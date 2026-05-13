@@ -16,6 +16,7 @@ void EffectRuntimeFrame::Clear() {
     beamQueue.clear();
     distortionQueue.clear();
     ringQueue.clear();
+    cylinderQueue.clear();
     authoring = EffectRuntimeAuthoringFrame{};
     activeInstanceCount = 0;
     activeComponentCount = 0;
@@ -78,6 +79,33 @@ bool ShouldPushTrailHistoryPoint(
     return DistanceSq(position, LatestTrailHistoryPoint(instance)) >= kMinDistanceSq;
 }
 
+float ComputeTotalLifetime(const EffectInstance& instance) {
+    float totalLifetime = instance.asset != nullptr ? instance.asset->lifetime : 0.0f;
+    if (instance.asset != nullptr) {
+        instance.asset->Components().ForEachComponentCommon(
+            [&totalLifetime](const EffectComponentCommon& component) {
+                const float componentEnd = component.startTime + component.duration;
+                if (componentEnd > totalLifetime) {
+                    totalLifetime = componentEnd;
+                }
+            });
+    }
+    return totalLifetime;
+}
+
+void RestartEffectInstanceState(EffectInstance& instance) {
+    instance.age = 0.0f;
+    instance.previousPosition = instance.transform.translate;
+    instance.velocity = {0.0f, 0.0f, 0.0f};
+    instance.trailHistoryHead = 0;
+    instance.trailHistoryCount = 1;
+    instance.trailHistory[0] = instance.transform.translate;
+    for (EffectComponentInstance& component : instance.components) {
+        component.age = 0.0f;
+        component.active = true;
+    }
+}
+
 VfxComponentInputCommon MakeComponentInputCommon(const EffectRenderItemCommon& item) {
     return {
         &item,
@@ -97,7 +125,8 @@ using ComponentNormalizationBuffer = std::variant<
     TrailComponentAsset,
     BeamComponentAsset,
     DistortionComponentAsset,
-    RingComponentAsset>;
+    RingComponentAsset,
+    CylinderComponentAsset>;
 
 EffectComponentCommon& ComponentCommon(ComponentNormalizationBuffer& component) {
     return std::visit(
@@ -136,6 +165,11 @@ ComponentNormalizationBuffer MakeComponentBufferForNormalization(
             return RingComponentAsset{*ring.common, *ring.settings};
         }
         return EffectComponentAssetBuilder::MakeRing(asset, component.common);
+    case EffectComponentType::Cylinder:
+        if (const CylinderComponentAssetView cylinder = CylinderComponentView(component)) {
+            return CylinderComponentAsset{*cylinder.common, *cylinder.settings};
+        }
+        return EffectComponentAssetBuilder::MakeCylinder(asset, component.common);
     }
     return EffectComponentAssetBuilder::MakeParticle(asset, component.common);
 }
@@ -271,6 +305,15 @@ RingRenderInput EffectRuntimeFrame::RingInput() const {
     return input;
 }
 
+CylinderRenderInput EffectRuntimeFrame::CylinderInput() const {
+    CylinderRenderInput input{};
+    if (!cylinderQueue.empty()) {
+        input.primary = MakeComponentInputCommon(cylinderQueue.front().common);
+        input.settings = cylinderQueue.front().settings;
+    }
+    return input;
+}
+
 void EffectSystem::RegisterAsset(EffectAsset asset) {
     RegisterAsset(std::move(asset), EffectAuthoringRegistry::Default());
 }
@@ -379,6 +422,11 @@ void EffectSystem::Update(float deltaTime) {
         for (EffectComponentInstance& component : instance.components) {
             component.age += deltaTime;
         }
+
+        const float totalLifetime = ComputeTotalLifetime(instance);
+        if (instance.previewLoop && totalLifetime > 0.0f && instance.age >= totalLifetime) {
+            RestartEffectInstanceState(instance);
+        }
     }
 
     instances_.erase(
@@ -386,18 +434,9 @@ void EffectSystem::Update(float deltaTime) {
             instances_.begin(),
             instances_.end(),
             [](const EffectInstance& instance) {
-                float totalLifetime = instance.asset != nullptr ? instance.asset->lifetime : 0.0f;
-                if (instance.asset != nullptr) {
-                    instance.asset->Components().ForEachComponentCommon(
-                        [&totalLifetime](const EffectComponentCommon& component) {
-                            const float componentEnd = component.startTime + component.duration;
-                            if (componentEnd > totalLifetime) {
-                                totalLifetime = componentEnd;
-                            }
-                        });
-                }
+                const float totalLifetime = ComputeTotalLifetime(instance);
                 return instance.asset == nullptr ||
-                       (totalLifetime > 0.0f && instance.age >= totalLifetime);
+                       (!instance.previewLoop && totalLifetime > 0.0f && instance.age >= totalLifetime);
             }),
         instances_.end());
 }
@@ -415,19 +454,25 @@ EffectInstance* EffectSystem::FindInstance(uint32_t id) {
     return nullptr;
 }
 
+const EffectInstance* EffectSystem::FindInstance(uint32_t id) const {
+    for (const EffectInstance& instance : instances_) {
+        if (instance.id == id) {
+            return &instance;
+        }
+    }
+    return nullptr;
+}
+
+void EffectSystem::SetEffectPreviewLoop(uint32_t id, bool enabled) {
+    if (EffectInstance* instance = FindInstance(id)) {
+        instance->previewLoop = enabled;
+    }
+}
+
 void EffectSystem::RestartInstance(uint32_t id) {
     EffectInstance* instance = FindInstance(id);
     if (instance != nullptr) {
-        instance->age = 0.0f;
-        instance->previousPosition = instance->transform.translate;
-        instance->velocity = {0.0f, 0.0f, 0.0f};
-        instance->trailHistoryHead = 0;
-        instance->trailHistoryCount = 1;
-        instance->trailHistory[0] = instance->transform.translate;
-        for (EffectComponentInstance& component : instance->components) {
-            component.age = 0.0f;
-            component.active = true;
-        }
+        RestartEffectInstanceState(*instance);
     }
 }
 
@@ -459,6 +504,8 @@ void EffectSystem::EnsureDefaultComponent(
                         components.ReplaceDistortionComponentAtForAuthoring(index, typedComponent);
                     } else if constexpr (std::is_same_v<Component, RingComponentAsset>) {
                         components.ReplaceRingComponentAtForAuthoring(index, typedComponent);
+                    } else if constexpr (std::is_same_v<Component, CylinderComponentAsset>) {
+                        components.ReplaceCylinderComponentAtForAuthoring(index, typedComponent);
                     }
                 },
                 component);

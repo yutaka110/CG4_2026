@@ -15,7 +15,8 @@ using ComponentEditBuffer = std::variant<
     TrailComponentAsset,
     BeamComponentAsset,
     DistortionComponentAsset,
-    RingComponentAsset>;
+    RingComponentAsset,
+    CylinderComponentAsset>;
 
 std::string Trim(std::string text) {
     const auto first = std::find_if_not(text.begin(), text.end(), [](unsigned char ch) {
@@ -233,6 +234,34 @@ bool ApplyRingSettingsKey(
     return true;
 }
 
+bool ApplyCylinderSettingsKey(
+    EffectCylinderSettings& settings,
+    const std::string& key,
+    const std::string& value) {
+    if (key == "divide" || key == "segments" || key == "segmentCount") {
+        settings.divide = ToUint(value, settings.divide);
+    } else if (key == "topRadius" || key == "radiusTop") {
+        settings.topRadius = ToFloat(value, settings.topRadius);
+    } else if (key == "bottomRadius" || key == "radiusBottom") {
+        settings.bottomRadius = ToFloat(value, settings.bottomRadius);
+    } else if (key == "height") {
+        settings.height = ToFloat(value, settings.height);
+    } else if (key == "emissive") {
+        settings.emissive = ToFloat(value, settings.emissive);
+    } else if (key == "uvScroll" || key == "uvScrollSpeed") {
+        settings.uvScrollSpeed = ToFloat(value, settings.uvScrollSpeed);
+    } else if (key == "alphaReference" || key == "alphaRef" || key == "discardThreshold") {
+        settings.alphaReference = ToFloat(value, settings.alphaReference);
+    } else if (key == "fadeOut" || key == "tailFade") {
+        settings.fadeOut = ToFloat(value, settings.fadeOut);
+    } else if (key == "depthFadeSoftness" || key == "softness") {
+        settings.depthFadeSoftness = ToFloat(value, settings.depthFadeSoftness);
+    } else {
+        return false;
+    }
+    return true;
+}
+
 bool ApplyTypedDefaultKey(
     EffectAsset& asset,
     const std::string& scope,
@@ -252,6 +281,9 @@ bool ApplyTypedDefaultKey(
     }
     if (scope == "ring") {
         return ApplyRingSettingsKey(asset.defaultRing, field, value);
+    }
+    if (scope == "cylinder") {
+        return ApplyCylinderSettingsKey(asset.defaultCylinder, field, value);
     }
     return false;
 }
@@ -288,6 +320,12 @@ bool ApplyTypedComponentKey(
     if (scope == "ring") {
         if (auto* ring = std::get_if<RingComponentAsset>(&component)) {
             return ApplyRingSettingsKey(ring->settings, field, value);
+        }
+        return false;
+    }
+    if (scope == "cylinder") {
+        if (auto* cylinder = std::get_if<CylinderComponentAsset>(&component)) {
+            return ApplyCylinderSettingsKey(cylinder->settings, field, value);
         }
         return false;
     }
@@ -395,6 +433,13 @@ bool ApplyLegacyTypedSettingsKey(
     return ApplyRingSettingsKey(component.settings, key, value);
 }
 
+bool ApplyLegacyTypedSettingsKey(
+    CylinderComponentAsset& component,
+    const std::string& key,
+    const std::string& value) {
+    return ApplyCylinderSettingsKey(component.settings, key, value);
+}
+
 bool ApplyLegacyComponentSettingsKey(
     ComponentEditBuffer& component,
     const std::string& key,
@@ -447,6 +492,9 @@ EffectComponentType ParseComponentType(const std::string& value) {
     }
     if (value == "ring") {
         return EffectComponentType::Ring;
+    }
+    if (value == "cylinder") {
+        return EffectComponentType::Cylinder;
     }
     return EffectComponentType::Particle;
 }
@@ -797,6 +845,8 @@ ComponentEditBuffer MakeComponentBufferFromAsset(
         return EffectComponentAssetBuilder::MakeDistortion(asset, common);
     case EffectComponentType::Ring:
         return EffectComponentAssetBuilder::MakeRing(asset, common);
+    case EffectComponentType::Cylinder:
+        return EffectComponentAssetBuilder::MakeCylinder(asset, common);
     case EffectComponentType::Particle:
     default:
         return EffectComponentAssetBuilder::MakeParticle(asset, common);
@@ -825,6 +875,9 @@ void ResetComponentPayloadForCommon(const EffectAsset& asset, ComponentEditBuffe
         break;
     case EffectComponentType::Ring:
         component = EffectComponentAssetBuilder::MakeRing(asset, common);
+        break;
+    case EffectComponentType::Cylinder:
+        component = EffectComponentAssetBuilder::MakeCylinder(asset, common);
         break;
     case EffectComponentType::Particle:
     default:

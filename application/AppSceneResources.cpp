@@ -31,6 +31,12 @@ namespace {
         Vector3 normal;
     };
 
+    struct CylinderVertex {
+        Vector4 position;
+        Vector2 texcoord;
+        Vector3 normal;
+    };
+
     std::vector<SphereVertex> BuildSphereVertices(uint32_t stackCount, uint32_t sliceCount) {
         std::vector<SphereVertex> v;
         v.reserve(stackCount * sliceCount * 6);
@@ -140,6 +146,45 @@ namespace {
             vertices.push_back(inner0);
             vertices.push_back(outer1);
             vertices.push_back(inner1);
+        }
+        return vertices;
+    }
+
+    std::vector<CylinderVertex> BuildCylinderVertices(uint32_t divide) {
+        std::vector<CylinderVertex> vertices;
+        divide = (std::max)(uint32_t{3}, divide);
+        vertices.reserve(static_cast<size_t>(divide) * 6);
+        const float radianPerDivide = 2.0f * std::numbers::pi_v<float> / static_cast<float>(divide);
+
+        auto makeVertex = [](float sinValue, float cosValue, float y, float u, float v) {
+            CylinderVertex vertex{};
+            vertex.position = {-sinValue, y, cosValue, 1.0f};
+            vertex.texcoord = {u, v};
+            vertex.normal = {-sinValue, 0.0f, cosValue};
+            return vertex;
+        };
+
+        for (uint32_t index = 0; index < divide; ++index) {
+            const float angle = static_cast<float>(index) * radianPerDivide;
+            const float nextAngle = static_cast<float>(index + 1) * radianPerDivide;
+            const float sin0 = std::sin(angle);
+            const float cos0 = std::cos(angle);
+            const float sin1 = std::sin(nextAngle);
+            const float cos1 = std::cos(nextAngle);
+            const float u0 = static_cast<float>(index) / static_cast<float>(divide);
+            const float u1 = static_cast<float>(index + 1) / static_cast<float>(divide);
+
+            const CylinderVertex top0 = makeVertex(sin0, cos0, 1.0f, u0, 0.0f);
+            const CylinderVertex top1 = makeVertex(sin1, cos1, 1.0f, u1, 0.0f);
+            const CylinderVertex bottom0 = makeVertex(sin0, cos0, 0.0f, u0, 1.0f);
+            const CylinderVertex bottom1 = makeVertex(sin1, cos1, 0.0f, u1, 1.0f);
+
+            vertices.push_back(top0);
+            vertices.push_back(top1);
+            vertices.push_back(bottom0);
+            vertices.push_back(bottom0);
+            vertices.push_back(top1);
+            vertices.push_back(bottom1);
         }
         return vertices;
     }
@@ -467,6 +512,27 @@ bool AppSceneResources::Initialize(
         ring.vbv.BufferLocation = ring.vertexResource->GetGPUVirtualAddress();
         ring.vbv.SizeInBytes = UINT(sizeof(RingVertex) * ring.vertexCount);
         ring.vbv.StrideInBytes = sizeof(RingVertex);
+    }
+
+    // =========================================================
+    // VFX Cylinder mesh
+    // =========================================================
+    {
+        const std::vector<CylinderVertex> cylinderVerts = BuildCylinderVertices(128);
+        cylinder.vertexCount = UINT(cylinderVerts.size());
+        cylinder.vertexResource =
+            CreateBufferResource(device, sizeof(CylinderVertex) * cylinder.vertexCount);
+
+        CylinderVertex* mappedVB = nullptr;
+        cylinder.vertexResource->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&mappedVB));
+        memcpy(mappedVB, cylinderVerts.data(), sizeof(CylinderVertex) * cylinder.vertexCount);
+
+        cylinder.vbv.BufferLocation = cylinder.vertexResource->GetGPUVirtualAddress();
+        cylinder.vbv.SizeInBytes = UINT(sizeof(CylinderVertex) * cylinder.vertexCount);
+        cylinder.vbv.StrideInBytes = sizeof(CylinderVertex);
     }
 
     // =========================================================

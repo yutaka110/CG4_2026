@@ -339,6 +339,9 @@
     <ClCompile Include="application\src\vfx\BeamRenderer.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\src\vfx\CylinderRenderer.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
     <ClCompile Include="application\src\vfx\ParticleRenderer.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -688,6 +691,9 @@
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\include\vfx\BeamRenderer.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\include\vfx\CylinderRenderer.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\include\vfx\DistortionRenderer.h">

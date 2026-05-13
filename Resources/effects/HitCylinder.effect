@@ -1,0 +1,24 @@
+name = hit_cylinder
+texture = gradationLine
+lifetime = 0.85
+blend = additive
+layer = additive
+renderQueue = 25
+color = 0.45,0.75,1.0,0.85
+size = 1.0,1.0,1.0
+cylinder.divide = 64
+cylinder.topRadius = 0.85
+cylinder.bottomRadius = 1.1
+cylinder.height = 2.1
+cylinder.emissive = 3.2
+cylinder.uvScrollSpeed = 0.85
+cylinder.alphaReference = 0.0
+cylinder.fadeOut = 1.45
+
+component = cylinder
+name = hit_cylinder_column
+technique = CylinderMesh
+texture = gradationLine
+duration = 0.85
+color = 0.45,0.75,1.0,0.85
+size = 1.0,1.0,1.0

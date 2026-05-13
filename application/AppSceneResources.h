@@ -32,6 +32,12 @@ struct RingMeshData {
     UINT vertexCount = 0;
 };
 
+struct CylinderMeshData {
+    Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource;
+    D3D12_VERTEX_BUFFER_VIEW vbv{};
+    UINT vertexCount = 0;
+};
+
 struct CameraForGPU {
     Vector3 worldPosition;
     float padding;
@@ -112,6 +118,7 @@ public:
 
     // VFX primitives
     RingMeshData ring{};
+    CylinderMeshData cylinder{};
 
     // Model
     ModelData modelData{};

@@ -9,6 +9,7 @@
 #include "graphics/RenderGraph.h"
 #include "vfx/AppVfxRendererSet.h"
 #include "vfx/BeamRenderer.h"
+#include "vfx/CylinderRenderer.h"
 #include "vfx/DistortionRenderer.h"
 #include "vfx/ParticleRenderer.h"
 #include "vfx/RingRenderer.h"
@@ -56,6 +57,9 @@ void AppVfxRenderPipeline::RegisterPasses(
     }
     if (runtimeState.enableRings) {
         ctx.vfxRenderers->ring->RegisterPasses(ctx, vfxResources);
+    }
+    if (runtimeState.enableCylinders) {
+        ctx.vfxRenderers->cylinder->RegisterPasses(ctx, vfxResources);
     }
     if (runtimeState.enableDistortions) {
         ctx.vfxRenderers->distortion->RegisterPasses(ctx, vfxResources);

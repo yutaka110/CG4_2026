@@ -26,6 +26,7 @@ enum class EffectComponentType {
     Beam,
     Distortion,
     Ring,
+    Cylinder,
 };
 
 enum class EffectTechnique {
@@ -34,6 +35,7 @@ enum class EffectTechnique {
     BeamLightning,
     DistortionSprite,
     RingMesh,
+    CylinderMesh,
 };
 
 enum class EffectRendererType {
@@ -42,6 +44,7 @@ enum class EffectRendererType {
     BeamRenderer,
     DistortionRenderer,
     RingRenderer,
+    CylinderRenderer,
 };
 
 enum class EffectSimulationType {
@@ -251,13 +254,26 @@ struct EffectRingSettings {
     float depthFadeSoftness = 0.02f;
 };
 
+struct EffectCylinderSettings {
+    uint32_t divide = 64;
+    float topRadius = 1.0f;
+    float bottomRadius = 1.0f;
+    float height = 2.0f;
+    float emissive = 2.0f;
+    float uvScrollSpeed = 0.0f;
+    float alphaReference = 0.0f;
+    float fadeOut = 1.0f;
+    float depthFadeSoftness = 0.02f;
+};
+
 struct EffectComponentPayload {
     using Variant = std::variant<
         EffectParticleSettings,
         EffectTrailSettings,
         EffectBeamSettings,
         EffectDistortionSettings,
-        EffectRingSettings>;
+        EffectRingSettings,
+        EffectCylinderSettings>;
 
     Variant data{EffectParticleSettings{}};
 };
@@ -292,6 +308,11 @@ struct DistortionComponentAsset {
 struct RingComponentAsset {
     EffectComponentCommon common{};
     EffectRingSettings settings{};
+};
+
+struct CylinderComponentAsset {
+    EffectComponentCommon common{};
+    EffectCylinderSettings settings{};
 };
 
 inline EffectComponentAsset ToEffectComponentAsset(const ParticleComponentAsset& component) {
@@ -334,6 +355,14 @@ inline EffectComponentAsset ToEffectComponentAsset(const RingComponentAsset& com
     return asset;
 }
 
+inline EffectComponentAsset ToEffectComponentAsset(const CylinderComponentAsset& component) {
+    EffectComponentAsset asset{};
+    asset.common = component.common;
+    asset.common.type = EffectComponentType::Cylinder;
+    asset.payload.data = component.settings;
+    return asset;
+}
+
 struct ParticleComponentStorageView;
 struct MutableParticleComponentStorageView;
 struct TrailComponentStorageView;
@@ -344,6 +373,8 @@ struct DistortionComponentStorageView;
 struct MutableDistortionComponentStorageView;
 struct RingComponentStorageView;
 struct MutableRingComponentStorageView;
+struct CylinderComponentStorageView;
+struct MutableCylinderComponentStorageView;
 
 class EffectAssetComponentStorage {
 public:
@@ -355,7 +386,8 @@ public:
                trailComponents_.size() +
                beamComponents_.size() +
                distortionComponents_.size() +
-               ringComponents_.size();
+               ringComponents_.size() +
+               cylinderComponents_.size();
     }
     void Reserve(std::size_t count) { packedComponents_.reserve(count); }
 
@@ -406,6 +438,14 @@ public:
         return packedComponents_.back();
     }
 
+    EffectComponentAsset& Add(CylinderComponentAsset component) {
+        component.common.type = EffectComponentType::Cylinder;
+        EffectComponentAsset packed = ToEffectComponentAsset(component);
+        cylinderComponents_.push_back(std::move(component));
+        packedComponents_.push_back(std::move(packed));
+        return packedComponents_.back();
+    }
+
     bool ReplaceParticleComponentAndSyncPacked(ParticleComponentAsset component) {
         component.common.type = EffectComponentType::Particle;
         EffectComponentAsset* packedComponent = Find(component.common.id);
@@ -417,6 +457,7 @@ public:
         RemoveTypedComponent(beamComponents_, component.common.id);
         RemoveTypedComponent(distortionComponents_, component.common.id);
         RemoveTypedComponent(ringComponents_, component.common.id);
+        RemoveTypedComponent(cylinderComponents_, component.common.id);
         *packedComponent = ToEffectComponentAsset(component);
         return true;
     }
@@ -432,6 +473,7 @@ public:
         RemoveTypedComponent(beamComponents_, component.common.id);
         RemoveTypedComponent(distortionComponents_, component.common.id);
         RemoveTypedComponent(ringComponents_, component.common.id);
+        RemoveTypedComponent(cylinderComponents_, component.common.id);
         *packedComponent = ToEffectComponentAsset(component);
         return true;
     }
@@ -447,6 +489,7 @@ public:
         RemoveTypedComponent(trailComponents_, component.common.id);
         RemoveTypedComponent(distortionComponents_, component.common.id);
         RemoveTypedComponent(ringComponents_, component.common.id);
+        RemoveTypedComponent(cylinderComponents_, component.common.id);
         *packedComponent = ToEffectComponentAsset(component);
         return true;
     }
@@ -462,6 +505,7 @@ public:
         RemoveTypedComponent(trailComponents_, component.common.id);
         RemoveTypedComponent(beamComponents_, component.common.id);
         RemoveTypedComponent(ringComponents_, component.common.id);
+        RemoveTypedComponent(cylinderComponents_, component.common.id);
         *packedComponent = ToEffectComponentAsset(component);
         return true;
     }
@@ -477,6 +521,23 @@ public:
         RemoveTypedComponent(trailComponents_, component.common.id);
         RemoveTypedComponent(beamComponents_, component.common.id);
         RemoveTypedComponent(distortionComponents_, component.common.id);
+        RemoveTypedComponent(cylinderComponents_, component.common.id);
+        *packedComponent = ToEffectComponentAsset(component);
+        return true;
+    }
+
+    bool ReplaceCylinderComponentAndSyncPacked(CylinderComponentAsset component) {
+        component.common.type = EffectComponentType::Cylinder;
+        EffectComponentAsset* packedComponent = Find(component.common.id);
+        if (packedComponent == nullptr) {
+            return false;
+        }
+        ReplaceTypedComponent(cylinderComponents_, component);
+        RemoveTypedComponent(particleComponents_, component.common.id);
+        RemoveTypedComponent(trailComponents_, component.common.id);
+        RemoveTypedComponent(beamComponents_, component.common.id);
+        RemoveTypedComponent(distortionComponents_, component.common.id);
+        RemoveTypedComponent(ringComponents_, component.common.id);
         *packedComponent = ToEffectComponentAsset(component);
         return true;
     }
@@ -540,6 +601,17 @@ private:
         return true;
     }
 
+    bool ReplaceCylinderComponentAtForAuthoring(
+        std::size_t index,
+        CylinderComponentAsset component) {
+        if (index >= packedComponents_.size()) {
+            return false;
+        }
+        component.common.type = EffectComponentType::Cylinder;
+        packedComponents_[index] = ToEffectComponentAsset(component);
+        return true;
+    }
+
 public:
     ParticleComponentStorageView ParticleStorageView() const;
     MutableParticleComponentStorageView MutableParticleStorageView();
@@ -551,6 +623,8 @@ public:
     MutableDistortionComponentStorageView MutableDistortionStorageView();
     RingComponentStorageView RingStorageView() const;
     MutableRingComponentStorageView MutableRingStorageView();
+    CylinderComponentStorageView CylinderStorageView() const;
+    MutableCylinderComponentStorageView MutableCylinderStorageView();
 
     template <typename Visitor>
     void ForEachComponentCommon(Visitor&& visitor) const {
@@ -569,6 +643,9 @@ public:
         for (const RingComponentAsset& component : ringComponents_) {
             visitor(component.common);
         }
+        for (const CylinderComponentAsset& component : cylinderComponents_) {
+            visitor(component.common);
+        }
     }
 
 private:
@@ -584,6 +661,7 @@ private:
         beamComponents_.clear();
         distortionComponents_.clear();
         ringComponents_.clear();
+        cylinderComponents_.clear();
 
         for (const EffectComponentAsset& component : packedComponents_) {
             MirrorTypedComponent(component);
@@ -650,6 +728,11 @@ private:
                 ringComponents_.push_back({component.common, *settings});
             }
             break;
+        case EffectComponentType::Cylinder:
+            if (const auto* settings = std::get_if<EffectCylinderSettings>(&component.payload.data)) {
+                cylinderComponents_.push_back({component.common, *settings});
+            }
+            break;
         }
     }
 
@@ -659,6 +742,7 @@ private:
     std::vector<BeamComponentAsset> beamComponents_;
     std::vector<DistortionComponentAsset> distortionComponents_;
     std::vector<RingComponentAsset> ringComponents_;
+    std::vector<CylinderComponentAsset> cylinderComponents_;
 };
 
 struct EffectAsset {
@@ -680,6 +764,7 @@ struct EffectAsset {
     EffectBeamSettings defaultBeam{};
     EffectDistortionSettings defaultDistortion{};
     EffectRingSettings defaultRing{};
+    EffectCylinderSettings defaultCylinder{};
     Vector4 color = {1.0f, 1.0f, 1.0f, 1.0f};
     Vector3 size = {1.0f, 1.0f, 1.0f};
     const EffectAssetComponentStorage& Components() const { return components_; }
@@ -715,6 +800,7 @@ struct EffectInstance {
     Vector4 color = {1.0f, 1.0f, 1.0f, 1.0f};
     float age = 0.0f;
     bool attached = false;
+    bool previewLoop = false;
 };
 
 struct EffectEvent {
@@ -759,6 +845,11 @@ struct RingRenderItem {
     const EffectRingSettings* settings = nullptr;
 };
 
+struct CylinderRenderItem {
+    EffectRenderItemCommon common{};
+    const EffectCylinderSettings* settings = nullptr;
+};
+
 struct ParticleRenderFallback {
     const EffectComponentCommon* common = nullptr;
     const EffectParticleSettings* settings = nullptr;
@@ -769,6 +860,7 @@ using TrailRenderQueue = std::vector<TrailRenderItem>;
 using BeamRenderQueue = std::vector<BeamRenderItem>;
 using DistortionRenderQueue = std::vector<DistortionRenderItem>;
 using RingRenderQueue = std::vector<RingRenderItem>;
+using CylinderRenderQueue = std::vector<CylinderRenderItem>;
 
 struct EffectRuntimeQueueAuthoringStatus {
     bool hasPrimary = false;
@@ -790,6 +882,7 @@ struct EffectRuntimeAuthoringFrame {
     EffectRuntimeQueueAuthoringStatus beam;
     EffectRuntimeQueueAuthoringStatus distortion;
     EffectRuntimeQueueAuthoringStatus ring;
+    EffectRuntimeQueueAuthoringStatus cylinder;
 };
 
 struct ParticleRenderInput;
@@ -797,6 +890,7 @@ struct TrailRenderInput;
 struct BeamRenderInput;
 struct DistortionRenderInput;
 struct RingRenderInput;
+struct CylinderRenderInput;
 class EffectAuthoringRegistry;
 
 struct EffectRuntimeFrame {
@@ -805,6 +899,7 @@ struct EffectRuntimeFrame {
     BeamRenderQueue beamQueue;
     DistortionRenderQueue distortionQueue;
     RingRenderQueue ringQueue;
+    CylinderRenderQueue cylinderQueue;
     EffectRuntimeAuthoringFrame authoring;
     uint32_t activeInstanceCount = 0;
     uint32_t activeComponentCount = 0;
@@ -816,6 +911,7 @@ struct EffectRuntimeFrame {
     BeamRenderInput BeamInput() const;
     DistortionRenderInput DistortionInput() const;
     RingRenderInput RingInput() const;
+    CylinderRenderInput CylinderInput() const;
 };
 
 class EffectSystem {
@@ -838,6 +934,8 @@ public:
     void Update(float deltaTime);
     void ClearInstances();
     EffectInstance* FindInstance(uint32_t id);
+    const EffectInstance* FindInstance(uint32_t id) const;
+    void SetEffectPreviewLoop(uint32_t id, bool enabled);
     void RestartInstance(uint32_t id);
 
     const std::vector<EffectInstance>& Instances() const { return instances_; }

@@ -79,6 +79,7 @@ struct AppVfxRuntimeState {
     bool enableBeams = true;
     bool enableDistortions = true;
     bool enableRings = true;
+    bool enableCylinders = true;
     bool enableParticleDedicatedResourceProbe = false;
     bool enableParticleDedicatedProbeTelemetry = false;
     bool enableParticleDedicatedAutoFallback = true;
@@ -118,4 +119,13 @@ struct AppVfxRuntimeState {
     float autoPlayVfxRadius = 2.5f;
     float autoPlayVfxTimer = 0.0f;
     float autoPlayVfxAngle = 0.0f;
+
+    bool holdHitPlaneBurst = false;
+    bool holdHitRing = false;
+    bool holdHitCylinder = false;
+    bool holdHitCylinderCombo = false;
+    uint32_t holdHitPlaneBurstInstanceId = 0;
+    uint32_t holdHitRingInstanceId = 0;
+    uint32_t holdHitCylinderInstanceId = 0;
+    uint32_t holdHitCylinderComboInstanceId = 0;
 };

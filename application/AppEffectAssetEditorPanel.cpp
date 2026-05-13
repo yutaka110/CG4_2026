@@ -581,6 +581,24 @@ bool DrawEffectTypeControls(EffectRingSettings& ring) {
     return changed;
 }
 
+bool DrawEffectTypeControls(EffectCylinderSettings& cylinder) {
+    bool changed = false;
+    int divide = static_cast<int>(cylinder.divide);
+    if (ImGui::SliderInt("Cylinder Divide", &divide, 3, 128)) {
+        cylinder.divide = static_cast<uint32_t>(divide);
+        changed = true;
+    }
+    changed |= ImGui::SliderFloat("Top Radius", &cylinder.topRadius, 0.0f, 8.0f, "%.2f");
+    changed |= ImGui::SliderFloat("Bottom Radius", &cylinder.bottomRadius, 0.0f, 8.0f, "%.2f");
+    changed |= ImGui::SliderFloat("Cylinder Height", &cylinder.height, 0.01f, 8.0f, "%.2f");
+    changed |= ImGui::SliderFloat("Cylinder Emissive", &cylinder.emissive, 0.0f, 12.0f, "%.2f");
+    changed |= ImGui::SliderFloat("Cylinder UV Scroll", &cylinder.uvScrollSpeed, -8.0f, 8.0f, "%.2f");
+    changed |= ImGui::SliderFloat("Cylinder Alpha Ref", &cylinder.alphaReference, 0.0f, 1.0f, "%.2f");
+    changed |= ImGui::SliderFloat("Cylinder Fade Out", &cylinder.fadeOut, 0.0f, 4.0f, "%.2f");
+    changed |= ImGui::SliderFloat("Cylinder Depth Fade", &cylinder.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
+    return changed;
+}
+
 void ResetEffectTypeToAssetDefault(EffectParticleSettings& particle, const EffectAsset& asset) {
     particle.emissive = asset.defaultParticle.emissive;
     particle.spawnCount = asset.defaultParticle.spawnCount;
@@ -614,6 +632,10 @@ void ResetEffectTypeToAssetDefault(EffectDistortionSettings& distortion, const E
 
 void ResetEffectTypeToAssetDefault(EffectRingSettings& ring, const EffectAsset& asset) {
     ring = asset.defaultRing;
+}
+
+void ResetEffectTypeToAssetDefault(EffectCylinderSettings& cylinder, const EffectAsset& asset) {
+    cylinder = asset.defaultCylinder;
 }
 
 template <typename ComponentAsset>
@@ -719,6 +741,13 @@ RingComponentAsset ToComponentAsset(const RingComponentAssetView& view) {
     return {*view.common, *view.settings};
 }
 
+CylinderComponentAsset ToComponentAsset(const CylinderComponentAssetView& view) {
+    if (!view) {
+        return {};
+    }
+    return {*view.common, *view.settings};
+}
+
 template <typename ComponentAsset, typename DrawFn>
 void QueueEditedComponent(
     std::vector<ComponentAsset>& replacements,
@@ -771,6 +800,15 @@ void ApplyReplacements(
     const MutableRingComponentStorageView storage = asset.MutableComponents().MutableRingStorageView();
     for (const RingComponentAsset& replacement : replacements) {
         ReplaceRingComponentAndSyncPacked(storage, replacement);
+    }
+}
+
+void ApplyReplacements(
+    EffectAsset& asset,
+    const std::vector<CylinderComponentAsset>& replacements) {
+    const MutableCylinderComponentStorageView storage = asset.MutableComponents().MutableCylinderStorageView();
+    for (const CylinderComponentAsset& replacement : replacements) {
+        ReplaceCylinderComponentAndSyncPacked(storage, replacement);
     }
 }
 
@@ -916,6 +954,36 @@ void DrawRingTypeSection(
     }
 }
 
+void DrawCylinderTypeSection(
+    EffectAsset& asset,
+    const EffectAuthoringRegistry& authoringRegistry) {
+    if (!HasCylinderComponents(asset)) {
+        return;
+    }
+
+    if (ImGui::TreeNode(EffectTypeLabel(EffectComponentType::Cylinder))) {
+        std::vector<CylinderComponentAsset> replacements;
+        if (ImGui::Button("Reset to Asset Default")) {
+            ForEachCylinderComponent(asset.Components().CylinderStorageView(), [&asset, &replacements](const CylinderComponentAssetView& cylinder) {
+                CylinderComponentAsset replacement = ToComponentAsset(cylinder);
+                ResetEffectTypeToAssetDefault(replacement.settings, asset);
+                replacements.push_back(replacement);
+            });
+        }
+        ImGui::Separator();
+        ForEachCylinderComponent(asset.Components().CylinderStorageView(), [&replacements, &authoringRegistry](const CylinderComponentAssetView& cylinder) {
+            QueueEditedComponent(
+                replacements,
+                ToComponentAsset(cylinder),
+                [&authoringRegistry](CylinderComponentAsset& component) {
+                    return DrawEffectComponentNode(component, authoringRegistry);
+                });
+        });
+        ApplyReplacements(asset, replacements);
+        ImGui::TreePop();
+    }
+}
+
 void DrawEffectTypeSection(
     EffectAsset& asset,
     EffectComponentType type,
@@ -935,6 +1003,9 @@ void DrawEffectTypeSection(
         break;
     case EffectComponentType::Ring:
         DrawRingTypeSection(asset, authoringRegistry);
+        break;
+    case EffectComponentType::Cylinder:
+        DrawCylinderTypeSection(asset, authoringRegistry);
         break;
     }
 }
@@ -1068,6 +1139,18 @@ void DrawEffectAssetEditorPanel(
                 ImGui::SliderFloat("Default Ring Expansion", &asset.defaultRing.expansion, 0.0f, 8.0f, "%.2f");
                 ImGui::SliderFloat("Default Ring Fade Out", &asset.defaultRing.fadeOut, 0.0f, 4.0f, "%.2f");
                 ImGui::SliderFloat("Default Ring Depth Fade", &asset.defaultRing.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
+                int defaultCylinderDivide = static_cast<int>(asset.defaultCylinder.divide);
+                if (ImGui::SliderInt("Default Cylinder Divide", &defaultCylinderDivide, 3, 128)) {
+                    asset.defaultCylinder.divide = static_cast<uint32_t>(defaultCylinderDivide);
+                }
+                ImGui::SliderFloat("Default Cylinder Top Radius", &asset.defaultCylinder.topRadius, 0.0f, 8.0f, "%.2f");
+                ImGui::SliderFloat("Default Cylinder Bottom Radius", &asset.defaultCylinder.bottomRadius, 0.0f, 8.0f, "%.2f");
+                ImGui::SliderFloat("Default Cylinder Height", &asset.defaultCylinder.height, 0.01f, 8.0f, "%.2f");
+                ImGui::SliderFloat("Default Cylinder Emissive", &asset.defaultCylinder.emissive, 0.0f, 12.0f, "%.2f");
+                ImGui::SliderFloat("Default Cylinder UV Scroll", &asset.defaultCylinder.uvScrollSpeed, -8.0f, 8.0f, "%.2f");
+                ImGui::SliderFloat("Default Cylinder Alpha Ref", &asset.defaultCylinder.alphaReference, 0.0f, 1.0f, "%.2f");
+                ImGui::SliderFloat("Default Cylinder Fade Out", &asset.defaultCylinder.fadeOut, 0.0f, 4.0f, "%.2f");
+                ImGui::SliderFloat("Default Cylinder Depth Fade", &asset.defaultCylinder.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
                 ImGui::TreePop();
             }
 
@@ -1077,6 +1160,7 @@ void DrawEffectAssetEditorPanel(
                 EffectComponentType::Distortion,
                 EffectComponentType::Beam,
                 EffectComponentType::Ring,
+                EffectComponentType::Cylinder,
             };
 
             for (EffectComponentType type : orderedTypes) {

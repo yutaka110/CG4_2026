@@ -127,6 +127,8 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
         L"resources/DistortionSprite.PS.hlsl",
         L"resources/Ring.VS.hlsl",
         L"resources/Ring.PS.hlsl",
+        L"resources/Cylinder.VS.hlsl",
+        L"resources/Cylinder.PS.hlsl",
         L"resources/ParticleSim.CS.hlsl",
         L"resources/TrailMeshStream.CS.hlsl",
         L"resources/TrailMeshBuild.CS.hlsl",
@@ -475,6 +477,54 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     if (FAILED(hr)) return FailHr("CreateRootSignature(Ring)", hr);
 
     // ------------------------------
+    // Cylinder RootSignature
+    // b0: draw constants, t0: cylinder texture
+    // ------------------------------
+    D3D12_DESCRIPTOR_RANGE cylinderTextureRange{};
+    cylinderTextureRange.BaseShaderRegister = 0;
+    cylinderTextureRange.NumDescriptors = 1;
+    cylinderTextureRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    cylinderTextureRange.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_ROOT_PARAMETER cylinderRootParams[2] = {};
+    cylinderRootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    cylinderRootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    cylinderRootParams[0].Constants.ShaderRegister = 0;
+    cylinderRootParams[0].Constants.Num32BitValues = 28;
+
+    cylinderRootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    cylinderRootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    cylinderRootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    cylinderRootParams[1].DescriptorTable.pDescriptorRanges = &cylinderTextureRange;
+
+    D3D12_STATIC_SAMPLER_DESC cylinderSampler = staticSamplers[0];
+    cylinderSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    cylinderSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    cylinderSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+
+    D3D12_ROOT_SIGNATURE_DESC cylinderRsDesc{};
+    cylinderRsDesc.NumParameters = _countof(cylinderRootParams);
+    cylinderRsDesc.pParameters = cylinderRootParams;
+    cylinderRsDesc.NumStaticSamplers = 1;
+    cylinderRsDesc.pStaticSamplers = &cylinderSampler;
+    cylinderRsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> cylinderSigBlob;
+    ComPtr<ID3DBlob> cylinderErrBlob;
+    hr = D3D12SerializeRootSignature(&cylinderRsDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                    &cylinderSigBlob, &cylinderErrBlob);
+    if (FAILED(hr)) {
+        if (cylinderErrBlob) {
+            OutputDebugStringA(reinterpret_cast<const char*>(cylinderErrBlob->GetBufferPointer()));
+        }
+        return false;
+    }
+
+    hr = device->CreateRootSignature(0, cylinderSigBlob->GetBufferPointer(), cylinderSigBlob->GetBufferSize(),
+                                    IID_PPV_ARGS(&cylinderRootSignature_));
+    if (FAILED(hr)) return FailHr("CreateRootSignature(Cylinder)", hr);
+
+    // ------------------------------
     // Compute RootSignature (MotionDetect)
     // ------------------------------
     // t4: Y, t5: UV, u0: output
@@ -760,6 +810,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     distortionSpritePs_ = Compile_(L"resources/DistortionSprite.PS.hlsl", L"ps_6_0");
     ringVs_ = Compile_(L"resources/Ring.VS.hlsl", L"vs_6_0");
     ringPs_ = Compile_(L"resources/Ring.PS.hlsl", L"ps_6_0");
+    cylinderVs_ = Compile_(L"resources/Cylinder.VS.hlsl", L"vs_6_0");
+    cylinderPs_ = Compile_(L"resources/Cylinder.PS.hlsl", L"ps_6_0");
     gpuParticleCs_ = Compile_(L"resources/ParticleSim.CS.hlsl", L"cs_6_0");
     trailMeshStreamCs_ = Compile_(L"resources/TrailMeshStream.CS.hlsl", L"cs_6_0");
     trailMeshBuildCs_ = Compile_(L"resources/TrailMeshBuild.CS.hlsl", L"cs_6_0");
@@ -785,7 +837,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
     if (!vs_ || !ps_ || !spriteVs_ || !spritePs_ || !skyboxVs_ || !skyboxPs_ || !cs_ || !particleVs_ || !particlePs_ ||
         !trailMeshVs_ || !trailMeshStreamVs_ || !trailMeshPs_ || !distortionSpriteVs_ || !distortionSpritePs_ ||
-        !ringVs_ || !ringPs_ || !gpuParticleCs_ || !trailMeshStreamCs_ || !trailMeshBuildCs_ || !compositeVs_ || !compositePs_ || !bloomExtractPs_ ||
+        !ringVs_ || !ringPs_ || !cylinderVs_ || !cylinderPs_ || !gpuParticleCs_ || !trailMeshStreamCs_ || !trailMeshBuildCs_ || !compositeVs_ || !compositePs_ || !bloomExtractPs_ ||
         !bloomDownsamplePs_ || !bloomUpsamplePs_ || !blurHorizontalPs_ || !blurVerticalPs_ ||
         !boxBlurHorizontalPs_ || !boxBlurVerticalPs_ || !gaussianBlurHorizontalPs_ || !gaussianBlurVerticalPs_ ||
         !distortionCompositePs_ ||
@@ -1298,6 +1350,31 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Ring)", hr);
     }
 
+    {
+        D3D12_BLEND_DESC cylinderBlend{};
+        cylinderBlend.AlphaToCoverageEnable = FALSE;
+        cylinderBlend.IndependentBlendEnable = FALSE;
+        auto& rt = cylinderBlend.RenderTarget[0];
+        rt.BlendEnable = TRUE;
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        rt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        rt.DestBlend = D3D12_BLEND_ONE;
+        rt.BlendOp = D3D12_BLEND_OP_ADD;
+        rt.SrcBlendAlpha = D3D12_BLEND_ONE;
+        rt.DestBlendAlpha = D3D12_BLEND_ONE;
+        rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = particleDesc;
+        d.pRootSignature = cylinderRootSignature_.Get();
+        d.VS = { cylinderVs_->GetBufferPointer(), cylinderVs_->GetBufferSize() };
+        d.PS = { cylinderPs_->GetBufferPointer(), cylinderPs_->GetBufferSize() };
+        d.BlendState = cylinderBlend;
+        d.RasterizerState = particleRaster;
+        d.DepthStencilState = particleDepth;
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&cylinderPso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Cylinder)", hr);
+    }
+
     // ------------------------------
     // Main Opaque/Alpha variants (for sprite or UI etc)
     // These were in AppMain as psoOpaque/psoAlpha using mainRootSignature.
@@ -1349,6 +1426,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         L"resources/DistortionSprite.PS.hlsl",
         L"resources/Ring.VS.hlsl",
         L"resources/Ring.PS.hlsl",
+        L"resources/Cylinder.VS.hlsl",
+        L"resources/Cylinder.PS.hlsl",
         L"resources/ParticleSim.CS.hlsl",
         L"resources/TrailMeshStream.CS.hlsl",
         L"resources/TrailMeshBuild.CS.hlsl",

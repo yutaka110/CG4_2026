@@ -40,3 +40,8 @@ struct RingRenderInput {
     VfxComponentInputCommon primary{};
     const EffectRingSettings* settings = nullptr;
 };
+
+struct CylinderRenderInput {
+    VfxComponentInputCommon primary{};
+    const EffectCylinderSettings* settings = nullptr;
+};
