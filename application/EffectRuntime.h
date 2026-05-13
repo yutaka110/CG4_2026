@@ -29,6 +29,9 @@ public:
         const Vector3& scale);
     void StopEffect(uint32_t id);
     void RestartInstance(uint32_t id);
+    void SetEffectPreviewLoop(uint32_t id, bool enabled);
+    EffectInstance* FindInstance(uint32_t id);
+    const EffectInstance* FindInstance(uint32_t id) const;
     void ClearInstances();
 
     void Update(float deltaTime);
@@ -75,6 +78,11 @@ private:
         const EffectRingSettings* settings = nullptr;
     };
 
+    struct CylinderActiveComponent {
+        EffectRenderItemCommon common{};
+        const EffectCylinderSettings* settings = nullptr;
+    };
+
     void ForEachActiveInstanceComponent(
         const std::function<void(const EffectInstance&, const EffectComponentInstance&)>& visitor) const;
     static bool BuildActiveComponentCore(
@@ -94,16 +102,20 @@ private:
         const std::function<void(const ActiveComponentCore&, const DistortionComponentAssetView&)>& visitor) const;
     void ForEachRingAssetComponent(
         const std::function<void(const ActiveComponentCore&, const RingComponentAssetView&)>& visitor) const;
+    void ForEachCylinderAssetComponent(
+        const std::function<void(const ActiveComponentCore&, const CylinderComponentAssetView&)>& visitor) const;
     void ForEachParticleComponent(const std::function<void(const ParticleActiveComponent&)>& visitor) const;
     void ForEachTrailComponent(const std::function<void(const TrailActiveComponent&)>& visitor) const;
     void ForEachBeamComponent(const std::function<void(const BeamActiveComponent&)>& visitor) const;
     void ForEachDistortionComponent(const std::function<void(const DistortionActiveComponent&)>& visitor) const;
     void ForEachRingComponent(const std::function<void(const RingActiveComponent&)>& visitor) const;
+    void ForEachCylinderComponent(const std::function<void(const CylinderActiveComponent&)>& visitor) const;
     ParticleRenderQueue BuildParticleQueue() const;
     TrailRenderQueue BuildTrailQueue() const;
     BeamRenderQueue BuildBeamQueue() const;
     DistortionRenderQueue BuildDistortionQueue() const;
     RingRenderQueue BuildRingQueue() const;
+    CylinderRenderQueue BuildCylinderQueue() const;
     const EffectAuthoringRegistry& AuthoringRegistry() const;
 
     EffectSystem* effectSystem_ = nullptr;

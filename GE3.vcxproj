@@ -201,6 +201,7 @@ copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dx
     <ClCompile Include="application\ModelLoaderAssimp.cpp" />
     <ClCompile Include="application\src\renderer\DebugSceneRenderer.cpp" />
     <ClCompile Include="application\src\vfx\BeamRenderer.cpp" />
+    <ClCompile Include="application\src\vfx\CylinderRenderer.cpp" />
     <ClCompile Include="application\src\vfx\DistortionRenderer.cpp" />
     <ClCompile Include="application\src\vfx\ParticleRenderer.cpp" />
     <ClCompile Include="application\src\vfx\RingRenderer.cpp" />
@@ -498,6 +499,7 @@ copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dx
     <ClInclude Include="application\include\renderer\DebugSceneRenderer.h" />
     <ClInclude Include="application\include\vfx\AppVfxRendererSet.h" />
     <ClInclude Include="application\include\vfx\BeamRenderer.h" />
+    <ClInclude Include="application\include\vfx\CylinderRenderer.h" />
     <ClInclude Include="application\include\vfx\DistortionRenderer.h" />
     <ClInclude Include="application\include\vfx\ParticleRenderer.h" />
     <ClInclude Include="application\include\vfx\RingRenderer.h" />

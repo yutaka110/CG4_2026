@@ -73,6 +73,20 @@ void ApplyLiveTuningToComponent(
     destination.depthFadeSoftness = source.settings->depthFadeSoftness;
 }
 
+void ApplyLiveTuningToComponent(
+    const CylinderComponentAssetView& source,
+    EffectCylinderSettings& destination) {
+    destination.divide = source.settings->divide;
+    destination.topRadius = source.settings->topRadius;
+    destination.bottomRadius = source.settings->bottomRadius;
+    destination.height = source.settings->height;
+    destination.emissive = source.settings->emissive;
+    destination.uvScrollSpeed = source.settings->uvScrollSpeed;
+    destination.alphaReference = source.settings->alphaReference;
+    destination.fadeOut = source.settings->fadeOut;
+    destination.depthFadeSoftness = source.settings->depthFadeSoftness;
+}
+
 void PreserveParticleLiveTuning(
     const EffectAsset& currentAsset,
     EffectAsset& reloadedAsset) {
@@ -173,6 +187,31 @@ void PreserveRingLiveTuning(
     }
 }
 
+void PreserveCylinderLiveTuning(
+    const EffectAsset& currentAsset,
+    EffectAsset& reloadedAsset) {
+    std::vector<CylinderComponentAsset> replacements;
+    ForEachCylinderComponent(reloadedAsset.Components().CylinderStorageView(), [&currentAsset, &replacements](const CylinderComponentAssetView& reloadedCylinder) {
+        bool applied = false;
+        ForEachCylinderComponent(currentAsset.Components().CylinderStorageView(), [&applied, &reloadedCylinder, &replacements](const CylinderComponentAssetView& currentCylinder) {
+            if (applied) {
+                return;
+            }
+            if (IsSameAuthoredComponent(currentCylinder.common, reloadedCylinder.common)) {
+                CylinderComponentAsset replacement{*reloadedCylinder.common, *reloadedCylinder.settings};
+                ApplyLiveTuningToComponent(currentCylinder, replacement.settings);
+                replacements.push_back(replacement);
+                applied = true;
+            }
+        });
+    });
+
+    const MutableCylinderComponentStorageView storage = reloadedAsset.MutableComponents().MutableCylinderStorageView();
+    for (const CylinderComponentAsset& replacement : replacements) {
+        ReplaceCylinderComponentAndSyncPacked(storage, replacement);
+    }
+}
+
 void PreserveLiveTuning(
     const EffectAsset& currentAsset,
     EffectAsset& reloadedAsset) {
@@ -181,11 +220,13 @@ void PreserveLiveTuning(
     reloadedAsset.defaultBeam = currentAsset.defaultBeam;
     reloadedAsset.defaultDistortion = currentAsset.defaultDistortion;
     reloadedAsset.defaultRing = currentAsset.defaultRing;
+    reloadedAsset.defaultCylinder = currentAsset.defaultCylinder;
 
     PreserveParticleLiveTuning(currentAsset, reloadedAsset);
     PreserveTrailLiveTuning(currentAsset, reloadedAsset);
     PreserveDistortionLiveTuning(currentAsset, reloadedAsset);
     PreserveRingLiveTuning(currentAsset, reloadedAsset);
+    PreserveCylinderLiveTuning(currentAsset, reloadedAsset);
 }
 } // namespace
 

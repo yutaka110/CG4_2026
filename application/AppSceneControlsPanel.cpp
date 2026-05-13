@@ -14,6 +14,86 @@ Vector3 FrontHitEffectPosition(const AppRuntimeState& runtimeState) {
         runtimeState.transform.translate.z - frontRadius - 0.15f,
     };
 }
+
+void SyncHeldEffect(
+    EffectRuntime& effectRuntime,
+    bool enabled,
+    uint32_t& instanceId,
+    const char* effectName,
+    const Vector3& position,
+    const Vector4& color,
+    const Vector3& scale) {
+    if (!enabled) {
+        if (instanceId != 0) {
+            effectRuntime.SetEffectPreviewLoop(instanceId, false);
+            effectRuntime.StopEffect(instanceId);
+            instanceId = 0;
+        }
+        return;
+    }
+
+    EffectInstance* instance = effectRuntime.FindInstance(instanceId);
+    if (instance == nullptr) {
+        instanceId = effectRuntime.PlayEffectWithParams(effectName, position, color, scale);
+        effectRuntime.SetEffectPreviewLoop(instanceId, true);
+        instance = effectRuntime.FindInstance(instanceId);
+        if (instance == nullptr) {
+            return;
+        }
+    } else {
+        effectRuntime.SetEffectPreviewLoop(instanceId, true);
+    }
+
+    if (instance->assetName != effectName) {
+        effectRuntime.SetEffectPreviewLoop(instanceId, false);
+        effectRuntime.StopEffect(instanceId);
+        instanceId = effectRuntime.PlayEffectWithParams(effectName, position, color, scale);
+        effectRuntime.SetEffectPreviewLoop(instanceId, true);
+        return;
+    }
+
+    instance->transform.translate = position;
+    instance->previousPosition = position;
+}
+
+void DisableHeldHitEffects(AppRuntimeState& runtimeState, EffectRuntime& effectRuntime) {
+    runtimeState.vfx.holdHitPlaneBurst = false;
+    runtimeState.vfx.holdHitRing = false;
+    runtimeState.vfx.holdHitCylinder = false;
+    runtimeState.vfx.holdHitCylinderCombo = false;
+    SyncHeldEffect(
+        effectRuntime,
+        false,
+        runtimeState.vfx.holdHitPlaneBurstInstanceId,
+        "hit_plane_burst",
+        {},
+        {},
+        {});
+    SyncHeldEffect(
+        effectRuntime,
+        false,
+        runtimeState.vfx.holdHitRingInstanceId,
+        "hit_ring",
+        {},
+        {},
+        {});
+    SyncHeldEffect(
+        effectRuntime,
+        false,
+        runtimeState.vfx.holdHitCylinderInstanceId,
+        "hit_cylinder",
+        {},
+        {},
+        {});
+    SyncHeldEffect(
+        effectRuntime,
+        false,
+        runtimeState.vfx.holdHitCylinderComboInstanceId,
+        "hit_cylinder_combo",
+        {},
+        {},
+        {});
+}
 } // namespace
 
 void DrawSceneLightingControlsPanel(
@@ -130,6 +210,8 @@ void DrawVfxRuntimeControlsPanel(
     ImGui::Checkbox("Distortion", &runtimeState.vfx.enableDistortions);
     ImGui::SameLine();
     ImGui::Checkbox("Rings", &runtimeState.vfx.enableRings);
+    ImGui::SameLine();
+    ImGui::Checkbox("Cylinders", &runtimeState.vfx.enableCylinders);
     ImGui::Checkbox("Trail Mesh Stream", &runtimeState.vfx.enableTrailMeshStream);
     ImGui::Checkbox("Trail Mesh Stream Safety Fallback", &runtimeState.vfx.enableTrailMeshStreamAutoFallback);
     if (ImGui::Checkbox(
@@ -143,6 +225,47 @@ void DrawVfxRuntimeControlsPanel(
         trailMeshStreamStartupTelemetryFrames);
     ImGui::SliderFloat("Demo Spawn Interval", &runtimeState.vfx.autoPlayVfxInterval, 0.1f, 2.0f, "%.2f");
     ImGui::SliderFloat("Demo Spawn Radius", &runtimeState.vfx.autoPlayVfxRadius, 0.0f, 8.0f, "%.2f");
+    const Vector3 heldEffectPosition = FrontHitEffectPosition(runtimeState);
+    ImGui::SeparatorText("Held Hit Effects");
+    ImGui::Checkbox("Hold Plane Burst", &runtimeState.vfx.holdHitPlaneBurst);
+    ImGui::SameLine();
+    ImGui::Checkbox("Hold Ring", &runtimeState.vfx.holdHitRing);
+    ImGui::SameLine();
+    ImGui::Checkbox("Hold Cylinder", &runtimeState.vfx.holdHitCylinder);
+    ImGui::SameLine();
+    ImGui::Checkbox("Hold Cylinder Combo", &runtimeState.vfx.holdHitCylinderCombo);
+    SyncHeldEffect(
+        effectRuntime,
+        runtimeState.vfx.holdHitPlaneBurst,
+        runtimeState.vfx.holdHitPlaneBurstInstanceId,
+        "hit_plane_burst",
+        heldEffectPosition,
+        {1.0f, 1.0f, 1.0f, 1.0f},
+        {1.0f, 1.0f, 1.0f});
+    SyncHeldEffect(
+        effectRuntime,
+        runtimeState.vfx.holdHitRing,
+        runtimeState.vfx.holdHitRingInstanceId,
+        "hit_ring",
+        heldEffectPosition,
+        {0.9f, 0.95f, 1.0f, 1.0f},
+        {1.0f, 1.0f, 1.0f});
+    SyncHeldEffect(
+        effectRuntime,
+        runtimeState.vfx.holdHitCylinder,
+        runtimeState.vfx.holdHitCylinderInstanceId,
+        "hit_cylinder",
+        heldEffectPosition,
+        {0.65f, 0.85f, 1.0f, 1.0f},
+        {1.0f, 1.0f, 1.0f});
+    SyncHeldEffect(
+        effectRuntime,
+        runtimeState.vfx.holdHitCylinderCombo,
+        runtimeState.vfx.holdHitCylinderComboInstanceId,
+        "hit_cylinder_combo",
+        heldEffectPosition,
+        {1.0f, 1.0f, 1.0f, 1.0f},
+        {1.0f, 1.0f, 1.0f});
     if (ImGui::Button("Play warp_core")) {
         effectRuntime.PlayEffectWithParams(
             "warp_core",
@@ -167,14 +290,24 @@ void DrawVfxRuntimeControlsPanel(
             {1.0f, 1.0f, 1.0f});
     }
     ImGui::SameLine();
+    if (ImGui::Button("Play hit_cylinder")) {
+        runtimeState.vfx.enableCylinders = true;
+        effectRuntime.PlayEffectWithParams(
+            "hit_cylinder",
+            runtimeState.emitter.transform.translate,
+            {0.65f, 0.85f, 1.0f, 1.0f},
+            {1.0f, 1.0f, 1.0f});
+    }
+    ImGui::SameLine();
     if (ImGui::Button("Focus hit_combo")) {
+        DisableHeldHitEffects(runtimeState, effectRuntime);
         runtimeState.vfx.autoPlayVfxDemo = false;
         runtimeState.vfx.enableParticles = true;
         runtimeState.vfx.enableRings = true;
+        runtimeState.vfx.enableCylinders = false;
         runtimeState.vfx.enableTrails = false;
         runtimeState.vfx.enableBeams = false;
         runtimeState.vfx.enableDistortions = false;
-        runtimeState.vfx.enableRings = false;
         runtimeState.emitter.transform.translate = FrontHitEffectPosition(runtimeState);
         effectRuntime.ClearInstances();
         effectRuntime.PlayEffectWithParams(
@@ -184,12 +317,51 @@ void DrawVfxRuntimeControlsPanel(
             {1.0f, 1.0f, 1.0f});
     }
     ImGui::SameLine();
+    if (ImGui::Button("Focus hit_cylinder")) {
+        DisableHeldHitEffects(runtimeState, effectRuntime);
+        runtimeState.vfx.autoPlayVfxDemo = false;
+        runtimeState.vfx.enableParticles = false;
+        runtimeState.vfx.enableRings = false;
+        runtimeState.vfx.enableCylinders = true;
+        runtimeState.vfx.enableTrails = false;
+        runtimeState.vfx.enableBeams = false;
+        runtimeState.vfx.enableDistortions = false;
+        runtimeState.emitter.transform.translate = FrontHitEffectPosition(runtimeState);
+        effectRuntime.ClearInstances();
+        effectRuntime.PlayEffectWithParams(
+            "hit_cylinder",
+            runtimeState.emitter.transform.translate,
+            {0.65f, 0.85f, 1.0f, 1.0f},
+            {1.0f, 1.0f, 1.0f});
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Focus cylinder_combo")) {
+        DisableHeldHitEffects(runtimeState, effectRuntime);
+        runtimeState.vfx.autoPlayVfxDemo = false;
+        runtimeState.vfx.enableParticles = true;
+        runtimeState.vfx.enableRings = true;
+        runtimeState.vfx.enableCylinders = true;
+        runtimeState.vfx.enableTrails = false;
+        runtimeState.vfx.enableBeams = false;
+        runtimeState.vfx.enableDistortions = false;
+        runtimeState.emitter.transform.translate = FrontHitEffectPosition(runtimeState);
+        effectRuntime.ClearInstances();
+        effectRuntime.PlayEffectWithParams(
+            "hit_cylinder_combo",
+            runtimeState.emitter.transform.translate,
+            {1.0f, 1.0f, 1.0f, 1.0f},
+            {1.0f, 1.0f, 1.0f});
+    }
+    ImGui::SameLine();
     if (ImGui::Button("Focus hit_plane_burst")) {
+        DisableHeldHitEffects(runtimeState, effectRuntime);
         runtimeState.vfx.autoPlayVfxDemo = false;
         runtimeState.vfx.enableParticles = true;
         runtimeState.vfx.enableTrails = false;
         runtimeState.vfx.enableBeams = false;
         runtimeState.vfx.enableDistortions = false;
+        runtimeState.vfx.enableRings = false;
+        runtimeState.vfx.enableCylinders = false;
         runtimeState.emitter.transform.translate = FrontHitEffectPosition(runtimeState);
         effectRuntime.ClearInstances();
         effectRuntime.PlayEffectWithParams(
@@ -220,6 +392,7 @@ void DrawVfxRuntimeControlsPanel(
             {1.0f, 1.0f, 1.0f});
     }
     if (ImGui::Button("Clear Effects")) {
+        DisableHeldHitEffects(runtimeState, effectRuntime);
         effectRuntime.ClearInstances();
     }
 }

@@ -16,6 +16,8 @@ inline const char* ComponentTypeLabel(EffectComponentType type) {
         return "Distortion";
     case EffectComponentType::Ring:
         return "Ring";
+    case EffectComponentType::Cylinder:
+        return "Cylinder";
     }
     return "Unknown";
 }
@@ -36,6 +38,8 @@ inline const char* TechniqueLabel(EffectTechnique technique) {
         return "DistortionSprite";
     case EffectTechnique::RingMesh:
         return "RingMesh";
+    case EffectTechnique::CylinderMesh:
+        return "CylinderMesh";
     }
     return "Unknown";
 }
@@ -56,6 +60,8 @@ inline const char* RendererTypeLabel(EffectRendererType type) {
         return "DistortionRenderer";
     case EffectRendererType::RingRenderer:
         return "RingRenderer";
+    case EffectRendererType::CylinderRenderer:
+        return "CylinderRenderer";
     }
     return "Unknown";
 }

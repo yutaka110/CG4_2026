@@ -117,6 +117,18 @@ TechniqueRegistry BuildDefaultTechniqueRegistry() {
             "None",
             EffectLayer::AdditiveFx,
             180));
+    registry.Register(
+        MakeTechniqueDescriptor(
+            "CylinderMesh",
+            "Cylinder Mesh",
+            "Primitive",
+            "Additive side-only cylinder primitive for columns, portals, and authored VFX volumes.",
+            EffectTechnique::CylinderMesh,
+            EffectComponentType::Cylinder,
+            "CylinderRenderer",
+            "None",
+            EffectLayer::AdditiveFx,
+            190));
     return registry;
 }
 } // namespace

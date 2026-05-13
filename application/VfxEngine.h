@@ -17,6 +17,7 @@
 #include "utils/math/MathUtils.h"
 #include "vfx/AppVfxRendererSet.h"
 #include "vfx/BeamRenderer.h"
+#include "vfx/CylinderRenderer.h"
 #include "vfx/DistortionRenderer.h"
 #include "vfx/ParticleRenderer.h"
 #include "vfx/RingRenderer.h"
@@ -107,7 +108,8 @@ private:
     TrailRenderer trailRenderer_;
     DistortionRenderer distortionRenderer_;
     RingRenderer ringRenderer_;
-    AppVfxRendererSet vfxRenderers_{&particleRenderer_, &trailRenderer_, &beam_, &distortionRenderer_, &ringRenderer_};
+    CylinderRenderer cylinderRenderer_;
+    AppVfxRendererSet vfxRenderers_{&particleRenderer_, &trailRenderer_, &beam_, &distortionRenderer_, &ringRenderer_, &cylinderRenderer_};
     EffectAuthoringRegistry effectAuthoringRegistry_;
     EffectSystem effectSystem_;
     EffectRuntime effectRuntime_;

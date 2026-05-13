@@ -34,6 +34,12 @@ struct RingComponentAssetView {
     explicit operator bool() const { return common != nullptr && settings != nullptr; }
 };
 
+struct CylinderComponentAssetView {
+    const EffectComponentCommon* common = nullptr;
+    const EffectCylinderSettings* settings = nullptr;
+    explicit operator bool() const { return common != nullptr && settings != nullptr; }
+};
+
 inline ParticleComponentAssetView ParticleComponentView(const EffectComponentAsset& component) {
     if (component.common.type != EffectComponentType::Particle) {
         return {};
@@ -99,6 +105,19 @@ inline const EffectRingSettings* RingSettings(const EffectComponentAsset& compon
     return view ? view.settings : nullptr;
 }
 
+inline CylinderComponentAssetView CylinderComponentView(const EffectComponentAsset& component) {
+    if (component.common.type != EffectComponentType::Cylinder) {
+        return {};
+    }
+    const EffectCylinderSettings* settings = std::get_if<EffectCylinderSettings>(&component.payload.data);
+    return settings != nullptr ? CylinderComponentAssetView{&component.common, settings} : CylinderComponentAssetView{};
+}
+
+inline const EffectCylinderSettings* CylinderSettings(const EffectComponentAsset& component) {
+    const CylinderComponentAssetView view = CylinderComponentView(component);
+    return view ? view.settings : nullptr;
+}
+
 struct ParticleComponentCollectionView {
     std::vector<ParticleComponentAssetView> components;
     auto begin() const { return components.begin(); }
@@ -133,6 +152,14 @@ struct DistortionComponentCollectionView {
 
 struct RingComponentCollectionView {
     std::vector<RingComponentAssetView> components;
+    auto begin() const { return components.begin(); }
+    auto end() const { return components.end(); }
+    bool empty() const { return components.empty(); }
+    std::size_t size() const { return components.size(); }
+};
+
+struct CylinderComponentCollectionView {
+    std::vector<CylinderComponentAssetView> components;
     auto begin() const { return components.begin(); }
     auto end() const { return components.end(); }
     bool empty() const { return components.empty(); }
@@ -197,6 +224,16 @@ struct MutableRingComponentStorageView {
     explicit operator bool() const { return components != nullptr; }
 };
 
+struct CylinderComponentStorageView {
+    const std::vector<CylinderComponentAsset>* components = nullptr;
+    explicit operator bool() const { return components != nullptr; }
+};
+
+struct MutableCylinderComponentStorageView {
+    EffectAssetComponentStorage* components = nullptr;
+    explicit operator bool() const { return components != nullptr; }
+};
+
 inline ParticleComponentStorageView EffectAssetComponentStorage::ParticleStorageView() const {
     return {&particleComponents_};
 }
@@ -234,6 +271,14 @@ inline RingComponentStorageView EffectAssetComponentStorage::RingStorageView() c
 }
 
 inline MutableRingComponentStorageView EffectAssetComponentStorage::MutableRingStorageView() {
+    return {this};
+}
+
+inline CylinderComponentStorageView EffectAssetComponentStorage::CylinderStorageView() const {
+    return {&cylinderComponents_};
+}
+
+inline MutableCylinderComponentStorageView EffectAssetComponentStorage::MutableCylinderStorageView() {
     return {this};
 }
 
@@ -280,6 +325,15 @@ inline bool ReplaceRingComponentAndSyncPacked(
         return false;
     }
     return view.components->ReplaceRingComponentAndSyncPacked(component);
+}
+
+inline bool ReplaceCylinderComponentAndSyncPacked(
+    const MutableCylinderComponentStorageView& view,
+    const CylinderComponentAsset& component) {
+    if (!view) {
+        return false;
+    }
+    return view.components->ReplaceCylinderComponentAndSyncPacked(component);
 }
 
 template <typename Visitor>
@@ -382,6 +436,26 @@ inline void ForEachRingComponent(const EffectAsset& asset, Visitor&& visitor) {
     ForEachRingComponent(asset.Components(), std::forward<Visitor>(visitor));
 }
 
+template <typename Visitor>
+inline void ForEachCylinderComponent(const CylinderComponentStorageView& view, Visitor&& visitor) {
+    if (!view) {
+        return;
+    }
+    for (const CylinderComponentAsset& component : *view.components) {
+        visitor(CylinderComponentAssetView{&component.common, &component.settings});
+    }
+}
+
+template <typename Visitor>
+inline void ForEachCylinderComponent(const EffectAssetComponentStorage& components, Visitor&& visitor) {
+    ForEachCylinderComponent(components.CylinderStorageView(), std::forward<Visitor>(visitor));
+}
+
+template <typename Visitor>
+inline void ForEachCylinderComponent(const EffectAsset& asset, Visitor&& visitor) {
+    ForEachCylinderComponent(asset.Components(), std::forward<Visitor>(visitor));
+}
+
 inline bool HasParticleComponents(const ParticleComponentStorageView& view) {
     bool found = false;
     ForEachParticleComponent(view, [&found](const ParticleComponentAssetView&) {
@@ -460,6 +534,22 @@ inline bool HasRingComponents(const EffectAssetComponentStorage& components) {
 
 inline bool HasRingComponents(const EffectAsset& asset) {
     return HasRingComponents(asset.Components());
+}
+
+inline bool HasCylinderComponents(const CylinderComponentStorageView& view) {
+    bool found = false;
+    ForEachCylinderComponent(view, [&found](const CylinderComponentAssetView&) {
+        found = true;
+    });
+    return found;
+}
+
+inline bool HasCylinderComponents(const EffectAssetComponentStorage& components) {
+    return HasCylinderComponents(components.CylinderStorageView());
+}
+
+inline bool HasCylinderComponents(const EffectAsset& asset) {
+    return HasCylinderComponents(asset.Components());
 }
 
 inline ParticleComponentAssetView FindParticleComponent(
@@ -592,6 +682,32 @@ inline RingComponentAssetView FindRingComponent(
     return FindRingComponent(asset.Components(), componentId);
 }
 
+inline CylinderComponentAssetView FindCylinderComponent(
+    const CylinderComponentStorageView& view,
+    uint32_t componentId) {
+    if (!view) {
+        return {};
+    }
+    for (const CylinderComponentAsset& component : *view.components) {
+        if (component.common.id == componentId) {
+            return {&component.common, &component.settings};
+        }
+    }
+    return {};
+}
+
+inline CylinderComponentAssetView FindCylinderComponent(
+    const EffectAssetComponentStorage& components,
+    uint32_t componentId) {
+    return FindCylinderComponent(components.CylinderStorageView(), componentId);
+}
+
+inline CylinderComponentAssetView FindCylinderComponent(
+    const EffectAsset& asset,
+    uint32_t componentId) {
+    return FindCylinderComponent(asset.Components(), componentId);
+}
+
 inline ParticleComponentCollectionView ParticleComponents(const ParticleComponentStorageView& storage) {
     ParticleComponentCollectionView view{};
     if (!storage) {
@@ -692,6 +808,26 @@ inline RingComponentCollectionView RingComponents(const EffectAsset& asset) {
     return RingComponents(asset.Components());
 }
 
+inline CylinderComponentCollectionView CylinderComponents(const CylinderComponentStorageView& storage) {
+    CylinderComponentCollectionView view{};
+    if (!storage) {
+        return view;
+    }
+    view.components.reserve(storage.components->size());
+    ForEachCylinderComponent(storage, [&view](const CylinderComponentAssetView& cylinder) {
+        view.components.push_back(cylinder);
+    });
+    return view;
+}
+
+inline CylinderComponentCollectionView CylinderComponents(const EffectAssetComponentStorage& components) {
+    return CylinderComponents(components.CylinderStorageView());
+}
+
+inline CylinderComponentCollectionView CylinderComponents(const EffectAsset& asset) {
+    return CylinderComponents(asset.Components());
+}
+
 struct EffectComponentAssetBuilder {
     static EffectComponentCommon MakeCommon(
         const EffectAsset& asset,
@@ -759,6 +895,13 @@ struct EffectComponentAssetBuilder {
         return {common, asset.defaultRing};
     }
 
+    static CylinderComponentAsset MakeCylinder(
+        const EffectAsset& asset,
+        EffectComponentCommon common) {
+        common.type = EffectComponentType::Cylinder;
+        return {common, asset.defaultCylinder};
+    }
+
     static EffectComponentAsset Pack(
         const EffectAsset& asset,
         const EffectComponentCommon& common) {
@@ -771,6 +914,8 @@ struct EffectComponentAssetBuilder {
             return ToEffectComponentAsset(MakeDistortion(asset, common));
         case EffectComponentType::Ring:
             return ToEffectComponentAsset(MakeRing(asset, common));
+        case EffectComponentType::Cylinder:
+            return ToEffectComponentAsset(MakeCylinder(asset, common));
         case EffectComponentType::Particle:
         default:
             return ToEffectComponentAsset(MakeParticle(asset, common));

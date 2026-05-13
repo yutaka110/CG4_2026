@@ -1,6 +1,7 @@
 #pragma once
 
 class BeamRenderer;
+class CylinderRenderer;
 class DistortionRenderer;
 class ParticleRenderer;
 class RingRenderer;
@@ -12,12 +13,14 @@ struct AppVfxRendererSet {
     BeamRenderer* beam = nullptr;
     DistortionRenderer* distortion = nullptr;
     RingRenderer* ring = nullptr;
+    CylinderRenderer* cylinder = nullptr;
 
     bool IsValid() const {
         return particle != nullptr &&
             trail != nullptr &&
             beam != nullptr &&
             distortion != nullptr &&
-            ring != nullptr;
+            ring != nullptr &&
+            cylinder != nullptr;
     }
 };

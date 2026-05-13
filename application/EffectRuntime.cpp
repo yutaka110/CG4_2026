@@ -175,6 +175,10 @@ const EffectComponentCommon* PrimaryComponentCommon(const DistortionRenderQueue&
 const EffectComponentCommon* PrimaryComponentCommon(const RingRenderQueue& queue) {
     return queue.empty() ? nullptr : queue.front().common.componentCommon;
 }
+
+const EffectComponentCommon* PrimaryComponentCommon(const CylinderRenderQueue& queue) {
+    return queue.empty() ? nullptr : queue.front().common.componentCommon;
+}
 } // namespace
 
 EffectRuntime::EffectRuntime(EffectSystem* effectSystem)
@@ -223,6 +227,20 @@ void EffectRuntime::RestartInstance(uint32_t id) {
     }
 }
 
+void EffectRuntime::SetEffectPreviewLoop(uint32_t id, bool enabled) {
+    if (effectSystem_ != nullptr) {
+        effectSystem_->SetEffectPreviewLoop(id, enabled);
+    }
+}
+
+EffectInstance* EffectRuntime::FindInstance(uint32_t id) {
+    return effectSystem_ != nullptr ? effectSystem_->FindInstance(id) : nullptr;
+}
+
+const EffectInstance* EffectRuntime::FindInstance(uint32_t id) const {
+    return effectSystem_ != nullptr ? effectSystem_->FindInstance(id) : nullptr;
+}
+
 void EffectRuntime::ClearInstances() {
     if (effectSystem_ != nullptr) {
         effectSystem_->ClearInstances();
@@ -248,6 +266,7 @@ EffectRuntimeFrame EffectRuntime::BuildFrame() const {
     frame.beamQueue = BuildBeamQueue();
     frame.distortionQueue = BuildDistortionQueue();
     frame.ringQueue = BuildRingQueue();
+    frame.cylinderQueue = BuildCylinderQueue();
     const EffectAuthoringRegistry& authoringRegistry = AuthoringRegistry();
     frame.authoring.particle =
         BuildRuntimeQueueAuthoringStatus(PrimaryComponentCommon(frame.particleQueue), authoringRegistry);
@@ -259,13 +278,16 @@ EffectRuntimeFrame EffectRuntime::BuildFrame() const {
         BuildRuntimeQueueAuthoringStatus(PrimaryComponentCommon(frame.distortionQueue), authoringRegistry);
     frame.authoring.ring =
         BuildRuntimeQueueAuthoringStatus(PrimaryComponentCommon(frame.ringQueue), authoringRegistry);
+    frame.authoring.cylinder =
+        BuildRuntimeQueueAuthoringStatus(PrimaryComponentCommon(frame.cylinderQueue), authoringRegistry);
     frame.activeComponentCount =
         static_cast<uint32_t>(
             frame.particleQueue.size() +
             frame.trailQueue.size() +
             frame.beamQueue.size() +
             frame.distortionQueue.size() +
-            frame.ringQueue.size());
+            frame.ringQueue.size() +
+            frame.cylinderQueue.size());
     return frame;
 }
 
@@ -502,6 +524,34 @@ void EffectRuntime::ForEachRingAssetComponent(
         });
 }
 
+void EffectRuntime::ForEachCylinderAssetComponent(
+    const std::function<void(const ActiveComponentCore&, const CylinderComponentAssetView&)>& visitor) const {
+    ForEachActiveInstanceComponent(
+        [&visitor, this](const EffectInstance& instance, const EffectComponentInstance& componentInstance) {
+            if (instance.asset == nullptr) {
+                return;
+            }
+            if (const CylinderComponentAssetView cylinder =
+                    FindCylinderComponent(instance.asset->Components().CylinderStorageView(), componentInstance.componentId)) {
+                const RuntimeComponentRoute route =
+                    ResolveRuntimeComponentRoute(*cylinder.common, AuthoringRegistry());
+                if (!ComponentRoutesToRenderer(route, EffectComponentType::Cylinder)) {
+                    return;
+                }
+                ActiveComponentCore core{};
+                if (BuildActiveComponentCore(
+                        instance,
+                        componentInstance,
+                        *cylinder.common,
+                        route.renderer,
+                        route.simulation,
+                        core)) {
+                    visitor(core, cylinder);
+                }
+            }
+        });
+}
+
 void EffectRuntime::ForEachParticleComponent(
     const std::function<void(const ParticleActiveComponent&)>& visitor) const {
     ForEachParticleAssetComponent(
@@ -539,6 +589,14 @@ void EffectRuntime::ForEachRingComponent(
     ForEachRingAssetComponent(
         [&visitor](const ActiveComponentCore& core, const RingComponentAssetView& ring) {
             visitor({core.common, ring.settings});
+        });
+}
+
+void EffectRuntime::ForEachCylinderComponent(
+    const std::function<void(const CylinderActiveComponent&)>& visitor) const {
+    ForEachCylinderAssetComponent(
+        [&visitor](const ActiveComponentCore& core, const CylinderComponentAssetView& cylinder) {
+            visitor({core.common, cylinder.settings});
         });
 }
 
@@ -586,6 +644,16 @@ RingRenderQueue EffectRuntime::BuildRingQueue() const {
     RingRenderQueue queue;
     ForEachRingComponent(
         [&queue](const RingActiveComponent& component) {
+            queue.push_back({component.common, component.settings});
+        });
+    SortRenderQueue(queue);
+    return queue;
+}
+
+CylinderRenderQueue EffectRuntime::BuildCylinderQueue() const {
+    CylinderRenderQueue queue;
+    ForEachCylinderComponent(
+        [&queue](const CylinderActiveComponent& component) {
             queue.push_back({component.common, component.settings});
         });
     SortRenderQueue(queue);

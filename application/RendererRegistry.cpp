@@ -36,6 +36,11 @@ RendererRegistry BuildDefaultRendererRegistry() {
             "RingRenderer",
             EffectRendererType::RingRenderer,
             EffectComponentType::Ring});
+    registry.Register(
+        EffectRendererDescriptor{
+            "CylinderRenderer",
+            EffectRendererType::CylinderRenderer,
+            EffectComponentType::Cylinder});
     return registry;
 }
 } // namespace
