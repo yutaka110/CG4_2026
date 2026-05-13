@@ -29,6 +29,10 @@ void ApplyLiveTuningToComponent(
     EffectParticleSettings& destination) {
     destination.depthFadeSoftness = source.settings->depthFadeSoftness;
     destination.edgeSoftness = source.settings->edgeSoftness;
+    destination.spawnCount = source.settings->spawnCount;
+    destination.randomRotation = source.settings->randomRotation;
+    destination.scaleYMin = source.settings->scaleYMin;
+    destination.scaleYMax = source.settings->scaleYMax;
 }
 
 void ApplyLiveTuningToComponent(
@@ -267,6 +271,7 @@ void VfxEngine::RegisterDefaultTextures(const AppSceneResources& scene) {
     effectResourceCache_.RegisterTexture({"default", scene.textureSrvHandleCPU, scene.textureSrvHandleGPU, 1, 1});
     effectResourceCache_.RegisterTexture({"monsterBall", scene.textureSrvHandleCPU2, scene.textureSrvHandleGPU2, 1, 1});
     effectResourceCache_.RegisterTexture({"streakNoise", scene.textureSrvHandleCPU, scene.textureSrvHandleGPU, 1, 1});
+    effectResourceCache_.RegisterTexture({"circle2", scene.circle2TextureSrvHandleCPU, scene.circle2TextureSrvHandleGPU, 1, 1});
 }
 
 void VfxEngine::RegisterRenderPasses(

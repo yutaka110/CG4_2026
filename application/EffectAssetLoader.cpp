@@ -120,6 +120,14 @@ bool ApplyParticleSettingsKey(
         settings.pulseSpeed = ToFloat(value, settings.pulseSpeed);
     } else if (key == "spawnRadius") {
         settings.spawnRadius = ToFloat(value, settings.spawnRadius);
+    } else if (key == "spawnCount" || key == "activeCount") {
+        settings.spawnCount = ToFloat(value, settings.spawnCount);
+    } else if (key == "randomRotation" || key == "rotationRandom") {
+        settings.randomRotation = ToFloat(value, settings.randomRotation);
+    } else if (key == "scaleYMin" || key == "randomScaleYMin") {
+        settings.scaleYMin = ToFloat(value, settings.scaleYMin);
+    } else if (key == "scaleYMax" || key == "randomScaleYMax") {
+        settings.scaleYMax = ToFloat(value, settings.scaleYMax);
     } else if (key == "depthFadeSoftness" || key == "softness") {
         settings.depthFadeSoftness = ToFloat(value, settings.depthFadeSoftness);
     } else if (key == "particleEdgeSoftness" || key == "edgeSoftness") {
@@ -270,6 +278,14 @@ bool ApplyLegacyAssetSettingsKey(
         asset.defaultParticle.pulseSpeed = ToFloat(value, asset.defaultParticle.pulseSpeed);
     } else if (key == "spawnRadius") {
         asset.defaultParticle.spawnRadius = ToFloat(value, asset.defaultParticle.spawnRadius);
+    } else if (key == "spawnCount" || key == "activeCount") {
+        asset.defaultParticle.spawnCount = ToFloat(value, asset.defaultParticle.spawnCount);
+    } else if (key == "randomRotation" || key == "rotationRandom") {
+        asset.defaultParticle.randomRotation = ToFloat(value, asset.defaultParticle.randomRotation);
+    } else if (key == "scaleYMin" || key == "randomScaleYMin") {
+        asset.defaultParticle.scaleYMin = ToFloat(value, asset.defaultParticle.scaleYMin);
+    } else if (key == "scaleYMax" || key == "randomScaleYMax") {
+        asset.defaultParticle.scaleYMax = ToFloat(value, asset.defaultParticle.scaleYMax);
     } else if (key == "depthFadeSoftness" || key == "softness") {
         asset.defaultParticle.depthFadeSoftness = ToFloat(value, asset.defaultParticle.depthFadeSoftness);
         asset.defaultTrail.depthFadeSoftness = asset.defaultParticle.depthFadeSoftness;

@@ -27,8 +27,13 @@ void AppVfxRenderPipeline::RegisterPasses(
         D3D12_RESOURCE_STATE_RENDER_TARGET);
     ctx.gpuParticleSystem->DeclareGraphBuffers(*ctx.renderGraph);
 
-    ctx.vfxRenderers->particle->RegisterPasses(ctx, vfxResources);
-    ctx.vfxRenderers->trail->RegisterPasses(ctx, vfxResources);
+    const AppVfxRuntimeState& runtimeState = ctx.runtimeState->vfx;
+    if (runtimeState.enableParticles) {
+        ctx.vfxRenderers->particle->RegisterPasses(ctx, vfxResources);
+    }
+    if (runtimeState.enableTrails) {
+        ctx.vfxRenderers->trail->RegisterPasses(ctx, vfxResources);
+    }
 
     ctx.renderGraph->AddPass({
         "VFX.BeginAccumulation",
@@ -41,10 +46,14 @@ void AppVfxRenderPipeline::RegisterPasses(
         [ctx](ge3::graphics::RenderPassContext& passContext) {
             ctx.vfxRenderTargets->BeginVfx(passContext.commandList, ctx.dsv);
         }});
-    if (vfxResources.beam.simulation.usesCompute) {
-        ctx.vfxRenderers->beam->RegisterDedicatedPasses(ctx, vfxResources);
-    } else {
-        ctx.vfxRenderers->beam->RegisterPasses(ctx, vfxResources);
+    if (runtimeState.enableBeams) {
+        if (vfxResources.beam.simulation.usesCompute) {
+            ctx.vfxRenderers->beam->RegisterDedicatedPasses(ctx, vfxResources);
+        } else {
+            ctx.vfxRenderers->beam->RegisterPasses(ctx, vfxResources);
+        }
     }
-    ctx.vfxRenderers->distortion->RegisterPasses(ctx, vfxResources);
+    if (runtimeState.enableDistortions) {
+        ctx.vfxRenderers->distortion->RegisterPasses(ctx, vfxResources);
+    }
 }

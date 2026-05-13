@@ -225,7 +225,7 @@ void ParticleRenderer::RegisterPasses(
         vfxResources.particle.routing.depthTarget,
         [this, ctx, vfxResources](ge3::graphics::RenderPassContext& passContext) {
             const ParticleRenderQueue& queue = ctx.effectRuntime->particleQueue;
-            if (!ctx.runtimeState->vfx.enableParticles && queue.empty()) {
+            if (!ctx.runtimeState->vfx.enableParticles || queue.empty()) {
                 return;
             }
             Draw(
@@ -257,6 +257,12 @@ void ParticleRenderer::Simulate(
     float pulseSpeed = 5.0f;
     float spawnRadius = 4.0f;
     float uvScrollSpeed = 0.0f;
+    float particleLifetime = 0.0f;
+    float spawnCount = 0.0f;
+    float randomRotation = 0.0f;
+    float scaleYMin = 1.0f;
+    float scaleYMax = 1.0f;
+    Vector3 emitterPosition = {0.0f, 0.0f, 0.0f};
 
     if (input.primary.instance != nullptr &&
         input.primary.componentCommon != nullptr &&
@@ -271,19 +277,30 @@ void ParticleRenderer::Simulate(
             instance.color.w * component.color.w,
         };
         scale = instance.transform.scale;
+        emitterPosition = instance.transform.translate;
+        particleLifetime = component.duration;
         emissive = settings.emissive;
         turbulence = settings.noiseStrength + settings.distortionStrength;
         pulseSpeed = settings.pulseSpeed;
         spawnRadius = settings.spawnRadius;
         uvScrollSpeed = settings.uvScrollSpeed;
+        spawnCount = settings.spawnCount;
+        randomRotation = settings.randomRotation;
+        scaleYMin = settings.scaleYMin;
+        scaleYMax = settings.scaleYMax;
     } else if (input.fallbackCommon != nullptr && input.fallbackSettings != nullptr) {
         tint = input.fallbackCommon->color;
         scale = input.fallbackCommon->size;
+        particleLifetime = input.fallbackCommon->duration;
         emissive = input.fallbackSettings->emissive;
         turbulence = input.fallbackSettings->noiseStrength + input.fallbackSettings->distortionStrength;
         pulseSpeed = input.fallbackSettings->pulseSpeed;
         spawnRadius = input.fallbackSettings->spawnRadius;
         uvScrollSpeed = input.fallbackSettings->uvScrollSpeed;
+        spawnCount = input.fallbackSettings->spawnCount;
+        randomRotation = input.fallbackSettings->randomRotation;
+        scaleYMin = input.fallbackSettings->scaleYMin;
+        scaleYMax = input.fallbackSettings->scaleYMax;
     }
 
     const vfx::VfxSimulationResourceSet* simulationResources =
@@ -311,7 +328,13 @@ void ParticleRenderer::Simulate(
         spawnRadius,
         uvScrollSpeed,
         renderBufferResource,
-        stateBufferResource);
+        stateBufferResource,
+        particleLifetime,
+        spawnCount,
+        randomRotation,
+        scaleYMin,
+        scaleYMax,
+        emitterPosition);
 }
 
 void ParticleRenderer::Draw(

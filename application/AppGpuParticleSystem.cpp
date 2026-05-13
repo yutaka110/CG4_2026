@@ -509,6 +509,7 @@ bool AppGpuParticleSystem::Initialize(
         initial[i].color = {0.25f + seed * 0.75f, 0.55f, 1.0f, 1.0f};
         initial[i].scale = {0.08f + seed * 0.08f, 0.08f + seed * 0.08f, 1.0f};
         initial[i].seed = seed;
+        initial[i].shape = {};
     }
 
     void* mapped = nullptr;
@@ -1219,7 +1220,13 @@ void AppGpuParticleSystem::Simulate(
         float spawnRadius,
         float uvScrollSpeed,
         std::string_view renderBufferResource,
-        std::string_view stateBufferResource) {
+        std::string_view stateBufferResource,
+        float particleLifetime,
+        float spawnCount,
+        float randomRotation,
+        float scaleYMin,
+        float scaleYMax,
+        Vector3 emitterPosition) {
     if (!initialized_ || commandList == nullptr || rootSignature == nullptr || pipelineState == nullptr) {
         return;
     }
@@ -1275,6 +1282,8 @@ void AppGpuParticleSystem::Simulate(
         Vector4 tint;
         Vector4 scaleAndParams;
         Vector4 effectParams;
+        Vector4 particleShapeParams;
+        Vector4 emitterParams;
     } constants{};
     constants.viewProjection = viewProjection;
     constants.deltaTime = deltaTime;
@@ -1283,6 +1292,8 @@ void AppGpuParticleSystem::Simulate(
     constants.tint = tint;
     constants.scaleAndParams = {scale.x, scale.y, emissive, turbulence};
     constants.effectParams = {pulseSpeed, spawnRadius, uvScrollSpeed, 0.0f};
+    constants.particleShapeParams = {spawnCount, randomRotation, scaleYMin, scaleYMax};
+    constants.emitterParams = {emitterPosition.x, emitterPosition.y, emitterPosition.z, particleLifetime};
 
     if (*outputState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
         D3D12_RESOURCE_BARRIER outputReady =
@@ -1299,7 +1310,7 @@ void AppGpuParticleSystem::Simulate(
 
     commandList->SetComputeRootSignature(rootSignature);
     commandList->SetPipelineState(pipelineState);
-    commandList->SetComputeRoot32BitConstants(0, 32, &constants, 0);
+    commandList->SetComputeRoot32BitConstants(0, 40, &constants, 0);
     commandList->SetComputeRootDescriptorTable(1, outputUav);
     commandList->SetComputeRootDescriptorTable(2, stateUav);
     const uint32_t dispatchGroupCount = (maxParticles_ + 255) / 256;

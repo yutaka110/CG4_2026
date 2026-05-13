@@ -75,6 +75,9 @@ struct BeamDedicatedOperationalHealthSummary {
 
 struct AppVfxRuntimeState {
     bool enableParticles = false;
+    bool enableTrails = true;
+    bool enableBeams = true;
+    bool enableDistortions = true;
     bool enableParticleDedicatedResourceProbe = false;
     bool enableParticleDedicatedProbeTelemetry = false;
     bool enableParticleDedicatedAutoFallback = true;
@@ -109,7 +112,7 @@ struct AppVfxRuntimeState {
     bool beamDedicatedDefaultOnReady = false;
     std::string beamDedicatedDefaultOnHealth = "warmup";
 
-    bool autoPlayVfxDemo = true;
+    bool autoPlayVfxDemo = false;
     float autoPlayVfxInterval = 0.6f;
     float autoPlayVfxRadius = 2.5f;
     float autoPlayVfxTimer = 0.0f;

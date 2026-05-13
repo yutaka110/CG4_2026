@@ -275,6 +275,23 @@ bool AppSceneResources::Initialize(
     textureSrvHandleGPU2 = AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 2);
     device->CreateShaderResourceView(textureResource2.Get(), &srvDesc2, textureSrvHandleCPU2);
 
+    const std::string circle2TexturePath =
+        std::filesystem::exists("Resources/circle2.png") ? "Resources/circle2.png" : "resources/monsterBall.png";
+    DirectX::ScratchImage circle2Images = AppRenderResources::LoadTexture(circle2TexturePath);
+    const DirectX::TexMetadata& circle2Metadata = circle2Images.GetMetadata();
+    circle2TextureResource = AppRenderResources::CreateTextureResource(device, circle2Metadata);
+    AppRenderResources::UploadTextureData(circle2TextureResource, circle2Images);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC circle2SrvDesc{};
+    circle2SrvDesc.Format = circle2Metadata.format;
+    circle2SrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    circle2SrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    circle2SrvDesc.Texture2D.MipLevels = UINT(circle2Metadata.mipLevels);
+
+    circle2TextureSrvHandleCPU = AppRenderResources::GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 5);
+    circle2TextureSrvHandleGPU = AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 5);
+    device->CreateShaderResourceView(circle2TextureResource.Get(), &circle2SrvDesc, circle2TextureSrvHandleCPU);
+
     const std::string skyboxTexturePath = "Resources/rostock_laage_airport_4k.dds";
     if (std::filesystem::exists(skyboxTexturePath)) {
         DirectX::ScratchImage skyboxImages = AppRenderResources::LoadTexture(skyboxTexturePath);

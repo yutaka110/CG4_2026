@@ -5,6 +5,17 @@
 
 #include "../../externals/imgui/imgui.h"
 
+namespace {
+Vector3 FrontHitEffectPosition(const AppRuntimeState& runtimeState) {
+    const float frontRadius = runtimeState.transform.scale.z;
+    return {
+        runtimeState.transform.translate.x,
+        runtimeState.transform.translate.y,
+        runtimeState.transform.translate.z - frontRadius - 0.15f,
+    };
+}
+} // namespace
+
 void DrawSceneLightingControlsPanel(
     AppRuntimeState& runtimeState) {
     ImGui::ColorEdit3("Light Color",
@@ -71,6 +82,9 @@ void DrawMaterialSettingsControlsPanel(
         0.01f,
         -100.0f,
         100.0f);
+    if (ImGui::Button("Place Emitter On Front Hit")) {
+        runtimeState.emitter.transform.translate = FrontHitEffectPosition(runtimeState);
+    }
 
     ImGui::DragFloat3("Field Accel", &runtimeState.accelerationField.acceleration.x, 0.1f);
     ImGui::DragFloat3("Field Min", &runtimeState.accelerationField.area.min.x, 0.1f);
@@ -106,6 +120,14 @@ void DrawVfxRuntimeControlsPanel(
         effectRuntime.SetSpeedMultiplier(runtimeSpeed);
     }
     ImGui::Checkbox("Auto Play VFX Demo", &runtimeState.vfx.autoPlayVfxDemo);
+    ImGui::SeparatorText("VFX Visibility");
+    ImGui::Checkbox("Particles", &runtimeState.vfx.enableParticles);
+    ImGui::SameLine();
+    ImGui::Checkbox("Trails", &runtimeState.vfx.enableTrails);
+    ImGui::SameLine();
+    ImGui::Checkbox("Beams", &runtimeState.vfx.enableBeams);
+    ImGui::SameLine();
+    ImGui::Checkbox("Distortion", &runtimeState.vfx.enableDistortions);
     ImGui::Checkbox("Trail Mesh Stream", &runtimeState.vfx.enableTrailMeshStream);
     ImGui::Checkbox("Trail Mesh Stream Safety Fallback", &runtimeState.vfx.enableTrailMeshStreamAutoFallback);
     if (ImGui::Checkbox(
@@ -124,6 +146,29 @@ void DrawVfxRuntimeControlsPanel(
             "warp_core",
             runtimeState.emitter.transform.translate,
             {1.0f, 0.75f, 0.35f, 1.0f},
+            {1.0f, 1.0f, 1.0f});
+    }
+    if (ImGui::Button("Play hit_plane_burst")) {
+        runtimeState.vfx.enableParticles = true;
+        effectRuntime.PlayEffectWithParams(
+            "hit_plane_burst",
+            runtimeState.emitter.transform.translate,
+            {1.0f, 1.0f, 1.0f, 1.0f},
+            {1.0f, 1.0f, 1.0f});
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Focus hit_plane_burst")) {
+        runtimeState.vfx.autoPlayVfxDemo = false;
+        runtimeState.vfx.enableParticles = true;
+        runtimeState.vfx.enableTrails = false;
+        runtimeState.vfx.enableBeams = false;
+        runtimeState.vfx.enableDistortions = false;
+        runtimeState.emitter.transform.translate = FrontHitEffectPosition(runtimeState);
+        effectRuntime.ClearInstances();
+        effectRuntime.PlayEffectWithParams(
+            "hit_plane_burst",
+            runtimeState.emitter.transform.translate,
+            {1.0f, 1.0f, 1.0f, 1.0f},
             {1.0f, 1.0f, 1.0f});
     }
     if (ImGui::Button("Play authoring_metadata_demo")) {

@@ -14,6 +14,7 @@ struct ParticleState
     float4 color;
     float3 scale;
     float seed;
+    float4 shape;
 };
 
 cbuffer SimConstants : register(b0)
@@ -26,6 +27,8 @@ cbuffer SimConstants : register(b0)
     float4 gTint;
     float4 gScaleAndParams;
     float4 gEffectParams;
+    float4 gParticleShapeParams;
+    float4 gEmitterParams;
 };
 
 RWStructuredBuffer<ParticleForGPU> gParticleOutput : register(u0);
@@ -36,14 +39,21 @@ float3 HashSpawn(uint id, float seed, float radius)
     float x = frac(sin((float)id * 12.9898 + seed * 78.233) * 43758.5453);
     float y = frac(sin((float)id * 39.3467 + seed * 11.135) * 24634.6345);
     float z = frac(sin((float)id * 73.1569 + seed * 91.753) * 16431.5172);
-    return float3((x - 0.5f) * radius * 2.0f, (y - 0.5f) * radius, 2.0f + z * max(radius, 0.1f));
+    return float3((x - 0.5f) * radius * 2.0f, (y - 0.5f) * radius * 2.0f, (z - 0.5f) * radius * 2.0f);
 }
 
-float4x4 MakeWorld(float3 position, float3 scale)
+float Hash01(uint id, float seed, float salt)
 {
+    return frac(sin((float)id * (17.371f + salt) + seed * (43.17f + salt)) * 32768.123f);
+}
+
+float4x4 MakeWorld(float3 position, float3 scale, float rotationZ)
+{
+    float s = sin(rotationZ);
+    float c = cos(rotationZ);
     return float4x4(
-        scale.x, 0.0f, 0.0f, 0.0f,
-        0.0f, scale.y, 0.0f, 0.0f,
+        scale.x * c, scale.x * s, 0.0f, 0.0f,
+        -scale.y * s, scale.y * c, 0.0f, 0.0f,
         0.0f, 0.0f, scale.z, 0.0f,
         position.x, position.y, position.z, 1.0f);
 }
@@ -58,12 +68,37 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
 
     ParticleState state = gParticleState[id];
+    uint activeCount = gParticleShapeParams.x > 0.0f
+        ? min((uint)round(gParticleShapeParams.x), gMaxParticles)
+        : gMaxParticles;
+    if (id >= activeCount)
+    {
+        ParticleForGPU inactive;
+        inactive.World = MakeWorld(float3(0.0f, 0.0f, 0.0f), float3(0.0f, 0.0f, 0.0f), 0.0f);
+        inactive.WVP = inactive.World;
+        inactive.color = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        gParticleOutput[id] = inactive;
+        return;
+    }
+
+    float authoredLifetime = gEmitterParams.w > 0.0f ? gEmitterParams.w : state.lifetime;
+    bool needsRespawn = gEmitterParams.w > 0.0f && abs(state.lifetime - authoredLifetime) > 0.001f;
     state.age += gDeltaTime;
-    if (state.age >= state.lifetime)
+    if (needsRespawn || state.age >= state.lifetime)
     {
         state.age = 0.0f;
-        state.position = HashSpawn(id, state.seed + gTime, max(gEffectParams.y, 0.1f));
+        state.lifetime = max(authoredLifetime, 0.001f);
+        state.position = gEmitterParams.xyz + HashSpawn(id, state.seed + gTime, max(gEffectParams.y, 0.0f));
         state.velocity = float3(state.seed * 0.8f - 0.4f, 0.6f + state.seed, state.seed * 0.5f - 0.25f);
+        float scaleMin = min(gParticleShapeParams.z, gParticleShapeParams.w);
+        float scaleMax = max(gParticleShapeParams.z, gParticleShapeParams.w);
+        float scaleRand = Hash01(id, state.seed + gTime, 9.17f);
+        state.shape.z = lerp(scaleMin, scaleMax, scaleRand);
+        float activeDenom = max((float)activeCount, 1.0f);
+        float radialAngle = ((float)id / activeDenom) * 6.2831853f;
+        float jitter = (Hash01(id, state.seed + gTime, 21.4f) - 0.5f) * 0.65f;
+        state.shape.x = gParticleShapeParams.y > 0.5f ? radialAngle + jitter : 0.0f;
+        state.shape.y = 0.0f;
     }
 
     float normalizedAge = saturate(state.age / max(state.lifetime, 0.001f));
@@ -76,8 +111,11 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     float alpha = 1.0f - normalizedAge;
     float pulse = 0.65f + 0.35f * sin(gTime * max(gEffectParams.x, 0.01f) + state.seed * 6.28318f);
-    float3 scale = state.scale * float3(gScaleAndParams.x, gScaleAndParams.y, 1.0f) * (0.7f + normalizedAge * 1.7f);
-    float4x4 world = MakeWorld(state.position, scale);
+    float useAuthoredPlaneScale = gParticleShapeParams.x > 0.0f ? 1.0f : 0.0f;
+    float3 stateScale = useAuthoredPlaneScale > 0.5f ? float3(1.0f, 1.0f, 1.0f) : state.scale;
+    float yScaleRandom = useAuthoredPlaneScale > 0.5f ? max(state.shape.z, 0.001f) : 1.0f;
+    float3 scale = stateScale * float3(gScaleAndParams.x, gScaleAndParams.y * yScaleRandom, 1.0f) * (0.7f + normalizedAge * 1.7f);
+    float4x4 world = MakeWorld(state.position, scale, state.shape.x + state.shape.y * state.age);
 
     ParticleForGPU output;
     output.World = world;

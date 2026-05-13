@@ -84,12 +84,15 @@ public:
     // Texture
     Microsoft::WRL::ComPtr<ID3D12Resource> textureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> textureResource2;
+    Microsoft::WRL::ComPtr<ID3D12Resource> circle2TextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> skyboxTextureResource;
     D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU2{};
+    D3D12_GPU_DESCRIPTOR_HANDLE circle2TextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleGPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU2{};
+    D3D12_CPU_DESCRIPTOR_HANDLE circle2TextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleCPU{};
 
     // Sphere

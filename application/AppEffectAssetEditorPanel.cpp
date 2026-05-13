@@ -512,6 +512,19 @@ bool DrawTrailFollowModeCombo(const char* label, EffectTrailFollowMode& mode) {
 
 bool DrawEffectTypeControls(EffectParticleSettings& particle) {
     bool changed = false;
+    changed |= ImGui::SliderFloat("Particle Emissive", &particle.emissive, 0.0f, 12.0f, "%.2f");
+    int spawnCount = static_cast<int>(particle.spawnCount);
+    if (ImGui::SliderInt("Particle Spawn Count", &spawnCount, 0, 256)) {
+        particle.spawnCount = static_cast<float>(spawnCount);
+        changed = true;
+    }
+    bool randomRotation = particle.randomRotation > 0.5f;
+    if (ImGui::Checkbox("Random Rotation", &randomRotation)) {
+        particle.randomRotation = randomRotation ? 1.0f : 0.0f;
+        changed = true;
+    }
+    changed |= ImGui::SliderFloat("Scale Y Min", &particle.scaleYMin, 0.01f, 8.0f, "%.2f");
+    changed |= ImGui::SliderFloat("Scale Y Max", &particle.scaleYMax, 0.01f, 8.0f, "%.2f");
     changed |= ImGui::SliderFloat("Depth Fade", &particle.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
     changed |= ImGui::SliderFloat("Particle Edge", &particle.edgeSoftness, 0.0f, 1.0f, "%.2f");
     return changed;
@@ -552,6 +565,11 @@ bool DrawEffectTypeControls(EffectBeamSettings&) {
 }
 
 void ResetEffectTypeToAssetDefault(EffectParticleSettings& particle, const EffectAsset& asset) {
+    particle.emissive = asset.defaultParticle.emissive;
+    particle.spawnCount = asset.defaultParticle.spawnCount;
+    particle.randomRotation = asset.defaultParticle.randomRotation;
+    particle.scaleYMin = asset.defaultParticle.scaleYMin;
+    particle.scaleYMax = asset.defaultParticle.scaleYMax;
     particle.depthFadeSoftness = asset.defaultParticle.depthFadeSoftness;
     particle.edgeSoftness = asset.defaultParticle.edgeSoftness;
 }
@@ -938,6 +956,17 @@ void DrawEffectAssetEditorPanel(
                 asset.techniqueDescription.empty() ? "none" : asset.techniqueDescription.c_str());
 
             if (ImGui::TreeNode("Asset Defaults")) {
+                ImGui::SliderFloat("Default Particle Emissive", &asset.defaultParticle.emissive, 0.0f, 12.0f, "%.2f");
+                int defaultParticleSpawnCount = static_cast<int>(asset.defaultParticle.spawnCount);
+                if (ImGui::SliderInt("Default Particle Spawn Count", &defaultParticleSpawnCount, 0, 256)) {
+                    asset.defaultParticle.spawnCount = static_cast<float>(defaultParticleSpawnCount);
+                }
+                bool defaultParticleRandomRotation = asset.defaultParticle.randomRotation > 0.5f;
+                if (ImGui::Checkbox("Default Particle Random Rotation", &defaultParticleRandomRotation)) {
+                    asset.defaultParticle.randomRotation = defaultParticleRandomRotation ? 1.0f : 0.0f;
+                }
+                ImGui::SliderFloat("Default Particle Scale Y Min", &asset.defaultParticle.scaleYMin, 0.01f, 8.0f, "%.2f");
+                ImGui::SliderFloat("Default Particle Scale Y Max", &asset.defaultParticle.scaleYMax, 0.01f, 8.0f, "%.2f");
                 ImGui::SliderFloat("Default Particle Depth Fade", &asset.defaultParticle.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
                 ImGui::SliderFloat("Default Particle Edge", &asset.defaultParticle.edgeSoftness, 0.0f, 1.0f, "%.2f");
                 ImGui::SliderFloat("Default Trail Depth Fade", &asset.defaultTrail.depthFadeSoftness, 0.001f, 0.1f, "%.3f");

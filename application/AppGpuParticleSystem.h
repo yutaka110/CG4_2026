@@ -33,6 +33,7 @@ public:
         Vector4 color{};
         Vector3 scale{};
         float seed = 0.0f;
+        Vector4 shape{};
     };
 
     struct TrailMeshStreamControlPointSample {
@@ -128,7 +129,13 @@ public:
         float spawnRadius,
         float uvScrollSpeed,
         std::string_view renderBufferResource = "ParticleRenderBuffer",
-        std::string_view stateBufferResource = "ParticleState");
+        std::string_view stateBufferResource = "ParticleState",
+        float particleLifetime = 0.0f,
+        float spawnCount = 0.0f,
+        float randomRotation = 0.0f,
+        float scaleYMin = 1.0f,
+        float scaleYMax = 1.0f,
+        Vector3 emitterPosition = {});
 
     void DeclareGraphBuffers(ge3::graphics::RenderGraph& renderGraph) const;
     bool EnsureGraphBuffers(ID3D12Device* device, const ge3::graphics::RenderGraph& renderGraph);

@@ -194,6 +194,10 @@ struct EffectParticleSettings {
     float uvScrollSpeed = 0.0f;
     float pulseSpeed = 5.0f;
     float spawnRadius = 4.0f;
+    float spawnCount = 0.0f;
+    float randomRotation = 0.0f;
+    float scaleYMin = 1.0f;
+    float scaleYMax = 1.0f;
     float depthFadeSoftness = 0.02f;
     float edgeSoftness = 0.5f;
 };

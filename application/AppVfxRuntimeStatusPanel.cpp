@@ -34,6 +34,9 @@ void DrawParticleRuntimeStatusSection(
     const EffectRuntimeFrame& runtimeFrame,
     const AppVfxRuntimeStatusPanelInput& input) {
     ImGui::Checkbox("Show Particles", &runtimeState.vfx.enableParticles);
+    ImGui::Checkbox("Show Trails", &runtimeState.vfx.enableTrails);
+    ImGui::Checkbox("Show Beams", &runtimeState.vfx.enableBeams);
+    ImGui::Checkbox("Show Distortion", &runtimeState.vfx.enableDistortions);
     if (ImGui::Checkbox("Particle Dedicated Resource Probe", &runtimeState.vfx.enableParticleDedicatedResourceProbe)) {
         *input.particleDedicatedProbeTelemetryFrames = 0;
         *input.particleDedicatedHealthFrames = 0;

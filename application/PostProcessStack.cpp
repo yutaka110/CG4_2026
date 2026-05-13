@@ -224,7 +224,7 @@ void PostProcessStack::ResetToVfxDefaults() {
     gaussianBlurHorizontal.pipeline = "GaussianBlurHorizontal";
     gaussianBlurHorizontal.secondaryInputResource = kPostProcessOutputResource;
     gaussianBlurHorizontal.tertiaryInputResource = kPostProcessOutputResource;
-    gaussianBlurHorizontal.enabled = true;
+    gaussianBlurHorizontal.enabled = false;
     gaussianBlurHorizontal.intensity = 1.0f;
     gaussianBlurHorizontal.resolutionScale = 1.0f;
     gaussianBlurHorizontal.parameters.gaussianBlurKernelRadius = 2.0f;
@@ -238,7 +238,7 @@ void PostProcessStack::ResetToVfxDefaults() {
     gaussianBlurVertical.pipeline = "GaussianBlurVertical";
     gaussianBlurVertical.secondaryInputResource = kPostProcessPreviousInputResource;
     gaussianBlurVertical.tertiaryInputResource = kPostProcessPreviousInputResource;
-    gaussianBlurVertical.enabled = true;
+    gaussianBlurVertical.enabled = false;
     gaussianBlurVertical.intensity = 1.0f;
     gaussianBlurVertical.resolutionScale = 1.0f;
     gaussianBlurVertical.parameters.gaussianBlurKernelRadius = 2.0f;
@@ -252,7 +252,7 @@ void PostProcessStack::ResetToVfxDefaults() {
     prewittOutline.pipeline = "PrewittOutline";
     prewittOutline.secondaryInputResource = kPostProcessOutputResource;
     prewittOutline.tertiaryInputResource = kPostProcessOutputResource;
-    prewittOutline.enabled = true;
+    prewittOutline.enabled = false;
     prewittOutline.intensity = 1.0f;
     prewittOutline.resolutionScale = 1.0f;
     prewittOutline.parameters.outlineThreshold = 0.08f;
@@ -271,7 +271,7 @@ void PostProcessStack::ResetToVfxDefaults() {
     grayscale.pipeline = "Grayscale";
     grayscale.secondaryInputResource = kPostProcessOutputResource;
     grayscale.tertiaryInputResource = kPostProcessOutputResource;
-    grayscale.enabled = true;
+    grayscale.enabled = false;
     grayscale.intensity = 1.0f;
     grayscale.resolutionScale = 1.0f;
     grayscale.parameters.grayscaleMode = 1.0f;
@@ -284,7 +284,7 @@ void PostProcessStack::ResetToVfxDefaults() {
     vignette.pipeline = "Vignette";
     vignette.secondaryInputResource = kPostProcessOutputResource;
     vignette.tertiaryInputResource = kPostProcessOutputResource;
-    vignette.enabled = true;
+    vignette.enabled = false;
     vignette.intensity = 1.0f;
     vignette.resolutionScale = 1.0f;
     vignette.parameters.vignetteRadius = 0.75f;
