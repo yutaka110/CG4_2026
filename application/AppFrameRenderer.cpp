@@ -55,6 +55,7 @@ void AppFrameRenderer::DrawMainModel(
     D3D12_GPU_DESCRIPTOR_HANDLE textureHandle,
     D3D12_GPU_DESCRIPTOR_HANDLE receivedTextureHandle,
     D3D12_GPU_DESCRIPTOR_HANDLE motionMaskTextureHandle,
+    D3D12_GPU_DESCRIPTOR_HANDLE environmentTextureHandle,
     D3D12_GPU_VIRTUAL_ADDRESS directionalLightBufferAddress,
     D3D12_GPU_VIRTUAL_ADDRESS cameraBufferAddress,
     D3D12_GPU_VIRTUAL_ADDRESS pointLightBufferAddress,
@@ -82,6 +83,7 @@ void AppFrameRenderer::DrawMainModel(
     material.textures.srv[2] = textureHandle;
     material.textures.srv[4] = receivedTextureHandle;
     material.textures.srv[5] = motionMaskTextureHandle;
+    material.textures.srv[9] = environmentTextureHandle;
     ApplyMaterialInstance(commandList, material);
     commandList->DrawInstanced(vertexCount, 1, 0, 0);
 }
@@ -102,6 +104,7 @@ void AppFrameRenderer::ApplyMaterialInstance(
     if (material.parameters.cbv[6] != 0) commandList->SetGraphicsRootConstantBufferView(6, material.parameters.cbv[6]);
     if (material.parameters.cbv[7] != 0) commandList->SetGraphicsRootConstantBufferView(7, material.parameters.cbv[7]);
     if (material.parameters.cbv[8] != 0) commandList->SetGraphicsRootConstantBufferView(8, material.parameters.cbv[8]);
+    if (material.textures.srv[9].ptr != 0) commandList->SetGraphicsRootDescriptorTable(9, material.textures.srv[9]);
 }
 
 void AppFrameRenderer::DrawSprite(

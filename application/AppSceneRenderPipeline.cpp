@@ -114,6 +114,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 ctx.scene->textureSrvHandleGPU2,
                 ctx.scene->textureSrvHandleGPU2,
                 ctx.scene->textureSrvHandleGPU2,
+                ctx.scene->skyboxTextureSrvHandleGPU,
                 ctx.scene->directionalLightResource->GetGPUVirtualAddress(),
                 ctx.scene->cameraResource->GetGPUVirtualAddress(),
                 ctx.scene->pointLightResource->GetGPUVirtualAddress(),

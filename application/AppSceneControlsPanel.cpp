@@ -38,6 +38,11 @@ void DrawMaterialSettingsControlsPanel(
         reinterpret_cast<float*>(&runtimeState.materialData.color));
     ImGui::Checkbox("Enable Lighting", reinterpret_cast<bool*>(&runtimeState.materialData.enableLighting));
     ImGui::SliderFloat("Shininess", &runtimeState.materialData.shininess, 1.0f, 64.0f);
+    ImGui::SliderFloat(
+        "Environment Reflection",
+        &runtimeState.materialData.environmentCoefficient,
+        0.0f,
+        1.0f);
 
     ImGui::Text("Recommended: shininess 8-16");
 

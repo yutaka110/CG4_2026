@@ -189,6 +189,12 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     descriptorRange[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     descriptorRange[0].OffsetInDescriptorsFromTableStart = 0;
 
+    D3D12_DESCRIPTOR_RANGE environmentRange = {};
+    environmentRange.BaseShaderRegister = 1;
+    environmentRange.NumDescriptors = 1;
+    environmentRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    environmentRange.OffsetInDescriptorsFromTableStart = 0;
+
     D3D12_DESCRIPTOR_RANGE receivedRange = {};
     receivedRange.BaseShaderRegister = 4;
     receivedRange.NumDescriptors = 1;
@@ -201,7 +207,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     motionMaskRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     motionMaskRange.OffsetInDescriptorsFromTableStart = 0;
 
-    D3D12_ROOT_PARAMETER rootParameters[9] = {};
+    D3D12_ROOT_PARAMETER rootParameters[10] = {};
     rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     rootParameters[0].Descriptor.ShaderRegister = 0;
@@ -240,6 +246,11 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     rootParameters[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParameters[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     rootParameters[8].Descriptor.ShaderRegister = 4;
+
+    rootParameters[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParameters[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParameters[9].DescriptorTable.NumDescriptorRanges = 1;
+    rootParameters[9].DescriptorTable.pDescriptorRanges = &environmentRange;
 
     descriptionRootSignature.pParameters = rootParameters;
     descriptionRootSignature.NumParameters = _countof(rootParameters);

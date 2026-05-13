@@ -175,6 +175,7 @@ bool AppSceneResources::Initialize(
     materialData->color = Vector4(1.0f, 1.0f, 1.0f, 1.0f);
     materialData->enableLighting = true;
     materialData->shininess = 3.0f;
+    materialData->environmentCoefficient = 0.3f;
     materialData->uvTransform = MakeIdentity4x4();
 
     materialResourceSprite = CreateBufferResource(device, sizeof(Material));
@@ -185,6 +186,7 @@ bool AppSceneResources::Initialize(
     materialDataSprite->color = Vector4(1.0f, 1.0f, 1.0f, 1.0f);
     materialDataSprite->enableLighting = false;
     materialDataSprite->shininess = 1.0f;
+    materialDataSprite->environmentCoefficient = 0.0f;
     materialDataSprite->uvTransform = MakeIdentity4x4();
 
     // =========================================================
