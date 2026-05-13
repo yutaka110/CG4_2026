@@ -29,6 +29,7 @@ public:
         D3D12_GPU_DESCRIPTOR_HANDLE textureHandle,
         D3D12_GPU_DESCRIPTOR_HANDLE receivedTextureHandle,
         D3D12_GPU_DESCRIPTOR_HANDLE motionMaskTextureHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE environmentTextureHandle,
         D3D12_GPU_VIRTUAL_ADDRESS directionalLightBufferAddress,
         D3D12_GPU_VIRTUAL_ADDRESS cameraBufferAddress,
         D3D12_GPU_VIRTUAL_ADDRESS pointLightBufferAddress,

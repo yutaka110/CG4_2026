@@ -9,7 +9,8 @@ struct Material
     int32_t enableLighting;
     float32_t4x4 uvTransform;
     float shininess;
-    float3 pad_; // 16byte alignment
+    float environmentCoefficient;
+    float2 pad_; // 16byte alignment
 };
 
 struct DirectionalLight
@@ -58,6 +59,7 @@ ConstantBuffer<DirectionalLight> gDirectionalLight : register(b1);
 ConstantBuffer<PointLight> gPointLight : register(b3);
 
 Texture2D<float4> gTexture : register(t0);
+TextureCube<float4> gEnvironmentTexture : register(t1);
 SamplerState gSampler : register(s0);
 
 // kept for your project (not used here)
@@ -240,6 +242,15 @@ specPowP = pow(saturate(dot(Rp, V)), max(gMaterial.shininess, 1.0f));
         outRgb = (diffuseD + specularD) + (diffuseP + specularP) + (diffuseS + specularS);
 
 
+    }
+
+    if (gMaterial.environmentCoefficient > 0.0f)
+    {
+        float3 N = SafeNormalize(input.normal);
+        float3 cameraToPosition = SafeNormalize(input.worldPosition - cameraWorldPosition);
+        float3 reflectedVector = reflect(cameraToPosition, N);
+        float3 environmentColor = gEnvironmentTexture.Sample(gSampler, reflectedVector).rgb;
+        outRgb += environmentColor * gMaterial.environmentCoefficient;
     }
 
     output.color = float4(outRgb, baseA);

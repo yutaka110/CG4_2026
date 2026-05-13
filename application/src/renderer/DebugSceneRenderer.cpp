@@ -171,6 +171,8 @@ bool DebugSceneRenderer::CreateRootSignatureAndPSO(
         // デフォルト値
         materialData->color = { 1.0f, 1.0f, 1.0f, 1.0f };
         materialData->enableLighting = 1;
+        materialData->shininess = 8.0f;
+        materialData->environmentCoefficient = 0.0f;
         materialData->uvTransform = MakeIdentity4x4();
         // メンバに保持
         // （ヘッダ側の型が Material* なら）
