@@ -1,0 +1,28 @@
+name = authoring_unknown_technique_demo
+shader = Particle
+texture = streakNoise
+blend = additive
+layer = additive
+lifetime = 1.8
+renderQueue = 3650
+size = 1.0,1.0,1.0
+color = 1.0,0.45,0.25,1.0
+particle.emissive = 2.8
+particle.noiseStrength = 0.45
+particle.uvScrollSpeed = 0.8
+particle.pulseSpeed = 4.0
+particle.spawnRadius = 1.8
+
+component = particle
+# Intentional failure sample: this ID is not registered in TechniqueRegistry.
+# Loader diagnostics should report unknownTechnique and fall back to ParticleAdditive routing.
+technique = MissingAuthoringSpark
+name = unknown_technique_particle
+duration = 1.8
+particle.emissive = 2.8
+particle.noiseStrength = 0.45
+particle.uvScrollSpeed = 0.8
+particle.pulseSpeed = 4.0
+particle.spawnRadius = 1.8
+size = 1.0,1.0,1.0
+color = 1.0,0.45,0.25,1.0

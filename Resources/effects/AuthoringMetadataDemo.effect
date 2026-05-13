@@ -1,0 +1,59 @@
+name = authoring_metadata_demo
+shader = Particle
+texture = streakNoise
+blend = additive
+layer = additive
+lifetime = 2.6
+renderQueue = 3600
+size = 1.2,1.2,1.0
+color = 0.45,0.85,1.0,1.0
+techniqueDisplayName = Authoring Metadata Demo
+techniqueCategory = Authoring Samples
+techniqueDescription = Asset-level metadata inherited by components unless a component overrides a field.
+particle.emissive = 3.2
+particle.noiseStrength = 0.55
+particle.uvScrollSpeed = 1.1
+particle.pulseSpeed = 3.5
+particle.spawnRadius = 2.6
+
+component = particle
+# New technique ID sample: registered as AuthoringSpark, routed through the ParticleRenderer
+# while keeping ParticleAdditive only as the legacy enum mirror.
+technique = AuthoringSpark
+name = metadata_demo_authoring_spark
+renderQueue = 3600
+duration = 2.2
+particle.emissive = 3.2
+particle.noiseStrength = 0.55
+particle.uvScrollSpeed = 1.1
+particle.pulseSpeed = 3.5
+particle.spawnRadius = 2.6
+size = 1.2,1.2,1.0
+color = 0.45,0.85,1.0,1.0
+
+component = beam
+technique = BeamLightning
+name = metadata_demo_beam
+renderQueue = 3820
+start = 0.05
+duration = 1.3
+techniqueDisplayName = Metadata Demo Beam Override
+techniqueDescription = Component-level displayName and description override the asset-level metadata for this beam only.
+beam.emissive = 2.2
+size = 0.55,3.2,1.0
+color = 0.7,0.95,1.0,1.0
+
+component = distortion
+technique = DistortionSprite
+name = metadata_demo_distortion
+layer = distortion
+blend = distortion
+renderQueue = 3900
+start = 0.15
+duration = 1.0
+techniqueCategory = Authoring Samples / Component Override
+distortion.strength = 0.22
+distortion.noiseStrength = 0.35
+distortion.uvScrollSpeed = 0.9
+size = 1.6,1.6,1.0
+color = 0.45,0.7,1.0,0.32

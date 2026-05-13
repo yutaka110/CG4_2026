@@ -1,0 +1,32 @@
+name = authoring_registry_only_demo
+shader = Particle
+texture = streakNoise
+blend = additive
+layer = additive
+lifetime = 2.4
+renderQueue = 3650
+size = 1.0,1.0,1.0
+color = 0.9,0.65,1.0,1.0
+techniqueDisplayName = Registry Only Authoring Demo
+techniqueCategory = Authoring Samples
+techniqueDescription = Demonstrates a new technique, renderer ID, and simulation ID without adding new enum values.
+particle.emissive = 3.6
+particle.noiseStrength = 0.5
+particle.uvScrollSpeed = 1.3
+particle.pulseSpeed = 4.0
+particle.spawnRadius = 2.2
+
+component = particle
+# Uses a new technique ID that routes through AuthoringParticleRenderer and
+# AuthoringCpuSpawnGpuSim. The compatMirror remains ParticleAdditive/CpuSpawnGpuSim.
+technique = AuthoringRegistryOnlySpark
+name = registry_only_authoring_spark
+renderQueue = 3650
+duration = 2.0
+particle.emissive = 3.6
+particle.noiseStrength = 0.5
+particle.uvScrollSpeed = 1.3
+particle.pulseSpeed = 4.0
+particle.spawnRadius = 2.2
+size = 1.0,1.0,1.0
+color = 0.9,0.65,1.0,1.0
