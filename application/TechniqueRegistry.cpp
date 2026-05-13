@@ -105,6 +105,18 @@ TechniqueRegistry BuildDefaultTechniqueRegistry() {
     distortion.overrideBlend = true;
     distortion.blend = ge3::graphics::BlendMode::Distortion;
     registry.Register(std::move(distortion));
+    registry.Register(
+        MakeTechniqueDescriptor(
+            "RingMesh",
+            "Ring Mesh",
+            "Primitive",
+            "Additive mesh primitive ring for impact flashes, expanding circles, and authored VFX accents.",
+            EffectTechnique::RingMesh,
+            EffectComponentType::Ring,
+            "RingRenderer",
+            "None",
+            EffectLayer::AdditiveFx,
+            180));
     return registry;
 }
 } // namespace

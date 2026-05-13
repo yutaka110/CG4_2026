@@ -31,6 +31,11 @@ RendererRegistry BuildDefaultRendererRegistry() {
             "DistortionRenderer",
             EffectRendererType::DistortionRenderer,
             EffectComponentType::Distortion});
+    registry.Register(
+        EffectRendererDescriptor{
+            "RingRenderer",
+            EffectRendererType::RingRenderer,
+            EffectComponentType::Ring});
     return registry;
 }
 } // namespace

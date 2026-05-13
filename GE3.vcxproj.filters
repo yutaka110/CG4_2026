@@ -342,6 +342,9 @@
     <ClCompile Include="application\src\vfx\ParticleRenderer.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\src\vfx\RingRenderer.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
     <ClCompile Include="application\src\vfx\TrailRenderer.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -691,6 +694,9 @@
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\include\vfx\ParticleRenderer.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\include\vfx\RingRenderer.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\include\vfx\TrailRenderer.h">

@@ -11,6 +11,7 @@
 #include "vfx/BeamRenderer.h"
 #include "vfx/DistortionRenderer.h"
 #include "vfx/ParticleRenderer.h"
+#include "vfx/RingRenderer.h"
 #include "vfx/TrailRenderer.h"
 #include "vfx/VfxResourceResolver.h"
 #include "vfx/VfxResources.h"
@@ -52,6 +53,9 @@ void AppVfxRenderPipeline::RegisterPasses(
         } else {
             ctx.vfxRenderers->beam->RegisterPasses(ctx, vfxResources);
         }
+    }
+    if (runtimeState.enableRings) {
+        ctx.vfxRenderers->ring->RegisterPasses(ctx, vfxResources);
     }
     if (runtimeState.enableDistortions) {
         ctx.vfxRenderers->distortion->RegisterPasses(ctx, vfxResources);

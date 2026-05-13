@@ -15,6 +15,7 @@ void EffectRuntimeFrame::Clear() {
     trailQueue.clear();
     beamQueue.clear();
     distortionQueue.clear();
+    ringQueue.clear();
     authoring = EffectRuntimeAuthoringFrame{};
     activeInstanceCount = 0;
     activeComponentCount = 0;
@@ -95,7 +96,8 @@ using ComponentNormalizationBuffer = std::variant<
     ParticleComponentAsset,
     TrailComponentAsset,
     BeamComponentAsset,
-    DistortionComponentAsset>;
+    DistortionComponentAsset,
+    RingComponentAsset>;
 
 EffectComponentCommon& ComponentCommon(ComponentNormalizationBuffer& component) {
     return std::visit(
@@ -129,6 +131,11 @@ ComponentNormalizationBuffer MakeComponentBufferForNormalization(
             return DistortionComponentAsset{*distortion.common, *distortion.settings};
         }
         return EffectComponentAssetBuilder::MakeDistortion(asset, component.common);
+    case EffectComponentType::Ring:
+        if (const RingComponentAssetView ring = RingComponentView(component)) {
+            return RingComponentAsset{*ring.common, *ring.settings};
+        }
+        return EffectComponentAssetBuilder::MakeRing(asset, component.common);
     }
     return EffectComponentAssetBuilder::MakeParticle(asset, component.common);
 }
@@ -251,6 +258,15 @@ DistortionRenderInput EffectRuntimeFrame::DistortionInput() const {
     if (!distortionQueue.empty()) {
         input.primary = MakeComponentInputCommon(distortionQueue.front().common);
         input.settings = distortionQueue.front().settings;
+    }
+    return input;
+}
+
+RingRenderInput EffectRuntimeFrame::RingInput() const {
+    RingRenderInput input{};
+    if (!ringQueue.empty()) {
+        input.primary = MakeComponentInputCommon(ringQueue.front().common);
+        input.settings = ringQueue.front().settings;
     }
     return input;
 }
@@ -441,6 +457,8 @@ void EffectSystem::EnsureDefaultComponent(
                         components.ReplaceBeamComponentAtForAuthoring(index, typedComponent);
                     } else if constexpr (std::is_same_v<Component, DistortionComponentAsset>) {
                         components.ReplaceDistortionComponentAtForAuthoring(index, typedComponent);
+                    } else if constexpr (std::is_same_v<Component, RingComponentAsset>) {
+                        components.ReplaceRingComponentAtForAuthoring(index, typedComponent);
                     }
                 },
                 component);

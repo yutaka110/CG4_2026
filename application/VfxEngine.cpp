@@ -60,6 +60,19 @@ void ApplyLiveTuningToComponent(
     destination.depthAttenuation = source.settings->depthAttenuation;
 }
 
+void ApplyLiveTuningToComponent(
+    const RingComponentAssetView& source,
+    EffectRingSettings& destination) {
+    destination.divide = source.settings->divide;
+    destination.outerRadius = source.settings->outerRadius;
+    destination.innerRadius = source.settings->innerRadius;
+    destination.emissive = source.settings->emissive;
+    destination.uvScrollSpeed = source.settings->uvScrollSpeed;
+    destination.expansion = source.settings->expansion;
+    destination.fadeOut = source.settings->fadeOut;
+    destination.depthFadeSoftness = source.settings->depthFadeSoftness;
+}
+
 void PreserveParticleLiveTuning(
     const EffectAsset& currentAsset,
     EffectAsset& reloadedAsset) {
@@ -135,6 +148,31 @@ void PreserveDistortionLiveTuning(
     }
 }
 
+void PreserveRingLiveTuning(
+    const EffectAsset& currentAsset,
+    EffectAsset& reloadedAsset) {
+    std::vector<RingComponentAsset> replacements;
+    ForEachRingComponent(reloadedAsset.Components().RingStorageView(), [&currentAsset, &replacements](const RingComponentAssetView& reloadedRing) {
+        bool applied = false;
+        ForEachRingComponent(currentAsset.Components().RingStorageView(), [&applied, &reloadedRing, &replacements](const RingComponentAssetView& currentRing) {
+            if (applied) {
+                return;
+            }
+            if (IsSameAuthoredComponent(currentRing.common, reloadedRing.common)) {
+                RingComponentAsset replacement{*reloadedRing.common, *reloadedRing.settings};
+                ApplyLiveTuningToComponent(currentRing, replacement.settings);
+                replacements.push_back(replacement);
+                applied = true;
+            }
+        });
+    });
+
+    const MutableRingComponentStorageView storage = reloadedAsset.MutableComponents().MutableRingStorageView();
+    for (const RingComponentAsset& replacement : replacements) {
+        ReplaceRingComponentAndSyncPacked(storage, replacement);
+    }
+}
+
 void PreserveLiveTuning(
     const EffectAsset& currentAsset,
     EffectAsset& reloadedAsset) {
@@ -142,10 +180,12 @@ void PreserveLiveTuning(
     reloadedAsset.defaultTrail = currentAsset.defaultTrail;
     reloadedAsset.defaultBeam = currentAsset.defaultBeam;
     reloadedAsset.defaultDistortion = currentAsset.defaultDistortion;
+    reloadedAsset.defaultRing = currentAsset.defaultRing;
 
     PreserveParticleLiveTuning(currentAsset, reloadedAsset);
     PreserveTrailLiveTuning(currentAsset, reloadedAsset);
     PreserveDistortionLiveTuning(currentAsset, reloadedAsset);
+    PreserveRingLiveTuning(currentAsset, reloadedAsset);
 }
 } // namespace
 
@@ -272,6 +312,7 @@ void VfxEngine::RegisterDefaultTextures(const AppSceneResources& scene) {
     effectResourceCache_.RegisterTexture({"monsterBall", scene.textureSrvHandleCPU2, scene.textureSrvHandleGPU2, 1, 1});
     effectResourceCache_.RegisterTexture({"streakNoise", scene.textureSrvHandleCPU, scene.textureSrvHandleGPU, 1, 1});
     effectResourceCache_.RegisterTexture({"circle2", scene.circle2TextureSrvHandleCPU, scene.circle2TextureSrvHandleGPU, 1, 1});
+    effectResourceCache_.RegisterTexture({"gradationLine", scene.gradationLineTextureSrvHandleCPU, scene.gradationLineTextureSrvHandleGPU, 1, 1});
 }
 
 void VfxEngine::RegisterRenderPasses(

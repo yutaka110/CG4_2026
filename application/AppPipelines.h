@@ -20,6 +20,7 @@ public:
     ID3D12RootSignature* GetSpriteRootSignature() const { return spriteRootSignature_.Get(); }
     ID3D12RootSignature* GetSkyboxRootSignature() const { return skyboxRootSignature_.Get(); }
     ID3D12RootSignature* GetParticleRootSignature() const { return particleRootSignature_.Get(); }
+    ID3D12RootSignature* GetRingRootSignature() const { return ringRootSignature_.Get(); }
     ID3D12RootSignature* GetComputeRootSignature() const { return computeRootSignature_.Get(); }
 
     ID3D12PipelineState* GetMainPSO() const { return mainPso_.Get(); }
@@ -61,6 +62,7 @@ public:
     ID3D12PipelineState* GetTrailMeshPSO() const { return trailMeshPso_.Get(); }
     ID3D12PipelineState* GetTrailMeshStreamPSO() const { return trailMeshStreamPso_.Get(); }
     ID3D12PipelineState* GetDistortionSpritePSO() const { return distortionSpritePso_.Get(); }
+    ID3D12PipelineState* GetRingPSO() const { return ringPso_.Get(); }
 
 private:
     // RootSignature
@@ -68,6 +70,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> spriteRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> skyboxRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> particleRootSignature_;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> ringRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> computeRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> gpuParticleComputeRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> trailMeshStreamComputeRootSignature_;
@@ -110,6 +113,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> trailMeshPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> trailMeshStreamPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> distortionSpritePso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> ringPso_;
 
     // Shader blobs are kept alive while PSO uses them
     ge3::core::ShaderCompiler shaderCompiler_;
@@ -127,6 +131,8 @@ private:
     Microsoft::WRL::ComPtr<IDxcBlob> trailMeshPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> distortionSpriteVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> distortionSpritePs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> ringVs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> ringPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> gpuParticleCs_;
     Microsoft::WRL::ComPtr<IDxcBlob> trailMeshStreamCs_;
     Microsoft::WRL::ComPtr<IDxcBlob> trailMeshBuildCs_;

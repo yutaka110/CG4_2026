@@ -28,6 +28,12 @@ struct DistortionComponentAssetView {
     explicit operator bool() const { return common != nullptr && settings != nullptr; }
 };
 
+struct RingComponentAssetView {
+    const EffectComponentCommon* common = nullptr;
+    const EffectRingSettings* settings = nullptr;
+    explicit operator bool() const { return common != nullptr && settings != nullptr; }
+};
+
 inline ParticleComponentAssetView ParticleComponentView(const EffectComponentAsset& component) {
     if (component.common.type != EffectComponentType::Particle) {
         return {};
@@ -80,6 +86,19 @@ inline const EffectDistortionSettings* DistortionSettings(const EffectComponentA
     return view ? view.settings : nullptr;
 }
 
+inline RingComponentAssetView RingComponentView(const EffectComponentAsset& component) {
+    if (component.common.type != EffectComponentType::Ring) {
+        return {};
+    }
+    const EffectRingSettings* settings = std::get_if<EffectRingSettings>(&component.payload.data);
+    return settings != nullptr ? RingComponentAssetView{&component.common, settings} : RingComponentAssetView{};
+}
+
+inline const EffectRingSettings* RingSettings(const EffectComponentAsset& component) {
+    const RingComponentAssetView view = RingComponentView(component);
+    return view ? view.settings : nullptr;
+}
+
 struct ParticleComponentCollectionView {
     std::vector<ParticleComponentAssetView> components;
     auto begin() const { return components.begin(); }
@@ -106,6 +125,14 @@ struct BeamComponentCollectionView {
 
 struct DistortionComponentCollectionView {
     std::vector<DistortionComponentAssetView> components;
+    auto begin() const { return components.begin(); }
+    auto end() const { return components.end(); }
+    bool empty() const { return components.empty(); }
+    std::size_t size() const { return components.size(); }
+};
+
+struct RingComponentCollectionView {
+    std::vector<RingComponentAssetView> components;
     auto begin() const { return components.begin(); }
     auto end() const { return components.end(); }
     bool empty() const { return components.empty(); }
@@ -160,6 +187,16 @@ struct MutableDistortionComponentStorageView {
     explicit operator bool() const { return components != nullptr; }
 };
 
+struct RingComponentStorageView {
+    const std::vector<RingComponentAsset>* components = nullptr;
+    explicit operator bool() const { return components != nullptr; }
+};
+
+struct MutableRingComponentStorageView {
+    EffectAssetComponentStorage* components = nullptr;
+    explicit operator bool() const { return components != nullptr; }
+};
+
 inline ParticleComponentStorageView EffectAssetComponentStorage::ParticleStorageView() const {
     return {&particleComponents_};
 }
@@ -189,6 +226,14 @@ inline DistortionComponentStorageView EffectAssetComponentStorage::DistortionSto
 }
 
 inline MutableDistortionComponentStorageView EffectAssetComponentStorage::MutableDistortionStorageView() {
+    return {this};
+}
+
+inline RingComponentStorageView EffectAssetComponentStorage::RingStorageView() const {
+    return {&ringComponents_};
+}
+
+inline MutableRingComponentStorageView EffectAssetComponentStorage::MutableRingStorageView() {
     return {this};
 }
 
@@ -226,6 +271,15 @@ inline bool ReplaceDistortionComponentAndSyncPacked(
         return false;
     }
     return view.components->ReplaceDistortionComponentAndSyncPacked(component);
+}
+
+inline bool ReplaceRingComponentAndSyncPacked(
+    const MutableRingComponentStorageView& view,
+    const RingComponentAsset& component) {
+    if (!view) {
+        return false;
+    }
+    return view.components->ReplaceRingComponentAndSyncPacked(component);
 }
 
 template <typename Visitor>
@@ -308,6 +362,26 @@ inline void ForEachDistortionComponent(const EffectAsset& asset, Visitor&& visit
     ForEachDistortionComponent(asset.Components(), std::forward<Visitor>(visitor));
 }
 
+template <typename Visitor>
+inline void ForEachRingComponent(const RingComponentStorageView& view, Visitor&& visitor) {
+    if (!view) {
+        return;
+    }
+    for (const RingComponentAsset& component : *view.components) {
+        visitor(RingComponentAssetView{&component.common, &component.settings});
+    }
+}
+
+template <typename Visitor>
+inline void ForEachRingComponent(const EffectAssetComponentStorage& components, Visitor&& visitor) {
+    ForEachRingComponent(components.RingStorageView(), std::forward<Visitor>(visitor));
+}
+
+template <typename Visitor>
+inline void ForEachRingComponent(const EffectAsset& asset, Visitor&& visitor) {
+    ForEachRingComponent(asset.Components(), std::forward<Visitor>(visitor));
+}
+
 inline bool HasParticleComponents(const ParticleComponentStorageView& view) {
     bool found = false;
     ForEachParticleComponent(view, [&found](const ParticleComponentAssetView&) {
@@ -370,6 +444,22 @@ inline bool HasDistortionComponents(const EffectAssetComponentStorage& component
 
 inline bool HasDistortionComponents(const EffectAsset& asset) {
     return HasDistortionComponents(asset.Components());
+}
+
+inline bool HasRingComponents(const RingComponentStorageView& view) {
+    bool found = false;
+    ForEachRingComponent(view, [&found](const RingComponentAssetView&) {
+        found = true;
+    });
+    return found;
+}
+
+inline bool HasRingComponents(const EffectAssetComponentStorage& components) {
+    return HasRingComponents(components.RingStorageView());
+}
+
+inline bool HasRingComponents(const EffectAsset& asset) {
+    return HasRingComponents(asset.Components());
 }
 
 inline ParticleComponentAssetView FindParticleComponent(
@@ -476,6 +566,32 @@ inline DistortionComponentAssetView FindDistortionComponent(
     return FindDistortionComponent(asset.Components(), componentId);
 }
 
+inline RingComponentAssetView FindRingComponent(
+    const RingComponentStorageView& view,
+    uint32_t componentId) {
+    if (!view) {
+        return {};
+    }
+    for (const RingComponentAsset& component : *view.components) {
+        if (component.common.id == componentId) {
+            return {&component.common, &component.settings};
+        }
+    }
+    return {};
+}
+
+inline RingComponentAssetView FindRingComponent(
+    const EffectAssetComponentStorage& components,
+    uint32_t componentId) {
+    return FindRingComponent(components.RingStorageView(), componentId);
+}
+
+inline RingComponentAssetView FindRingComponent(
+    const EffectAsset& asset,
+    uint32_t componentId) {
+    return FindRingComponent(asset.Components(), componentId);
+}
+
 inline ParticleComponentCollectionView ParticleComponents(const ParticleComponentStorageView& storage) {
     ParticleComponentCollectionView view{};
     if (!storage) {
@@ -556,6 +672,26 @@ inline DistortionComponentCollectionView DistortionComponents(const EffectAsset&
     return DistortionComponents(asset.Components());
 }
 
+inline RingComponentCollectionView RingComponents(const RingComponentStorageView& storage) {
+    RingComponentCollectionView view{};
+    if (!storage) {
+        return view;
+    }
+    view.components.reserve(storage.components->size());
+    ForEachRingComponent(storage, [&view](const RingComponentAssetView& ring) {
+        view.components.push_back(ring);
+    });
+    return view;
+}
+
+inline RingComponentCollectionView RingComponents(const EffectAssetComponentStorage& components) {
+    return RingComponents(components.RingStorageView());
+}
+
+inline RingComponentCollectionView RingComponents(const EffectAsset& asset) {
+    return RingComponents(asset.Components());
+}
+
 struct EffectComponentAssetBuilder {
     static EffectComponentCommon MakeCommon(
         const EffectAsset& asset,
@@ -616,6 +752,13 @@ struct EffectComponentAssetBuilder {
         return {common, asset.defaultDistortion};
     }
 
+    static RingComponentAsset MakeRing(
+        const EffectAsset& asset,
+        EffectComponentCommon common) {
+        common.type = EffectComponentType::Ring;
+        return {common, asset.defaultRing};
+    }
+
     static EffectComponentAsset Pack(
         const EffectAsset& asset,
         const EffectComponentCommon& common) {
@@ -626,6 +769,8 @@ struct EffectComponentAssetBuilder {
             return ToEffectComponentAsset(MakeBeam(asset, common));
         case EffectComponentType::Distortion:
             return ToEffectComponentAsset(MakeDistortion(asset, common));
+        case EffectComponentType::Ring:
+            return ToEffectComponentAsset(MakeRing(asset, common));
         case EffectComponentType::Particle:
         default:
             return ToEffectComponentAsset(MakeParticle(asset, common));

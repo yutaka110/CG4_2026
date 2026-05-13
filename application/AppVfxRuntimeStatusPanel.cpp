@@ -37,6 +37,7 @@ void DrawParticleRuntimeStatusSection(
     ImGui::Checkbox("Show Trails", &runtimeState.vfx.enableTrails);
     ImGui::Checkbox("Show Beams", &runtimeState.vfx.enableBeams);
     ImGui::Checkbox("Show Distortion", &runtimeState.vfx.enableDistortions);
+    ImGui::Checkbox("Show Rings", &runtimeState.vfx.enableRings);
     if (ImGui::Checkbox("Particle Dedicated Resource Probe", &runtimeState.vfx.enableParticleDedicatedResourceProbe)) {
         *input.particleDedicatedProbeTelemetryFrames = 0;
         *input.particleDedicatedHealthFrames = 0;

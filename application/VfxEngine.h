@@ -19,6 +19,7 @@
 #include "vfx/BeamRenderer.h"
 #include "vfx/DistortionRenderer.h"
 #include "vfx/ParticleRenderer.h"
+#include "vfx/RingRenderer.h"
 #include "vfx/VfxResourceResolver.h"
 #include "vfx/TrailRenderer.h"
 
@@ -105,7 +106,8 @@ private:
     ParticleRenderer particleRenderer_;
     TrailRenderer trailRenderer_;
     DistortionRenderer distortionRenderer_;
-    AppVfxRendererSet vfxRenderers_{&particleRenderer_, &trailRenderer_, &beam_, &distortionRenderer_};
+    RingRenderer ringRenderer_;
+    AppVfxRendererSet vfxRenderers_{&particleRenderer_, &trailRenderer_, &beam_, &distortionRenderer_, &ringRenderer_};
     EffectAuthoringRegistry effectAuthoringRegistry_;
     EffectSystem effectSystem_;
     EffectRuntime effectRuntime_;

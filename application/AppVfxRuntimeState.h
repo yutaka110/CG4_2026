@@ -78,6 +78,7 @@ struct AppVfxRuntimeState {
     bool enableTrails = true;
     bool enableBeams = true;
     bool enableDistortions = true;
+    bool enableRings = true;
     bool enableParticleDedicatedResourceProbe = false;
     bool enableParticleDedicatedProbeTelemetry = false;
     bool enableParticleDedicatedAutoFallback = true;

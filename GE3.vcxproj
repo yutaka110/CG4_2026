@@ -203,6 +203,7 @@ copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dx
     <ClCompile Include="application\src\vfx\BeamRenderer.cpp" />
     <ClCompile Include="application\src\vfx\DistortionRenderer.cpp" />
     <ClCompile Include="application\src\vfx\ParticleRenderer.cpp" />
+    <ClCompile Include="application\src\vfx\RingRenderer.cpp" />
     <ClCompile Include="application\src\vfx\TrailRenderer.cpp" />
     <ClCompile Include="application\src\vfx\VfxComponentDraw.cpp" />
     <ClCompile Include="application\src\vfx\VfxResourceResolver.cpp" />
@@ -499,6 +500,7 @@ copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dx
     <ClInclude Include="application\include\vfx\BeamRenderer.h" />
     <ClInclude Include="application\include\vfx\DistortionRenderer.h" />
     <ClInclude Include="application\include\vfx\ParticleRenderer.h" />
+    <ClInclude Include="application\include\vfx\RingRenderer.h" />
     <ClInclude Include="application\include\vfx\TrailRenderer.h" />
     <ClInclude Include="application\include\vfx\VfxPassRegistration.h" />
     <ClInclude Include="application\include\vfx\VfxRenderContext.h" />

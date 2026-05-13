@@ -564,6 +564,23 @@ bool DrawEffectTypeControls(EffectBeamSettings&) {
     return false;
 }
 
+bool DrawEffectTypeControls(EffectRingSettings& ring) {
+    bool changed = false;
+    int divide = static_cast<int>(ring.divide);
+    if (ImGui::SliderInt("Ring Divide", &divide, 8, 128)) {
+        ring.divide = static_cast<uint32_t>(divide);
+        changed = true;
+    }
+    changed |= ImGui::SliderFloat("Outer Radius", &ring.outerRadius, 0.01f, 8.0f, "%.2f");
+    changed |= ImGui::SliderFloat("Inner Radius", &ring.innerRadius, 0.0f, 8.0f, "%.2f");
+    changed |= ImGui::SliderFloat("Ring Emissive", &ring.emissive, 0.0f, 12.0f, "%.2f");
+    changed |= ImGui::SliderFloat("Ring UV Scroll", &ring.uvScrollSpeed, -8.0f, 8.0f, "%.2f");
+    changed |= ImGui::SliderFloat("Ring Expansion", &ring.expansion, 0.0f, 8.0f, "%.2f");
+    changed |= ImGui::SliderFloat("Ring Fade Out", &ring.fadeOut, 0.0f, 4.0f, "%.2f");
+    changed |= ImGui::SliderFloat("Ring Depth Fade", &ring.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
+    return changed;
+}
+
 void ResetEffectTypeToAssetDefault(EffectParticleSettings& particle, const EffectAsset& asset) {
     particle.emissive = asset.defaultParticle.emissive;
     particle.spawnCount = asset.defaultParticle.spawnCount;
@@ -593,6 +610,10 @@ void ResetEffectTypeToAssetDefault(EffectTrailSettings& trail, const EffectAsset
 void ResetEffectTypeToAssetDefault(EffectDistortionSettings& distortion, const EffectAsset& asset) {
     distortion.depthFadeSoftness = asset.defaultDistortion.depthFadeSoftness;
     distortion.depthAttenuation = asset.defaultDistortion.depthAttenuation;
+}
+
+void ResetEffectTypeToAssetDefault(EffectRingSettings& ring, const EffectAsset& asset) {
+    ring = asset.defaultRing;
 }
 
 template <typename ComponentAsset>
@@ -691,6 +712,13 @@ DistortionComponentAsset ToComponentAsset(const DistortionComponentAssetView& vi
     return {*view.common, *view.settings};
 }
 
+RingComponentAsset ToComponentAsset(const RingComponentAssetView& view) {
+    if (!view) {
+        return {};
+    }
+    return {*view.common, *view.settings};
+}
+
 template <typename ComponentAsset, typename DrawFn>
 void QueueEditedComponent(
     std::vector<ComponentAsset>& replacements,
@@ -734,6 +762,15 @@ void ApplyReplacements(
     const MutableDistortionComponentStorageView storage = asset.MutableComponents().MutableDistortionStorageView();
     for (const DistortionComponentAsset& replacement : replacements) {
         ReplaceDistortionComponentAndSyncPacked(storage, replacement);
+    }
+}
+
+void ApplyReplacements(
+    EffectAsset& asset,
+    const std::vector<RingComponentAsset>& replacements) {
+    const MutableRingComponentStorageView storage = asset.MutableComponents().MutableRingStorageView();
+    for (const RingComponentAsset& replacement : replacements) {
+        ReplaceRingComponentAndSyncPacked(storage, replacement);
     }
 }
 
@@ -849,6 +886,36 @@ void DrawBeamTypeSection(
     }
 }
 
+void DrawRingTypeSection(
+    EffectAsset& asset,
+    const EffectAuthoringRegistry& authoringRegistry) {
+    if (!HasRingComponents(asset)) {
+        return;
+    }
+
+    if (ImGui::TreeNode(EffectTypeLabel(EffectComponentType::Ring))) {
+        std::vector<RingComponentAsset> replacements;
+        if (ImGui::Button("Reset to Asset Default")) {
+            ForEachRingComponent(asset.Components().RingStorageView(), [&asset, &replacements](const RingComponentAssetView& ring) {
+                RingComponentAsset replacement = ToComponentAsset(ring);
+                ResetEffectTypeToAssetDefault(replacement.settings, asset);
+                replacements.push_back(replacement);
+            });
+        }
+        ImGui::Separator();
+        ForEachRingComponent(asset.Components().RingStorageView(), [&replacements, &authoringRegistry](const RingComponentAssetView& ring) {
+            QueueEditedComponent(
+                replacements,
+                ToComponentAsset(ring),
+                [&authoringRegistry](RingComponentAsset& component) {
+                    return DrawEffectComponentNode(component, authoringRegistry);
+                });
+        });
+        ApplyReplacements(asset, replacements);
+        ImGui::TreePop();
+    }
+}
+
 void DrawEffectTypeSection(
     EffectAsset& asset,
     EffectComponentType type,
@@ -865,6 +932,9 @@ void DrawEffectTypeSection(
         break;
     case EffectComponentType::Beam:
         DrawBeamTypeSection(asset, authoringRegistry);
+        break;
+    case EffectComponentType::Ring:
+        DrawRingTypeSection(asset, authoringRegistry);
         break;
     }
 }
@@ -987,6 +1057,17 @@ void DrawEffectAssetEditorPanel(
                 }
                 ImGui::SliderFloat("Default Distortion Depth Fade", &asset.defaultDistortion.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
                 ImGui::SliderFloat("Default Distortion Attenuation", &asset.defaultDistortion.depthAttenuation, 0.1f, 4.0f, "%.2f");
+                int defaultRingDivide = static_cast<int>(asset.defaultRing.divide);
+                if (ImGui::SliderInt("Default Ring Divide", &defaultRingDivide, 8, 128)) {
+                    asset.defaultRing.divide = static_cast<uint32_t>(defaultRingDivide);
+                }
+                ImGui::SliderFloat("Default Ring Outer Radius", &asset.defaultRing.outerRadius, 0.01f, 8.0f, "%.2f");
+                ImGui::SliderFloat("Default Ring Inner Radius", &asset.defaultRing.innerRadius, 0.0f, 8.0f, "%.2f");
+                ImGui::SliderFloat("Default Ring Emissive", &asset.defaultRing.emissive, 0.0f, 12.0f, "%.2f");
+                ImGui::SliderFloat("Default Ring UV Scroll", &asset.defaultRing.uvScrollSpeed, -8.0f, 8.0f, "%.2f");
+                ImGui::SliderFloat("Default Ring Expansion", &asset.defaultRing.expansion, 0.0f, 8.0f, "%.2f");
+                ImGui::SliderFloat("Default Ring Fade Out", &asset.defaultRing.fadeOut, 0.0f, 4.0f, "%.2f");
+                ImGui::SliderFloat("Default Ring Depth Fade", &asset.defaultRing.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
                 ImGui::TreePop();
             }
 
@@ -995,6 +1076,7 @@ void DrawEffectAssetEditorPanel(
                 EffectComponentType::Trail,
                 EffectComponentType::Distortion,
                 EffectComponentType::Beam,
+                EffectComponentType::Ring,
             };
 
             for (EffectComponentType type : orderedTypes) {

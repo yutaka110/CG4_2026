@@ -70,6 +70,11 @@ private:
         const EffectDistortionSettings* settings = nullptr;
     };
 
+    struct RingActiveComponent {
+        EffectRenderItemCommon common{};
+        const EffectRingSettings* settings = nullptr;
+    };
+
     void ForEachActiveInstanceComponent(
         const std::function<void(const EffectInstance&, const EffectComponentInstance&)>& visitor) const;
     static bool BuildActiveComponentCore(
@@ -87,14 +92,18 @@ private:
         const std::function<void(const ActiveComponentCore&, const BeamComponentAssetView&)>& visitor) const;
     void ForEachDistortionAssetComponent(
         const std::function<void(const ActiveComponentCore&, const DistortionComponentAssetView&)>& visitor) const;
+    void ForEachRingAssetComponent(
+        const std::function<void(const ActiveComponentCore&, const RingComponentAssetView&)>& visitor) const;
     void ForEachParticleComponent(const std::function<void(const ParticleActiveComponent&)>& visitor) const;
     void ForEachTrailComponent(const std::function<void(const TrailActiveComponent&)>& visitor) const;
     void ForEachBeamComponent(const std::function<void(const BeamActiveComponent&)>& visitor) const;
     void ForEachDistortionComponent(const std::function<void(const DistortionActiveComponent&)>& visitor) const;
+    void ForEachRingComponent(const std::function<void(const RingActiveComponent&)>& visitor) const;
     ParticleRenderQueue BuildParticleQueue() const;
     TrailRenderQueue BuildTrailQueue() const;
     BeamRenderQueue BuildBeamQueue() const;
     DistortionRenderQueue BuildDistortionQueue() const;
+    RingRenderQueue BuildRingQueue() const;
     const EffectAuthoringRegistry& AuthoringRegistry() const;
 
     EffectSystem* effectSystem_ = nullptr;
