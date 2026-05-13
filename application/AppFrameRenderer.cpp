@@ -129,6 +129,27 @@ void AppFrameRenderer::DrawSprite(
     commandList->DrawIndexedInstanced(6, 1, 0, 0, 0);
 }
 
+void AppFrameRenderer::DrawSkybox(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12DescriptorHeap* descriptorHeap,
+    const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
+    D3D12_GPU_VIRTUAL_ADDRESS transformBufferAddress,
+    D3D12_GPU_DESCRIPTOR_HANDLE textureHandle,
+    uint32_t vertexCount) const {
+    if (commandList == nullptr || descriptorHeap == nullptr ||
+        transformBufferAddress == 0 || textureHandle.ptr == 0 || vertexCount == 0) {
+        return;
+    }
+
+    ID3D12DescriptorHeap* descriptorHeaps[] = { descriptorHeap };
+    commandList->SetDescriptorHeaps(1, descriptorHeaps);
+    commandList->SetGraphicsRootConstantBufferView(0, transformBufferAddress);
+    commandList->SetGraphicsRootDescriptorTable(1, textureHandle);
+    commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList->DrawInstanced(vertexCount, 1, 0, 0);
+}
+
 void AppFrameRenderer::PrepareSphere(
     ID3D12GraphicsCommandList* commandList,
     ID3D12RootSignature* rootSignature,

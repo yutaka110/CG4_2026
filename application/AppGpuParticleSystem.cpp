@@ -113,6 +113,20 @@ D3D12_RESOURCE_BARRIER MakeTransition(
     return barrier;
 }
 
+void TransitionIfNeeded(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12Resource* resource,
+    D3D12_RESOURCE_STATES& currentState,
+    D3D12_RESOURCE_STATES nextState) {
+    if (commandList == nullptr || resource == nullptr || currentState == nextState) {
+        return;
+    }
+
+    D3D12_RESOURCE_BARRIER barrier = MakeTransition(resource, currentState, nextState);
+    commandList->ResourceBarrier(1, &barrier);
+    currentState = nextState;
+}
+
 bool EnsureDefaultBuffer(
     ID3D12Device* device,
     const ge3::graphics::TransientBufferDesc& desc,
@@ -1717,6 +1731,11 @@ void AppGpuParticleSystem::CaptureTrailMeshStreamTelemetry(ID3D12GraphicsCommand
         trailIndexBuffer_.Get(),
         0,
         indexBytes);
+    TransitionIfNeeded(
+        commandList,
+        trailDrawArgs_.Get(),
+        trailDrawArgsState_,
+        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
 
     trailTelemetry_.sampledControlPointCount =
         static_cast<uint32_t>(controlPointBytes / sizeof(TrailMeshStreamControlPointSample));
@@ -1876,6 +1895,11 @@ void AppGpuParticleSystem::CaptureParticleDedicatedReadbackTelemetry(ID3D12Graph
         dedicatedIndirectArgs_.Get(),
         0,
         sizeof(D3D12_DRAW_INDEXED_ARGUMENTS));
+    TransitionIfNeeded(
+        commandList,
+        dedicatedIndirectArgs_.Get(),
+        dedicatedIndirectArgsState_,
+        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
 
     particleDedicatedReadbackTelemetry_.sampledRenderCount =
         static_cast<uint32_t>(renderBytes / sizeof(ParticleRenderSample));
@@ -1986,6 +2010,11 @@ void AppGpuParticleSystem::CaptureDistortionDedicatedReadbackTelemetry(ID3D12Gra
         dedicatedDistortionIndirectArgs_.Get(),
         0,
         sizeof(D3D12_DRAW_INDEXED_ARGUMENTS));
+    TransitionIfNeeded(
+        commandList,
+        dedicatedDistortionIndirectArgs_.Get(),
+        dedicatedDistortionIndirectArgsState_,
+        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
 
     distortionDedicatedReadbackTelemetry_.sampledRenderCount =
         static_cast<uint32_t>(renderBytes / sizeof(ParticleRenderSample));
@@ -2080,6 +2109,11 @@ void AppGpuParticleSystem::CaptureBeamDedicatedReadbackTelemetry(ID3D12GraphicsC
         dedicatedBeamIndirectArgs_.Get(),
         0,
         sizeof(D3D12_DRAW_INDEXED_ARGUMENTS));
+    TransitionIfNeeded(
+        commandList,
+        dedicatedBeamIndirectArgs_.Get(),
+        dedicatedBeamIndirectArgsState_,
+        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
 
     beamDedicatedReadbackTelemetry_.sampledRenderCount =
         static_cast<uint32_t>(renderBytes / sizeof(ParticleRenderSample));

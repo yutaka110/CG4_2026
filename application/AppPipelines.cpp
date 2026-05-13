@@ -115,6 +115,8 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
         L"resources/Object3D.PS.hlsl",
         L"resources/Sprite.VS.hlsl",
         L"resources/Sprite.PS.hlsl",
+        L"resources/Skybox.VS.hlsl",
+        L"resources/Skybox.PS.hlsl",
         L"MotionDetect.CS.hlsl",
         L"resources/Particle.VS.hlsl",
         L"resources/Particle.PS.hlsl",
@@ -301,6 +303,47 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     hr = device->CreateRootSignature(0, spriteSigBlob->GetBufferPointer(), spriteSigBlob->GetBufferSize(),
                                     IID_PPV_ARGS(&spriteRootSignature_));
     if (FAILED(hr)) return FailHr("CreateRootSignature(Sprite)", hr);
+
+    // ------------------------------
+    // Skybox RootSignature
+    // ------------------------------
+    D3D12_DESCRIPTOR_RANGE skyboxTextureRange{};
+    skyboxTextureRange.BaseShaderRegister = 0;
+    skyboxTextureRange.NumDescriptors = 1;
+    skyboxTextureRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    skyboxTextureRange.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_ROOT_PARAMETER skyboxRootParams[2] = {};
+    skyboxRootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    skyboxRootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    skyboxRootParams[0].Descriptor.ShaderRegister = 0;
+
+    skyboxRootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    skyboxRootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    skyboxRootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    skyboxRootParams[1].DescriptorTable.pDescriptorRanges = &skyboxTextureRange;
+
+    D3D12_ROOT_SIGNATURE_DESC skyboxRsDesc{};
+    skyboxRsDesc.NumParameters = _countof(skyboxRootParams);
+    skyboxRsDesc.pParameters = skyboxRootParams;
+    skyboxRsDesc.NumStaticSamplers = _countof(staticSamplers);
+    skyboxRsDesc.pStaticSamplers = staticSamplers;
+    skyboxRsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> skyboxSigBlob;
+    ComPtr<ID3DBlob> skyboxErrBlob;
+    hr = D3D12SerializeRootSignature(&skyboxRsDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                    &skyboxSigBlob, &skyboxErrBlob);
+    if (FAILED(hr)) {
+        if (skyboxErrBlob) {
+            OutputDebugStringA(reinterpret_cast<const char*>(skyboxErrBlob->GetBufferPointer()));
+        }
+        return false;
+    }
+
+    hr = device->CreateRootSignature(0, skyboxSigBlob->GetBufferPointer(), skyboxSigBlob->GetBufferSize(),
+                                    IID_PPV_ARGS(&skyboxRootSignature_));
+    if (FAILED(hr)) return FailHr("CreateRootSignature(Skybox)", hr);
 
     // ------------------------------
     // Particle RootSignature
@@ -644,6 +687,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     ps_ = Compile_(L"resources/Object3D.PS.hlsl", L"ps_6_0");
     spriteVs_ = Compile_(L"resources/Sprite.VS.hlsl", L"vs_6_0");
     spritePs_ = Compile_(L"resources/Sprite.PS.hlsl", L"ps_6_0");
+    skyboxVs_ = Compile_(L"resources/Skybox.VS.hlsl", L"vs_6_0");
+    skyboxPs_ = Compile_(L"resources/Skybox.PS.hlsl", L"ps_6_0");
     cs_ = Compile_(L"MotionDetect.CS.hlsl", L"cs_6_0");
     particleVs_ = Compile_(L"resources/Particle.VS.hlsl", L"vs_6_0");
     particlePs_ = Compile_(L"resources/Particle.PS.hlsl", L"ps_6_0");
@@ -675,7 +720,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     debugDepthPreviewPs_ = Compile_(L"resources/DebugDepthPreview.PS.hlsl", L"ps_6_0");
     debugEmissivePreviewPs_ = Compile_(L"resources/DebugEmissivePreview.PS.hlsl", L"ps_6_0");
 
-    if (!vs_ || !ps_ || !spriteVs_ || !spritePs_ || !cs_ || !particleVs_ || !particlePs_ ||
+    if (!vs_ || !ps_ || !spriteVs_ || !spritePs_ || !skyboxVs_ || !skyboxPs_ || !cs_ || !particleVs_ || !particlePs_ ||
         !trailMeshVs_ || !trailMeshStreamVs_ || !trailMeshPs_ || !distortionSpriteVs_ || !distortionSpritePs_ ||
         !gpuParticleCs_ || !trailMeshStreamCs_ || !trailMeshBuildCs_ || !compositeVs_ || !compositePs_ || !bloomExtractPs_ ||
         !bloomDownsamplePs_ || !bloomUpsamplePs_ || !blurHorizontalPs_ || !blurVerticalPs_ ||
@@ -745,6 +790,47 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
     hr = device->CreateGraphicsPipelineState(&graphicsPipelineStateDesc, IID_PPV_ARGS(&mainPso_));
     if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Main)", hr);
+
+    // ------------------------------
+    // Skybox PSO
+    // ------------------------------
+    D3D12_INPUT_ELEMENT_DESC skyboxElement{};
+    skyboxElement.SemanticName = "POSITION";
+    skyboxElement.SemanticIndex = 0;
+    skyboxElement.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    skyboxElement.AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
+
+    D3D12_INPUT_LAYOUT_DESC skyboxInputLayout{};
+    skyboxInputLayout.pInputElementDescs = &skyboxElement;
+    skyboxInputLayout.NumElements = 1;
+
+    D3D12_RASTERIZER_DESC skyboxRasterizer{};
+    skyboxRasterizer.CullMode = D3D12_CULL_MODE_NONE;
+    skyboxRasterizer.FillMode = D3D12_FILL_MODE_SOLID;
+    skyboxRasterizer.DepthClipEnable = TRUE;
+
+    D3D12_DEPTH_STENCIL_DESC skyboxDepth{};
+    skyboxDepth.DepthEnable = FALSE;
+    skyboxDepth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    skyboxDepth.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC skyboxDesc{};
+    skyboxDesc.pRootSignature = skyboxRootSignature_.Get();
+    skyboxDesc.InputLayout = skyboxInputLayout;
+    skyboxDesc.VS = { skyboxVs_->GetBufferPointer(), skyboxVs_->GetBufferSize() };
+    skyboxDesc.PS = { skyboxPs_->GetBufferPointer(), skyboxPs_->GetBufferSize() };
+    skyboxDesc.BlendState = blendDesc;
+    skyboxDesc.RasterizerState = skyboxRasterizer;
+    skyboxDesc.DepthStencilState = skyboxDepth;
+    skyboxDesc.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+    skyboxDesc.NumRenderTargets = 1;
+    skyboxDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    skyboxDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    skyboxDesc.SampleDesc.Count = 1;
+    skyboxDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
+
+    hr = device->CreateGraphicsPipelineState(&skyboxDesc, IID_PPV_ARGS(&skyboxPso_));
+    if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Skybox)", hr);
 
     // ------------------------------
     // Sprite PSO
@@ -1163,6 +1249,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         L"resources/Object3D.PS.hlsl",
         L"resources/Sprite.VS.hlsl",
         L"resources/Sprite.PS.hlsl",
+        L"resources/Skybox.VS.hlsl",
+        L"resources/Skybox.PS.hlsl",
         L"MotionDetect.CS.hlsl",
         L"resources/Particle.VS.hlsl",
         L"resources/Particle.PS.hlsl",

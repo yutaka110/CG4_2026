@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstring>
+#include <filesystem>
 #include <numbers>
 #include <vector>
 
@@ -17,6 +18,10 @@ namespace {
         float position[4];
         float texcoord[2];
         float normal[3];
+    };
+
+    struct SkyboxVertex {
+        Vector4 position;
     };
 
     std::vector<SphereVertex> BuildSphereVertices(uint32_t stackCount, uint32_t sliceCount) {
@@ -70,6 +75,27 @@ namespace {
         }
 
         return v;
+    }
+
+    std::vector<SkyboxVertex> BuildSkyboxVertices() {
+        constexpr float k = 1.0f;
+        const Vector4 p000{-k, -k, -k, 1.0f};
+        const Vector4 p001{-k, -k,  k, 1.0f};
+        const Vector4 p010{-k,  k, -k, 1.0f};
+        const Vector4 p011{-k,  k,  k, 1.0f};
+        const Vector4 p100{ k, -k, -k, 1.0f};
+        const Vector4 p101{ k, -k,  k, 1.0f};
+        const Vector4 p110{ k,  k, -k, 1.0f};
+        const Vector4 p111{ k,  k,  k, 1.0f};
+
+        return {
+            {p100}, {p110}, {p111}, {p100}, {p111}, {p101},
+            {p000}, {p001}, {p011}, {p000}, {p011}, {p010},
+            {p010}, {p011}, {p111}, {p010}, {p111}, {p110},
+            {p000}, {p100}, {p101}, {p000}, {p101}, {p001},
+            {p001}, {p101}, {p111}, {p001}, {p111}, {p011},
+            {p000}, {p010}, {p110}, {p000}, {p110}, {p100},
+        };
     }
 
 } // namespace
@@ -247,6 +273,32 @@ bool AppSceneResources::Initialize(
     textureSrvHandleGPU2 = AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 2);
     device->CreateShaderResourceView(textureResource2.Get(), &srvDesc2, textureSrvHandleCPU2);
 
+    const std::string skyboxTexturePath = "Resources/rostock_laage_airport_4k.dds";
+    if (std::filesystem::exists(skyboxTexturePath)) {
+        DirectX::ScratchImage skyboxImages = AppRenderResources::LoadTexture(skyboxTexturePath);
+        const DirectX::TexMetadata& skyboxMetadata = skyboxImages.GetMetadata();
+        if (skyboxMetadata.IsCubemap()) {
+            skyboxTextureResource = AppRenderResources::CreateTextureResource(device, skyboxMetadata);
+            AppRenderResources::UploadTextureData(skyboxTextureResource, skyboxImages);
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC skyboxSrvDesc{};
+            skyboxSrvDesc.Format = skyboxMetadata.format;
+            skyboxSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            skyboxSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+            skyboxSrvDesc.TextureCube.MostDetailedMip = 0;
+            skyboxSrvDesc.TextureCube.MipLevels = UINT(skyboxMetadata.mipLevels);
+            skyboxSrvDesc.TextureCube.ResourceMinLODClamp = 0.0f;
+
+            skyboxTextureSrvHandleCPU = AppRenderResources::GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 3);
+            skyboxTextureSrvHandleGPU = AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 3);
+            device->CreateShaderResourceView(skyboxTextureResource.Get(), &skyboxSrvDesc, skyboxTextureSrvHandleCPU);
+        } else {
+            OutputDebugStringA("[AppSceneResources] Skybox texture exists but is not a cubemap DDS.\n");
+        }
+    } else {
+        OutputDebugStringA("[AppSceneResources] Skybox DDS not found. Skybox pass will be skipped.\n");
+    }
+
     // =========================================================
     // Sphere mesh
     // =========================================================
@@ -279,6 +331,36 @@ bool AppSceneResources::Initialize(
         sphere.mappedCBV->WVP = MakeIdentity4x4();
         sphere.mappedCBV->World = MakeIdentity4x4();
         sphere.mappedCBV->WorldInverseTranspose = MakeIdentity4x4();
+    }
+
+    // =========================================================
+    // Skybox mesh
+    // =========================================================
+    {
+        const std::vector<SkyboxVertex> skyboxVerts = BuildSkyboxVertices();
+        skybox.vertexCount = UINT(skyboxVerts.size());
+        skybox.vertexResource =
+            CreateBufferResource(device, sizeof(SkyboxVertex) * skybox.vertexCount);
+
+        SkyboxVertex* mappedVB = nullptr;
+        skybox.vertexResource->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&mappedVB));
+        memcpy(mappedVB, skyboxVerts.data(), sizeof(SkyboxVertex) * skybox.vertexCount);
+
+        skybox.vbv.BufferLocation = skybox.vertexResource->GetGPUVirtualAddress();
+        skybox.vbv.SizeInBytes = UINT(sizeof(SkyboxVertex) * skybox.vertexCount);
+        skybox.vbv.StrideInBytes = sizeof(SkyboxVertex);
+
+        skybox.cbvResource = CreateBufferResource(device, sizeof(TransformationMatrix));
+        skybox.cbvResource->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&skybox.mappedCBV));
+        skybox.mappedCBV->WVP = MakeIdentity4x4();
+        skybox.mappedCBV->World = MakeIdentity4x4();
+        skybox.mappedCBV->WorldInverseTranspose = MakeIdentity4x4();
     }
 
     // =========================================================
@@ -368,6 +450,16 @@ void AppSceneResources::UpdateTransforms(
         sphere.mappedCBV->World = worldWithNode;
         sphere.mappedCBV->WVP = wvpWithNode;
         sphere.mappedCBV->WorldInverseTranspose = Transpose(Inverse(worldWithNode));
+    }
+
+    if (skybox.mappedCBV != nullptr) {
+        Matrix4x4 skyboxView = viewMatrix;
+        skyboxView.m[3][0] = 0.0f;
+        skyboxView.m[3][1] = 0.0f;
+        skyboxView.m[3][2] = 0.0f;
+        skybox.mappedCBV->World = MakeIdentity4x4();
+        skybox.mappedCBV->WVP = Multiply(skyboxView, projMatrix);
+        skybox.mappedCBV->WorldInverseTranspose = MakeIdentity4x4();
     }
 }
 

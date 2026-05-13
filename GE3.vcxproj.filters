@@ -374,6 +374,8 @@
     <FxCompile Include="Resources\GaussianBlurHorizontal.PS.hlsl" />
     <FxCompile Include="Resources\GaussianBlurVertical.PS.hlsl" />
     <FxCompile Include="Resources\PrewittOutline.PS.hlsl" />
+    <FxCompile Include="Resources\Skybox.PS.hlsl" />
+    <FxCompile Include="Resources\Skybox.VS.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Matrix4x4.h">
@@ -717,6 +719,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\Particle.hlsli" />
+    <None Include="Resources\Skybox.hlsli" />
     <None Include="Resources\effects\AuthoringMetadataDemo.effect" />
     <None Include="Resources\effects\WarpCore.effect" />
   </ItemGroup>
