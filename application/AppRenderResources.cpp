@@ -5,7 +5,22 @@
 #include "utils/dx12/BufferHelper.h"
 #include "utils/math/Vector.h"
 
+#include <algorithm>
+#include <cwctype>
+#include <filesystem>
+
 using Microsoft::WRL::ComPtr;
+
+namespace {
+bool HasExtension(const std::string& filePath, const wchar_t* extension) {
+    std::filesystem::path path(filePath);
+    std::wstring ext = path.extension().wstring();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](wchar_t c) {
+        return static_cast<wchar_t>(std::towlower(c));
+    });
+    return ext == extension;
+}
+} // namespace
 
 ComPtr<ID3D12DescriptorHeap> AppRenderResources::CreateDescriptorHeap(
     ComPtr<ID3D12Device> device,
@@ -30,12 +45,27 @@ ComPtr<ID3D12DescriptorHeap> AppRenderResources::CreateDescriptorHeap(
 DirectX::ScratchImage AppRenderResources::LoadTexture(const std::string& filePath) {
     DirectX::ScratchImage image{};
     std::wstring filePathW = ConvertString(filePath);
-    HRESULT hr = DirectX::LoadFromWICFile(
-        filePathW.c_str(),
-        DirectX::WIC_FLAGS_FORCE_SRGB,
-        nullptr,
-        image);
+
+    HRESULT hr = S_OK;
+    if (HasExtension(filePath, L".dds")) {
+        hr = DirectX::LoadFromDDSFile(
+            filePathW.c_str(),
+            DirectX::DDS_FLAGS_NONE,
+            nullptr,
+            image);
+    } else {
+        hr = DirectX::LoadFromWICFile(
+            filePathW.c_str(),
+            DirectX::WIC_FLAGS_FORCE_SRGB,
+            nullptr,
+            image);
+    }
     assert(SUCCEEDED(hr));
+
+    const DirectX::TexMetadata& metadata = image.GetMetadata();
+    if (metadata.IsCubemap() || DirectX::IsCompressed(metadata.format)) {
+        return image;
+    }
 
     DirectX::ScratchImage mipImages{};
     hr = DirectX::GenerateMipMaps(
@@ -85,15 +115,20 @@ void AppRenderResources::UploadTextureData(
     const DirectX::ScratchImage& mipImages) {
     const DirectX::TexMetadata& metadata = mipImages.GetMetadata();
 
-    for (size_t mipLevel = 0; mipLevel < metadata.mipLevels; ++mipLevel) {
-        const DirectX::Image* img = mipImages.GetImage(mipLevel, 0, 0);
-        HRESULT hr = texture->WriteToSubresource(
-            UINT(mipLevel),
-            nullptr,
-            img->pixels,
-            UINT(img->rowPitch),
-            UINT(img->slicePitch));
-        assert(SUCCEEDED(hr));
+    for (size_t item = 0; item < metadata.arraySize; ++item) {
+        for (size_t mipLevel = 0; mipLevel < metadata.mipLevels; ++mipLevel) {
+            const DirectX::Image* img = mipImages.GetImage(mipLevel, item, 0);
+            assert(img != nullptr);
+
+            const UINT subresource = UINT(mipLevel + item * metadata.mipLevels);
+            HRESULT hr = texture->WriteToSubresource(
+                subresource,
+                nullptr,
+                img->pixels,
+                UINT(img->rowPitch),
+                UINT(img->slicePitch));
+            assert(SUCCEEDED(hr));
+        }
     }
 }
 

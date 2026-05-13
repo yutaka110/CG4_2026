@@ -18,6 +18,7 @@ public:
 
     ID3D12RootSignature* GetMainRootSignature() const { return mainRootSignature_.Get(); }
     ID3D12RootSignature* GetSpriteRootSignature() const { return spriteRootSignature_.Get(); }
+    ID3D12RootSignature* GetSkyboxRootSignature() const { return skyboxRootSignature_.Get(); }
     ID3D12RootSignature* GetParticleRootSignature() const { return particleRootSignature_.Get(); }
     ID3D12RootSignature* GetComputeRootSignature() const { return computeRootSignature_.Get(); }
 
@@ -25,6 +26,7 @@ public:
     ID3D12PipelineState* GetMainOpaquePSO() const { return mainOpaquePso_.Get(); }
     ID3D12PipelineState* GetMainAlphaPSO() const { return mainAlphaPso_.Get(); }
     ID3D12PipelineState* GetSpritePSO() const { return spritePso_.Get(); }
+    ID3D12PipelineState* GetSkyboxPSO() const { return skyboxPso_.Get(); }
 
     ID3D12PipelineState* GetComputePSO() const { return computePso_.Get(); }
     ID3D12RootSignature* GetGpuParticleComputeRootSignature() const { return gpuParticleComputeRootSignature_.Get(); }
@@ -64,6 +66,7 @@ private:
     // RootSignature
     Microsoft::WRL::ComPtr<ID3D12RootSignature> mainRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> spriteRootSignature_;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> skyboxRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> particleRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> computeRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> gpuParticleComputeRootSignature_;
@@ -76,6 +79,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainOpaquePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainAlphaPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> spritePso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> skyboxPso_;
 
     Microsoft::WRL::ComPtr<ID3D12PipelineState> computePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> gpuParticleComputePso_;
@@ -113,6 +117,8 @@ private:
     Microsoft::WRL::ComPtr<IDxcBlob> ps_;
     Microsoft::WRL::ComPtr<IDxcBlob> spriteVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> spritePs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> skyboxVs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> skyboxPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> cs_;
     Microsoft::WRL::ComPtr<IDxcBlob> particleVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> particlePs_;

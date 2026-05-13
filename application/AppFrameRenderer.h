@@ -48,6 +48,14 @@ public:
         D3D12_GPU_VIRTUAL_ADDRESS transformBufferAddress,
         D3D12_GPU_DESCRIPTOR_HANDLE textureHandle) const;
 
+    void DrawSkybox(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12DescriptorHeap* descriptorHeap,
+        const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
+        D3D12_GPU_VIRTUAL_ADDRESS transformBufferAddress,
+        D3D12_GPU_DESCRIPTOR_HANDLE textureHandle,
+        uint32_t vertexCount) const;
+
     void PrepareSphere(
         ID3D12GraphicsCommandList* commandList,
         ID3D12RootSignature* rootSignature,

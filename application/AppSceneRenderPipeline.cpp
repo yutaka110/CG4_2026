@@ -31,6 +31,34 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
     ctx.renderGraph->AddPass({
+        "Background.Skybox",
+        ge3::graphics::RenderPassLayer::Geometry,
+        {
+            {"SceneColor", ge3::graphics::RenderResourceAccessType::WriteRtv},
+        },
+        "",
+        [ctx](ge3::graphics::RenderPassContext& passContext) {
+            const bool skyboxReady = ctx.frameRenderer->PrepareMainPass(
+                passContext.commandList,
+                ctx.runtimeState->viewport,
+                ctx.runtimeState->scissorRect,
+                ctx.appPipelines->GetSkyboxRootSignature(),
+                ctx.appPipelines->GetSkyboxPSO());
+
+            if (skyboxReady &&
+                ctx.scene->skybox.cbvResource &&
+                ctx.scene->skyboxTextureSrvHandleGPU.ptr != 0) {
+                ctx.frameRenderer->DrawSkybox(
+                    passContext.commandList,
+                    ctx.srvDescriptorHeap,
+                    ctx.scene->skybox.vbv,
+                    ctx.scene->skybox.cbvResource->GetGPUVirtualAddress(),
+                    ctx.scene->skyboxTextureSrvHandleGPU,
+                    ctx.scene->skybox.vertexCount);
+            }
+        }});
+
+    ctx.renderGraph->AddPass({
         "Geometry.Sprite",
         ge3::graphics::RenderPassLayer::Geometry,
         {

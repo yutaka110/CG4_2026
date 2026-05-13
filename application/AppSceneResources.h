@@ -18,6 +18,14 @@ struct SphereMeshData {
     UINT vertexCount = 0;
 };
 
+struct SkyboxMeshData {
+    Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource;
+    D3D12_VERTEX_BUFFER_VIEW vbv{};
+    Microsoft::WRL::ComPtr<ID3D12Resource> cbvResource;
+    TransformationMatrix* mappedCBV = nullptr;
+    UINT vertexCount = 0;
+};
+
 struct CameraForGPU {
     Vector3 worldPosition;
     float padding;
@@ -76,13 +84,19 @@ public:
     // Texture
     Microsoft::WRL::ComPtr<ID3D12Resource> textureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> textureResource2;
+    Microsoft::WRL::ComPtr<ID3D12Resource> skyboxTextureResource;
     D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU2{};
+    D3D12_GPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleGPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU2{};
+    D3D12_CPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleCPU{};
 
     // Sphere
     SphereMeshData sphere{};
+
+    // Skybox
+    SkyboxMeshData skybox{};
 
     // Model
     ModelData modelData{};
