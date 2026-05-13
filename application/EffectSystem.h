@@ -25,6 +25,7 @@ enum class EffectComponentType {
     Trail,
     Beam,
     Distortion,
+    Ring,
 };
 
 enum class EffectTechnique {
@@ -32,6 +33,7 @@ enum class EffectTechnique {
     TrailRibbon,
     BeamLightning,
     DistortionSprite,
+    RingMesh,
 };
 
 enum class EffectRendererType {
@@ -39,6 +41,7 @@ enum class EffectRendererType {
     TrailRenderer,
     BeamRenderer,
     DistortionRenderer,
+    RingRenderer,
 };
 
 enum class EffectSimulationType {
@@ -237,12 +240,24 @@ struct EffectDistortionSettings {
     float depthAttenuation = 1.0f;
 };
 
+struct EffectRingSettings {
+    uint32_t divide = 64;
+    float outerRadius = 1.0f;
+    float innerRadius = 0.35f;
+    float emissive = 2.0f;
+    float uvScrollSpeed = 0.0f;
+    float expansion = 0.0f;
+    float fadeOut = 1.0f;
+    float depthFadeSoftness = 0.02f;
+};
+
 struct EffectComponentPayload {
     using Variant = std::variant<
         EffectParticleSettings,
         EffectTrailSettings,
         EffectBeamSettings,
-        EffectDistortionSettings>;
+        EffectDistortionSettings,
+        EffectRingSettings>;
 
     Variant data{EffectParticleSettings{}};
 };
@@ -272,6 +287,11 @@ struct BeamComponentAsset {
 struct DistortionComponentAsset {
     EffectComponentCommon common{};
     EffectDistortionSettings settings{};
+};
+
+struct RingComponentAsset {
+    EffectComponentCommon common{};
+    EffectRingSettings settings{};
 };
 
 inline EffectComponentAsset ToEffectComponentAsset(const ParticleComponentAsset& component) {
@@ -306,6 +326,14 @@ inline EffectComponentAsset ToEffectComponentAsset(const DistortionComponentAsse
     return asset;
 }
 
+inline EffectComponentAsset ToEffectComponentAsset(const RingComponentAsset& component) {
+    EffectComponentAsset asset{};
+    asset.common = component.common;
+    asset.common.type = EffectComponentType::Ring;
+    asset.payload.data = component.settings;
+    return asset;
+}
+
 struct ParticleComponentStorageView;
 struct MutableParticleComponentStorageView;
 struct TrailComponentStorageView;
@@ -314,6 +342,8 @@ struct BeamComponentStorageView;
 struct MutableBeamComponentStorageView;
 struct DistortionComponentStorageView;
 struct MutableDistortionComponentStorageView;
+struct RingComponentStorageView;
+struct MutableRingComponentStorageView;
 
 class EffectAssetComponentStorage {
 public:
@@ -324,7 +354,8 @@ public:
         return particleComponents_.size() +
                trailComponents_.size() +
                beamComponents_.size() +
-               distortionComponents_.size();
+               distortionComponents_.size() +
+               ringComponents_.size();
     }
     void Reserve(std::size_t count) { packedComponents_.reserve(count); }
 
@@ -367,6 +398,14 @@ public:
         return packedComponents_.back();
     }
 
+    EffectComponentAsset& Add(RingComponentAsset component) {
+        component.common.type = EffectComponentType::Ring;
+        EffectComponentAsset packed = ToEffectComponentAsset(component);
+        ringComponents_.push_back(std::move(component));
+        packedComponents_.push_back(std::move(packed));
+        return packedComponents_.back();
+    }
+
     bool ReplaceParticleComponentAndSyncPacked(ParticleComponentAsset component) {
         component.common.type = EffectComponentType::Particle;
         EffectComponentAsset* packedComponent = Find(component.common.id);
@@ -377,6 +416,7 @@ public:
         RemoveTypedComponent(trailComponents_, component.common.id);
         RemoveTypedComponent(beamComponents_, component.common.id);
         RemoveTypedComponent(distortionComponents_, component.common.id);
+        RemoveTypedComponent(ringComponents_, component.common.id);
         *packedComponent = ToEffectComponentAsset(component);
         return true;
     }
@@ -391,6 +431,7 @@ public:
         RemoveTypedComponent(particleComponents_, component.common.id);
         RemoveTypedComponent(beamComponents_, component.common.id);
         RemoveTypedComponent(distortionComponents_, component.common.id);
+        RemoveTypedComponent(ringComponents_, component.common.id);
         *packedComponent = ToEffectComponentAsset(component);
         return true;
     }
@@ -405,6 +446,7 @@ public:
         RemoveTypedComponent(particleComponents_, component.common.id);
         RemoveTypedComponent(trailComponents_, component.common.id);
         RemoveTypedComponent(distortionComponents_, component.common.id);
+        RemoveTypedComponent(ringComponents_, component.common.id);
         *packedComponent = ToEffectComponentAsset(component);
         return true;
     }
@@ -419,6 +461,22 @@ public:
         RemoveTypedComponent(particleComponents_, component.common.id);
         RemoveTypedComponent(trailComponents_, component.common.id);
         RemoveTypedComponent(beamComponents_, component.common.id);
+        RemoveTypedComponent(ringComponents_, component.common.id);
+        *packedComponent = ToEffectComponentAsset(component);
+        return true;
+    }
+
+    bool ReplaceRingComponentAndSyncPacked(RingComponentAsset component) {
+        component.common.type = EffectComponentType::Ring;
+        EffectComponentAsset* packedComponent = Find(component.common.id);
+        if (packedComponent == nullptr) {
+            return false;
+        }
+        ReplaceTypedComponent(ringComponents_, component);
+        RemoveTypedComponent(particleComponents_, component.common.id);
+        RemoveTypedComponent(trailComponents_, component.common.id);
+        RemoveTypedComponent(beamComponents_, component.common.id);
+        RemoveTypedComponent(distortionComponents_, component.common.id);
         *packedComponent = ToEffectComponentAsset(component);
         return true;
     }
@@ -471,6 +529,17 @@ private:
         return true;
     }
 
+    bool ReplaceRingComponentAtForAuthoring(
+        std::size_t index,
+        RingComponentAsset component) {
+        if (index >= packedComponents_.size()) {
+            return false;
+        }
+        component.common.type = EffectComponentType::Ring;
+        packedComponents_[index] = ToEffectComponentAsset(component);
+        return true;
+    }
+
 public:
     ParticleComponentStorageView ParticleStorageView() const;
     MutableParticleComponentStorageView MutableParticleStorageView();
@@ -480,6 +549,8 @@ public:
     MutableBeamComponentStorageView MutableBeamStorageView();
     DistortionComponentStorageView DistortionStorageView() const;
     MutableDistortionComponentStorageView MutableDistortionStorageView();
+    RingComponentStorageView RingStorageView() const;
+    MutableRingComponentStorageView MutableRingStorageView();
 
     template <typename Visitor>
     void ForEachComponentCommon(Visitor&& visitor) const {
@@ -493,6 +564,9 @@ public:
             visitor(component.common);
         }
         for (const DistortionComponentAsset& component : distortionComponents_) {
+            visitor(component.common);
+        }
+        for (const RingComponentAsset& component : ringComponents_) {
             visitor(component.common);
         }
     }
@@ -509,6 +583,7 @@ private:
         trailComponents_.clear();
         beamComponents_.clear();
         distortionComponents_.clear();
+        ringComponents_.clear();
 
         for (const EffectComponentAsset& component : packedComponents_) {
             MirrorTypedComponent(component);
@@ -570,6 +645,11 @@ private:
                 distortionComponents_.push_back({component.common, *settings});
             }
             break;
+        case EffectComponentType::Ring:
+            if (const auto* settings = std::get_if<EffectRingSettings>(&component.payload.data)) {
+                ringComponents_.push_back({component.common, *settings});
+            }
+            break;
         }
     }
 
@@ -578,6 +658,7 @@ private:
     std::vector<TrailComponentAsset> trailComponents_;
     std::vector<BeamComponentAsset> beamComponents_;
     std::vector<DistortionComponentAsset> distortionComponents_;
+    std::vector<RingComponentAsset> ringComponents_;
 };
 
 struct EffectAsset {
@@ -598,6 +679,7 @@ struct EffectAsset {
     EffectTrailSettings defaultTrail{};
     EffectBeamSettings defaultBeam{};
     EffectDistortionSettings defaultDistortion{};
+    EffectRingSettings defaultRing{};
     Vector4 color = {1.0f, 1.0f, 1.0f, 1.0f};
     Vector3 size = {1.0f, 1.0f, 1.0f};
     const EffectAssetComponentStorage& Components() const { return components_; }
@@ -672,6 +754,11 @@ struct DistortionRenderItem {
     const EffectDistortionSettings* settings = nullptr;
 };
 
+struct RingRenderItem {
+    EffectRenderItemCommon common{};
+    const EffectRingSettings* settings = nullptr;
+};
+
 struct ParticleRenderFallback {
     const EffectComponentCommon* common = nullptr;
     const EffectParticleSettings* settings = nullptr;
@@ -681,6 +768,7 @@ using ParticleRenderQueue = std::vector<ParticleRenderItem>;
 using TrailRenderQueue = std::vector<TrailRenderItem>;
 using BeamRenderQueue = std::vector<BeamRenderItem>;
 using DistortionRenderQueue = std::vector<DistortionRenderItem>;
+using RingRenderQueue = std::vector<RingRenderItem>;
 
 struct EffectRuntimeQueueAuthoringStatus {
     bool hasPrimary = false;
@@ -701,12 +789,14 @@ struct EffectRuntimeAuthoringFrame {
     EffectRuntimeQueueAuthoringStatus trail;
     EffectRuntimeQueueAuthoringStatus beam;
     EffectRuntimeQueueAuthoringStatus distortion;
+    EffectRuntimeQueueAuthoringStatus ring;
 };
 
 struct ParticleRenderInput;
 struct TrailRenderInput;
 struct BeamRenderInput;
 struct DistortionRenderInput;
+struct RingRenderInput;
 class EffectAuthoringRegistry;
 
 struct EffectRuntimeFrame {
@@ -714,6 +804,7 @@ struct EffectRuntimeFrame {
     TrailRenderQueue trailQueue;
     BeamRenderQueue beamQueue;
     DistortionRenderQueue distortionQueue;
+    RingRenderQueue ringQueue;
     EffectRuntimeAuthoringFrame authoring;
     uint32_t activeInstanceCount = 0;
     uint32_t activeComponentCount = 0;
@@ -724,6 +815,7 @@ struct EffectRuntimeFrame {
     TrailRenderInput TrailInput() const;
     BeamRenderInput BeamInput() const;
     DistortionRenderInput DistortionInput() const;
+    RingRenderInput RingInput() const;
 };
 
 class EffectSystem {

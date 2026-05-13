@@ -1,0 +1,23 @@
+name = hit_ring
+texture = gradationLine
+lifetime = 0.55
+blend = additive
+layer = additive
+renderQueue = 20
+color = 0.75,0.9,1.0,1.0
+size = 1.0,1.0,1.0
+ring.divide = 64
+ring.outerRadius = 1.15
+ring.innerRadius = 0.35
+ring.emissive = 4.5
+ring.uvScrollSpeed = 0.55
+ring.expansion = 1.25
+ring.fadeOut = 1.65
+
+component = ring
+name = hit_ring_flash
+technique = RingMesh
+texture = gradationLine
+duration = 0.55
+color = 0.75,0.9,1.0,1.0
+size = 1.0,1.0,1.0

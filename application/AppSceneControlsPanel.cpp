@@ -128,6 +128,8 @@ void DrawVfxRuntimeControlsPanel(
     ImGui::Checkbox("Beams", &runtimeState.vfx.enableBeams);
     ImGui::SameLine();
     ImGui::Checkbox("Distortion", &runtimeState.vfx.enableDistortions);
+    ImGui::SameLine();
+    ImGui::Checkbox("Rings", &runtimeState.vfx.enableRings);
     ImGui::Checkbox("Trail Mesh Stream", &runtimeState.vfx.enableTrailMeshStream);
     ImGui::Checkbox("Trail Mesh Stream Safety Fallback", &runtimeState.vfx.enableTrailMeshStreamAutoFallback);
     if (ImGui::Checkbox(
@@ -152,6 +154,31 @@ void DrawVfxRuntimeControlsPanel(
         runtimeState.vfx.enableParticles = true;
         effectRuntime.PlayEffectWithParams(
             "hit_plane_burst",
+            runtimeState.emitter.transform.translate,
+            {1.0f, 1.0f, 1.0f, 1.0f},
+            {1.0f, 1.0f, 1.0f});
+    }
+    if (ImGui::Button("Play hit_ring")) {
+        runtimeState.vfx.enableRings = true;
+        effectRuntime.PlayEffectWithParams(
+            "hit_ring",
+            runtimeState.emitter.transform.translate,
+            {0.9f, 0.95f, 1.0f, 1.0f},
+            {1.0f, 1.0f, 1.0f});
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Focus hit_combo")) {
+        runtimeState.vfx.autoPlayVfxDemo = false;
+        runtimeState.vfx.enableParticles = true;
+        runtimeState.vfx.enableRings = true;
+        runtimeState.vfx.enableTrails = false;
+        runtimeState.vfx.enableBeams = false;
+        runtimeState.vfx.enableDistortions = false;
+        runtimeState.vfx.enableRings = false;
+        runtimeState.emitter.transform.translate = FrontHitEffectPosition(runtimeState);
+        effectRuntime.ClearInstances();
+        effectRuntime.PlayEffectWithParams(
+            "hit_ring_plane_combo",
             runtimeState.emitter.transform.translate,
             {1.0f, 1.0f, 1.0f, 1.0f},
             {1.0f, 1.0f, 1.0f});

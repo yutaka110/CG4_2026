@@ -14,6 +14,8 @@ inline const char* ComponentTypeLabel(EffectComponentType type) {
         return "Beam";
     case EffectComponentType::Distortion:
         return "Distortion";
+    case EffectComponentType::Ring:
+        return "Ring";
     }
     return "Unknown";
 }
@@ -32,6 +34,8 @@ inline const char* TechniqueLabel(EffectTechnique technique) {
         return "BeamLightning";
     case EffectTechnique::DistortionSprite:
         return "DistortionSprite";
+    case EffectTechnique::RingMesh:
+        return "RingMesh";
     }
     return "Unknown";
 }
@@ -50,6 +54,8 @@ inline const char* RendererTypeLabel(EffectRendererType type) {
         return "BeamRenderer";
     case EffectRendererType::DistortionRenderer:
         return "DistortionRenderer";
+    case EffectRendererType::RingRenderer:
+        return "RingRenderer";
     }
     return "Unknown";
 }

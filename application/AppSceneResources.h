@@ -26,6 +26,12 @@ struct SkyboxMeshData {
     UINT vertexCount = 0;
 };
 
+struct RingMeshData {
+    Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource;
+    D3D12_VERTEX_BUFFER_VIEW vbv{};
+    UINT vertexCount = 0;
+};
+
 struct CameraForGPU {
     Vector3 worldPosition;
     float padding;
@@ -85,14 +91,17 @@ public:
     Microsoft::WRL::ComPtr<ID3D12Resource> textureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> textureResource2;
     Microsoft::WRL::ComPtr<ID3D12Resource> circle2TextureResource;
+    Microsoft::WRL::ComPtr<ID3D12Resource> gradationLineTextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> skyboxTextureResource;
     D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU2{};
     D3D12_GPU_DESCRIPTOR_HANDLE circle2TextureSrvHandleGPU{};
+    D3D12_GPU_DESCRIPTOR_HANDLE gradationLineTextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleGPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU2{};
     D3D12_CPU_DESCRIPTOR_HANDLE circle2TextureSrvHandleCPU{};
+    D3D12_CPU_DESCRIPTOR_HANDLE gradationLineTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleCPU{};
 
     // Sphere
@@ -100,6 +109,9 @@ public:
 
     // Skybox
     SkyboxMeshData skybox{};
+
+    // VFX primitives
+    RingMeshData ring{};
 
     // Model
     ModelData modelData{};

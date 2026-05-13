@@ -171,6 +171,10 @@ const EffectComponentCommon* PrimaryComponentCommon(const BeamRenderQueue& queue
 const EffectComponentCommon* PrimaryComponentCommon(const DistortionRenderQueue& queue) {
     return queue.empty() ? nullptr : queue.front().common.componentCommon;
 }
+
+const EffectComponentCommon* PrimaryComponentCommon(const RingRenderQueue& queue) {
+    return queue.empty() ? nullptr : queue.front().common.componentCommon;
+}
 } // namespace
 
 EffectRuntime::EffectRuntime(EffectSystem* effectSystem)
@@ -243,6 +247,7 @@ EffectRuntimeFrame EffectRuntime::BuildFrame() const {
     frame.trailQueue = BuildTrailQueue();
     frame.beamQueue = BuildBeamQueue();
     frame.distortionQueue = BuildDistortionQueue();
+    frame.ringQueue = BuildRingQueue();
     const EffectAuthoringRegistry& authoringRegistry = AuthoringRegistry();
     frame.authoring.particle =
         BuildRuntimeQueueAuthoringStatus(PrimaryComponentCommon(frame.particleQueue), authoringRegistry);
@@ -252,12 +257,15 @@ EffectRuntimeFrame EffectRuntime::BuildFrame() const {
         BuildRuntimeQueueAuthoringStatus(PrimaryComponentCommon(frame.beamQueue), authoringRegistry);
     frame.authoring.distortion =
         BuildRuntimeQueueAuthoringStatus(PrimaryComponentCommon(frame.distortionQueue), authoringRegistry);
+    frame.authoring.ring =
+        BuildRuntimeQueueAuthoringStatus(PrimaryComponentCommon(frame.ringQueue), authoringRegistry);
     frame.activeComponentCount =
         static_cast<uint32_t>(
             frame.particleQueue.size() +
             frame.trailQueue.size() +
             frame.beamQueue.size() +
-            frame.distortionQueue.size());
+            frame.distortionQueue.size() +
+            frame.ringQueue.size());
     return frame;
 }
 
@@ -466,6 +474,34 @@ void EffectRuntime::ForEachDistortionAssetComponent(
         });
 }
 
+void EffectRuntime::ForEachRingAssetComponent(
+    const std::function<void(const ActiveComponentCore&, const RingComponentAssetView&)>& visitor) const {
+    ForEachActiveInstanceComponent(
+        [&visitor, this](const EffectInstance& instance, const EffectComponentInstance& componentInstance) {
+            if (instance.asset == nullptr) {
+                return;
+            }
+            if (const RingComponentAssetView ring =
+                    FindRingComponent(instance.asset->Components().RingStorageView(), componentInstance.componentId)) {
+                const RuntimeComponentRoute route =
+                    ResolveRuntimeComponentRoute(*ring.common, AuthoringRegistry());
+                if (!ComponentRoutesToRenderer(route, EffectComponentType::Ring)) {
+                    return;
+                }
+                ActiveComponentCore core{};
+                if (BuildActiveComponentCore(
+                        instance,
+                        componentInstance,
+                        *ring.common,
+                        route.renderer,
+                        route.simulation,
+                        core)) {
+                    visitor(core, ring);
+                }
+            }
+        });
+}
+
 void EffectRuntime::ForEachParticleComponent(
     const std::function<void(const ParticleActiveComponent&)>& visitor) const {
     ForEachParticleAssetComponent(
@@ -495,6 +531,14 @@ void EffectRuntime::ForEachDistortionComponent(
     ForEachDistortionAssetComponent(
         [&visitor](const ActiveComponentCore& core, const DistortionComponentAssetView& distortion) {
             visitor({core.common, distortion.settings});
+        });
+}
+
+void EffectRuntime::ForEachRingComponent(
+    const std::function<void(const RingActiveComponent&)>& visitor) const {
+    ForEachRingAssetComponent(
+        [&visitor](const ActiveComponentCore& core, const RingComponentAssetView& ring) {
+            visitor({core.common, ring.settings});
         });
 }
 
@@ -532,6 +576,16 @@ DistortionRenderQueue EffectRuntime::BuildDistortionQueue() const {
     DistortionRenderQueue queue;
     ForEachDistortionComponent(
         [&queue](const DistortionActiveComponent& component) {
+            queue.push_back({component.common, component.settings});
+        });
+    SortRenderQueue(queue);
+    return queue;
+}
+
+RingRenderQueue EffectRuntime::BuildRingQueue() const {
+    RingRenderQueue queue;
+    ForEachRingComponent(
+        [&queue](const RingActiveComponent& component) {
             queue.push_back({component.common, component.settings});
         });
     SortRenderQueue(queue);

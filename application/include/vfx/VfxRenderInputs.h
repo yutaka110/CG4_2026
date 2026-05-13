@@ -35,3 +35,8 @@ struct DistortionRenderInput {
     VfxComponentInputCommon primary{};
     const EffectDistortionSettings* settings = nullptr;
 };
+
+struct RingRenderInput {
+    VfxComponentInputCommon primary{};
+    const EffectRingSettings* settings = nullptr;
+};

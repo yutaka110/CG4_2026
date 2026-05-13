@@ -14,7 +14,8 @@ using ComponentEditBuffer = std::variant<
     ParticleComponentAsset,
     TrailComponentAsset,
     BeamComponentAsset,
-    DistortionComponentAsset>;
+    DistortionComponentAsset,
+    RingComponentAsset>;
 
 std::string Trim(std::string text) {
     const auto first = std::find_if_not(text.begin(), text.end(), [](unsigned char ch) {
@@ -206,6 +207,32 @@ bool ApplyDistortionSettingsKey(
     return true;
 }
 
+bool ApplyRingSettingsKey(
+    EffectRingSettings& settings,
+    const std::string& key,
+    const std::string& value) {
+    if (key == "divide" || key == "segments" || key == "segmentCount") {
+        settings.divide = ToUint(value, settings.divide);
+    } else if (key == "outerRadius" || key == "radiusOuter") {
+        settings.outerRadius = ToFloat(value, settings.outerRadius);
+    } else if (key == "innerRadius" || key == "radiusInner") {
+        settings.innerRadius = ToFloat(value, settings.innerRadius);
+    } else if (key == "emissive") {
+        settings.emissive = ToFloat(value, settings.emissive);
+    } else if (key == "uvScroll" || key == "uvScrollSpeed") {
+        settings.uvScrollSpeed = ToFloat(value, settings.uvScrollSpeed);
+    } else if (key == "expansion" || key == "expand") {
+        settings.expansion = ToFloat(value, settings.expansion);
+    } else if (key == "fadeOut" || key == "tailFade") {
+        settings.fadeOut = ToFloat(value, settings.fadeOut);
+    } else if (key == "depthFadeSoftness" || key == "softness") {
+        settings.depthFadeSoftness = ToFloat(value, settings.depthFadeSoftness);
+    } else {
+        return false;
+    }
+    return true;
+}
+
 bool ApplyTypedDefaultKey(
     EffectAsset& asset,
     const std::string& scope,
@@ -222,6 +249,9 @@ bool ApplyTypedDefaultKey(
     }
     if (scope == "distortion") {
         return ApplyDistortionSettingsKey(asset.defaultDistortion, field, value);
+    }
+    if (scope == "ring") {
+        return ApplyRingSettingsKey(asset.defaultRing, field, value);
     }
     return false;
 }
@@ -252,6 +282,12 @@ bool ApplyTypedComponentKey(
     if (scope == "distortion") {
         if (auto* distortion = std::get_if<DistortionComponentAsset>(&component)) {
             return ApplyDistortionSettingsKey(distortion->settings, field, value);
+        }
+        return false;
+    }
+    if (scope == "ring") {
+        if (auto* ring = std::get_if<RingComponentAsset>(&component)) {
+            return ApplyRingSettingsKey(ring->settings, field, value);
         }
         return false;
     }
@@ -352,6 +388,13 @@ bool ApplyLegacyTypedSettingsKey(
     return ApplyDistortionSettingsKey(component.settings, key, value);
 }
 
+bool ApplyLegacyTypedSettingsKey(
+    RingComponentAsset& component,
+    const std::string& key,
+    const std::string& value) {
+    return ApplyRingSettingsKey(component.settings, key, value);
+}
+
 bool ApplyLegacyComponentSettingsKey(
     ComponentEditBuffer& component,
     const std::string& key,
@@ -401,6 +444,9 @@ EffectComponentType ParseComponentType(const std::string& value) {
     }
     if (value == "distortion") {
         return EffectComponentType::Distortion;
+    }
+    if (value == "ring") {
+        return EffectComponentType::Ring;
     }
     return EffectComponentType::Particle;
 }
@@ -749,6 +795,8 @@ ComponentEditBuffer MakeComponentBufferFromAsset(
         return EffectComponentAssetBuilder::MakeBeam(asset, common);
     case EffectComponentType::Distortion:
         return EffectComponentAssetBuilder::MakeDistortion(asset, common);
+    case EffectComponentType::Ring:
+        return EffectComponentAssetBuilder::MakeRing(asset, common);
     case EffectComponentType::Particle:
     default:
         return EffectComponentAssetBuilder::MakeParticle(asset, common);
@@ -774,6 +822,9 @@ void ResetComponentPayloadForCommon(const EffectAsset& asset, ComponentEditBuffe
         break;
     case EffectComponentType::Distortion:
         component = EffectComponentAssetBuilder::MakeDistortion(asset, common);
+        break;
+    case EffectComponentType::Ring:
+        component = EffectComponentAssetBuilder::MakeRing(asset, common);
         break;
     case EffectComponentType::Particle:
     default:

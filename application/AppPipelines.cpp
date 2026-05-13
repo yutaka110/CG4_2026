@@ -125,6 +125,8 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
         L"resources/TrailMesh.PS.hlsl",
         L"resources/DistortionSprite.VS.hlsl",
         L"resources/DistortionSprite.PS.hlsl",
+        L"resources/Ring.VS.hlsl",
+        L"resources/Ring.PS.hlsl",
         L"resources/ParticleSim.CS.hlsl",
         L"resources/TrailMeshStream.CS.hlsl",
         L"resources/TrailMeshBuild.CS.hlsl",
@@ -425,6 +427,54 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     if (FAILED(hr)) return FailHr("CreateRootSignature(Particle)", hr);
 
     // ------------------------------
+    // Ring RootSignature
+    // b0: draw constants, t0: ring texture
+    // ------------------------------
+    D3D12_DESCRIPTOR_RANGE ringTextureRange{};
+    ringTextureRange.BaseShaderRegister = 0;
+    ringTextureRange.NumDescriptors = 1;
+    ringTextureRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    ringTextureRange.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_ROOT_PARAMETER ringRootParams[2] = {};
+    ringRootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    ringRootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    ringRootParams[0].Constants.ShaderRegister = 0;
+    ringRootParams[0].Constants.Num32BitValues = 24;
+
+    ringRootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    ringRootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    ringRootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    ringRootParams[1].DescriptorTable.pDescriptorRanges = &ringTextureRange;
+
+    D3D12_STATIC_SAMPLER_DESC ringSampler = staticSamplers[0];
+    ringSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    ringSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    ringSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+
+    D3D12_ROOT_SIGNATURE_DESC ringRsDesc{};
+    ringRsDesc.NumParameters = _countof(ringRootParams);
+    ringRsDesc.pParameters = ringRootParams;
+    ringRsDesc.NumStaticSamplers = 1;
+    ringRsDesc.pStaticSamplers = &ringSampler;
+    ringRsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> ringSigBlob;
+    ComPtr<ID3DBlob> ringErrBlob;
+    hr = D3D12SerializeRootSignature(&ringRsDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                    &ringSigBlob, &ringErrBlob);
+    if (FAILED(hr)) {
+        if (ringErrBlob) {
+            OutputDebugStringA(reinterpret_cast<const char*>(ringErrBlob->GetBufferPointer()));
+        }
+        return false;
+    }
+
+    hr = device->CreateRootSignature(0, ringSigBlob->GetBufferPointer(), ringSigBlob->GetBufferSize(),
+                                    IID_PPV_ARGS(&ringRootSignature_));
+    if (FAILED(hr)) return FailHr("CreateRootSignature(Ring)", hr);
+
+    // ------------------------------
     // Compute RootSignature (MotionDetect)
     // ------------------------------
     // t4: Y, t5: UV, u0: output
@@ -708,6 +758,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     trailMeshPs_ = Compile_(L"resources/TrailMesh.PS.hlsl", L"ps_6_0");
     distortionSpriteVs_ = Compile_(L"resources/DistortionSprite.VS.hlsl", L"vs_6_0");
     distortionSpritePs_ = Compile_(L"resources/DistortionSprite.PS.hlsl", L"ps_6_0");
+    ringVs_ = Compile_(L"resources/Ring.VS.hlsl", L"vs_6_0");
+    ringPs_ = Compile_(L"resources/Ring.PS.hlsl", L"ps_6_0");
     gpuParticleCs_ = Compile_(L"resources/ParticleSim.CS.hlsl", L"cs_6_0");
     trailMeshStreamCs_ = Compile_(L"resources/TrailMeshStream.CS.hlsl", L"cs_6_0");
     trailMeshBuildCs_ = Compile_(L"resources/TrailMeshBuild.CS.hlsl", L"cs_6_0");
@@ -733,7 +785,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
     if (!vs_ || !ps_ || !spriteVs_ || !spritePs_ || !skyboxVs_ || !skyboxPs_ || !cs_ || !particleVs_ || !particlePs_ ||
         !trailMeshVs_ || !trailMeshStreamVs_ || !trailMeshPs_ || !distortionSpriteVs_ || !distortionSpritePs_ ||
-        !gpuParticleCs_ || !trailMeshStreamCs_ || !trailMeshBuildCs_ || !compositeVs_ || !compositePs_ || !bloomExtractPs_ ||
+        !ringVs_ || !ringPs_ || !gpuParticleCs_ || !trailMeshStreamCs_ || !trailMeshBuildCs_ || !compositeVs_ || !compositePs_ || !bloomExtractPs_ ||
         !bloomDownsamplePs_ || !bloomUpsamplePs_ || !blurHorizontalPs_ || !blurVerticalPs_ ||
         !boxBlurHorizontalPs_ || !boxBlurVerticalPs_ || !gaussianBlurHorizontalPs_ || !gaussianBlurVerticalPs_ ||
         !distortionCompositePs_ ||
@@ -1221,6 +1273,31 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(DistortionSprite)", hr);
     }
 
+    {
+        D3D12_BLEND_DESC ringBlend{};
+        ringBlend.AlphaToCoverageEnable = FALSE;
+        ringBlend.IndependentBlendEnable = FALSE;
+        auto& rt = ringBlend.RenderTarget[0];
+        rt.BlendEnable = TRUE;
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        rt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        rt.DestBlend = D3D12_BLEND_ONE;
+        rt.BlendOp = D3D12_BLEND_OP_ADD;
+        rt.SrcBlendAlpha = D3D12_BLEND_ONE;
+        rt.DestBlendAlpha = D3D12_BLEND_ONE;
+        rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = particleDesc;
+        d.pRootSignature = ringRootSignature_.Get();
+        d.VS = { ringVs_->GetBufferPointer(), ringVs_->GetBufferSize() };
+        d.PS = { ringPs_->GetBufferPointer(), ringPs_->GetBufferSize() };
+        d.BlendState = ringBlend;
+        d.RasterizerState = particleRaster;
+        d.DepthStencilState = particleDepth;
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&ringPso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Ring)", hr);
+    }
+
     // ------------------------------
     // Main Opaque/Alpha variants (for sprite or UI etc)
     // These were in AppMain as psoOpaque/psoAlpha using mainRootSignature.
@@ -1270,6 +1347,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         L"resources/TrailMesh.PS.hlsl",
         L"resources/DistortionSprite.VS.hlsl",
         L"resources/DistortionSprite.PS.hlsl",
+        L"resources/Ring.VS.hlsl",
+        L"resources/Ring.PS.hlsl",
         L"resources/ParticleSim.CS.hlsl",
         L"resources/TrailMeshStream.CS.hlsl",
         L"resources/TrailMeshBuild.CS.hlsl",

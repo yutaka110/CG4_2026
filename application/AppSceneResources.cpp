@@ -1,6 +1,7 @@
 #include "AppSceneResources.h"
 
 #include <cassert>
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <numbers>
@@ -22,6 +23,12 @@ namespace {
 
     struct SkyboxVertex {
         Vector4 position;
+    };
+
+    struct RingVertex {
+        Vector4 position;
+        Vector2 texcoord;
+        Vector3 normal;
     };
 
     std::vector<SphereVertex> BuildSphereVertices(uint32_t stackCount, uint32_t sliceCount) {
@@ -96,6 +103,45 @@ namespace {
             {p001}, {p101}, {p111}, {p001}, {p111}, {p011},
             {p000}, {p010}, {p110}, {p000}, {p110}, {p100},
         };
+    }
+
+    std::vector<RingVertex> BuildRingVertices(uint32_t divide) {
+        std::vector<RingVertex> vertices;
+        divide = (std::max)(uint32_t{3}, divide);
+        vertices.reserve(static_cast<size_t>(divide) * 6);
+        const float radianPerDivide = 2.0f * std::numbers::pi_v<float> / static_cast<float>(divide);
+
+        auto makeVertex = [](float sinValue, float cosValue, float v, float u) {
+            RingVertex vertex{};
+            vertex.position = {sinValue, cosValue, 0.0f, 1.0f};
+            vertex.texcoord = {u, v};
+            vertex.normal = {0.0f, 0.0f, -1.0f};
+            return vertex;
+        };
+
+        for (uint32_t index = 0; index < divide; ++index) {
+            const float angle = static_cast<float>(index) * radianPerDivide;
+            const float nextAngle = static_cast<float>(index + 1) * radianPerDivide;
+            const float sin0 = std::sin(angle);
+            const float cos0 = std::cos(angle);
+            const float sin1 = std::sin(nextAngle);
+            const float cos1 = std::cos(nextAngle);
+            const float u0 = static_cast<float>(index) / static_cast<float>(divide);
+            const float u1 = static_cast<float>(index + 1) / static_cast<float>(divide);
+
+            const RingVertex outer0 = makeVertex(sin0, cos0, 0.0f, u0);
+            const RingVertex outer1 = makeVertex(sin1, cos1, 0.0f, u1);
+            const RingVertex inner0 = makeVertex(sin0, cos0, 1.0f, u0);
+            const RingVertex inner1 = makeVertex(sin1, cos1, 1.0f, u1);
+
+            vertices.push_back(outer0);
+            vertices.push_back(outer1);
+            vertices.push_back(inner0);
+            vertices.push_back(inner0);
+            vertices.push_back(outer1);
+            vertices.push_back(inner1);
+        }
+        return vertices;
     }
 
 } // namespace
@@ -292,6 +338,26 @@ bool AppSceneResources::Initialize(
     circle2TextureSrvHandleGPU = AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 5);
     device->CreateShaderResourceView(circle2TextureResource.Get(), &circle2SrvDesc, circle2TextureSrvHandleCPU);
 
+    const std::string gradationLineTexturePath =
+        std::filesystem::exists("Resources/gradationLine.png") ? "Resources/gradationLine.png" : circle2TexturePath;
+    DirectX::ScratchImage gradationLineImages = AppRenderResources::LoadTexture(gradationLineTexturePath);
+    const DirectX::TexMetadata& gradationLineMetadata = gradationLineImages.GetMetadata();
+    gradationLineTextureResource = AppRenderResources::CreateTextureResource(device, gradationLineMetadata);
+    AppRenderResources::UploadTextureData(gradationLineTextureResource, gradationLineImages);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC gradationLineSrvDesc{};
+    gradationLineSrvDesc.Format = gradationLineMetadata.format;
+    gradationLineSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    gradationLineSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    gradationLineSrvDesc.Texture2D.MipLevels = UINT(gradationLineMetadata.mipLevels);
+
+    gradationLineTextureSrvHandleCPU = AppRenderResources::GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 6);
+    gradationLineTextureSrvHandleGPU = AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 6);
+    device->CreateShaderResourceView(
+        gradationLineTextureResource.Get(),
+        &gradationLineSrvDesc,
+        gradationLineTextureSrvHandleCPU);
+
     const std::string skyboxTexturePath = "Resources/rostock_laage_airport_4k.dds";
     if (std::filesystem::exists(skyboxTexturePath)) {
         DirectX::ScratchImage skyboxImages = AppRenderResources::LoadTexture(skyboxTexturePath);
@@ -380,6 +446,27 @@ bool AppSceneResources::Initialize(
         skybox.mappedCBV->WVP = MakeIdentity4x4();
         skybox.mappedCBV->World = MakeIdentity4x4();
         skybox.mappedCBV->WorldInverseTranspose = MakeIdentity4x4();
+    }
+
+    // =========================================================
+    // VFX Ring mesh
+    // =========================================================
+    {
+        const std::vector<RingVertex> ringVerts = BuildRingVertices(128);
+        ring.vertexCount = UINT(ringVerts.size());
+        ring.vertexResource =
+            CreateBufferResource(device, sizeof(RingVertex) * ring.vertexCount);
+
+        RingVertex* mappedVB = nullptr;
+        ring.vertexResource->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&mappedVB));
+        memcpy(mappedVB, ringVerts.data(), sizeof(RingVertex) * ring.vertexCount);
+
+        ring.vbv.BufferLocation = ring.vertexResource->GetGPUVirtualAddress();
+        ring.vbv.SizeInBytes = UINT(sizeof(RingVertex) * ring.vertexCount);
+        ring.vbv.StrideInBytes = sizeof(RingVertex);
     }
 
     // =========================================================
