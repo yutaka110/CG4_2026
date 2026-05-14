@@ -1,4 +1,5 @@
 #include"utils/math/MathUtils.h"
+#include <algorithm>
 #include <cmath>
 #include<numbers>
 Matrix4x4 MakeIdentity4x4()
@@ -53,6 +54,44 @@ Vector3 Normalize(const Vector3& v) {
 		return { 0.0f, 0.0f, 0.0f };
 	}
 	return { v.x / length, v.y / length, v.z / length };
+}
+
+Quaternion Normalize(const Quaternion& q) {
+	float length = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+	if (length == 0.0f) {
+		return { 0.0f, 0.0f, 0.0f, 1.0f };
+	}
+	return { q.x / length, q.y / length, q.z / length, q.w / length };
+}
+
+Quaternion Slerp(const Quaternion& a, const Quaternion& b, float t) {
+	t = (std::clamp)(t, 0.0f, 1.0f);
+	Quaternion end = b;
+	float dot = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+	if (dot < 0.0f) {
+		dot = -dot;
+		end = { -b.x, -b.y, -b.z, -b.w };
+	}
+
+	if (dot > 0.9995f) {
+		return Normalize(Quaternion{
+			a.x + (end.x - a.x) * t,
+			a.y + (end.y - a.y) * t,
+			a.z + (end.z - a.z) * t,
+			a.w + (end.w - a.w) * t,
+		});
+	}
+
+	const float theta = std::acos((std::clamp)(dot, -1.0f, 1.0f));
+	const float sinTheta = std::sin(theta);
+	const float weightA = std::sin((1.0f - t) * theta) / sinTheta;
+	const float weightB = std::sin(t * theta) / sinTheta;
+	return Normalize(Quaternion{
+		a.x * weightA + end.x * weightB,
+		a.y * weightA + end.y * weightB,
+		a.z * weightA + end.z * weightB,
+		a.w * weightA + end.w * weightB,
+	});
 }
 
 //Matrix3x3 MakeScaleMatrix(const Vector2& scale) {
@@ -179,6 +218,38 @@ Matrix4x4 MakeAffineMatrix(const Vector3& scale, const Vector3& rotate, const Ve
 	Matrix4x4 affineMatrix = Multiply(Multiply(scaleMatrix, rotateMatrix), translateMatrix);
 
 	return affineMatrix;
+}
+
+Matrix4x4 MakeRotateMatrix(const Quaternion& rotate) {
+	const Quaternion q = Normalize(rotate);
+	const float xx = q.x * q.x;
+	const float yy = q.y * q.y;
+	const float zz = q.z * q.z;
+	const float xy = q.x * q.y;
+	const float xz = q.x * q.z;
+	const float yz = q.y * q.z;
+	const float wx = q.w * q.x;
+	const float wy = q.w * q.y;
+	const float wz = q.w * q.z;
+
+	Matrix4x4 result = MakeIdentity4x4();
+	result.m[0][0] = 1.0f - 2.0f * (yy + zz);
+	result.m[0][1] = 2.0f * (xy + wz);
+	result.m[0][2] = 2.0f * (xz - wy);
+	result.m[1][0] = 2.0f * (xy - wz);
+	result.m[1][1] = 1.0f - 2.0f * (xx + zz);
+	result.m[1][2] = 2.0f * (yz + wx);
+	result.m[2][0] = 2.0f * (xz + wy);
+	result.m[2][1] = 2.0f * (yz - wx);
+	result.m[2][2] = 1.0f - 2.0f * (xx + yy);
+	return result;
+}
+
+Matrix4x4 MakeAffineMatrix(const Vector3& scale, const Quaternion& rotate, const Vector3& translate) {
+	Matrix4x4 scaleMatrix = MakeScaleMatrix(scale);
+	Matrix4x4 rotateMatrix = MakeRotateMatrix(rotate);
+	Matrix4x4 translateMatrix = MakeTranslateMatrix(translate);
+	return Multiply(Multiply(scaleMatrix, rotateMatrix), translateMatrix);
 }
 
 Matrix4x4 Inverse(Matrix4x4& m) {

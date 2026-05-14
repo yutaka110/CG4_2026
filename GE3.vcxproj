@@ -159,6 +159,7 @@ copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dx
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="application\AnimationClip.cpp" />
     <ClCompile Include="application\AppAudio.cpp" />
     <ClCompile Include="application\AppBootstrap.cpp" />
     <ClCompile Include="application\AppFrameGraphBuilder.cpp" />
@@ -453,6 +454,7 @@ copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dx
     </FxCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="application\AnimationClip.h" />
     <ClInclude Include="application\AppRunLoop.h" />
     <ClInclude Include="application\VfxEngine.h" />
     <ClInclude Include="application\AppAudio.h" />

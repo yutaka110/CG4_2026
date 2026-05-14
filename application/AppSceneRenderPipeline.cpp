@@ -120,5 +120,24 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 ctx.scene->pointLightResource->GetGPUVirtualAddress(),
                 ctx.scene->spotLightResource->GetGPUVirtualAddress(),
                 ctx.scene->modelVertexCount);
+
+            if (ctx.runtimeState->showAnimatedCube &&
+                ctx.scene->animatedCubeTransformResource &&
+                ctx.scene->animatedCubeTextureSrvHandleGPU.ptr != 0) {
+                ctx.frameRenderer->DrawMainModel(
+                    passContext.commandList,
+                    ctx.scene->animatedCubeVBV,
+                    ctx.scene->materialResource->GetGPUVirtualAddress(),
+                    ctx.scene->animatedCubeTransformResource->GetGPUVirtualAddress(),
+                    ctx.scene->animatedCubeTextureSrvHandleGPU,
+                    ctx.scene->textureSrvHandleGPU2,
+                    ctx.scene->textureSrvHandleGPU2,
+                    ctx.scene->skyboxTextureSrvHandleGPU,
+                    ctx.scene->directionalLightResource->GetGPUVirtualAddress(),
+                    ctx.scene->cameraResource->GetGPUVirtualAddress(),
+                    ctx.scene->pointLightResource->GetGPUVirtualAddress(),
+                    ctx.scene->spotLightResource->GetGPUVirtualAddress(),
+                    ctx.scene->animatedCubeVertexCount);
+            }
         }});
 }

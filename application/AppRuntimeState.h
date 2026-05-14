@@ -25,6 +25,7 @@ struct RuntimeAccelerationFieldState {
 
 struct AppRuntimeState {
     Transform transform{};
+    Transform animatedCubeTransform{};
     Transform transformSprite{};
     Transform uvTransformSprite{};
     Material materialData{};
@@ -42,6 +43,11 @@ struct AppRuntimeState {
     Vector3 cameraWorldPosition{};
 
     bool useMonsterBall = true;
+    bool showAnimatedCube = true;
+    bool playAnimatedCube = true;
+    bool loopAnimatedCube = true;
+    float animatedCubeTime = 0.0f;
+    float animatedCubeSpeed = 1.0f;
     AppVfxRuntimeState vfx{};
     float debugDepthPreviewNear = 0.1f;
     float debugDepthPreviewFar = 25.0f;

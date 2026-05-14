@@ -189,6 +189,36 @@ namespace {
         return vertices;
     }
 
+    const NodeAnimation* FindNodeAnimationRecursive(
+        const AnimationClip& animation,
+        const Node& node) {
+        auto found = animation.nodeAnimations.find(node.name);
+        if (found != animation.nodeAnimations.end()) {
+            return &found->second;
+        }
+
+        for (const Node& child : node.children) {
+            if (const NodeAnimation* childAnimation =
+                    FindNodeAnimationRecursive(animation, child)) {
+                return childAnimation;
+            }
+        }
+        return nullptr;
+    }
+
+    const NodeAnimation* FindAnimatedCubeNodeAnimation(
+        const AnimationClip& animation,
+        const Node& rootNode) {
+        if (const NodeAnimation* nodeAnimation =
+                FindNodeAnimationRecursive(animation, rootNode)) {
+            return nodeAnimation;
+        }
+        if (!animation.nodeAnimations.empty()) {
+            return &animation.nodeAnimations.begin()->second;
+        }
+        return nullptr;
+    }
+
 } // namespace
 
 bool AppSceneResources::Initialize(
@@ -429,6 +459,32 @@ bool AppSceneResources::Initialize(
         OutputDebugStringA("[AppSceneResources] Skybox DDS not found. Skybox pass will be skipped.\n");
     }
 
+    const std::string animatedCubeTexturePath =
+        std::filesystem::exists("Resources/AnimatedCube/AnimatedCube_BaseColor.png")
+            ? "Resources/AnimatedCube/AnimatedCube_BaseColor.png"
+            : "resources/monsterBall.png";
+    DirectX::ScratchImage animatedCubeImages =
+        AppRenderResources::LoadTexture(animatedCubeTexturePath);
+    const DirectX::TexMetadata& animatedCubeMetadata = animatedCubeImages.GetMetadata();
+    animatedCubeTextureResource =
+        AppRenderResources::CreateTextureResource(device, animatedCubeMetadata);
+    AppRenderResources::UploadTextureData(animatedCubeTextureResource, animatedCubeImages);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC animatedCubeSrvDesc{};
+    animatedCubeSrvDesc.Format = animatedCubeMetadata.format;
+    animatedCubeSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    animatedCubeSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    animatedCubeSrvDesc.Texture2D.MipLevels = UINT(animatedCubeMetadata.mipLevels);
+
+    animatedCubeTextureSrvHandleCPU =
+        AppRenderResources::GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 7);
+    animatedCubeTextureSrvHandleGPU =
+        AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 7);
+    device->CreateShaderResourceView(
+        animatedCubeTextureResource.Get(),
+        &animatedCubeSrvDesc,
+        animatedCubeTextureSrvHandleCPU);
+
     // =========================================================
     // Sphere mesh
     // =========================================================
@@ -554,6 +610,39 @@ bool AppSceneResources::Initialize(
 
     modelVertexCount = UINT(modelData.vertices.size());
 
+    // =========================================================
+    // AnimatedCube model and animation
+    // =========================================================
+    animatedCubeData = LoadObjFile_Assimp("Resources/AnimatedCube", "AnimatedCube.gltf");
+    animatedCubeAnimation = LoadAnimationFile("Resources/AnimatedCube", "AnimatedCube.gltf");
+    if (!animatedCubeData.vertices.empty()) {
+        animatedCubeVertexResource =
+            CreateBufferResource(device, sizeof(VertexData) * animatedCubeData.vertices.size());
+
+        VertexData* animatedMapped = nullptr;
+        animatedCubeVertexResource->Map(0, nullptr, reinterpret_cast<void**>(&animatedMapped));
+        memcpy(
+            animatedMapped,
+            animatedCubeData.vertices.data(),
+            sizeof(VertexData) * animatedCubeData.vertices.size());
+
+        animatedCubeVBV.BufferLocation = animatedCubeVertexResource->GetGPUVirtualAddress();
+        animatedCubeVBV.SizeInBytes = UINT(sizeof(VertexData) * animatedCubeData.vertices.size());
+        animatedCubeVBV.StrideInBytes = sizeof(VertexData);
+        animatedCubeVertexCount = UINT(animatedCubeData.vertices.size());
+
+        animatedCubeTransformResource = CreateBufferResource(device, sizeof(TransformationMatrix));
+        animatedCubeTransformResource->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&animatedCubeTransformData));
+        animatedCubeTransformData->WVP = MakeIdentity4x4();
+        animatedCubeTransformData->World = MakeIdentity4x4();
+        animatedCubeTransformData->WorldInverseTranspose = MakeIdentity4x4();
+    } else {
+        OutputDebugStringA("[AppSceneResources] AnimatedCube model has no vertices.\n");
+    }
+
     return true;
 }
 
@@ -624,6 +713,23 @@ void AppSceneResources::UpdateTransforms(
         sphere.mappedCBV->WorldInverseTranspose = Transpose(Inverse(worldWithNode));
     }
 
+    if (animatedCubeTransformData != nullptr) {
+        Matrix4x4 animatedLocal = animatedCubeData.rootNode.localMatrix;
+        if (const NodeAnimation* nodeAnimation =
+                FindAnimatedCubeNodeAnimation(animatedCubeAnimation, animatedCubeData.rootNode)) {
+            animatedLocal = MakeNodeAnimationMatrix(*nodeAnimation, runtimeState.animatedCubeTime);
+        }
+
+        Matrix4x4 baseWorld = MakeAffineMatrix(
+            runtimeState.animatedCubeTransform.scale,
+            runtimeState.animatedCubeTransform.rotate,
+            runtimeState.animatedCubeTransform.translate);
+        Matrix4x4 worldMatrix = Multiply(animatedLocal, baseWorld);
+        animatedCubeTransformData->World = worldMatrix;
+        animatedCubeTransformData->WVP = Multiply(worldMatrix, Multiply(viewMatrix, projMatrix));
+        animatedCubeTransformData->WorldInverseTranspose = Transpose(Inverse(worldMatrix));
+    }
+
     if (skybox.mappedCBV != nullptr) {
         Matrix4x4 skyboxView = viewMatrix;
         skyboxView.m[3][0] = 0.0f;
@@ -636,6 +742,16 @@ void AppSceneResources::UpdateTransforms(
 }
 
 void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float deltaTime) {
+    if (runtimeState.playAnimatedCube) {
+        Animator animator{};
+        animator.time = runtimeState.animatedCubeTime;
+        animator.speed = runtimeState.animatedCubeSpeed;
+        animator.playing = runtimeState.playAnimatedCube;
+        animator.loop = runtimeState.loopAnimatedCube;
+        animator.Update(deltaTime, animatedCubeAnimation.duration);
+        runtimeState.animatedCubeTime = animator.time;
+    }
+
     directionalLightData = runtimeState.directionalLightData;
     directionalLightData.direction = Normalize(directionalLightData.direction);
     runtimeState.directionalLightData.direction = directionalLightData.direction;

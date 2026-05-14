@@ -6,6 +6,7 @@
 
 #include "../../externals/DirectXTex/DirectXTex.h"
 #include "AppRuntimeState.h"
+#include "AnimationClip.h"
 #include "utils/math/MathUtils.h"
 #include "utils/math/Vector.h"
 #include "utils/dx12/BufferHelper.h"
@@ -99,16 +100,19 @@ public:
     Microsoft::WRL::ComPtr<ID3D12Resource> circle2TextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> gradationLineTextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> skyboxTextureResource;
+    Microsoft::WRL::ComPtr<ID3D12Resource> animatedCubeTextureResource;
     D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU2{};
     D3D12_GPU_DESCRIPTOR_HANDLE circle2TextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE gradationLineTextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleGPU{};
+    D3D12_GPU_DESCRIPTOR_HANDLE animatedCubeTextureSrvHandleGPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU2{};
     D3D12_CPU_DESCRIPTOR_HANDLE circle2TextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE gradationLineTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleCPU{};
+    D3D12_CPU_DESCRIPTOR_HANDLE animatedCubeTextureSrvHandleCPU{};
 
     // Sphere
     SphereMeshData sphere{};
@@ -125,4 +129,12 @@ public:
     Microsoft::WRL::ComPtr<ID3D12Resource> modelVertexResource;
     D3D12_VERTEX_BUFFER_VIEW modelVBV{};
     UINT modelVertexCount = 0;
+
+    ModelData animatedCubeData{};
+    AnimationClip animatedCubeAnimation{};
+    Microsoft::WRL::ComPtr<ID3D12Resource> animatedCubeVertexResource;
+    Microsoft::WRL::ComPtr<ID3D12Resource> animatedCubeTransformResource;
+    D3D12_VERTEX_BUFFER_VIEW animatedCubeVBV{};
+    TransformationMatrix* animatedCubeTransformData = nullptr;
+    UINT animatedCubeVertexCount = 0;
 };
