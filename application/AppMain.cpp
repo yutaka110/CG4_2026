@@ -709,6 +709,10 @@ runtimeState.transform.scale = { 6.0f, 6.0f, 6.0f };
 runtimeState.transform.rotate = { 0.0f, 0.0f, 0.0f };
 runtimeState.transform.translate = { 0.0f, 0.0f, 0.0f };
 
+runtimeState.animatedCubeTransform.scale = { 0.4f, 0.4f, 0.4f };
+runtimeState.animatedCubeTransform.rotate = { 0.0f, 0.0f, 0.0f };
+runtimeState.animatedCubeTransform.translate = { -0.9f, 0.0f, -6.3f };
+
 runtimeState.transformSprite.scale = { 256.0f, 256.0f, 1.0f };
 runtimeState.transformSprite.rotate = { 0.0f, 0.0f, 0.0f };
 runtimeState.transformSprite.translate = { 640.0f, 360.0f, 0.0f };

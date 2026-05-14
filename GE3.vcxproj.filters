@@ -210,6 +210,9 @@
     <ClCompile Include="engine\src\utils\DebugTools.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\AnimationClip.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
     <ClCompile Include="application\AppMain.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -559,6 +562,9 @@
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="engine\include\assets\ObjLoader.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\AnimationClip.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\AppMain.h">

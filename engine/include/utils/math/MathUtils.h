@@ -22,6 +22,14 @@ struct Transform
     Vector3 translate;
 };
 
+struct Quaternion
+{
+    float x;
+    float y;
+    float z;
+    float w;
+};
+
 struct Sphere
 {
     Vector3 center;
@@ -108,6 +116,8 @@ Matrix4x4 Multiply(Matrix4x4 m1, Matrix4x4 m2);
 Matrix4x4 Inverse(Matrix4x4& m);
 Matrix4x4 Transpose(const Matrix4x4& mat);
 Vector3   Normalize(const Vector3& v);
+Quaternion Normalize(const Quaternion& q);
+Quaternion Slerp(const Quaternion& a, const Quaternion& b, float t);
 //Vector3 Transform(const Vector3& vector, const Matrix4x4& matrix);
 //Matrix3x3 MakeScaleMatrix(const Vector2& scale);
 //Matrix3x3 MakeTranslateMatrix(const Vector2& translate);
@@ -119,4 +129,6 @@ Matrix4x4 MakeRoateXMatrix(float radian);
 Matrix4x4 MakeRoateYMatrix(float radian);
 Matrix4x4 MakeRoateZMatrix(float radian);
 Matrix4x4 MakeAffineMatrix(const Vector3& scale, const Vector3& rotate, const Vector3& translate);
+Matrix4x4 MakeRotateMatrix(const Quaternion& rotate);
+Matrix4x4 MakeAffineMatrix(const Vector3& scale, const Quaternion& rotate, const Vector3& translate);
 Matrix4x4 MakeOrthographicMatrix(float left, float top, float right, float bottom, float nearClip, float farClip);

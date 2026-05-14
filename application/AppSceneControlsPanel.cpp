@@ -150,6 +150,33 @@ void DrawMaterialSettingsControlsPanel(
         reinterpret_cast<float*>(&runtimeState.transform.translate), 0.01f,
         -100.0f, 100.0f);
 
+    ImGui::SeparatorText("Animated Cube");
+    ImGui::Checkbox("Show Animated Cube", &runtimeState.showAnimatedCube);
+    ImGui::SameLine();
+    ImGui::Checkbox("Play Animation", &runtimeState.playAnimatedCube);
+    ImGui::SameLine();
+    ImGui::Checkbox("Loop Animation", &runtimeState.loopAnimatedCube);
+    ImGui::SliderFloat("Animation Speed", &runtimeState.animatedCubeSpeed, -2.0f, 2.0f);
+    ImGui::SliderFloat("Animation Time", &runtimeState.animatedCubeTime, 0.0f, 5.0f);
+    ImGui::DragFloat3(
+        "Animated Cube Scale",
+        reinterpret_cast<float*>(&runtimeState.animatedCubeTransform.scale),
+        0.01f,
+        0.01f,
+        10.0f);
+    ImGui::DragFloat3(
+        "Animated Cube Rotate",
+        reinterpret_cast<float*>(&runtimeState.animatedCubeTransform.rotate),
+        0.01f,
+        -3.14f,
+        3.14f);
+    ImGui::DragFloat3(
+        "Animated Cube Translate",
+        reinterpret_cast<float*>(&runtimeState.animatedCubeTransform.translate),
+        0.01f,
+        -100.0f,
+        100.0f);
+
     ImGui::DragFloat2("UVTranslate", &runtimeState.uvTransformSprite.translate.x, 0.01f,
         -10.0f, 10.0f);
     ImGui::DragFloat2("UVScale", &runtimeState.uvTransformSprite.scale.x, 0.01f, -10.0f,
