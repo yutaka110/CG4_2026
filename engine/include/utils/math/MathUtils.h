@@ -1,5 +1,6 @@
 #pragma once
 #include "utils/math/Vector.h"
+#include <cstdint>
 #include <vector>
 #include <string>
 //================================
@@ -111,6 +112,7 @@ struct Node {
 // ModelData構造体
 struct ModelData {
     std::vector<VertexData> vertices;
+    std::vector<uint32_t> indices;
     MaterialData material;
     Node rootNode;
 };
