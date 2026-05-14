@@ -108,7 +108,8 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
 
             ctx.frameRenderer->DrawMainModel(
                 passContext.commandList,
-                ctx.scene->modelVBV,
+                ctx.scene->modelMesh.vbv,
+                ctx.scene->modelMesh.ibv,
                 ctx.scene->materialResource->GetGPUVirtualAddress(),
                 ctx.scene->sphere.cbvResource->GetGPUVirtualAddress(),
                 ctx.scene->textureSrvHandleGPU2,
@@ -119,14 +120,15 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 ctx.scene->cameraResource->GetGPUVirtualAddress(),
                 ctx.scene->pointLightResource->GetGPUVirtualAddress(),
                 ctx.scene->spotLightResource->GetGPUVirtualAddress(),
-                ctx.scene->modelVertexCount);
+                ctx.scene->modelMesh.indexCount);
 
             if (ctx.runtimeState->showAnimatedCube &&
                 ctx.scene->animatedCubeTransformResource &&
                 ctx.scene->animatedCubeTextureSrvHandleGPU.ptr != 0) {
                 ctx.frameRenderer->DrawMainModel(
                     passContext.commandList,
-                    ctx.scene->animatedCubeVBV,
+                    ctx.scene->animatedCubeMesh.vbv,
+                    ctx.scene->animatedCubeMesh.ibv,
                     ctx.scene->materialResource->GetGPUVirtualAddress(),
                     ctx.scene->animatedCubeTransformResource->GetGPUVirtualAddress(),
                     ctx.scene->animatedCubeTextureSrvHandleGPU,
@@ -137,7 +139,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     ctx.scene->cameraResource->GetGPUVirtualAddress(),
                     ctx.scene->pointLightResource->GetGPUVirtualAddress(),
                     ctx.scene->spotLightResource->GetGPUVirtualAddress(),
-                    ctx.scene->animatedCubeVertexCount);
+                    ctx.scene->animatedCubeMesh.indexCount);
             }
         }});
 

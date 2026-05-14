@@ -40,6 +40,15 @@ struct CylinderMeshData {
     UINT vertexCount = 0;
 };
 
+struct GpuMeshResource {
+    Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource;
+    Microsoft::WRL::ComPtr<ID3D12Resource> indexResource;
+    D3D12_VERTEX_BUFFER_VIEW vbv{};
+    D3D12_INDEX_BUFFER_VIEW ibv{};
+    UINT vertexCount = 0;
+    UINT indexCount = 0;
+};
+
 struct SkeletonDebugLineVertex {
     Vector4 position;
     Vector4 color;
@@ -132,17 +141,13 @@ public:
 
     // Model
     ModelData modelData{};
-    Microsoft::WRL::ComPtr<ID3D12Resource> modelVertexResource;
-    D3D12_VERTEX_BUFFER_VIEW modelVBV{};
-    UINT modelVertexCount = 0;
+    GpuMeshResource modelMesh{};
 
     ModelData animatedCubeData{};
     AnimationClip animatedCubeAnimation{};
-    Microsoft::WRL::ComPtr<ID3D12Resource> animatedCubeVertexResource;
+    GpuMeshResource animatedCubeMesh{};
     Microsoft::WRL::ComPtr<ID3D12Resource> animatedCubeTransformResource;
-    D3D12_VERTEX_BUFFER_VIEW animatedCubeVBV{};
     TransformationMatrix* animatedCubeTransformData = nullptr;
-    UINT animatedCubeVertexCount = 0;
 
     ModelData skeletonDebugModelData{};
     AnimationClip skeletonDebugAnimation{};

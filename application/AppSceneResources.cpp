@@ -223,6 +223,45 @@ namespace {
         return { matrix.m[3][0], matrix.m[3][1], matrix.m[3][2] };
     }
 
+    GpuMeshResource CreateGpuMeshResource(
+        ComPtr<ID3D12Device> device,
+        const ModelData& modelData) {
+        GpuMeshResource mesh{};
+        mesh.vertexCount = UINT(modelData.vertices.size());
+        mesh.indexCount = UINT(modelData.indices.size());
+        if (mesh.vertexCount == 0 || mesh.indexCount == 0) {
+            return mesh;
+        }
+
+        mesh.vertexResource =
+            CreateBufferResource(device, sizeof(VertexData) * modelData.vertices.size());
+        VertexData* mappedVertices = nullptr;
+        mesh.vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&mappedVertices));
+        std::memcpy(
+            mappedVertices,
+            modelData.vertices.data(),
+            sizeof(VertexData) * modelData.vertices.size());
+
+        mesh.vbv.BufferLocation = mesh.vertexResource->GetGPUVirtualAddress();
+        mesh.vbv.SizeInBytes = UINT(sizeof(VertexData) * modelData.vertices.size());
+        mesh.vbv.StrideInBytes = sizeof(VertexData);
+
+        mesh.indexResource =
+            CreateBufferResource(device, sizeof(uint32_t) * modelData.indices.size());
+        uint32_t* mappedIndices = nullptr;
+        mesh.indexResource->Map(0, nullptr, reinterpret_cast<void**>(&mappedIndices));
+        std::memcpy(
+            mappedIndices,
+            modelData.indices.data(),
+            sizeof(uint32_t) * modelData.indices.size());
+
+        mesh.ibv.BufferLocation = mesh.indexResource->GetGPUVirtualAddress();
+        mesh.ibv.SizeInBytes = UINT(sizeof(uint32_t) * modelData.indices.size());
+        mesh.ibv.Format = DXGI_FORMAT_R32_UINT;
+
+        return mesh;
+    }
+
 } // namespace
 
 bool AppSceneResources::Initialize(
@@ -596,44 +635,20 @@ bool AppSceneResources::Initialize(
     }
 
     // =========================================================
-    // Assimp model VB
+    // Assimp model mesh
     // =========================================================
     modelData = LoadObjFile_Assimp("Resources/ball", "ball.obj");
     assert(!modelData.vertices.empty());
-
-    modelVertexResource =
-        CreateBufferResource(device, sizeof(VertexData) * modelData.vertices.size());
-
-    VertexData* mapped = nullptr;
-    modelVertexResource->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
-    memcpy(mapped, modelData.vertices.data(), sizeof(VertexData) * modelData.vertices.size());
-
-    modelVBV.BufferLocation = modelVertexResource->GetGPUVirtualAddress();
-    modelVBV.SizeInBytes = UINT(sizeof(VertexData) * modelData.vertices.size());
-    modelVBV.StrideInBytes = sizeof(VertexData);
-
-    modelVertexCount = UINT(modelData.vertices.size());
+    assert(!modelData.indices.empty());
+    modelMesh = CreateGpuMeshResource(device, modelData);
 
     // =========================================================
     // AnimatedCube model and animation
     // =========================================================
     animatedCubeData = LoadObjFile_Assimp("Resources/AnimatedCube", "AnimatedCube.gltf");
     animatedCubeAnimation = LoadAnimationFile("Resources/AnimatedCube", "AnimatedCube.gltf");
-    if (!animatedCubeData.vertices.empty()) {
-        animatedCubeVertexResource =
-            CreateBufferResource(device, sizeof(VertexData) * animatedCubeData.vertices.size());
-
-        VertexData* animatedMapped = nullptr;
-        animatedCubeVertexResource->Map(0, nullptr, reinterpret_cast<void**>(&animatedMapped));
-        memcpy(
-            animatedMapped,
-            animatedCubeData.vertices.data(),
-            sizeof(VertexData) * animatedCubeData.vertices.size());
-
-        animatedCubeVBV.BufferLocation = animatedCubeVertexResource->GetGPUVirtualAddress();
-        animatedCubeVBV.SizeInBytes = UINT(sizeof(VertexData) * animatedCubeData.vertices.size());
-        animatedCubeVBV.StrideInBytes = sizeof(VertexData);
-        animatedCubeVertexCount = UINT(animatedCubeData.vertices.size());
+    if (!animatedCubeData.vertices.empty() && !animatedCubeData.indices.empty()) {
+        animatedCubeMesh = CreateGpuMeshResource(device, animatedCubeData);
 
         animatedCubeTransformResource = CreateBufferResource(device, sizeof(TransformationMatrix));
         animatedCubeTransformResource->Map(
@@ -645,7 +660,7 @@ bool AppSceneResources::Initialize(
         animatedCubeTransformData->WorldInverseTranspose = MakeIdentity4x4();
 
     } else {
-        OutputDebugStringA("[AppSceneResources] AnimatedCube model has no vertices.\n");
+        OutputDebugStringA("[AppSceneResources] AnimatedCube model has no indexed mesh data.\n");
     }
 
     // =========================================================
