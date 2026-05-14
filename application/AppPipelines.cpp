@@ -129,6 +129,8 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
         L"resources/Ring.PS.hlsl",
         L"resources/Cylinder.VS.hlsl",
         L"resources/Cylinder.PS.hlsl",
+        L"resources/SkeletonDebug.VS.hlsl",
+        L"resources/SkeletonDebug.PS.hlsl",
         L"resources/ParticleSim.CS.hlsl",
         L"resources/TrailMeshStream.CS.hlsl",
         L"resources/TrailMeshBuild.CS.hlsl",
@@ -525,6 +527,40 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     if (FAILED(hr)) return FailHr("CreateRootSignature(Cylinder)", hr);
 
     // ------------------------------
+    // Skeleton debug line RootSignature
+    // ------------------------------
+    D3D12_ROOT_PARAMETER skeletonDebugRootParams[1] = {};
+    skeletonDebugRootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    skeletonDebugRootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    skeletonDebugRootParams[0].Descriptor.ShaderRegister = 0;
+
+    D3D12_ROOT_SIGNATURE_DESC skeletonDebugRsDesc{};
+    skeletonDebugRsDesc.NumParameters = _countof(skeletonDebugRootParams);
+    skeletonDebugRsDesc.pParameters = skeletonDebugRootParams;
+    skeletonDebugRsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> skeletonDebugSigBlob;
+    ComPtr<ID3DBlob> skeletonDebugErrBlob;
+    hr = D3D12SerializeRootSignature(
+        &skeletonDebugRsDesc,
+        D3D_ROOT_SIGNATURE_VERSION_1,
+        &skeletonDebugSigBlob,
+        &skeletonDebugErrBlob);
+    if (FAILED(hr)) {
+        if (skeletonDebugErrBlob) {
+            OutputDebugStringA(reinterpret_cast<const char*>(skeletonDebugErrBlob->GetBufferPointer()));
+        }
+        return false;
+    }
+
+    hr = device->CreateRootSignature(
+        0,
+        skeletonDebugSigBlob->GetBufferPointer(),
+        skeletonDebugSigBlob->GetBufferSize(),
+        IID_PPV_ARGS(&skeletonDebugRootSignature_));
+    if (FAILED(hr)) return FailHr("CreateRootSignature(SkeletonDebug)", hr);
+
+    // ------------------------------
     // Compute RootSignature (MotionDetect)
     // ------------------------------
     // t4: Y, t5: UV, u0: output
@@ -812,6 +848,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     ringPs_ = Compile_(L"resources/Ring.PS.hlsl", L"ps_6_0");
     cylinderVs_ = Compile_(L"resources/Cylinder.VS.hlsl", L"vs_6_0");
     cylinderPs_ = Compile_(L"resources/Cylinder.PS.hlsl", L"ps_6_0");
+    skeletonDebugVs_ = Compile_(L"resources/SkeletonDebug.VS.hlsl", L"vs_6_0");
+    skeletonDebugPs_ = Compile_(L"resources/SkeletonDebug.PS.hlsl", L"ps_6_0");
     gpuParticleCs_ = Compile_(L"resources/ParticleSim.CS.hlsl", L"cs_6_0");
     trailMeshStreamCs_ = Compile_(L"resources/TrailMeshStream.CS.hlsl", L"cs_6_0");
     trailMeshBuildCs_ = Compile_(L"resources/TrailMeshBuild.CS.hlsl", L"cs_6_0");
@@ -837,7 +875,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
     if (!vs_ || !ps_ || !spriteVs_ || !spritePs_ || !skyboxVs_ || !skyboxPs_ || !cs_ || !particleVs_ || !particlePs_ ||
         !trailMeshVs_ || !trailMeshStreamVs_ || !trailMeshPs_ || !distortionSpriteVs_ || !distortionSpritePs_ ||
-        !ringVs_ || !ringPs_ || !cylinderVs_ || !cylinderPs_ || !gpuParticleCs_ || !trailMeshStreamCs_ || !trailMeshBuildCs_ || !compositeVs_ || !compositePs_ || !bloomExtractPs_ ||
+        !ringVs_ || !ringPs_ || !cylinderVs_ || !cylinderPs_ || !skeletonDebugVs_ || !skeletonDebugPs_ || !gpuParticleCs_ || !trailMeshStreamCs_ || !trailMeshBuildCs_ || !compositeVs_ || !compositePs_ || !bloomExtractPs_ ||
         !bloomDownsamplePs_ || !bloomUpsamplePs_ || !blurHorizontalPs_ || !blurVerticalPs_ ||
         !boxBlurHorizontalPs_ || !boxBlurVerticalPs_ || !gaussianBlurHorizontalPs_ || !gaussianBlurVerticalPs_ ||
         !distortionCompositePs_ ||
@@ -1375,6 +1413,52 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Cylinder)", hr);
     }
 
+    {
+        D3D12_INPUT_ELEMENT_DESC skeletonLineElements[2] = {};
+        skeletonLineElements[0].SemanticName = "POSITION";
+        skeletonLineElements[0].SemanticIndex = 0;
+        skeletonLineElements[0].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        skeletonLineElements[0].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
+        skeletonLineElements[1].SemanticName = "COLOR";
+        skeletonLineElements[1].SemanticIndex = 0;
+        skeletonLineElements[1].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        skeletonLineElements[1].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
+
+        D3D12_INPUT_LAYOUT_DESC skeletonLineLayout{};
+        skeletonLineLayout.pInputElementDescs = skeletonLineElements;
+        skeletonLineLayout.NumElements = _countof(skeletonLineElements);
+
+        D3D12_DEPTH_STENCIL_DESC skeletonLineDepth{};
+        skeletonLineDepth.DepthEnable = FALSE;
+        skeletonLineDepth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        skeletonLineDepth.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+
+        D3D12_RASTERIZER_DESC skeletonLineRaster{};
+        skeletonLineRaster.CullMode = D3D12_CULL_MODE_NONE;
+        skeletonLineRaster.FillMode = D3D12_FILL_MODE_SOLID;
+        skeletonLineRaster.DepthClipEnable = TRUE;
+
+        D3D12_BLEND_DESC skeletonLineBlend{};
+        skeletonLineBlend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
+        d.pRootSignature = skeletonDebugRootSignature_.Get();
+        d.InputLayout = skeletonLineLayout;
+        d.VS = { skeletonDebugVs_->GetBufferPointer(), skeletonDebugVs_->GetBufferSize() };
+        d.PS = { skeletonDebugPs_->GetBufferPointer(), skeletonDebugPs_->GetBufferSize() };
+        d.BlendState = skeletonLineBlend;
+        d.RasterizerState = skeletonLineRaster;
+        d.DepthStencilState = skeletonLineDepth;
+        d.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        d.NumRenderTargets = 1;
+        d.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+        d.SampleDesc.Count = 1;
+        d.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&skeletonDebugPso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(SkeletonDebug)", hr);
+    }
+
     // ------------------------------
     // Main Opaque/Alpha variants (for sprite or UI etc)
     // These were in AppMain as psoOpaque/psoAlpha using mainRootSignature.
@@ -1428,6 +1512,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         L"resources/Ring.PS.hlsl",
         L"resources/Cylinder.VS.hlsl",
         L"resources/Cylinder.PS.hlsl",
+        L"resources/SkeletonDebug.VS.hlsl",
+        L"resources/SkeletonDebug.PS.hlsl",
         L"resources/ParticleSim.CS.hlsl",
         L"resources/TrailMeshStream.CS.hlsl",
         L"resources/TrailMeshBuild.CS.hlsl",

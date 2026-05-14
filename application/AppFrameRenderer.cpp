@@ -153,6 +153,21 @@ void AppFrameRenderer::DrawSkybox(
     commandList->DrawInstanced(vertexCount, 1, 0, 0);
 }
 
+void AppFrameRenderer::DrawSkeletonDebugLines(
+    ID3D12GraphicsCommandList* commandList,
+    const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
+    D3D12_GPU_VIRTUAL_ADDRESS transformBufferAddress,
+    uint32_t vertexCount) const {
+    if (commandList == nullptr || transformBufferAddress == 0 || vertexCount == 0) {
+        return;
+    }
+
+    commandList->SetGraphicsRootConstantBufferView(0, transformBufferAddress);
+    commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+    commandList->DrawInstanced(vertexCount, 1, 0, 0);
+}
+
 void AppFrameRenderer::PrepareSphere(
     ID3D12GraphicsCommandList* commandList,
     ID3D12RootSignature* rootSignature,

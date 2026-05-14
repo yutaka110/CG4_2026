@@ -140,4 +140,36 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     ctx.scene->animatedCubeVertexCount);
             }
         }});
+
+    ctx.renderGraph->AddPass({
+        "Debug.Skeleton",
+        ge3::graphics::RenderPassLayer::Geometry,
+        {
+            {"SceneColor", ge3::graphics::RenderResourceAccessType::WriteRtv},
+            {"SceneDepth", ge3::graphics::RenderResourceAccessType::ReadDepth},
+        },
+        "SceneDepth",
+        [ctx](ge3::graphics::RenderPassContext& passContext) {
+            if (!ctx.runtimeState->showSkeletonDebug ||
+                ctx.scene->skeletonDebugVertexCount == 0 ||
+                !ctx.scene->skeletonDebugTransformResource) {
+                return;
+            }
+
+            const bool ready = ctx.frameRenderer->PrepareMainPass(
+                passContext.commandList,
+                ctx.runtimeState->viewport,
+                ctx.runtimeState->scissorRect,
+                ctx.appPipelines->GetSkeletonDebugRootSignature(),
+                ctx.appPipelines->GetSkeletonDebugPSO());
+            if (!ready) {
+                return;
+            }
+
+            ctx.frameRenderer->DrawSkeletonDebugLines(
+                passContext.commandList,
+                ctx.scene->skeletonDebugVBV,
+                ctx.scene->skeletonDebugTransformResource->GetGPUVirtualAddress(),
+                ctx.scene->skeletonDebugVertexCount);
+        }});
 }

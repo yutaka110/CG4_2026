@@ -122,15 +122,18 @@ ModelData LoadObjFile_Assimp(const std::string& directoryPath,
 Node ReadNode(aiNode* node) {
     Node result;
 
-    aiMatrix4x4 aiMat = node->mTransformation;
-    aiMat.Transpose(); // ★超重要（Assimpは行列レイアウトが違う）
+    aiVector3D scale{};
+    aiVector3D translate{};
+    aiQuaternion rotate{};
+    node->mTransformation.Decompose(scale, rotate, translate);
 
-    // aiMatrix → Matrix4x4 にコピー
-    for (int r = 0; r < 4; r++) {
-        for (int c = 0; c < 4; c++) {
-            result.localMatrix.m[r][c] = aiMat[r][c];
-        }
-    }
+    result.transform.scale = { scale.x, scale.y, scale.z };
+    result.transform.rotate = Normalize(Quaternion{ rotate.x, rotate.y, rotate.z, rotate.w });
+    result.transform.translate = { translate.x, translate.y, translate.z };
+    result.localMatrix = MakeAffineMatrix(
+        result.transform.scale,
+        result.transform.rotate,
+        result.transform.translate);
 
     result.name = node->mName.C_Str();
 

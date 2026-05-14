@@ -7,6 +7,7 @@
 #include "../../externals/DirectXTex/DirectXTex.h"
 #include "AppRuntimeState.h"
 #include "AnimationClip.h"
+#include "Skeleton.h"
 #include "utils/math/MathUtils.h"
 #include "utils/math/Vector.h"
 #include "utils/dx12/BufferHelper.h"
@@ -37,6 +38,11 @@ struct CylinderMeshData {
     Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource;
     D3D12_VERTEX_BUFFER_VIEW vbv{};
     UINT vertexCount = 0;
+};
+
+struct SkeletonDebugLineVertex {
+    Vector4 position;
+    Vector4 color;
 };
 
 struct CameraForGPU {
@@ -137,4 +143,15 @@ public:
     D3D12_VERTEX_BUFFER_VIEW animatedCubeVBV{};
     TransformationMatrix* animatedCubeTransformData = nullptr;
     UINT animatedCubeVertexCount = 0;
+
+    ModelData skeletonDebugModelData{};
+    AnimationClip skeletonDebugAnimation{};
+    Skeleton skeletonDebugSkeleton{};
+    Microsoft::WRL::ComPtr<ID3D12Resource> skeletonDebugVertexResource;
+    Microsoft::WRL::ComPtr<ID3D12Resource> skeletonDebugTransformResource;
+    D3D12_VERTEX_BUFFER_VIEW skeletonDebugVBV{};
+    SkeletonDebugLineVertex* mappedSkeletonDebugLines = nullptr;
+    TransformationMatrix* skeletonDebugTransformData = nullptr;
+    UINT skeletonDebugVertexCapacity = 0;
+    UINT skeletonDebugVertexCount = 0;
 };

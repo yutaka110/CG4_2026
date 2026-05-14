@@ -57,6 +57,12 @@ public:
         D3D12_GPU_DESCRIPTOR_HANDLE textureHandle,
         uint32_t vertexCount) const;
 
+    void DrawSkeletonDebugLines(
+        ID3D12GraphicsCommandList* commandList,
+        const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
+        D3D12_GPU_VIRTUAL_ADDRESS transformBufferAddress,
+        uint32_t vertexCount) const;
+
     void PrepareSphere(
         ID3D12GraphicsCommandList* commandList,
         ID3D12RootSignature* rootSignature,

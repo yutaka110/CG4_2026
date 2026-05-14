@@ -15,12 +15,14 @@ struct Matrix4x4
     float m[4][4];
 };
 
-struct Transform
+struct EulerTransform
 {
     Vector3 scale;
     Vector3 rotate;
     Vector3 translate;
 };
+
+using Transform = EulerTransform;
 
 struct Quaternion
 {
@@ -28,6 +30,13 @@ struct Quaternion
     float y;
     float z;
     float w;
+};
+
+struct QuaternionTransform
+{
+    Vector3 scale;
+    Quaternion rotate;
+    Vector3 translate;
 };
 
 struct Sphere
@@ -93,6 +102,7 @@ struct MaterialData {
 };
 
 struct Node {
+    QuaternionTransform transform;
     Matrix4x4 localMatrix;        // Nodeのローカル変換
     std::string name;             // Node名
     std::vector<Node> children;   // 子
