@@ -219,6 +219,10 @@ namespace {
         return nullptr;
     }
 
+    Vector3 ExtractTranslation(const Matrix4x4& matrix) {
+        return { matrix.m[3][0], matrix.m[3][1], matrix.m[3][2] };
+    }
+
 } // namespace
 
 bool AppSceneResources::Initialize(
@@ -639,8 +643,52 @@ bool AppSceneResources::Initialize(
         animatedCubeTransformData->WVP = MakeIdentity4x4();
         animatedCubeTransformData->World = MakeIdentity4x4();
         animatedCubeTransformData->WorldInverseTranspose = MakeIdentity4x4();
+
     } else {
         OutputDebugStringA("[AppSceneResources] AnimatedCube model has no vertices.\n");
+    }
+
+    // =========================================================
+    // Skeleton debug source: simpleSkin
+    // =========================================================
+    skeletonDebugModelData = LoadObjFile_Assimp("Resources/simpleSkin", "simpleSkin.gltf");
+    skeletonDebugAnimation = LoadAnimationFile("Resources/simpleSkin", "simpleSkin.gltf");
+    if (!skeletonDebugModelData.rootNode.name.empty()) {
+        skeletonDebugSkeleton = CreateSkeleton(skeletonDebugModelData.rootNode);
+        ApplyAnimation(skeletonDebugSkeleton, skeletonDebugAnimation, 0.0f);
+        UpdateSkeleton(skeletonDebugSkeleton);
+
+        const size_t jointCount = skeletonDebugSkeleton.joints.size();
+        const size_t hierarchyLineVertices = jointCount > 0 ? (jointCount - 1) * 2 : 0;
+        const size_t fallbackAnimatedJointLineVertices = jointCount > 0 ? (jointCount - 1) * 2 : 0;
+        const size_t jointMarkerVertices = jointCount * 6;
+        skeletonDebugVertexCapacity =
+            UINT(hierarchyLineVertices + fallbackAnimatedJointLineVertices + jointMarkerVertices);
+        if (skeletonDebugVertexCapacity > 0) {
+            skeletonDebugVertexResource = CreateBufferResource(
+                device,
+                sizeof(SkeletonDebugLineVertex) * skeletonDebugVertexCapacity);
+            skeletonDebugVertexResource->Map(
+                0,
+                nullptr,
+                reinterpret_cast<void**>(&mappedSkeletonDebugLines));
+            skeletonDebugVBV.BufferLocation = skeletonDebugVertexResource->GetGPUVirtualAddress();
+            skeletonDebugVBV.SizeInBytes =
+                UINT(sizeof(SkeletonDebugLineVertex) * skeletonDebugVertexCapacity);
+            skeletonDebugVBV.StrideInBytes = sizeof(SkeletonDebugLineVertex);
+
+            skeletonDebugTransformResource =
+                CreateBufferResource(device, sizeof(TransformationMatrix));
+            skeletonDebugTransformResource->Map(
+                0,
+                nullptr,
+                reinterpret_cast<void**>(&skeletonDebugTransformData));
+            skeletonDebugTransformData->WVP = MakeIdentity4x4();
+            skeletonDebugTransformData->World = MakeIdentity4x4();
+            skeletonDebugTransformData->WorldInverseTranspose = MakeIdentity4x4();
+        }
+    } else {
+        OutputDebugStringA("[AppSceneResources] simpleSkin skeleton debug source could not be loaded.\n");
     }
 
     return true;
@@ -728,6 +776,94 @@ void AppSceneResources::UpdateTransforms(
         animatedCubeTransformData->World = worldMatrix;
         animatedCubeTransformData->WVP = Multiply(worldMatrix, Multiply(viewMatrix, projMatrix));
         animatedCubeTransformData->WorldInverseTranspose = Transpose(Inverse(worldMatrix));
+
+        if (mappedSkeletonDebugLines != nullptr && skeletonDebugTransformData != nullptr) {
+            skeletonDebugVertexCount = 0;
+            const Vector4 rootColor = { 1.0f, 0.9f, 0.1f, 1.0f };
+            const Vector4 childColor = { 0.0f, 0.95f, 1.0f, 1.0f };
+            const Vector4 markerXColor = { 1.0f, 0.15f, 0.15f, 1.0f };
+            const Vector4 markerYColor = { 0.1f, 1.0f, 0.25f, 1.0f };
+            const Vector4 markerZColor = { 0.2f, 0.55f, 1.0f, 1.0f };
+            const Vector4 fallbackLinkColor = { 1.0f, 0.15f, 1.0f, 1.0f };
+            const float markerSize = 0.35f;
+            std::vector<Vector3> animatedJointPositions;
+            size_t animatedHierarchyLinkCount = 0;
+            auto pushLine = [&](const Vector3& a, const Vector3& b, const Vector4& colorA, const Vector4& colorB) {
+                if (skeletonDebugVertexCount + 2 > skeletonDebugVertexCapacity) {
+                    return;
+                }
+                mappedSkeletonDebugLines[skeletonDebugVertexCount++] = {
+                    { a.x, a.y, a.z, 1.0f },
+                    colorA,
+                };
+                mappedSkeletonDebugLines[skeletonDebugVertexCount++] = {
+                    { b.x, b.y, b.z, 1.0f },
+                    colorB,
+                };
+            };
+            auto distanceSquared = [](const Vector3& a, const Vector3& b) {
+                const float dx = a.x - b.x;
+                const float dy = a.y - b.y;
+                const float dz = a.z - b.z;
+                return dx * dx + dy * dy + dz * dz;
+            };
+
+            for (const Joint& joint : skeletonDebugSkeleton.joints) {
+                const Vector3 jointPosition = ExtractTranslation(joint.skeletonSpaceMatrix);
+                const bool isAnimatedJoint =
+                    skeletonDebugAnimation.nodeAnimations.find(joint.name) !=
+                    skeletonDebugAnimation.nodeAnimations.end();
+                if (isAnimatedJoint) {
+                    animatedJointPositions.push_back(jointPosition);
+                }
+
+                pushLine(
+                    { jointPosition.x - markerSize, jointPosition.y, jointPosition.z },
+                    { jointPosition.x + markerSize, jointPosition.y, jointPosition.z },
+                    markerXColor,
+                    markerXColor);
+                pushLine(
+                    { jointPosition.x, jointPosition.y - markerSize, jointPosition.z },
+                    { jointPosition.x, jointPosition.y + markerSize, jointPosition.z },
+                    markerYColor,
+                    markerYColor);
+                pushLine(
+                    { jointPosition.x, jointPosition.y, jointPosition.z - markerSize },
+                    { jointPosition.x, jointPosition.y, jointPosition.z + markerSize },
+                    markerZColor,
+                    markerZColor);
+
+                if (!joint.parent.has_value()) {
+                    continue;
+                }
+
+                const Joint& parent =
+                    skeletonDebugSkeleton.joints[static_cast<size_t>(*joint.parent)];
+                const Vector3 parentPosition = ExtractTranslation(parent.skeletonSpaceMatrix);
+                const bool parentIsAnimatedJoint =
+                    skeletonDebugAnimation.nodeAnimations.find(parent.name) !=
+                    skeletonDebugAnimation.nodeAnimations.end();
+                if (isAnimatedJoint && parentIsAnimatedJoint &&
+                    distanceSquared(parentPosition, jointPosition) > 0.0001f) {
+                    ++animatedHierarchyLinkCount;
+                }
+                pushLine(parentPosition, jointPosition, rootColor, childColor);
+            }
+
+            if (animatedHierarchyLinkCount == 0 && animatedJointPositions.size() >= 2) {
+                for (size_t index = 0; index + 1 < animatedJointPositions.size(); ++index) {
+                    pushLine(
+                        animatedJointPositions[index],
+                        animatedJointPositions[index + 1],
+                        fallbackLinkColor,
+                        fallbackLinkColor);
+                }
+            }
+
+            skeletonDebugTransformData->World = baseWorld;
+            skeletonDebugTransformData->WVP = Multiply(baseWorld, Multiply(viewMatrix, projMatrix));
+            skeletonDebugTransformData->WorldInverseTranspose = Transpose(Inverse(baseWorld));
+        }
     }
 
     if (skybox.mappedCBV != nullptr) {
@@ -751,6 +887,8 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
         animator.Update(deltaTime, animatedCubeAnimation.duration);
         runtimeState.animatedCubeTime = animator.time;
     }
+    ApplyAnimation(skeletonDebugSkeleton, skeletonDebugAnimation, runtimeState.animatedCubeTime);
+    UpdateSkeleton(skeletonDebugSkeleton);
 
     directionalLightData = runtimeState.directionalLightData;
     directionalLightData.direction = Normalize(directionalLightData.direction);

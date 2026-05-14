@@ -153,9 +153,12 @@ void DrawMaterialSettingsControlsPanel(
     ImGui::SeparatorText("Animated Cube");
     ImGui::Checkbox("Show Animated Cube", &runtimeState.showAnimatedCube);
     ImGui::SameLine();
+    ImGui::Checkbox("Show Skeleton", &runtimeState.showSkeletonDebug);
+    ImGui::SameLine();
     ImGui::Checkbox("Play Animation", &runtimeState.playAnimatedCube);
     ImGui::SameLine();
     ImGui::Checkbox("Loop Animation", &runtimeState.loopAnimatedCube);
+    ImGui::TextUnformatted("Skeleton Debug Source: Resources/simpleSkin/simpleSkin.gltf");
     ImGui::SliderFloat("Animation Speed", &runtimeState.animatedCubeSpeed, -2.0f, 2.0f);
     ImGui::SliderFloat("Animation Time", &runtimeState.animatedCubeTime, 0.0f, 5.0f);
     ImGui::DragFloat3(

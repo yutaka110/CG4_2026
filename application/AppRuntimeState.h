@@ -44,6 +44,7 @@ struct AppRuntimeState {
 
     bool useMonsterBall = true;
     bool showAnimatedCube = true;
+    bool showSkeletonDebug = true;
     bool playAnimatedCube = true;
     bool loopAnimatedCube = true;
     float animatedCubeTime = 0.0f;
