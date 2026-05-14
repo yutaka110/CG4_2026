@@ -1,8 +1,11 @@
 #pragma once
 
+#include <array>
 #include <d3d12.h>
+#include <span>
 #include <wrl.h>
 #include <string>
+#include <vector>
 
 #include "../../externals/DirectXTex/DirectXTex.h"
 #include "AppRuntimeState.h"
@@ -40,6 +43,55 @@ struct CylinderMeshData {
     UINT vertexCount = 0;
 };
 
+struct GpuMeshResource {
+    Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource;
+    Microsoft::WRL::ComPtr<ID3D12Resource> indexResource;
+    D3D12_VERTEX_BUFFER_VIEW vbv{};
+    D3D12_INDEX_BUFFER_VIEW ibv{};
+    UINT vertexCount = 0;
+    UINT indexCount = 0;
+};
+
+static constexpr uint32_t kNumMaxInfluence = 4;
+
+struct VertexInfluence {
+    std::array<float, kNumMaxInfluence> weights{};
+    std::array<int32_t, kNumMaxInfluence> jointIndices{};
+};
+
+struct JointPaletteEntry {
+    Matrix4x4 skeletonSpaceMatrix{};
+    Matrix4x4 skeletonSpaceInverseTransposeMatrix{};
+};
+
+struct SkinCluster {
+    std::vector<Matrix4x4> inverseBindPoseMatrices;
+    Microsoft::WRL::ComPtr<ID3D12Resource> influenceResource;
+    D3D12_VERTEX_BUFFER_VIEW influenceBufferView{};
+    std::span<VertexInfluence> mappedInfluence;
+    Microsoft::WRL::ComPtr<ID3D12Resource> paletteResource;
+    std::span<JointPaletteEntry> mappedPalette;
+    D3D12_CPU_DESCRIPTOR_HANDLE paletteSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE paletteSrvGpu{};
+};
+
+struct SkinnedModelInstance {
+    std::string name;
+    std::string directory;
+    std::string filename;
+    ModelData model;
+    AnimationClip animation;
+    Skeleton skeleton;
+    Animator animator;
+    GpuMeshResource mesh;
+    SkinCluster skinCluster;
+    Microsoft::WRL::ComPtr<ID3D12Resource> transformResource;
+    TransformationMatrix* transformData = nullptr;
+    Transform transform{};
+    bool visible = false;
+    bool loaded = false;
+};
+
 struct SkeletonDebugLineVertex {
     Vector4 position;
     Vector4 color;
@@ -66,6 +118,8 @@ public:
         uint32_t windowWidth,
         uint32_t windowHeight);
     void SyncRuntimeState(AppRuntimeState& runtimeState, float deltaTime);
+    SkinnedModelInstance* GetActiveSkinnedModel();
+    const SkinnedModelInstance* GetActiveSkinnedModel() const;
 
 public:
     // Sprite
@@ -132,21 +186,18 @@ public:
 
     // Model
     ModelData modelData{};
-    Microsoft::WRL::ComPtr<ID3D12Resource> modelVertexResource;
-    D3D12_VERTEX_BUFFER_VIEW modelVBV{};
-    UINT modelVertexCount = 0;
+    GpuMeshResource modelMesh{};
 
     ModelData animatedCubeData{};
     AnimationClip animatedCubeAnimation{};
-    Microsoft::WRL::ComPtr<ID3D12Resource> animatedCubeVertexResource;
+    GpuMeshResource animatedCubeMesh{};
     Microsoft::WRL::ComPtr<ID3D12Resource> animatedCubeTransformResource;
-    D3D12_VERTEX_BUFFER_VIEW animatedCubeVBV{};
     TransformationMatrix* animatedCubeTransformData = nullptr;
-    UINT animatedCubeVertexCount = 0;
 
-    ModelData skeletonDebugModelData{};
-    AnimationClip skeletonDebugAnimation{};
-    Skeleton skeletonDebugSkeleton{};
+    static constexpr uint32_t kSkinnedModelCount = 3;
+    std::array<SkinnedModelInstance, kSkinnedModelCount> skinnedModels{};
+    uint32_t activeSkinnedModelIndex = 0;
+
     Microsoft::WRL::ComPtr<ID3D12Resource> skeletonDebugVertexResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> skeletonDebugTransformResource;
     D3D12_VERTEX_BUFFER_VIEW skeletonDebugVBV{};

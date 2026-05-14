@@ -9,6 +9,50 @@
 #include "AppSceneResources.h"
 #include "graphics/RenderGraph.h"
 
+namespace {
+
+void DrawSkinnedModelInstance(
+    const AppFrameGraphBuildContext& ctx,
+    ge3::graphics::RenderPassContext& passContext,
+    const SkinnedModelInstance& instance) {
+    if (!instance.loaded ||
+        !instance.visible ||
+        !instance.transformResource ||
+        instance.skinCluster.paletteSrvGpu.ptr == 0) {
+        return;
+    }
+
+    const bool skinnedReady = ctx.frameRenderer->PrepareMainPass(
+        passContext.commandList,
+        ctx.runtimeState->viewport,
+        ctx.runtimeState->scissorRect,
+        ctx.appPipelines->GetSkinnedRootSignature(),
+        ctx.appPipelines->GetSkinnedPSO());
+    if (!skinnedReady) {
+        return;
+    }
+
+    ctx.frameRenderer->DrawSkinnedModel(
+        passContext.commandList,
+        instance.mesh.vbv,
+        instance.skinCluster.influenceBufferView,
+        instance.mesh.ibv,
+        ctx.scene->materialResource->GetGPUVirtualAddress(),
+        instance.transformResource->GetGPUVirtualAddress(),
+        ctx.scene->textureSrvHandleGPU,
+        ctx.scene->textureSrvHandleGPU2,
+        ctx.scene->textureSrvHandleGPU2,
+        ctx.scene->skyboxTextureSrvHandleGPU,
+        instance.skinCluster.paletteSrvGpu,
+        ctx.scene->directionalLightResource->GetGPUVirtualAddress(),
+        ctx.scene->cameraResource->GetGPUVirtualAddress(),
+        ctx.scene->pointLightResource->GetGPUVirtualAddress(),
+        ctx.scene->spotLightResource->GetGPUVirtualAddress(),
+        instance.mesh.indexCount);
+}
+
+} // namespace
+
 void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx) const {
     const float opaqueBlack[4] = {0.0f, 0.0f, 0.0f, 1.0f};
     ctx.renderGraph->DeclarePersistentRenderTarget(
@@ -108,7 +152,8 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
 
             ctx.frameRenderer->DrawMainModel(
                 passContext.commandList,
-                ctx.scene->modelVBV,
+                ctx.scene->modelMesh.vbv,
+                ctx.scene->modelMesh.ibv,
                 ctx.scene->materialResource->GetGPUVirtualAddress(),
                 ctx.scene->sphere.cbvResource->GetGPUVirtualAddress(),
                 ctx.scene->textureSrvHandleGPU2,
@@ -119,14 +164,15 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 ctx.scene->cameraResource->GetGPUVirtualAddress(),
                 ctx.scene->pointLightResource->GetGPUVirtualAddress(),
                 ctx.scene->spotLightResource->GetGPUVirtualAddress(),
-                ctx.scene->modelVertexCount);
+                ctx.scene->modelMesh.indexCount);
 
             if (ctx.runtimeState->showAnimatedCube &&
                 ctx.scene->animatedCubeTransformResource &&
                 ctx.scene->animatedCubeTextureSrvHandleGPU.ptr != 0) {
                 ctx.frameRenderer->DrawMainModel(
                     passContext.commandList,
-                    ctx.scene->animatedCubeVBV,
+                    ctx.scene->animatedCubeMesh.vbv,
+                    ctx.scene->animatedCubeMesh.ibv,
                     ctx.scene->materialResource->GetGPUVirtualAddress(),
                     ctx.scene->animatedCubeTransformResource->GetGPUVirtualAddress(),
                     ctx.scene->animatedCubeTextureSrvHandleGPU,
@@ -137,7 +183,14 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     ctx.scene->cameraResource->GetGPUVirtualAddress(),
                     ctx.scene->pointLightResource->GetGPUVirtualAddress(),
                     ctx.scene->spotLightResource->GetGPUVirtualAddress(),
-                    ctx.scene->animatedCubeVertexCount);
+                    ctx.scene->animatedCubeMesh.indexCount);
+            }
+
+            if (ctx.runtimeState->showSkinnedModel) {
+                if (const SkinnedModelInstance* activeSkinnedModel =
+                        ctx.scene->GetActiveSkinnedModel()) {
+                    DrawSkinnedModelInstance(ctx, passContext, *activeSkinnedModel);
+                }
             }
         }});
 

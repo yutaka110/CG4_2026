@@ -223,6 +223,286 @@ namespace {
         return { matrix.m[3][0], matrix.m[3][1], matrix.m[3][2] };
     }
 
+    Matrix4x4 InverseCopy(Matrix4x4 matrix) {
+        return Inverse(matrix);
+    }
+
+    GpuMeshResource CreateGpuMeshResource(
+        ComPtr<ID3D12Device> device,
+        const ModelData& modelData) {
+        GpuMeshResource mesh{};
+        mesh.vertexCount = UINT(modelData.vertices.size());
+        mesh.indexCount = UINT(modelData.indices.size());
+        if (mesh.vertexCount == 0 || mesh.indexCount == 0) {
+            return mesh;
+        }
+
+        mesh.vertexResource =
+            CreateBufferResource(device, sizeof(VertexData) * modelData.vertices.size());
+        VertexData* mappedVertices = nullptr;
+        mesh.vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&mappedVertices));
+        std::memcpy(
+            mappedVertices,
+            modelData.vertices.data(),
+            sizeof(VertexData) * modelData.vertices.size());
+
+        mesh.vbv.BufferLocation = mesh.vertexResource->GetGPUVirtualAddress();
+        mesh.vbv.SizeInBytes = UINT(sizeof(VertexData) * modelData.vertices.size());
+        mesh.vbv.StrideInBytes = sizeof(VertexData);
+
+        mesh.indexResource =
+            CreateBufferResource(device, sizeof(uint32_t) * modelData.indices.size());
+        uint32_t* mappedIndices = nullptr;
+        mesh.indexResource->Map(0, nullptr, reinterpret_cast<void**>(&mappedIndices));
+        std::memcpy(
+            mappedIndices,
+            modelData.indices.data(),
+            sizeof(uint32_t) * modelData.indices.size());
+
+        mesh.ibv.BufferLocation = mesh.indexResource->GetGPUVirtualAddress();
+        mesh.ibv.SizeInBytes = UINT(sizeof(uint32_t) * modelData.indices.size());
+        mesh.ibv.Format = DXGI_FORMAT_R32_UINT;
+        return mesh;
+    }
+
+    SkinCluster CreateSkinCluster(
+        ComPtr<ID3D12Device> device,
+        const Skeleton& skeleton,
+        const ModelData& modelData,
+        ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap,
+        uint32_t descriptorSizeSRV,
+        uint32_t paletteSrvIndex) {
+        SkinCluster skinCluster{};
+        const size_t jointCount = skeleton.joints.size();
+        const size_t vertexCount = modelData.vertices.size();
+        if (jointCount == 0 || vertexCount == 0) {
+            return skinCluster;
+        }
+
+        skinCluster.inverseBindPoseMatrices.resize(jointCount);
+        std::fill(
+            skinCluster.inverseBindPoseMatrices.begin(),
+            skinCluster.inverseBindPoseMatrices.end(),
+            MakeIdentity4x4());
+
+        skinCluster.paletteResource =
+            CreateBufferResource(device, sizeof(JointPaletteEntry) * jointCount);
+        JointPaletteEntry* mappedPalette = nullptr;
+        skinCluster.paletteResource->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&mappedPalette));
+        skinCluster.mappedPalette = { mappedPalette, jointCount };
+
+        skinCluster.paletteSrvCpu =
+            AppRenderResources::GetCPUDescriptorHandle(
+                srvDescriptorHeap,
+                descriptorSizeSRV,
+                paletteSrvIndex);
+        skinCluster.paletteSrvGpu =
+            AppRenderResources::GetGPUDescriptorHandle(
+                srvDescriptorHeap,
+                descriptorSizeSRV,
+                paletteSrvIndex);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC paletteSrvDesc{};
+        paletteSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
+        paletteSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        paletteSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        paletteSrvDesc.Buffer.FirstElement = 0;
+        paletteSrvDesc.Buffer.NumElements = UINT(jointCount);
+        paletteSrvDesc.Buffer.StructureByteStride = sizeof(JointPaletteEntry);
+        paletteSrvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+        device->CreateShaderResourceView(
+            skinCluster.paletteResource.Get(),
+            &paletteSrvDesc,
+            skinCluster.paletteSrvCpu);
+
+        skinCluster.influenceResource =
+            CreateBufferResource(device, sizeof(VertexInfluence) * vertexCount);
+        VertexInfluence* mappedInfluence = nullptr;
+        skinCluster.influenceResource->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&mappedInfluence));
+        std::memset(mappedInfluence, 0, sizeof(VertexInfluence) * vertexCount);
+        skinCluster.mappedInfluence = { mappedInfluence, vertexCount };
+
+        skinCluster.influenceBufferView.BufferLocation =
+            skinCluster.influenceResource->GetGPUVirtualAddress();
+        skinCluster.influenceBufferView.SizeInBytes =
+            UINT(sizeof(VertexInfluence) * vertexCount);
+        skinCluster.influenceBufferView.StrideInBytes = sizeof(VertexInfluence);
+
+        for (const auto& [jointName, jointWeight] : modelData.skinClusterData) {
+            const auto jointIt = skeleton.jointMap.find(jointName);
+            if (jointIt == skeleton.jointMap.end()) {
+                continue;
+            }
+
+            const uint32_t jointIndex = static_cast<uint32_t>(jointIt->second);
+            if (jointIndex >= skinCluster.inverseBindPoseMatrices.size()) {
+                continue;
+            }
+            skinCluster.inverseBindPoseMatrices[jointIndex] =
+                jointWeight.inverseBindPoseMatrix;
+
+            for (const VertexWeightData& vertexWeight : jointWeight.vertexWeights) {
+                if (vertexWeight.vertexIndex >= skinCluster.mappedInfluence.size()) {
+                    continue;
+                }
+
+                VertexInfluence& influence =
+                    skinCluster.mappedInfluence[vertexWeight.vertexIndex];
+                for (uint32_t influenceIndex = 0;
+                     influenceIndex < kNumMaxInfluence;
+                     ++influenceIndex) {
+                    if (influence.weights[influenceIndex] == 0.0f) {
+                        influence.weights[influenceIndex] = vertexWeight.weight;
+                        influence.jointIndices[influenceIndex] =
+                            static_cast<int32_t>(jointIndex);
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (VertexInfluence& influence : skinCluster.mappedInfluence) {
+            float sum = 0.0f;
+            for (float weight : influence.weights) {
+                sum += weight;
+            }
+            if (sum <= 0.0f) {
+                influence.weights[0] = 1.0f;
+                influence.jointIndices[0] = 0;
+                continue;
+            }
+            for (float& weight : influence.weights) {
+                weight /= sum;
+            }
+        }
+
+        return skinCluster;
+    }
+
+    void UpdateSkinCluster(SkinCluster& skinCluster, const Skeleton& skeleton) {
+        if (skinCluster.mappedPalette.empty()) {
+            return;
+        }
+
+        for (size_t jointIndex = 0; jointIndex < skeleton.joints.size(); ++jointIndex) {
+            if (jointIndex >= skinCluster.inverseBindPoseMatrices.size() ||
+                jointIndex >= skinCluster.mappedPalette.size()) {
+                break;
+            }
+
+            Matrix4x4 skinMatrix = Multiply(
+                skinCluster.inverseBindPoseMatrices[jointIndex],
+                skeleton.joints[jointIndex].skeletonSpaceMatrix);
+            skinCluster.mappedPalette[jointIndex].skeletonSpaceMatrix = skinMatrix;
+            skinCluster.mappedPalette[jointIndex].skeletonSpaceInverseTransposeMatrix =
+                Transpose(InverseCopy(skinMatrix));
+        }
+    }
+
+    bool LoadSkinnedModelInstance(
+        SkinnedModelInstance& instance,
+        ComPtr<ID3D12Device> device,
+        ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap,
+        uint32_t descriptorSizeSRV,
+        uint32_t paletteSrvIndex,
+        const std::string& name,
+        const std::string& directory,
+        const std::string& filename,
+        const Transform& transform) {
+        instance = {};
+        instance.name = name;
+        instance.directory = directory;
+        instance.filename = filename;
+        instance.transform = transform;
+        instance.animator.loop = true;
+        instance.animator.playing = true;
+        instance.animator.speed = 1.0f;
+
+        instance.model = LoadObjFile_Assimp(directory, filename);
+        instance.animation = LoadAnimationFile(directory, filename);
+        if (instance.model.vertices.empty() ||
+            instance.model.indices.empty() ||
+            instance.model.rootNode.name.empty()) {
+            OutputDebugStringA(("[AppSceneResources] Skinned model could not be loaded: " +
+                directory + "/" + filename + "\n").c_str());
+            return false;
+        }
+
+        instance.mesh = CreateGpuMeshResource(device, instance.model);
+        instance.skeleton = CreateSkeleton(instance.model.rootNode);
+        ApplyAnimation(instance.skeleton, instance.animation, 0.0f);
+        UpdateSkeleton(instance.skeleton);
+        instance.skinCluster = CreateSkinCluster(
+            device,
+            instance.skeleton,
+            instance.model,
+            srvDescriptorHeap,
+            descriptorSizeSRV,
+            paletteSrvIndex);
+        UpdateSkinCluster(instance.skinCluster, instance.skeleton);
+
+        instance.transformResource = CreateBufferResource(device, sizeof(TransformationMatrix));
+        instance.transformResource->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&instance.transformData));
+        instance.transformData->WVP = MakeIdentity4x4();
+        instance.transformData->World = MakeIdentity4x4();
+        instance.transformData->WorldInverseTranspose = MakeIdentity4x4();
+        instance.loaded = instance.mesh.indexCount > 0 &&
+            instance.skinCluster.paletteSrvGpu.ptr != 0 &&
+            instance.transformData != nullptr;
+        return instance.loaded;
+    }
+
+    void UpdateSkinnedModelInstance(
+        SkinnedModelInstance& instance,
+        float deltaTime,
+        bool play,
+        bool loop,
+        float speed,
+        float& animationTime) {
+        if (!instance.loaded) {
+            return;
+        }
+
+        instance.animator.time = animationTime;
+        instance.animator.playing = play;
+        instance.animator.loop = loop;
+        instance.animator.speed = speed;
+        if (play) {
+            instance.animator.Update(deltaTime, instance.animation.duration);
+            animationTime = instance.animator.time;
+        }
+
+        ApplyAnimation(instance.skeleton, instance.animation, animationTime);
+        UpdateSkeleton(instance.skeleton);
+        UpdateSkinCluster(instance.skinCluster, instance.skeleton);
+    }
+
+    void UpdateSkinnedModelInstanceTransform(
+        SkinnedModelInstance& instance,
+        const Matrix4x4& viewMatrix,
+        const Matrix4x4& projMatrix) {
+        if (!instance.loaded || instance.transformData == nullptr) {
+            return;
+        }
+
+        Matrix4x4 baseWorld = MakeAffineMatrix(
+            instance.transform.scale,
+            instance.transform.rotate,
+            instance.transform.translate);
+        instance.transformData->World = baseWorld;
+        instance.transformData->WVP = Multiply(baseWorld, Multiply(viewMatrix, projMatrix));
+        instance.transformData->WorldInverseTranspose = Transpose(Inverse(baseWorld));
+    }
+
 } // namespace
 
 bool AppSceneResources::Initialize(
@@ -596,44 +876,20 @@ bool AppSceneResources::Initialize(
     }
 
     // =========================================================
-    // Assimp model VB
+    // Assimp model mesh
     // =========================================================
     modelData = LoadObjFile_Assimp("Resources/ball", "ball.obj");
     assert(!modelData.vertices.empty());
-
-    modelVertexResource =
-        CreateBufferResource(device, sizeof(VertexData) * modelData.vertices.size());
-
-    VertexData* mapped = nullptr;
-    modelVertexResource->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
-    memcpy(mapped, modelData.vertices.data(), sizeof(VertexData) * modelData.vertices.size());
-
-    modelVBV.BufferLocation = modelVertexResource->GetGPUVirtualAddress();
-    modelVBV.SizeInBytes = UINT(sizeof(VertexData) * modelData.vertices.size());
-    modelVBV.StrideInBytes = sizeof(VertexData);
-
-    modelVertexCount = UINT(modelData.vertices.size());
+    assert(!modelData.indices.empty());
+    modelMesh = CreateGpuMeshResource(device, modelData);
 
     // =========================================================
     // AnimatedCube model and animation
     // =========================================================
     animatedCubeData = LoadObjFile_Assimp("Resources/AnimatedCube", "AnimatedCube.gltf");
     animatedCubeAnimation = LoadAnimationFile("Resources/AnimatedCube", "AnimatedCube.gltf");
-    if (!animatedCubeData.vertices.empty()) {
-        animatedCubeVertexResource =
-            CreateBufferResource(device, sizeof(VertexData) * animatedCubeData.vertices.size());
-
-        VertexData* animatedMapped = nullptr;
-        animatedCubeVertexResource->Map(0, nullptr, reinterpret_cast<void**>(&animatedMapped));
-        memcpy(
-            animatedMapped,
-            animatedCubeData.vertices.data(),
-            sizeof(VertexData) * animatedCubeData.vertices.size());
-
-        animatedCubeVBV.BufferLocation = animatedCubeVertexResource->GetGPUVirtualAddress();
-        animatedCubeVBV.SizeInBytes = UINT(sizeof(VertexData) * animatedCubeData.vertices.size());
-        animatedCubeVBV.StrideInBytes = sizeof(VertexData);
-        animatedCubeVertexCount = UINT(animatedCubeData.vertices.size());
+    if (!animatedCubeData.vertices.empty() && !animatedCubeData.indices.empty()) {
+        animatedCubeMesh = CreateGpuMeshResource(device, animatedCubeData);
 
         animatedCubeTransformResource = CreateBufferResource(device, sizeof(TransformationMatrix));
         animatedCubeTransformResource->Map(
@@ -645,50 +901,81 @@ bool AppSceneResources::Initialize(
         animatedCubeTransformData->WorldInverseTranspose = MakeIdentity4x4();
 
     } else {
-        OutputDebugStringA("[AppSceneResources] AnimatedCube model has no vertices.\n");
+        OutputDebugStringA("[AppSceneResources] AnimatedCube model has no indexed mesh data.\n");
     }
 
     // =========================================================
-    // Skeleton debug source: simpleSkin
+    // Skinned model instances
     // =========================================================
-    skeletonDebugModelData = LoadObjFile_Assimp("Resources/simpleSkin", "simpleSkin.gltf");
-    skeletonDebugAnimation = LoadAnimationFile("Resources/simpleSkin", "simpleSkin.gltf");
-    if (!skeletonDebugModelData.rootNode.name.empty()) {
-        skeletonDebugSkeleton = CreateSkeleton(skeletonDebugModelData.rootNode);
-        ApplyAnimation(skeletonDebugSkeleton, skeletonDebugAnimation, 0.0f);
-        UpdateSkeleton(skeletonDebugSkeleton);
+    const Transform skinnedDefaultTransform{
+        { 1.0f, 1.0f, 1.0f },
+        { 0.0f, 0.0f, 0.0f },
+        { -0.9f, 0.0f, -6.3f },
+    };
+    LoadSkinnedModelInstance(
+        skinnedModels[0],
+        device,
+        srvDescriptorHeap,
+        descriptorSizeSRV,
+        11,
+        "simpleSkin",
+        "Resources/simpleSkin",
+        "simpleSkin.gltf",
+        skinnedDefaultTransform);
+    LoadSkinnedModelInstance(
+        skinnedModels[1],
+        device,
+        srvDescriptorHeap,
+        descriptorSizeSRV,
+        12,
+        "human walk",
+        "Resources/human",
+        "walk.gltf",
+        skinnedDefaultTransform);
+    LoadSkinnedModelInstance(
+        skinnedModels[2],
+        device,
+        srvDescriptorHeap,
+        descriptorSizeSRV,
+        13,
+        "human sneakWalk",
+        "Resources/human",
+        "sneakWalk.gltf",
+        skinnedDefaultTransform);
 
-        const size_t jointCount = skeletonDebugSkeleton.joints.size();
-        const size_t hierarchyLineVertices = jointCount > 0 ? (jointCount - 1) * 2 : 0;
-        const size_t fallbackAnimatedJointLineVertices = jointCount > 0 ? (jointCount - 1) * 2 : 0;
-        const size_t jointMarkerVertices = jointCount * 6;
+    size_t maxJointCount = 0;
+    for (const SkinnedModelInstance& instance : skinnedModels) {
+        if (instance.loaded) {
+            maxJointCount = (std::max)(maxJointCount, instance.skeleton.joints.size());
+        }
+    }
+    if (maxJointCount > 0) {
+        const size_t hierarchyLineVertices = maxJointCount > 0 ? (maxJointCount - 1) * 2 : 0;
+        const size_t fallbackAnimatedJointLineVertices = maxJointCount > 0 ? (maxJointCount - 1) * 2 : 0;
+        const size_t jointMarkerVertices = maxJointCount * 6;
         skeletonDebugVertexCapacity =
             UINT(hierarchyLineVertices + fallbackAnimatedJointLineVertices + jointMarkerVertices);
-        if (skeletonDebugVertexCapacity > 0) {
-            skeletonDebugVertexResource = CreateBufferResource(
-                device,
-                sizeof(SkeletonDebugLineVertex) * skeletonDebugVertexCapacity);
-            skeletonDebugVertexResource->Map(
-                0,
-                nullptr,
-                reinterpret_cast<void**>(&mappedSkeletonDebugLines));
-            skeletonDebugVBV.BufferLocation = skeletonDebugVertexResource->GetGPUVirtualAddress();
-            skeletonDebugVBV.SizeInBytes =
-                UINT(sizeof(SkeletonDebugLineVertex) * skeletonDebugVertexCapacity);
-            skeletonDebugVBV.StrideInBytes = sizeof(SkeletonDebugLineVertex);
+        skeletonDebugVertexResource = CreateBufferResource(
+            device,
+            sizeof(SkeletonDebugLineVertex) * skeletonDebugVertexCapacity);
+        skeletonDebugVertexResource->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&mappedSkeletonDebugLines));
+        skeletonDebugVBV.BufferLocation = skeletonDebugVertexResource->GetGPUVirtualAddress();
+        skeletonDebugVBV.SizeInBytes =
+            UINT(sizeof(SkeletonDebugLineVertex) * skeletonDebugVertexCapacity);
+        skeletonDebugVBV.StrideInBytes = sizeof(SkeletonDebugLineVertex);
 
-            skeletonDebugTransformResource =
-                CreateBufferResource(device, sizeof(TransformationMatrix));
-            skeletonDebugTransformResource->Map(
-                0,
-                nullptr,
-                reinterpret_cast<void**>(&skeletonDebugTransformData));
-            skeletonDebugTransformData->WVP = MakeIdentity4x4();
-            skeletonDebugTransformData->World = MakeIdentity4x4();
-            skeletonDebugTransformData->WorldInverseTranspose = MakeIdentity4x4();
-        }
-    } else {
-        OutputDebugStringA("[AppSceneResources] simpleSkin skeleton debug source could not be loaded.\n");
+        skeletonDebugTransformResource =
+            CreateBufferResource(device, sizeof(TransformationMatrix));
+        skeletonDebugTransformResource->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&skeletonDebugTransformData));
+        skeletonDebugTransformData->WVP = MakeIdentity4x4();
+        skeletonDebugTransformData->World = MakeIdentity4x4();
+        skeletonDebugTransformData->WorldInverseTranspose = MakeIdentity4x4();
     }
 
     return true;
@@ -700,6 +987,22 @@ void AppSceneResources::UpdateCameraWorldPosition(const Vector3& worldPosition) 
     }
 
     mappedCamera->worldPosition = worldPosition;
+}
+
+SkinnedModelInstance* AppSceneResources::GetActiveSkinnedModel() {
+    if (activeSkinnedModelIndex >= skinnedModels.size()) {
+        return nullptr;
+    }
+    SkinnedModelInstance& instance = skinnedModels[activeSkinnedModelIndex];
+    return instance.loaded ? &instance : nullptr;
+}
+
+const SkinnedModelInstance* AppSceneResources::GetActiveSkinnedModel() const {
+    if (activeSkinnedModelIndex >= skinnedModels.size()) {
+        return nullptr;
+    }
+    const SkinnedModelInstance& instance = skinnedModels[activeSkinnedModelIndex];
+    return instance.loaded ? &instance : nullptr;
 }
 
 void AppSceneResources::UpdateTransforms(
@@ -777,7 +1080,19 @@ void AppSceneResources::UpdateTransforms(
         animatedCubeTransformData->WVP = Multiply(worldMatrix, Multiply(viewMatrix, projMatrix));
         animatedCubeTransformData->WorldInverseTranspose = Transpose(Inverse(worldMatrix));
 
-        if (mappedSkeletonDebugLines != nullptr && skeletonDebugTransformData != nullptr) {
+    }
+
+    SkinnedModelInstance* activeSkinnedModel = GetActiveSkinnedModel();
+    if (activeSkinnedModel != nullptr) {
+        activeSkinnedModel->visible = runtimeState.showSkinnedModel;
+        activeSkinnedModel->transform = runtimeState.skinnedModelTransform;
+        if (activeSkinnedModel->visible) {
+            UpdateSkinnedModelInstanceTransform(*activeSkinnedModel, viewMatrix, projMatrix);
+        }
+
+        if (runtimeState.showSkeletonDebug &&
+            mappedSkeletonDebugLines != nullptr &&
+            skeletonDebugTransformData != nullptr) {
             skeletonDebugVertexCount = 0;
             const Vector4 rootColor = { 1.0f, 0.9f, 0.1f, 1.0f };
             const Vector4 childColor = { 0.0f, 0.95f, 1.0f, 1.0f };
@@ -785,7 +1100,7 @@ void AppSceneResources::UpdateTransforms(
             const Vector4 markerYColor = { 0.1f, 1.0f, 0.25f, 1.0f };
             const Vector4 markerZColor = { 0.2f, 0.55f, 1.0f, 1.0f };
             const Vector4 fallbackLinkColor = { 1.0f, 0.15f, 1.0f, 1.0f };
-            const float markerSize = 0.35f;
+            const float markerSize = 0.06f;
             std::vector<Vector3> animatedJointPositions;
             size_t animatedHierarchyLinkCount = 0;
             auto pushLine = [&](const Vector3& a, const Vector3& b, const Vector4& colorA, const Vector4& colorB) {
@@ -808,11 +1123,12 @@ void AppSceneResources::UpdateTransforms(
                 return dx * dx + dy * dy + dz * dz;
             };
 
-            for (const Joint& joint : skeletonDebugSkeleton.joints) {
+            const Skeleton& skeleton = activeSkinnedModel->skeleton;
+            const AnimationClip& animation = activeSkinnedModel->animation;
+            for (const Joint& joint : skeleton.joints) {
                 const Vector3 jointPosition = ExtractTranslation(joint.skeletonSpaceMatrix);
                 const bool isAnimatedJoint =
-                    skeletonDebugAnimation.nodeAnimations.find(joint.name) !=
-                    skeletonDebugAnimation.nodeAnimations.end();
+                    animation.nodeAnimations.find(joint.name) != animation.nodeAnimations.end();
                 if (isAnimatedJoint) {
                     animatedJointPositions.push_back(jointPosition);
                 }
@@ -837,12 +1153,10 @@ void AppSceneResources::UpdateTransforms(
                     continue;
                 }
 
-                const Joint& parent =
-                    skeletonDebugSkeleton.joints[static_cast<size_t>(*joint.parent)];
+                const Joint& parent = skeleton.joints[static_cast<size_t>(*joint.parent)];
                 const Vector3 parentPosition = ExtractTranslation(parent.skeletonSpaceMatrix);
                 const bool parentIsAnimatedJoint =
-                    skeletonDebugAnimation.nodeAnimations.find(parent.name) !=
-                    skeletonDebugAnimation.nodeAnimations.end();
+                    animation.nodeAnimations.find(parent.name) != animation.nodeAnimations.end();
                 if (isAnimatedJoint && parentIsAnimatedJoint &&
                     distanceSquared(parentPosition, jointPosition) > 0.0001f) {
                     ++animatedHierarchyLinkCount;
@@ -860,10 +1174,18 @@ void AppSceneResources::UpdateTransforms(
                 }
             }
 
+            Matrix4x4 baseWorld = MakeAffineMatrix(
+                activeSkinnedModel->transform.scale,
+                activeSkinnedModel->transform.rotate,
+                activeSkinnedModel->transform.translate);
             skeletonDebugTransformData->World = baseWorld;
             skeletonDebugTransformData->WVP = Multiply(baseWorld, Multiply(viewMatrix, projMatrix));
             skeletonDebugTransformData->WorldInverseTranspose = Transpose(Inverse(baseWorld));
+        } else {
+            skeletonDebugVertexCount = 0;
         }
+    } else {
+        skeletonDebugVertexCount = 0;
     }
 
     if (skybox.mappedCBV != nullptr) {
@@ -878,7 +1200,27 @@ void AppSceneResources::UpdateTransforms(
 }
 
 void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float deltaTime) {
-    if (runtimeState.playAnimatedCube) {
+    activeSkinnedModelIndex = (std::min)(
+        runtimeState.selectedSkinnedModelIndex,
+        uint32_t(skinnedModels.size() - 1));
+    runtimeState.selectedSkinnedModelIndex = activeSkinnedModelIndex;
+
+    SkinnedModelInstance* activeSkinnedModel = GetActiveSkinnedModel();
+    const bool updateActiveSkinned =
+        activeSkinnedModel != nullptr &&
+        (runtimeState.showSkinnedModel || runtimeState.showSkeletonDebug);
+
+    if (updateActiveSkinned) {
+        activeSkinnedModel->visible = runtimeState.showSkinnedModel;
+        activeSkinnedModel->transform = runtimeState.skinnedModelTransform;
+        UpdateSkinnedModelInstance(
+            *activeSkinnedModel,
+            deltaTime,
+            runtimeState.playAnimatedCube,
+            runtimeState.loopAnimatedCube,
+            runtimeState.animatedCubeSpeed,
+            runtimeState.animatedCubeTime);
+    } else if (runtimeState.playAnimatedCube) {
         Animator animator{};
         animator.time = runtimeState.animatedCubeTime;
         animator.speed = runtimeState.animatedCubeSpeed;
@@ -886,9 +1228,9 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
         animator.loop = runtimeState.loopAnimatedCube;
         animator.Update(deltaTime, animatedCubeAnimation.duration);
         runtimeState.animatedCubeTime = animator.time;
+    } else if (activeSkinnedModel != nullptr) {
+        activeSkinnedModel->visible = false;
     }
-    ApplyAnimation(skeletonDebugSkeleton, skeletonDebugAnimation, runtimeState.animatedCubeTime);
-    UpdateSkeleton(skeletonDebugSkeleton);
 
     directionalLightData = runtimeState.directionalLightData;
     directionalLightData.direction = Normalize(directionalLightData.direction);

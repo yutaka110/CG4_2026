@@ -50,6 +50,7 @@ bool AppFrameRenderer::PrepareMainPass(
 void AppFrameRenderer::DrawMainModel(
     ID3D12GraphicsCommandList* commandList,
     const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
+    const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
     D3D12_GPU_VIRTUAL_ADDRESS materialBufferAddress,
     D3D12_GPU_VIRTUAL_ADDRESS transformBufferAddress,
     D3D12_GPU_DESCRIPTOR_HANDLE textureHandle,
@@ -60,8 +61,9 @@ void AppFrameRenderer::DrawMainModel(
     D3D12_GPU_VIRTUAL_ADDRESS cameraBufferAddress,
     D3D12_GPU_VIRTUAL_ADDRESS pointLightBufferAddress,
     D3D12_GPU_VIRTUAL_ADDRESS spotLightBufferAddress,
-    uint32_t vertexCount) const {
-    if (commandList == nullptr || vertexCount == 0 ||
+    uint32_t indexCount) const {
+    if (commandList == nullptr || indexCount == 0 ||
+        vertexBufferView.BufferLocation == 0 || indexBufferView.BufferLocation == 0 ||
         materialBufferAddress == 0 || transformBufferAddress == 0 ||
         textureHandle.ptr == 0 || directionalLightBufferAddress == 0 ||
         cameraBufferAddress == 0 || pointLightBufferAddress == 0 ||
@@ -71,6 +73,7 @@ void AppFrameRenderer::DrawMainModel(
 
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+    commandList->IASetIndexBuffer(&indexBufferView);
 
     ge3::graphics::MaterialInstance material{};
     material.name = "MainModel";
@@ -85,7 +88,61 @@ void AppFrameRenderer::DrawMainModel(
     material.textures.srv[5] = motionMaskTextureHandle;
     material.textures.srv[9] = environmentTextureHandle;
     ApplyMaterialInstance(commandList, material);
-    commandList->DrawInstanced(vertexCount, 1, 0, 0);
+    commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+}
+
+void AppFrameRenderer::DrawSkinnedModel(
+    ID3D12GraphicsCommandList* commandList,
+    const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
+    const D3D12_VERTEX_BUFFER_VIEW& influenceBufferView,
+    const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
+    D3D12_GPU_VIRTUAL_ADDRESS materialBufferAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS transformBufferAddress,
+    D3D12_GPU_DESCRIPTOR_HANDLE textureHandle,
+    D3D12_GPU_DESCRIPTOR_HANDLE receivedTextureHandle,
+    D3D12_GPU_DESCRIPTOR_HANDLE motionMaskTextureHandle,
+    D3D12_GPU_DESCRIPTOR_HANDLE environmentTextureHandle,
+    D3D12_GPU_DESCRIPTOR_HANDLE matrixPaletteHandle,
+    D3D12_GPU_VIRTUAL_ADDRESS directionalLightBufferAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS cameraBufferAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS pointLightBufferAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS spotLightBufferAddress,
+    uint32_t indexCount) const {
+    if (commandList == nullptr || indexCount == 0 ||
+        vertexBufferView.BufferLocation == 0 ||
+        influenceBufferView.BufferLocation == 0 ||
+        indexBufferView.BufferLocation == 0 ||
+        matrixPaletteHandle.ptr == 0 ||
+        materialBufferAddress == 0 || transformBufferAddress == 0 ||
+        textureHandle.ptr == 0 || directionalLightBufferAddress == 0 ||
+        cameraBufferAddress == 0 || pointLightBufferAddress == 0 ||
+        spotLightBufferAddress == 0) {
+        return;
+    }
+
+    D3D12_VERTEX_BUFFER_VIEW vertexBuffers[2] = {
+        vertexBufferView,
+        influenceBufferView,
+    };
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList->IASetVertexBuffers(0, 2, vertexBuffers);
+    commandList->IASetIndexBuffer(&indexBufferView);
+
+    ge3::graphics::MaterialInstance material{};
+    material.name = "SkinnedModel";
+    material.parameters.cbv[0] = materialBufferAddress;
+    material.parameters.cbv[1] = transformBufferAddress;
+    material.parameters.cbv[3] = directionalLightBufferAddress;
+    material.parameters.cbv[6] = cameraBufferAddress;
+    material.parameters.cbv[7] = pointLightBufferAddress;
+    material.parameters.cbv[8] = spotLightBufferAddress;
+    material.textures.srv[2] = textureHandle;
+    material.textures.srv[4] = receivedTextureHandle;
+    material.textures.srv[5] = motionMaskTextureHandle;
+    material.textures.srv[9] = environmentTextureHandle;
+    ApplyMaterialInstance(commandList, material);
+    commandList->SetGraphicsRootDescriptorTable(10, matrixPaletteHandle);
+    commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
 }
 
 void AppFrameRenderer::ApplyMaterialInstance(

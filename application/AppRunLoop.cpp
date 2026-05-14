@@ -127,7 +127,7 @@ void AppRunLoop::UpdateFrame() {
     (void)key;
 
     frameState_.viewProjectionMatrix = Multiply(frameState_.viewMatrix, frameState_.projMatrix);
-    frameState_.deltaTime += 0.016f;
+    frameState_.deltaTime = 0.016f;
     frameState_.drawCount = particleSystem_.UpdateInstances(
         frameState_.viewProjectionMatrix,
         frameState_.deltaTime);

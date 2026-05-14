@@ -112,6 +112,7 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
 
     const std::wstring shaders[] = {
         L"resources/Object3D.VS.hlsl",
+        L"resources/SkinningObject3D.VS.hlsl",
         L"resources/Object3D.PS.hlsl",
         L"resources/Sprite.VS.hlsl",
         L"resources/Sprite.PS.hlsl",
@@ -275,6 +276,46 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     hr = device->CreateRootSignature(0, signatureBlob->GetBufferPointer(), signatureBlob->GetBufferSize(),
                                     IID_PPV_ARGS(&mainRootSignature_));
     if (FAILED(hr)) return FailHr("CreateRootSignature(Main)", hr);
+
+    D3D12_DESCRIPTOR_RANGE matrixPaletteRange = {};
+    matrixPaletteRange.BaseShaderRegister = 10;
+    matrixPaletteRange.NumDescriptors = 1;
+    matrixPaletteRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    matrixPaletteRange.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_ROOT_PARAMETER skinnedRootParameters[11] = {};
+    for (uint32_t index = 0; index < _countof(rootParameters); ++index) {
+        skinnedRootParameters[index] = rootParameters[index];
+    }
+    skinnedRootParameters[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    skinnedRootParameters[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    skinnedRootParameters[10].DescriptorTable.NumDescriptorRanges = 1;
+    skinnedRootParameters[10].DescriptorTable.pDescriptorRanges = &matrixPaletteRange;
+
+    D3D12_ROOT_SIGNATURE_DESC skinnedRootSignatureDesc = descriptionRootSignature;
+    skinnedRootSignatureDesc.pParameters = skinnedRootParameters;
+    skinnedRootSignatureDesc.NumParameters = _countof(skinnedRootParameters);
+
+    ComPtr<ID3DBlob> skinnedSignatureBlob;
+    ComPtr<ID3DBlob> skinnedErrorBlob;
+    hr = D3D12SerializeRootSignature(
+        &skinnedRootSignatureDesc,
+        D3D_ROOT_SIGNATURE_VERSION_1,
+        &skinnedSignatureBlob,
+        &skinnedErrorBlob);
+    if (FAILED(hr)) {
+        if (skinnedErrorBlob) {
+            OutputDebugStringA(reinterpret_cast<const char*>(skinnedErrorBlob->GetBufferPointer()));
+        }
+        return false;
+    }
+
+    hr = device->CreateRootSignature(
+        0,
+        skinnedSignatureBlob->GetBufferPointer(),
+        skinnedSignatureBlob->GetBufferSize(),
+        IID_PPV_ARGS(&skinnedRootSignature_));
+    if (FAILED(hr)) return FailHr("CreateRootSignature(Skinned)", hr);
 
     // ------------------------------
     // Sprite RootSignature
@@ -831,6 +872,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     // Compile shaders
     // ------------------------------
     vs_ = Compile_(L"resources/Object3D.VS.hlsl", L"vs_6_0");
+    skinnedVs_ = Compile_(L"resources/SkinningObject3D.VS.hlsl", L"vs_6_0");
     ps_ = Compile_(L"resources/Object3D.PS.hlsl", L"ps_6_0");
     spriteVs_ = Compile_(L"resources/Sprite.VS.hlsl", L"vs_6_0");
     spritePs_ = Compile_(L"resources/Sprite.PS.hlsl", L"ps_6_0");
@@ -873,7 +915,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     debugDepthPreviewPs_ = Compile_(L"resources/DebugDepthPreview.PS.hlsl", L"ps_6_0");
     debugEmissivePreviewPs_ = Compile_(L"resources/DebugEmissivePreview.PS.hlsl", L"ps_6_0");
 
-    if (!vs_ || !ps_ || !spriteVs_ || !spritePs_ || !skyboxVs_ || !skyboxPs_ || !cs_ || !particleVs_ || !particlePs_ ||
+    if (!vs_ || !skinnedVs_ || !ps_ || !spriteVs_ || !spritePs_ || !skyboxVs_ || !skyboxPs_ || !cs_ || !particleVs_ || !particlePs_ ||
         !trailMeshVs_ || !trailMeshStreamVs_ || !trailMeshPs_ || !distortionSpriteVs_ || !distortionSpritePs_ ||
         !ringVs_ || !ringPs_ || !cylinderVs_ || !cylinderPs_ || !skeletonDebugVs_ || !skeletonDebugPs_ || !gpuParticleCs_ || !trailMeshStreamCs_ || !trailMeshBuildCs_ || !compositeVs_ || !compositePs_ || !bloomExtractPs_ ||
         !bloomDownsamplePs_ || !bloomUpsamplePs_ || !blurHorizontalPs_ || !blurVerticalPs_ ||
@@ -943,6 +985,37 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
     hr = device->CreateGraphicsPipelineState(&graphicsPipelineStateDesc, IID_PPV_ARGS(&mainPso_));
     if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Main)", hr);
+
+    D3D12_INPUT_ELEMENT_DESC skinnedInputElements[5] = {};
+    skinnedInputElements[0] = inputElementDescs[0];
+    skinnedInputElements[1] = inputElementDescs[1];
+    skinnedInputElements[2] = inputElementDescs[2];
+
+    skinnedInputElements[3].SemanticName = "WEIGHT";
+    skinnedInputElements[3].SemanticIndex = 0;
+    skinnedInputElements[3].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    skinnedInputElements[3].InputSlot = 1;
+    skinnedInputElements[3].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
+    skinnedInputElements[3].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+
+    skinnedInputElements[4].SemanticName = "INDEX";
+    skinnedInputElements[4].SemanticIndex = 0;
+    skinnedInputElements[4].Format = DXGI_FORMAT_R32G32B32A32_SINT;
+    skinnedInputElements[4].InputSlot = 1;
+    skinnedInputElements[4].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
+    skinnedInputElements[4].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+
+    D3D12_INPUT_LAYOUT_DESC skinnedInputLayoutDesc{};
+    skinnedInputLayoutDesc.pInputElementDescs = skinnedInputElements;
+    skinnedInputLayoutDesc.NumElements = _countof(skinnedInputElements);
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC skinnedPsoDesc = graphicsPipelineStateDesc;
+    skinnedPsoDesc.pRootSignature = skinnedRootSignature_.Get();
+    skinnedPsoDesc.InputLayout = skinnedInputLayoutDesc;
+    skinnedPsoDesc.VS = { skinnedVs_->GetBufferPointer(), skinnedVs_->GetBufferSize() };
+    skinnedPsoDesc.PS = { ps_->GetBufferPointer(), ps_->GetBufferSize() };
+    hr = device->CreateGraphicsPipelineState(&skinnedPsoDesc, IID_PPV_ARGS(&skinnedPso_));
+    if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Skinned)", hr);
 
     // ------------------------------
     // Skybox PSO
@@ -1495,6 +1568,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
     const std::wstring shaders[] = {
         L"resources/Object3D.VS.hlsl",
+        L"resources/SkinningObject3D.VS.hlsl",
         L"resources/Object3D.PS.hlsl",
         L"resources/Sprite.VS.hlsl",
         L"resources/Sprite.PS.hlsl",

@@ -26,6 +26,7 @@ struct RuntimeAccelerationFieldState {
 struct AppRuntimeState {
     Transform transform{};
     Transform animatedCubeTransform{};
+    Transform skinnedModelTransform{};
     Transform transformSprite{};
     Transform uvTransformSprite{};
     Material materialData{};
@@ -44,7 +45,9 @@ struct AppRuntimeState {
 
     bool useMonsterBall = true;
     bool showAnimatedCube = true;
-    bool showSkeletonDebug = true;
+    bool showSkinnedModel = false;
+    bool showSkeletonDebug = false;
+    uint32_t selectedSkinnedModelIndex = 0;
     bool playAnimatedCube = true;
     bool loopAnimatedCube = true;
     float animatedCubeTime = 0.0f;

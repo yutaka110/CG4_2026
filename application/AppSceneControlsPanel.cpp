@@ -5,6 +5,8 @@
 
 #include "../../externals/imgui/imgui.h"
 
+#include <algorithm>
+
 namespace {
 Vector3 FrontHitEffectPosition(const AppRuntimeState& runtimeState) {
     const float frontRadius = runtimeState.transform.scale.z;
@@ -153,12 +155,29 @@ void DrawMaterialSettingsControlsPanel(
     ImGui::SeparatorText("Animated Cube");
     ImGui::Checkbox("Show Animated Cube", &runtimeState.showAnimatedCube);
     ImGui::SameLine();
+    ImGui::Checkbox("Show Skinned", &runtimeState.showSkinnedModel);
+    ImGui::SameLine();
     ImGui::Checkbox("Show Skeleton", &runtimeState.showSkeletonDebug);
     ImGui::SameLine();
     ImGui::Checkbox("Play Animation", &runtimeState.playAnimatedCube);
     ImGui::SameLine();
     ImGui::Checkbox("Loop Animation", &runtimeState.loopAnimatedCube);
-    ImGui::TextUnformatted("Skeleton Debug Source: Resources/simpleSkin/simpleSkin.gltf");
+    const char* skinnedModelLabels[] = {
+        "simpleSkin",
+        "human walk",
+        "human sneakWalk",
+    };
+    int selectedSkinnedModel = static_cast<int>(runtimeState.selectedSkinnedModelIndex);
+    if (ImGui::Combo(
+            "Skinned Model",
+            &selectedSkinnedModel,
+            skinnedModelLabels,
+            IM_ARRAYSIZE(skinnedModelLabels))) {
+        runtimeState.selectedSkinnedModelIndex =
+            static_cast<uint32_t>((std::max)(0, selectedSkinnedModel));
+        runtimeState.animatedCubeTime = 0.0f;
+    }
+    ImGui::TextUnformatted("Skeleton Debug Source: selected Skinned Model");
     ImGui::SliderFloat("Animation Speed", &runtimeState.animatedCubeSpeed, -2.0f, 2.0f);
     ImGui::SliderFloat("Animation Time", &runtimeState.animatedCubeTime, 0.0f, 5.0f);
     ImGui::DragFloat3(
@@ -176,6 +195,24 @@ void DrawMaterialSettingsControlsPanel(
     ImGui::DragFloat3(
         "Animated Cube Translate",
         reinterpret_cast<float*>(&runtimeState.animatedCubeTransform.translate),
+        0.01f,
+        -100.0f,
+        100.0f);
+    ImGui::DragFloat3(
+        "Skinned Scale",
+        reinterpret_cast<float*>(&runtimeState.skinnedModelTransform.scale),
+        0.01f,
+        0.01f,
+        10.0f);
+    ImGui::DragFloat3(
+        "Skinned Rotate",
+        reinterpret_cast<float*>(&runtimeState.skinnedModelTransform.rotate),
+        0.01f,
+        -3.14f,
+        3.14f);
+    ImGui::DragFloat3(
+        "Skinned Translate",
+        reinterpret_cast<float*>(&runtimeState.skinnedModelTransform.translate),
         0.01f,
         -100.0f,
         100.0f);

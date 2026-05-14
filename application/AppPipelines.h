@@ -17,6 +17,7 @@ public:
     bool HotReloadIfNeeded(ID3D12Device* device);
 
     ID3D12RootSignature* GetMainRootSignature() const { return mainRootSignature_.Get(); }
+    ID3D12RootSignature* GetSkinnedRootSignature() const { return skinnedRootSignature_.Get(); }
     ID3D12RootSignature* GetSpriteRootSignature() const { return spriteRootSignature_.Get(); }
     ID3D12RootSignature* GetSkyboxRootSignature() const { return skyboxRootSignature_.Get(); }
     ID3D12RootSignature* GetParticleRootSignature() const { return particleRootSignature_.Get(); }
@@ -26,6 +27,7 @@ public:
     ID3D12RootSignature* GetComputeRootSignature() const { return computeRootSignature_.Get(); }
 
     ID3D12PipelineState* GetMainPSO() const { return mainPso_.Get(); }
+    ID3D12PipelineState* GetSkinnedPSO() const { return skinnedPso_.Get(); }
     ID3D12PipelineState* GetMainOpaquePSO() const { return mainOpaquePso_.Get(); }
     ID3D12PipelineState* GetMainAlphaPSO() const { return mainAlphaPso_.Get(); }
     ID3D12PipelineState* GetSpritePSO() const { return spritePso_.Get(); }
@@ -71,6 +73,7 @@ public:
 private:
     // RootSignature
     Microsoft::WRL::ComPtr<ID3D12RootSignature> mainRootSignature_;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> skinnedRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> spriteRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> skyboxRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> particleRootSignature_;
@@ -85,6 +88,7 @@ private:
 
     // PSO
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainPso_;      // 元の graphicsPipelineState
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> skinnedPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainOpaquePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainAlphaPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> spritePso_;
@@ -126,6 +130,7 @@ private:
     // Shader blobs are kept alive while PSO uses them
     ge3::core::ShaderCompiler shaderCompiler_;
     Microsoft::WRL::ComPtr<IDxcBlob> vs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> skinnedVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> ps_;
     Microsoft::WRL::ComPtr<IDxcBlob> spriteVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> spritePs_;

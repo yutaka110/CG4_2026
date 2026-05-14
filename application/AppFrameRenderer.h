@@ -24,6 +24,7 @@ public:
     void DrawMainModel(
         ID3D12GraphicsCommandList* commandList,
         const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
+        const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
         D3D12_GPU_VIRTUAL_ADDRESS materialBufferAddress,
         D3D12_GPU_VIRTUAL_ADDRESS transformBufferAddress,
         D3D12_GPU_DESCRIPTOR_HANDLE textureHandle,
@@ -34,7 +35,25 @@ public:
         D3D12_GPU_VIRTUAL_ADDRESS cameraBufferAddress,
         D3D12_GPU_VIRTUAL_ADDRESS pointLightBufferAddress,
         D3D12_GPU_VIRTUAL_ADDRESS spotLightBufferAddress,
-        uint32_t vertexCount) const;
+        uint32_t indexCount) const;
+
+    void DrawSkinnedModel(
+        ID3D12GraphicsCommandList* commandList,
+        const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
+        const D3D12_VERTEX_BUFFER_VIEW& influenceBufferView,
+        const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
+        D3D12_GPU_VIRTUAL_ADDRESS materialBufferAddress,
+        D3D12_GPU_VIRTUAL_ADDRESS transformBufferAddress,
+        D3D12_GPU_DESCRIPTOR_HANDLE textureHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE receivedTextureHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE motionMaskTextureHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE environmentTextureHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE matrixPaletteHandle,
+        D3D12_GPU_VIRTUAL_ADDRESS directionalLightBufferAddress,
+        D3D12_GPU_VIRTUAL_ADDRESS cameraBufferAddress,
+        D3D12_GPU_VIRTUAL_ADDRESS pointLightBufferAddress,
+        D3D12_GPU_VIRTUAL_ADDRESS spotLightBufferAddress,
+        uint32_t indexCount) const;
 
     void ApplyMaterialInstance(
         ID3D12GraphicsCommandList* commandList,

@@ -1,5 +1,7 @@
 #pragma once
 #include "utils/math/Vector.h"
+#include <cstdint>
+#include <map>
 #include <vector>
 #include <string>
 //================================
@@ -101,6 +103,16 @@ struct MaterialData {
     std::string textureFilePath;
 };
 
+struct VertexWeightData {
+    float weight = 0.0f;
+    uint32_t vertexIndex = 0;
+};
+
+struct JointWeightData {
+    Matrix4x4 inverseBindPoseMatrix{};
+    std::vector<VertexWeightData> vertexWeights;
+};
+
 struct Node {
     QuaternionTransform transform;
     Matrix4x4 localMatrix;        // Nodeのローカル変換
@@ -111,6 +123,8 @@ struct Node {
 // ModelData構造体
 struct ModelData {
     std::vector<VertexData> vertices;
+    std::vector<uint32_t> indices;
+    std::map<std::string, JointWeightData> skinClusterData;
     MaterialData material;
     Node rootNode;
 };
