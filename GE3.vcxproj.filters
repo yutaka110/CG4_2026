@@ -374,6 +374,7 @@
     <FxCompile Include="Resources\Beam3D.VS.hlsl" />
     <FxCompile Include="Resources\Beam3D.PS.hlsl" />
     <FxCompile Include="Resources\ParticleSim.CS.hlsl" />
+    <FxCompile Include="Resources\Skinning.CS.hlsl" />
     <FxCompile Include="Resources\TrailMeshStream.CS.hlsl" />
     <FxCompile Include="Resources\TrailMeshStream.VS.hlsl" />
     <FxCompile Include="Resources\TrailMeshBuild.CS.hlsl" />

@@ -697,13 +697,27 @@ if (!appPipelines.Initialize(device.Get())) {
 	OutputDebugStringA("[AppMain] AppPipelines initialization failed.\n");
 	return 1;
 }
-if (!scene.Initialize(device, srvDescriptorHeap, descriptorSizeSRV)) {
+ID3D12GraphicsCommandList* initialUploadCommandList = engineContext.GetMainCommandList();
+if (!scene.Initialize(device, initialUploadCommandList, srvDescriptorHeap, descriptorSizeSRV)) {
 	OutputDebugStringA("[AppMain] AppSceneResources initialization failed.\n");
 	return 1;
 }
+hr = initialUploadCommandList->Close();
+assert(SUCCEEDED(hr));
+ID3D12CommandList* initialUploadCommandLists[] = { initialUploadCommandList };
+commandQueue->ExecuteCommandLists(1, initialUploadCommandLists);
+fenceValue += 1;
+hr = commandQueue->Signal(fence.Get(), fenceValue);
+assert(SUCCEEDED(hr));
+if (fence->GetCompletedValue() < fenceValue) {
+	hr = fence->SetEventOnCompletion(fenceValue, fenceEvent);
+	assert(SUCCEEDED(hr));
+	WaitForSingleObject(fenceEvent, INFINITE);
+}
+engineContext.SetFenceValue(fenceValue);
+scene.ReleaseInitialUploadResources();
 
 AppRuntimeState runtimeState{};
-ApplyEnvironmentRuntimeConfig(runtimeState.vfx);
 AppParticleSystem particleSystem;
 runtimeState.transform.scale = { 6.0f, 6.0f, 6.0f };
 runtimeState.transform.rotate = { 0.0f, 0.0f, 0.0f };
@@ -713,9 +727,9 @@ runtimeState.animatedCubeTransform.scale = { 0.4f, 0.4f, 0.4f };
 runtimeState.animatedCubeTransform.rotate = { 0.0f, 0.0f, 0.0f };
 runtimeState.animatedCubeTransform.translate = { -0.9f, 0.0f, -6.3f };
 
-runtimeState.skinnedModelTransform.scale = { 1.0f, 1.0f, 1.0f };
+runtimeState.skinnedModelTransform.scale = { 0.45f, 0.45f, 0.45f };
 runtimeState.skinnedModelTransform.rotate = { 0.0f, 0.0f, 0.0f };
-runtimeState.skinnedModelTransform.translate = { -0.9f, 0.0f, -6.3f };
+runtimeState.skinnedModelTransform.translate = { 0.0f, -0.4f, -6.3f };
 
 runtimeState.transformSprite.scale = { 256.0f, 256.0f, 1.0f };
 runtimeState.transformSprite.rotate = { 0.0f, 0.0f, 0.0f };
@@ -724,6 +738,8 @@ runtimeState.transformSprite.translate = { 640.0f, 360.0f, 0.0f };
 runtimeState.uvTransformSprite.scale = { 1.0f, 1.0f, 1.0f };
 runtimeState.uvTransformSprite.rotate = { 0.0f, 0.0f, 0.0f };
 runtimeState.uvTransformSprite.translate = { 0.0f, 0.0f, 0.0f };
+
+ApplyEnvironmentRuntimeConfig(runtimeState);
 
 runtimeState.viewport.Width = 1280.0f;
 runtimeState.viewport.Height = 720.0f;

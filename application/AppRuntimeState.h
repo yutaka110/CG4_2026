@@ -23,6 +23,21 @@ struct RuntimeAccelerationFieldState {
     RuntimeAabbState area{};
 };
 
+struct RuntimeSkinningTimingPathStats {
+    bool valid = false;
+    uint32_t sampleCount = 0;
+    uint64_t lastTicks = 0;
+    uint64_t minTicks = 0;
+    uint64_t maxTicks = 0;
+    double averageTicks = 0.0;
+};
+
+struct RuntimeSkinningTimingStats {
+    RuntimeSkinningTimingPathStats vertexShaderTotal{};
+    RuntimeSkinningTimingPathStats computeTotal{};
+    RuntimeSkinningTimingPathStats computeSurfaceOnly{};
+};
+
 struct AppRuntimeState {
     Transform transform{};
     Transform animatedCubeTransform{};
@@ -53,6 +68,7 @@ struct AppRuntimeState {
     float animatedCubeTime = 0.0f;
     float animatedCubeSpeed = 1.0f;
     AppVfxRuntimeState vfx{};
+    RuntimeSkinningTimingStats skinningTiming{};
     float debugDepthPreviewNear = 0.1f;
     float debugDepthPreviewFar = 25.0f;
     float debugDepthPreviewPower = 1.35f;

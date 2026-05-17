@@ -279,6 +279,7 @@ void DrawVfxRuntimeControlsPanel(
     ImGui::Checkbox("Rings", &runtimeState.vfx.enableRings);
     ImGui::SameLine();
     ImGui::Checkbox("Cylinders", &runtimeState.vfx.enableCylinders);
+    ImGui::Checkbox("Skinned Surface VFX", &runtimeState.vfx.enableSkinnedSurfaceVfx);
     ImGui::Checkbox("Trail Mesh Stream", &runtimeState.vfx.enableTrailMeshStream);
     ImGui::Checkbox("Trail Mesh Stream Safety Fallback", &runtimeState.vfx.enableTrailMeshStreamAutoFallback);
     if (ImGui::Checkbox(
