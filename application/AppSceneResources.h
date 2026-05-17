@@ -64,15 +64,34 @@ struct JointPaletteEntry {
     Matrix4x4 skeletonSpaceInverseTransposeMatrix{};
 };
 
+struct SkinningInformation {
+    uint32_t numVertices = 0;
+    uint32_t padding[3]{};
+};
+
 struct SkinCluster {
     std::vector<Matrix4x4> inverseBindPoseMatrices;
     Microsoft::WRL::ComPtr<ID3D12Resource> influenceResource;
     D3D12_VERTEX_BUFFER_VIEW influenceBufferView{};
-    std::span<VertexInfluence> mappedInfluence;
     Microsoft::WRL::ComPtr<ID3D12Resource> paletteResource;
-    std::span<JointPaletteEntry> mappedPalette;
+    D3D12_RESOURCE_STATES paletteState = D3D12_RESOURCE_STATE_COPY_DEST;
+    std::vector<JointPaletteEntry> paletteEntries;
+    Microsoft::WRL::ComPtr<ID3D12Resource> paletteUploadResource;
+    JointPaletteEntry* mappedPaletteUpload = nullptr;
+    bool paletteDirty = false;
+    Microsoft::WRL::ComPtr<ID3D12Resource> skinnedVertexResource;
+    D3D12_VERTEX_BUFFER_VIEW skinnedVertexBufferView{};
+    Microsoft::WRL::ComPtr<ID3D12Resource> skinningInfoResource;
+    SkinningInformation* mappedSkinningInfo = nullptr;
+    D3D12_CPU_DESCRIPTOR_HANDLE vertexSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE vertexSrvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE influenceSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE influenceSrvGpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE paletteSrvCpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE paletteSrvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE skinnedVertexUavCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE skinnedVertexUavGpu{};
+    D3D12_RESOURCE_STATES skinnedVertexState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 };
 
 struct SkinnedModelInstance {
@@ -106,8 +125,10 @@ class AppSceneResources {
 public:
     bool Initialize(
         Microsoft::WRL::ComPtr<ID3D12Device> device,
+        ID3D12GraphicsCommandList* uploadCommandList,
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap,
         uint32_t descriptorSizeSRV);
+    void ReleaseInitialUploadResources();
 
     void UpdateCameraWorldPosition(const Vector3& worldPosition);
     void UpdateTransforms(
@@ -205,4 +226,7 @@ public:
     TransformationMatrix* skeletonDebugTransformData = nullptr;
     UINT skeletonDebugVertexCapacity = 0;
     UINT skeletonDebugVertexCount = 0;
+
+private:
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> initialUploadResources_;
 };

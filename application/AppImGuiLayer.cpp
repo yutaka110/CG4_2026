@@ -87,6 +87,106 @@ void DrawViewportFocusStatusBar(bool& viewportFocusMode) {
     }
     ImGui::End();
 }
+
+void DrawSkinningTimingRow(const char* label, const RuntimeSkinningTimingPathStats& stats) {
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextUnformatted(label);
+    ImGui::TableSetColumnIndex(1);
+    if (!stats.valid) {
+        ImGui::TextUnformatted("-");
+        ImGui::TableSetColumnIndex(2);
+        ImGui::TextUnformatted("-");
+        ImGui::TableSetColumnIndex(3);
+        ImGui::TextUnformatted("-");
+        ImGui::TableSetColumnIndex(4);
+        ImGui::TextUnformatted("-");
+        return;
+    }
+
+    ImGui::Text("%llu", static_cast<unsigned long long>(stats.lastTicks));
+    ImGui::TableSetColumnIndex(2);
+    ImGui::Text("%.1f", stats.averageTicks);
+    ImGui::TableSetColumnIndex(3);
+    ImGui::Text("%llu / %llu",
+        static_cast<unsigned long long>(stats.minTicks),
+        static_cast<unsigned long long>(stats.maxTicks));
+    ImGui::TableSetColumnIndex(4);
+    ImGui::Text("%u", stats.sampleCount);
+}
+
+void DrawSkinningTimingCompactRow(const char* label, const RuntimeSkinningTimingPathStats& stats) {
+    if (!stats.valid) {
+        ImGui::Text("%s: avg - ticks", label);
+        return;
+    }
+
+    ImGui::Text("%s: avg %.1f ticks", label, stats.averageTicks);
+    ImGui::Text("  last %llu  min/max %llu/%llu  n=%u",
+        static_cast<unsigned long long>(stats.lastTicks),
+        static_cast<unsigned long long>(stats.minTicks),
+        static_cast<unsigned long long>(stats.maxTicks),
+        stats.sampleCount);
+}
+
+const RuntimeSkinningTimingPathStats* GetDisplayedSkinningTimingStats(const AppRuntimeState& runtimeState,
+    const char** label) {
+    if (runtimeState.showSkinnedModel) {
+        if (runtimeState.vfx.enableSkinnedSurfaceVfx) {
+            *label = "CS + draw";
+            return &runtimeState.skinningTiming.computeTotal;
+        }
+        *label = "VS draw";
+        return &runtimeState.skinningTiming.vertexShaderTotal;
+    }
+
+    if (runtimeState.vfx.enableSkinnedSurfaceVfx) {
+        *label = "CS surface";
+        return &runtimeState.skinningTiming.computeSurfaceOnly;
+    }
+
+    *label = "none";
+    return nullptr;
+}
+
+void DrawSkinningTimingPanel(const AppRuntimeState& runtimeState) {
+    ImGui::SeparatorText("Skinning GPU Timing");
+    const char* activeLabel = "none";
+    const RuntimeSkinningTimingPathStats* activeStats = GetDisplayedSkinningTimingStats(runtimeState, &activeLabel);
+    if (activeStats && activeStats->valid) {
+        ImGui::Text("Active avg ticks: %.1f (%s, n=%u)",
+            activeStats->averageTicks,
+            activeLabel,
+            activeStats->sampleCount);
+    } else {
+        ImGui::Text("Active avg ticks: - (%s)", activeLabel);
+    }
+    ImGui::Text("CS Surface VFX: %s", runtimeState.vfx.enableSkinnedSurfaceVfx ? "on" : "off");
+    ImGui::Text("Displayed Path: %s",
+        runtimeState.showSkinnedModel
+            ? (runtimeState.vfx.enableSkinnedSurfaceVfx ? "CS skinning + draw" : "VS skinning")
+            : (runtimeState.vfx.enableSkinnedSurfaceVfx ? "CS surface only" : "none"));
+
+    if (ImGui::GetContentRegionAvail().x < 430.0f) {
+        DrawSkinningTimingCompactRow("VS draw", runtimeState.skinningTiming.vertexShaderTotal);
+        DrawSkinningTimingCompactRow("CS + draw", runtimeState.skinningTiming.computeTotal);
+        DrawSkinningTimingCompactRow("CS surface", runtimeState.skinningTiming.computeSurfaceOnly);
+        return;
+    }
+
+    if (ImGui::BeginTable("SkinningTimingTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Path");
+        ImGui::TableSetupColumn("Last");
+        ImGui::TableSetupColumn("Average");
+        ImGui::TableSetupColumn("Min / Max");
+        ImGui::TableSetupColumn("Samples");
+        ImGui::TableHeadersRow();
+        DrawSkinningTimingRow("VS draw", runtimeState.skinningTiming.vertexShaderTotal);
+        DrawSkinningTimingRow("CS + draw", runtimeState.skinningTiming.computeTotal);
+        DrawSkinningTimingRow("CS surface", runtimeState.skinningTiming.computeSurfaceOnly);
+        ImGui::EndTable();
+    }
+}
 } // namespace
 
 bool AppImGuiLayer::Initialize(HWND hwnd,
@@ -200,6 +300,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         ImGui::Separator();
 
         if (ImGui::CollapsingHeader("Runtime Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
+            DrawSkinningTimingPanel(runtimeState);
             DrawVfxRuntimeControlsPanel(
                 VfxRuntimeControlsPanelInput{
                     &runtimeState,
@@ -235,6 +336,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     ImGui::SetNextWindowPos(layout.diagnosticsPos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(layout.diagnosticsSize, ImGuiCond_Always);
     if (ImGui::Begin("VFX Diagnostics", nullptr, editorWindowFlags)) {
+        DrawSkinningTimingPanel(runtimeState);
+        ImGui::Separator();
+
         if (ImGui::BeginTabBar("VfxDiagnosticsTabs")) {
             if (ImGui::BeginTabItem("Effect Assets")) {
                 DrawEffectAssetEditorPanel(

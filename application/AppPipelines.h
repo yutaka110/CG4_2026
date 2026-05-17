@@ -25,6 +25,7 @@ public:
     ID3D12RootSignature* GetCylinderRootSignature() const { return cylinderRootSignature_.Get(); }
     ID3D12RootSignature* GetSkeletonDebugRootSignature() const { return skeletonDebugRootSignature_.Get(); }
     ID3D12RootSignature* GetComputeRootSignature() const { return computeRootSignature_.Get(); }
+    ID3D12RootSignature* GetSkinningComputeRootSignature() const { return skinningComputeRootSignature_.Get(); }
 
     ID3D12PipelineState* GetMainPSO() const { return mainPso_.Get(); }
     ID3D12PipelineState* GetSkinnedPSO() const { return skinnedPso_.Get(); }
@@ -34,6 +35,7 @@ public:
     ID3D12PipelineState* GetSkyboxPSO() const { return skyboxPso_.Get(); }
 
     ID3D12PipelineState* GetComputePSO() const { return computePso_.Get(); }
+    ID3D12PipelineState* GetSkinningComputePSO() const { return skinningComputePso_.Get(); }
     ID3D12RootSignature* GetGpuParticleComputeRootSignature() const { return gpuParticleComputeRootSignature_.Get(); }
     ID3D12RootSignature* GetTrailMeshStreamComputeRootSignature() const { return trailMeshStreamComputeRootSignature_.Get(); }
     ID3D12RootSignature* GetTrailMeshBuildComputeRootSignature() const { return trailMeshBuildComputeRootSignature_.Get(); }
@@ -81,6 +83,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> cylinderRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> skeletonDebugRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> computeRootSignature_;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> skinningComputeRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> gpuParticleComputeRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> trailMeshStreamComputeRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> trailMeshBuildComputeRootSignature_;
@@ -95,6 +98,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> skyboxPso_;
 
     Microsoft::WRL::ComPtr<ID3D12PipelineState> computePso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> skinningComputePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> gpuParticleComputePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> trailMeshStreamComputePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> trailMeshBuildComputePso_;
@@ -137,6 +141,7 @@ private:
     Microsoft::WRL::ComPtr<IDxcBlob> skyboxVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> skyboxPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> cs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> skinningCs_;
     Microsoft::WRL::ComPtr<IDxcBlob> particleVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> particlePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> trailMeshVs_;

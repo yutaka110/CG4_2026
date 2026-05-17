@@ -80,6 +80,7 @@ struct AppVfxRuntimeState {
     bool enableDistortions = true;
     bool enableRings = true;
     bool enableCylinders = true;
+    bool enableSkinnedSurfaceVfx = false;
     bool enableParticleDedicatedResourceProbe = false;
     bool enableParticleDedicatedProbeTelemetry = false;
     bool enableParticleDedicatedAutoFallback = true;

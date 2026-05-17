@@ -113,6 +113,7 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
     const std::wstring shaders[] = {
         L"resources/Object3D.VS.hlsl",
         L"resources/SkinningObject3D.VS.hlsl",
+        L"resources/Skinning.CS.hlsl",
         L"resources/Object3D.PS.hlsl",
         L"resources/Sprite.VS.hlsl",
         L"resources/Sprite.PS.hlsl",
@@ -649,6 +650,59 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     if (FAILED(hr)) return FailHr("CreateRootSignature(Compute)", hr);
 
     // ------------------------------
+    // Skinning Compute RootSignature
+    // t0: input vertices, t1: influences, t2: palette, u0: skinned vertices, b0: dispatch constants
+    // ------------------------------
+    D3D12_DESCRIPTOR_RANGE skinningComputeRanges[4] = {};
+    for (uint32_t i = 0; i < 3; ++i) {
+        skinningComputeRanges[i].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        skinningComputeRanges[i].NumDescriptors = 1;
+        skinningComputeRanges[i].BaseShaderRegister = i;
+        skinningComputeRanges[i].OffsetInDescriptorsFromTableStart = 0;
+    }
+    skinningComputeRanges[3].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    skinningComputeRanges[3].NumDescriptors = 1;
+    skinningComputeRanges[3].BaseShaderRegister = 0;
+    skinningComputeRanges[3].OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_ROOT_PARAMETER skinningComputeParams[5] = {};
+    for (uint32_t i = 0; i < 4; ++i) {
+        skinningComputeParams[i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        skinningComputeParams[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        skinningComputeParams[i].DescriptorTable.NumDescriptorRanges = 1;
+        skinningComputeParams[i].DescriptorTable.pDescriptorRanges = &skinningComputeRanges[i];
+    }
+    skinningComputeParams[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    skinningComputeParams[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    skinningComputeParams[4].Descriptor.ShaderRegister = 0;
+
+    D3D12_ROOT_SIGNATURE_DESC skinningComputeRootDesc{};
+    skinningComputeRootDesc.NumParameters = _countof(skinningComputeParams);
+    skinningComputeRootDesc.pParameters = skinningComputeParams;
+    skinningComputeRootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> skinningComputeSigBlob;
+    ComPtr<ID3DBlob> skinningComputeErrBlob;
+    hr = D3D12SerializeRootSignature(
+        &skinningComputeRootDesc,
+        D3D_ROOT_SIGNATURE_VERSION_1,
+        &skinningComputeSigBlob,
+        &skinningComputeErrBlob);
+    if (FAILED(hr)) {
+        if (skinningComputeErrBlob) {
+            OutputDebugStringA(reinterpret_cast<const char*>(skinningComputeErrBlob->GetBufferPointer()));
+        }
+        return false;
+    }
+
+    hr = device->CreateRootSignature(
+        0,
+        skinningComputeSigBlob->GetBufferPointer(),
+        skinningComputeSigBlob->GetBufferSize(),
+        IID_PPV_ARGS(&skinningComputeRootSignature_));
+    if (FAILED(hr)) return FailHr("CreateRootSignature(SkinningCompute)", hr);
+
+    // ------------------------------
     // GPU Particle Compute RootSignature
     // b0: simulation constants, u0: render particle output, u1: simulation state
     // ------------------------------
@@ -873,6 +927,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     // ------------------------------
     vs_ = Compile_(L"resources/Object3D.VS.hlsl", L"vs_6_0");
     skinnedVs_ = Compile_(L"resources/SkinningObject3D.VS.hlsl", L"vs_6_0");
+    skinningCs_ = Compile_(L"resources/Skinning.CS.hlsl", L"cs_6_0");
     ps_ = Compile_(L"resources/Object3D.PS.hlsl", L"ps_6_0");
     spriteVs_ = Compile_(L"resources/Sprite.VS.hlsl", L"vs_6_0");
     spritePs_ = Compile_(L"resources/Sprite.PS.hlsl", L"ps_6_0");
@@ -915,7 +970,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     debugDepthPreviewPs_ = Compile_(L"resources/DebugDepthPreview.PS.hlsl", L"ps_6_0");
     debugEmissivePreviewPs_ = Compile_(L"resources/DebugEmissivePreview.PS.hlsl", L"ps_6_0");
 
-    if (!vs_ || !skinnedVs_ || !ps_ || !spriteVs_ || !spritePs_ || !skyboxVs_ || !skyboxPs_ || !cs_ || !particleVs_ || !particlePs_ ||
+    if (!vs_ || !skinnedVs_ || !skinningCs_ || !ps_ || !spriteVs_ || !spritePs_ || !skyboxVs_ || !skyboxPs_ || !cs_ || !particleVs_ || !particlePs_ ||
         !trailMeshVs_ || !trailMeshStreamVs_ || !trailMeshPs_ || !distortionSpriteVs_ || !distortionSpritePs_ ||
         !ringVs_ || !ringPs_ || !cylinderVs_ || !cylinderPs_ || !skeletonDebugVs_ || !skeletonDebugPs_ || !gpuParticleCs_ || !trailMeshStreamCs_ || !trailMeshBuildCs_ || !compositeVs_ || !compositePs_ || !bloomExtractPs_ ||
         !bloomDownsamplePs_ || !bloomUpsamplePs_ || !blurHorizontalPs_ || !blurVerticalPs_ ||
@@ -1117,6 +1172,12 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     computePsoDesc.CS = { cs_->GetBufferPointer(), cs_->GetBufferSize() };
     hr = device->CreateComputePipelineState(&computePsoDesc, IID_PPV_ARGS(&computePso_));
     if (FAILED(hr)) return FailHr("CreateComputePipelineState(MotionDetect)", hr);
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC skinningComputeDesc{};
+    skinningComputeDesc.pRootSignature = skinningComputeRootSignature_.Get();
+    skinningComputeDesc.CS = { skinningCs_->GetBufferPointer(), skinningCs_->GetBufferSize() };
+    hr = device->CreateComputePipelineState(&skinningComputeDesc, IID_PPV_ARGS(&skinningComputePso_));
+    if (FAILED(hr)) return FailHr("CreateComputePipelineState(SkinningCompute)", hr);
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC gpuParticleComputeDesc{};
     gpuParticleComputeDesc.pRootSignature = gpuParticleComputeRootSignature_.Get();
@@ -1569,6 +1630,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     const std::wstring shaders[] = {
         L"resources/Object3D.VS.hlsl",
         L"resources/SkinningObject3D.VS.hlsl",
+        L"resources/Skinning.CS.hlsl",
         L"resources/Object3D.PS.hlsl",
         L"resources/Sprite.VS.hlsl",
         L"resources/Sprite.PS.hlsl",
