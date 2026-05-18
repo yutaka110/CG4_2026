@@ -10,6 +10,18 @@ struct EmitterState
     uint pad1;
 };
 
+struct EmitterSpawnRequest
+{
+    uint spawnRequest;
+    uint emitterKey;
+    uint2 pad;
+    float4 tint;
+    float4 scaleAndParams;
+    float4 effectParams;
+    float4 particleShapeParams;
+    float4 emitterParams;
+};
+
 cbuffer PoolConstants : register(b0)
 {
     float4x4 gViewProjection;
@@ -30,6 +42,7 @@ cbuffer PoolConstants : register(b0)
 
 RWByteAddressBuffer gCounters : register(u4);
 RWStructuredBuffer<EmitterState> gEmitterStates : register(u6);
+RWStructuredBuffer<EmitterSpawnRequest> gEmitterSpawnRequests : register(u7);
 
 float HashEmitterSeed(uint emitterKey, uint resetToken, float timelineAge)
 {
@@ -89,7 +102,16 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
     state.lastTimelineAge = gTimelineAge;
     gEmitterStates[emitterIndex] = state;
-    gCounters.Store(8, spawnRequest);
-    gCounters.Store(12, emitterIndex);
     gCounters.Store(16, needsEmitterReset ? 1 : 0);
+
+    EmitterSpawnRequest request;
+    request.spawnRequest = spawnRequest;
+    request.emitterKey = gEmitterKey;
+    request.pad = 0;
+    request.tint = gTint;
+    request.scaleAndParams = gScaleAndParams;
+    request.effectParams = gEffectParams;
+    request.particleShapeParams = gParticleShapeParams;
+    request.emitterParams = gEmitterParams;
+    gEmitterSpawnRequests[emitterIndex] = request;
 }

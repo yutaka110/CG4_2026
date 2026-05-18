@@ -140,6 +140,7 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
         L"resources/ParticlePoolUpdate.CS.hlsl",
         L"resources/ParticleEmitterUpdate.CS.hlsl",
         L"resources/ParticleEmitterReset.CS.hlsl",
+        L"resources/ParticlePoolSpawnPrepare.CS.hlsl",
         L"resources/ParticlePoolSpawn.CS.hlsl",
         L"resources/ParticlePoolArgs.CS.hlsl",
         L"resources/TrailMeshStream.CS.hlsl",
@@ -729,7 +730,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     // ------------------------------
     // GPU Particle Compute RootSignature
     // b0: simulation constants, u0: render particle output, u1: simulation state,
-    // u2: alive list, u3: dead list, u4: pool counters, u5: indirect draw args, u6: emitter state
+    // u2: alive list, u3: dead list, u4: pool counters, u5: indirect draw args, u6: emitter state,
+    // u7: emitter spawn requests, u8: emitter spawn prefix offsets, u9: spawn dispatch args
     // ------------------------------
     D3D12_DESCRIPTOR_RANGE particleOutputUavRange{};
     particleOutputUavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
@@ -773,7 +775,25 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     particleEmitterStateUavRange.BaseShaderRegister = 6;
     particleEmitterStateUavRange.OffsetInDescriptorsFromTableStart = 0;
 
-    D3D12_ROOT_PARAMETER gpuParticleParams[8] = {};
+    D3D12_DESCRIPTOR_RANGE particleEmitterSpawnRequestUavRange{};
+    particleEmitterSpawnRequestUavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    particleEmitterSpawnRequestUavRange.NumDescriptors = 1;
+    particleEmitterSpawnRequestUavRange.BaseShaderRegister = 7;
+    particleEmitterSpawnRequestUavRange.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_DESCRIPTOR_RANGE particleEmitterSpawnOffsetUavRange{};
+    particleEmitterSpawnOffsetUavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    particleEmitterSpawnOffsetUavRange.NumDescriptors = 1;
+    particleEmitterSpawnOffsetUavRange.BaseShaderRegister = 8;
+    particleEmitterSpawnOffsetUavRange.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_DESCRIPTOR_RANGE particleSpawnDispatchArgsUavRange{};
+    particleSpawnDispatchArgsUavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    particleSpawnDispatchArgsUavRange.NumDescriptors = 1;
+    particleSpawnDispatchArgsUavRange.BaseShaderRegister = 9;
+    particleSpawnDispatchArgsUavRange.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_ROOT_PARAMETER gpuParticleParams[11] = {};
     gpuParticleParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     gpuParticleParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     gpuParticleParams[0].Constants.ShaderRegister = 0;
@@ -813,6 +833,21 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     gpuParticleParams[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     gpuParticleParams[7].DescriptorTable.NumDescriptorRanges = 1;
     gpuParticleParams[7].DescriptorTable.pDescriptorRanges = &particleEmitterStateUavRange;
+
+    gpuParticleParams[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    gpuParticleParams[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    gpuParticleParams[8].DescriptorTable.NumDescriptorRanges = 1;
+    gpuParticleParams[8].DescriptorTable.pDescriptorRanges = &particleEmitterSpawnRequestUavRange;
+
+    gpuParticleParams[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    gpuParticleParams[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    gpuParticleParams[9].DescriptorTable.NumDescriptorRanges = 1;
+    gpuParticleParams[9].DescriptorTable.pDescriptorRanges = &particleEmitterSpawnOffsetUavRange;
+
+    gpuParticleParams[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    gpuParticleParams[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    gpuParticleParams[10].DescriptorTable.NumDescriptorRanges = 1;
+    gpuParticleParams[10].DescriptorTable.pDescriptorRanges = &particleSpawnDispatchArgsUavRange;
 
     D3D12_ROOT_SIGNATURE_DESC gpuParticleRootDesc{};
     gpuParticleRootDesc.NumParameters = _countof(gpuParticleParams);
@@ -1034,6 +1069,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     gpuParticlePoolUpdateCs_ = Compile_(L"resources/ParticlePoolUpdate.CS.hlsl", L"cs_6_0");
     gpuParticleEmitterUpdateCs_ = Compile_(L"resources/ParticleEmitterUpdate.CS.hlsl", L"cs_6_0");
     gpuParticleEmitterResetCs_ = Compile_(L"resources/ParticleEmitterReset.CS.hlsl", L"cs_6_0");
+    gpuParticlePoolSpawnPrepareCs_ = Compile_(L"resources/ParticlePoolSpawnPrepare.CS.hlsl", L"cs_6_0");
     gpuParticlePoolSpawnCs_ = Compile_(L"resources/ParticlePoolSpawn.CS.hlsl", L"cs_6_0");
     gpuParticlePoolArgsCs_ = Compile_(L"resources/ParticlePoolArgs.CS.hlsl", L"cs_6_0");
     trailMeshStreamCs_ = Compile_(L"resources/TrailMeshStream.CS.hlsl", L"cs_6_0");
@@ -1063,6 +1099,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         !ringVs_ || !ringPs_ || !cylinderVs_ || !cylinderPs_ || !skeletonDebugVs_ || !skeletonDebugPs_ ||
         !gpuParticleCs_ || !gpuParticleResetCs_ || !gpuParticlePoolResetCs_ || !gpuParticlePoolBeginCs_ ||
         !gpuParticlePoolUpdateCs_ || !gpuParticleEmitterUpdateCs_ || !gpuParticleEmitterResetCs_ ||
+        !gpuParticlePoolSpawnPrepareCs_ ||
         !gpuParticlePoolSpawnCs_ || !gpuParticlePoolArgsCs_ ||
         !trailMeshStreamCs_ || !trailMeshBuildCs_ || !compositeVs_ || !compositePs_ || !bloomExtractPs_ ||
         !bloomDownsamplePs_ || !bloomUpsamplePs_ || !blurHorizontalPs_ || !blurVerticalPs_ ||
@@ -1312,6 +1349,12 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     gpuParticleEmitterResetComputeDesc.CS = { gpuParticleEmitterResetCs_->GetBufferPointer(), gpuParticleEmitterResetCs_->GetBufferSize() };
     hr = device->CreateComputePipelineState(&gpuParticleEmitterResetComputeDesc, IID_PPV_ARGS(&gpuParticleEmitterResetComputePso_));
     if (FAILED(hr)) return FailHr("CreateComputePipelineState(GpuParticleEmitterReset)", hr);
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC gpuParticlePoolSpawnPrepareComputeDesc{};
+    gpuParticlePoolSpawnPrepareComputeDesc.pRootSignature = gpuParticleComputeRootSignature_.Get();
+    gpuParticlePoolSpawnPrepareComputeDesc.CS = { gpuParticlePoolSpawnPrepareCs_->GetBufferPointer(), gpuParticlePoolSpawnPrepareCs_->GetBufferSize() };
+    hr = device->CreateComputePipelineState(&gpuParticlePoolSpawnPrepareComputeDesc, IID_PPV_ARGS(&gpuParticlePoolSpawnPrepareComputePso_));
+    if (FAILED(hr)) return FailHr("CreateComputePipelineState(GpuParticlePoolSpawnPrepare)", hr);
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC gpuParticlePoolSpawnComputeDesc{};
     gpuParticlePoolSpawnComputeDesc.pRootSignature = gpuParticleComputeRootSignature_.Get();
@@ -1797,6 +1840,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         L"resources/ParticlePoolUpdate.CS.hlsl",
         L"resources/ParticleEmitterUpdate.CS.hlsl",
         L"resources/ParticleEmitterReset.CS.hlsl",
+        L"resources/ParticlePoolSpawnPrepare.CS.hlsl",
         L"resources/ParticlePoolSpawn.CS.hlsl",
         L"resources/ParticlePoolArgs.CS.hlsl",
         L"resources/TrailMeshStream.CS.hlsl",

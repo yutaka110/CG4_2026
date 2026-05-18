@@ -31,6 +31,18 @@ struct EmitterState
     uint pad1;
 };
 
+struct EmitterSpawnRequest
+{
+    uint spawnRequest;
+    uint emitterKey;
+    uint2 pad;
+    float4 tint;
+    float4 scaleAndParams;
+    float4 effectParams;
+    float4 particleShapeParams;
+    float4 emitterParams;
+};
+
 cbuffer PoolConstants : register(b0)
 {
     float4x4 gViewProjection;
@@ -55,6 +67,8 @@ RWStructuredBuffer<uint> gAliveList : register(u2);
 RWStructuredBuffer<uint> gDeadList : register(u3);
 RWByteAddressBuffer gCounters : register(u4);
 RWStructuredBuffer<EmitterState> gEmitterStates : register(u6);
+RWStructuredBuffer<EmitterSpawnRequest> gEmitterSpawnRequests : register(u7);
+RWStructuredBuffer<uint> gEmitterSpawnOffsets : register(u8);
 
 float Hash01(uint id, float seed, float salt)
 {
@@ -104,42 +118,74 @@ bool PopDead(out uint particleIndex)
     return false;
 }
 
+static const uint kMaxEmitters = 1024;
+
 [numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
-    uint spawnThread = dispatchThreadId.x;
-    uint spawnRequest = min(gCounters.Load(8), gMaxParticles);
-    if (spawnThread >= spawnRequest)
+    uint globalSpawnIndex = dispatchThreadId.x;
+    uint totalSpawn = gCounters.Load(20);
+    if (globalSpawnIndex >= totalSpawn)
     {
         return;
     }
 
+    uint low = 0;
+    uint high = kMaxEmitters - 1;
+    [unroll]
+    for (uint step = 0; step < 10; ++step)
+    {
+        uint mid = (low + high) >> 1;
+        if (globalSpawnIndex < gEmitterSpawnOffsets[mid])
+        {
+            high = mid;
+        }
+        else
+        {
+            low = mid + 1;
+        }
+    }
+
+    uint emitterIndex = low;
+    uint previousOffset = emitterIndex > 0 ? gEmitterSpawnOffsets[emitterIndex - 1] : 0;
+    uint spawnIndex = globalSpawnIndex - previousOffset;
+    EmitterSpawnRequest request = gEmitterSpawnRequests[emitterIndex];
+    if (request.emitterKey == 0)
+    {
+        return;
+    }
+
+    uint requestEnd = gEmitterSpawnOffsets[emitterIndex];
+    if (globalSpawnIndex >= requestEnd)
+    {
+        return;
+    }
+
+    EmitterState emitter = gEmitterStates[emitterIndex];
     uint particleIndex;
     if (!PopDead(particleIndex) || particleIndex >= gMaxParticles)
     {
         return;
     }
 
-    const uint emitterIndex = gCounters.Load(12);
-    EmitterState emitter = gEmitterStates[emitterIndex];
-    float seed = Hash01(particleIndex + spawnThread + emitter.totalEmitted, gTime + emitter.seed + 1.0f, 19.0f);
-    float lifetime = gEmitterParams.w > 0.0f ? gEmitterParams.w : (2.0f + seed * 3.0f);
-    float scaleMin = min(gParticleShapeParams.z, gParticleShapeParams.w);
-    float scaleMax = max(gParticleShapeParams.z, gParticleShapeParams.w);
+    float seed = Hash01(particleIndex + spawnIndex + emitter.totalEmitted, gTime + emitter.seed + 1.0f, 19.0f);
+    float lifetime = request.emitterParams.w > 0.0f ? request.emitterParams.w : (2.0f + seed * 3.0f);
+    float scaleMin = min(request.particleShapeParams.z, request.particleShapeParams.w);
+    float scaleMax = max(request.particleShapeParams.z, request.particleShapeParams.w);
     float scaleRand = Hash01(particleIndex, gTime + seed, 29.0f);
     float authoredScale = lerp(scaleMin, scaleMax, scaleRand);
     authoredScale = authoredScale > 0.0f ? authoredScale : 1.0f;
 
     ParticleState state;
-    state.position = gEmitterParams.xyz + HashSpawn(particleIndex + spawnThread, gTime, max(gEffectParams.y, 0.0f));
+    state.position = request.emitterParams.xyz + HashSpawn(particleIndex + spawnIndex, gTime, max(request.effectParams.y, 0.0f));
     state.age = 0.0f;
     state.velocity = float3(seed * 0.6f - 0.3f, 0.4f + seed * 0.8f, seed * 0.4f - 0.2f);
     state.lifetime = max(lifetime, 0.001f);
-    state.color = gTint;
+    state.color = request.tint;
     state.scale = float3(0.08f + seed * 0.08f, 0.08f + seed * 0.08f, 1.0f);
     state.seed = seed;
-    state.shape = float4(gParticleShapeParams.y > 0.5f ? seed * 6.2831853f : 0.0f, 0.0f, authoredScale, 1.0f);
-    state.emitterKey = gEmitterKey;
+    state.shape = float4(request.particleShapeParams.y > 0.5f ? seed * 6.2831853f : 0.0f, 0.0f, authoredScale, 1.0f);
+    state.emitterKey = request.emitterKey;
     state.pad = 0;
     gParticleState[particleIndex] = state;
 
@@ -150,11 +196,11 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         gAliveList[aliveSlot] = particleIndex;
     }
 
-    float3 scale = state.scale * float3(gScaleAndParams.x, gScaleAndParams.y * max(state.shape.z, 0.001f), 1.0f) * 0.7f;
+    float3 scale = state.scale * float3(request.scaleAndParams.x, request.scaleAndParams.y * max(state.shape.z, 0.001f), 1.0f) * 0.7f;
     float4x4 world = MakeWorld(state.position, scale, state.shape.x);
     ParticleForGPU output;
     output.World = world;
     output.WVP = mul(world, gViewProjection);
-    output.color = float4(state.color.rgb * gTint.rgb * max(gScaleAndParams.z, 0.01f), gTint.a);
+    output.color = float4(state.color.rgb * request.tint.rgb * max(request.scaleAndParams.z, 0.01f), request.tint.a);
     gParticleOutput[particleIndex] = output;
 }

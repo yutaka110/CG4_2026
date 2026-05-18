@@ -887,6 +887,18 @@ void DrawParticleDedicatedResourceProbePanel(
             input.simulationTelemetry->stateBufferResource,
             static_cast<unsigned long long>(input.simulationTelemetry->stateBufferUav.ptr));
         ImGui::TextColored(
+            input.simulationTelemetry->gpuPoolTelemetryValid
+                ? ImVec4(0.45f, 1.0f, 0.45f, 1.0f)
+                : ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
+            "gpuPoolTelemetry=%s copied=%s totalSpawnRequest=%u spawnThreads=%u indirectDispatchGroups=%u deadListBeforeSpawn=%u deadListShortage=%u",
+            input.simulationTelemetry->gpuPoolTelemetryValid ? "valid" : "waiting",
+            input.simulationTelemetry->gpuPoolTelemetryCopiedThisFrame ? "yes" : "no",
+            input.simulationTelemetry->totalSpawnRequest,
+            input.simulationTelemetry->spawnThreadCount,
+            input.simulationTelemetry->indirectDispatchGroups,
+            input.simulationTelemetry->deadListAvailableBeforeSpawn,
+            input.simulationTelemetry->deadListShortageCount);
+        ImGui::TextColored(
             input.simulationTelemetry->emitterSlotOverflowCount == 0
                 ? ImVec4(0.45f, 1.0f, 0.45f, 1.0f)
                 : ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
