@@ -6,7 +6,9 @@ cbuffer PoolConstants : register(b0)
     uint gMaxParticles;
     uint gSliceOffset;
     uint gSliceCount;
-    float3 gPad;
+    uint gEmitterKey;
+    uint gEmitterResetToken;
+    float gTimelineAge;
     float4 gTint;
     float4 gScaleAndParams;
     float4 gEffectParams;

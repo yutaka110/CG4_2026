@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -16,7 +17,24 @@ struct TrailHistoryPointLayout {
     Vector4 position;
 };
 
-constexpr size_t kParticlePoolCounterBytes = sizeof(uint32_t) * 4;
+constexpr size_t kParticlePoolCounterBytes = sizeof(uint32_t) * 8;
+
+void LogGpuEmitterSlotOverflow(
+    uint32_t emitterKey,
+    uint32_t fallbackSlot,
+    uint32_t capacity,
+    uint64_t overflowTotal) {
+    char message[256]{};
+    std::snprintf(
+        message,
+        sizeof(message),
+        "[AppGpuParticleSystem] GPU emitter slot overflow: key=%u fallbackSlot=%u capacity=%u overflowTotal=%llu\n",
+        emitterKey,
+        fallbackSlot,
+        capacity,
+        static_cast<unsigned long long>(overflowTotal));
+    OutputDebugStringA(message);
+}
 
 Microsoft::WRL::ComPtr<ID3D12Resource> CreateDefaultBuffer(
     ID3D12Device* device,
@@ -176,6 +194,7 @@ std::vector<AppGpuParticleSystem::ParticleStateSample> BuildInitialParticleState
         initial[i].scale = {0.08f + seed * 0.08f, 0.08f + seed * 0.08f, 1.0f};
         initial[i].seed = seed;
         initial[i].shape = {};
+        initial[i].emitterKey = 0;
     }
     return initial;
 }
@@ -215,6 +234,89 @@ size_t AppGpuParticleSystem::ParticleRenderBufferBytes(uint32_t maxParticles) {
 
 size_t AppGpuParticleSystem::ParticleStateBytes(uint32_t maxParticles) {
     return sizeof(ParticleStateSample) * maxParticles;
+}
+
+void AppGpuParticleSystem::ResetGpuManagedEmitterAllocator() {
+    gpuManagedEmitterAllocatorEpoch_ = 0;
+    gpuManagedEmitterSlotKeys_.fill(0);
+    gpuManagedEmitterSlotTouched_.fill(0);
+    gpuManagedEmitterSlotByKey_.clear();
+    gpuManagedEmitterOverflowThisFrame_ = 0;
+    gpuManagedEmitterOverflowTotal_ = 0;
+}
+
+uint32_t AppGpuParticleSystem::CountGpuManagedActiveEmitterSlots() const {
+    uint32_t activeSlots = 0;
+    for (uint64_t touchedEpoch : gpuManagedEmitterSlotTouched_) {
+        if (touchedEpoch == gpuManagedEmitterAllocatorEpoch_) {
+            ++activeSlots;
+        }
+    }
+    return activeSlots;
+}
+
+uint32_t AppGpuParticleSystem::ResolveGpuManagedEmitterSlot(
+    uint32_t emitterKey,
+    uint32_t fallbackSlot,
+    bool beginFrame) {
+    if (beginFrame) {
+        ++gpuManagedEmitterAllocatorEpoch_;
+        gpuManagedEmitterOverflowThisFrame_ = 0;
+        if (gpuManagedEmitterAllocatorEpoch_ == 0) {
+            ResetGpuManagedEmitterAllocator();
+            gpuManagedEmitterAllocatorEpoch_ = 1;
+        }
+    }
+
+    const uint32_t key = emitterKey != 0 ? emitterKey : fallbackSlot + 1;
+    const auto existing = gpuManagedEmitterSlotByKey_.find(key);
+    if (existing != gpuManagedEmitterSlotByKey_.end() &&
+        existing->second < kMaxGpuParticleEmitters &&
+        gpuManagedEmitterSlotKeys_[existing->second] == key) {
+        gpuManagedEmitterSlotTouched_[existing->second] = gpuManagedEmitterAllocatorEpoch_;
+        return existing->second;
+    }
+
+    uint32_t selectedSlot = kMaxGpuParticleEmitters;
+    for (uint32_t slot = 0; slot < kMaxGpuParticleEmitters; ++slot) {
+        if (gpuManagedEmitterSlotKeys_[slot] == 0) {
+            selectedSlot = slot;
+            break;
+        }
+    }
+
+    if (selectedSlot == kMaxGpuParticleEmitters) {
+        uint64_t oldestTouch = gpuManagedEmitterAllocatorEpoch_;
+        for (uint32_t slot = 0; slot < kMaxGpuParticleEmitters; ++slot) {
+            if (gpuManagedEmitterSlotTouched_[slot] != gpuManagedEmitterAllocatorEpoch_ &&
+                gpuManagedEmitterSlotTouched_[slot] <= oldestTouch) {
+                oldestTouch = gpuManagedEmitterSlotTouched_[slot];
+                selectedSlot = slot;
+            }
+        }
+    }
+
+    if (selectedSlot == kMaxGpuParticleEmitters) {
+        if (gpuManagedEmitterOverflowThisFrame_ == 0) {
+            LogGpuEmitterSlotOverflow(
+                key,
+                fallbackSlot,
+                kMaxGpuParticleEmitters,
+                gpuManagedEmitterOverflowTotal_ + 1);
+        }
+        ++gpuManagedEmitterOverflowThisFrame_;
+        ++gpuManagedEmitterOverflowTotal_;
+        selectedSlot = fallbackSlot % kMaxGpuParticleEmitters;
+    }
+
+    const uint32_t previousKey = gpuManagedEmitterSlotKeys_[selectedSlot];
+    if (previousKey != 0) {
+        gpuManagedEmitterSlotByKey_.erase(previousKey);
+    }
+    gpuManagedEmitterSlotKeys_[selectedSlot] = key;
+    gpuManagedEmitterSlotTouched_[selectedSlot] = gpuManagedEmitterAllocatorEpoch_;
+    gpuManagedEmitterSlotByKey_[key] = selectedSlot;
+    return selectedSlot;
 }
 
 size_t AppGpuParticleSystem::TrailControlPointBufferBytes(uint32_t maxSegments) {
@@ -458,12 +560,14 @@ bool AppGpuParticleSystem::CreateParticlePoolViews(ID3D12Device* device) {
         particleAliveList_ == nullptr ||
         particleDeadList_ == nullptr ||
         particleCounters_ == nullptr ||
+        particleEmitterStates_ == nullptr ||
         indirectArgs_ == nullptr ||
         !particleAliveListSrv_.IsValid() ||
         !particleAliveListUav_.IsValid() ||
         !particleDeadListUav_.IsValid() ||
         !particleCountersUav_.IsValid() ||
-        !particleIndirectArgsUav_.IsValid()) {
+        !particleIndirectArgsUav_.IsValid() ||
+        !particleEmitterStatesUav_.IsValid()) {
         return false;
     }
 
@@ -496,6 +600,13 @@ bool AppGpuParticleSystem::CreateParticlePoolViews(ID3D12Device* device) {
     argsUav.Buffer.NumElements = 1;
     argsUav.Buffer.StructureByteStride = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
     device->CreateUnorderedAccessView(indirectArgs_.Get(), nullptr, &argsUav, particleIndirectArgsUav_.cpu);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC emitterUav{};
+    emitterUav.Format = DXGI_FORMAT_UNKNOWN;
+    emitterUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    emitterUav.Buffer.NumElements = kMaxGpuParticleEmitters;
+    emitterUav.Buffer.StructureByteStride = sizeof(ParticleEmitterStateSample);
+    device->CreateUnorderedAccessView(particleEmitterStates_.Get(), nullptr, &emitterUav, particleEmitterStatesUav_.cpu);
     return true;
 }
 
@@ -553,6 +664,10 @@ bool AppGpuParticleSystem::Initialize(
         device,
         kParticlePoolCounterBytes,
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    particleEmitterStates_ = CreateDefaultBuffer(
+        device,
+        sizeof(ParticleEmitterStateSample) * kMaxGpuParticleEmitters,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     uploadState_ = CreateUploadBuffer(device, stateBytes);
     indirectArgs_ = CreateDefaultBuffer(
         device,
@@ -599,6 +714,7 @@ bool AppGpuParticleSystem::Initialize(
         particleAliveList_ == nullptr ||
         particleDeadList_ == nullptr ||
         particleCounters_ == nullptr ||
+        particleEmitterStates_ == nullptr ||
         uploadState_ == nullptr ||
         indirectArgs_ == nullptr ||
         uploadIndirectArgs_ == nullptr ||
@@ -683,6 +799,7 @@ bool AppGpuParticleSystem::Initialize(
     particleDeadListUav_ = heaps.srv.Allocate();
     particleCountersUav_ = heaps.srv.Allocate();
     particleIndirectArgsUav_ = heaps.srv.Allocate();
+    particleEmitterStatesUav_ = heaps.srv.Allocate();
     dedicatedStateUav_ = heaps.srv.Allocate();
     dedicatedDistortionStateUav_ = heaps.srv.Allocate();
     dedicatedBeamStateUav_ = heaps.srv.Allocate();
@@ -796,7 +913,9 @@ bool AppGpuParticleSystem::ResetParticlePool(
         uint32_t maxParticles;
         uint32_t sliceOffset;
         uint32_t sliceCount;
-        float pad[3];
+        uint32_t emitterKey;
+        uint32_t emitterResetToken;
+        float timelineAge;
         Vector4 tint;
         Vector4 scaleAndParams;
         Vector4 effectParams;
@@ -853,11 +972,13 @@ bool AppGpuParticleSystem::ResetGpuManagedParticlePool(
         particleAliveList_ == nullptr ||
         particleDeadList_ == nullptr ||
         particleCounters_ == nullptr ||
+        particleEmitterStates_ == nullptr ||
         particleUav_.gpu.ptr == 0 ||
         stateUav_.gpu.ptr == 0 ||
         particleAliveListUav_.gpu.ptr == 0 ||
         particleDeadListUav_.gpu.ptr == 0 ||
         particleCountersUav_.gpu.ptr == 0 ||
+        particleEmitterStatesUav_.gpu.ptr == 0 ||
         maxParticles_ == 0) {
         return false;
     }
@@ -869,7 +990,9 @@ bool AppGpuParticleSystem::ResetGpuManagedParticlePool(
         uint32_t maxParticles;
         uint32_t sliceOffset;
         uint32_t sliceCount;
-        float pad[3];
+        uint32_t emitterKey;
+        uint32_t emitterResetToken;
+        float timelineAge;
         Vector4 tint;
         Vector4 scaleAndParams;
         Vector4 effectParams;
@@ -887,6 +1010,7 @@ bool AppGpuParticleSystem::ResetGpuManagedParticlePool(
     TransitionIfNeeded(commandList, particleAliveList_.Get(), particleAliveListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     TransitionIfNeeded(commandList, particleDeadList_.Get(), particleDeadListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     TransitionIfNeeded(commandList, particleCounters_.Get(), particleCountersState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleEmitterStates_.Get(), particleEmitterStatesState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap};
     commandList->SetDescriptorHeaps(1, descriptorHeaps);
@@ -898,6 +1022,7 @@ bool AppGpuParticleSystem::ResetGpuManagedParticlePool(
     commandList->SetComputeRootDescriptorTable(3, particleAliveListUav_.gpu);
     commandList->SetComputeRootDescriptorTable(4, particleDeadListUav_.gpu);
     commandList->SetComputeRootDescriptorTable(5, particleCountersUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(7, particleEmitterStatesUav_.gpu);
     commandList->Dispatch((maxParticles_ + 255) / 256, 1, 1);
     D3D12_RESOURCE_BARRIER barriers[] = {
         MakeUavBarrier(particleOutput_.Get()),
@@ -905,8 +1030,10 @@ bool AppGpuParticleSystem::ResetGpuManagedParticlePool(
         MakeUavBarrier(particleAliveList_.Get()),
         MakeUavBarrier(particleDeadList_.Get()),
         MakeUavBarrier(particleCounters_.Get()),
+        MakeUavBarrier(particleEmitterStates_.Get()),
     };
     commandList->ResourceBarrier(_countof(barriers), barriers);
+    ResetGpuManagedEmitterAllocator();
     particlePoolInitialized_ = true;
     return true;
 }
@@ -917,6 +1044,8 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
     ID3D12RootSignature* rootSignature,
     ID3D12PipelineState* beginPipelineState,
     ID3D12PipelineState* updatePipelineState,
+    ID3D12PipelineState* emitterUpdatePipelineState,
+    ID3D12PipelineState* emitterResetPipelineState,
     ID3D12PipelineState* spawnPipelineState,
     ID3D12PipelineState* argsPipelineState,
     const Matrix4x4& viewProjection,
@@ -931,11 +1060,16 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
     float uvScrollSpeed,
     float particleLifetime,
     float spawnCount,
+    float spawnFrequency,
     float randomRotation,
     float scaleYMin,
     float scaleYMax,
     Vector3 emitterPosition,
-    bool updateExistingParticles) {
+    bool updateExistingParticles,
+    uint32_t emitterIndex,
+    uint32_t emitterKey,
+    uint32_t emitterResetToken,
+    float emitterTimelineAge) {
     if (!initialized_ ||
         !particlePoolInitialized_ ||
         commandList == nullptr ||
@@ -943,6 +1077,8 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
         rootSignature == nullptr ||
         beginPipelineState == nullptr ||
         updatePipelineState == nullptr ||
+        emitterUpdatePipelineState == nullptr ||
+        emitterResetPipelineState == nullptr ||
         spawnPipelineState == nullptr ||
         argsPipelineState == nullptr ||
         particleOutput_ == nullptr ||
@@ -950,8 +1086,10 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
         particleAliveList_ == nullptr ||
         particleDeadList_ == nullptr ||
         particleCounters_ == nullptr ||
+        particleEmitterStates_ == nullptr ||
         indirectArgs_ == nullptr ||
-        particleIndirectArgsUav_.gpu.ptr == 0) {
+        particleIndirectArgsUav_.gpu.ptr == 0 ||
+        particleEmitterStatesUav_.gpu.ptr == 0) {
         return;
     }
 
@@ -962,21 +1100,30 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
         uint32_t maxParticles;
         uint32_t sliceOffset;
         uint32_t sliceCount;
-        float pad[3];
+        uint32_t emitterKey;
+        uint32_t emitterResetToken;
+        float timelineAge;
         Vector4 tint;
         Vector4 scaleAndParams;
         Vector4 effectParams;
         Vector4 particleShapeParams;
         Vector4 emitterParams;
     } constants{};
+    const uint32_t requestedEmitterKey = emitterKey != 0 ? emitterKey : emitterIndex + 1;
+    const uint32_t resolvedEmitterSlot =
+        ResolveGpuManagedEmitterSlot(requestedEmitterKey, emitterIndex, updateExistingParticles);
     constants.viewProjection = viewProjection;
     constants.deltaTime = deltaTime;
     constants.time = time;
     constants.maxParticles = maxParticles_;
+    constants.sliceOffset = resolvedEmitterSlot;
     constants.sliceCount = maxParticles_;
+    constants.emitterKey = requestedEmitterKey;
+    constants.emitterResetToken = emitterResetToken;
+    constants.timelineAge = (std::max)(0.0f, emitterTimelineAge);
     constants.tint = tint;
     constants.scaleAndParams = {scale.x, scale.y, emissive, turbulence};
-    constants.effectParams = {pulseSpeed, spawnRadius, uvScrollSpeed, 0.0f};
+    constants.effectParams = {pulseSpeed, spawnRadius, uvScrollSpeed, spawnFrequency};
     constants.particleShapeParams = {spawnCount, randomRotation, scaleYMin, scaleYMax};
     constants.emitterParams = {emitterPosition.x, emitterPosition.y, emitterPosition.z, particleLifetime};
 
@@ -985,6 +1132,7 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
     TransitionIfNeeded(commandList, particleAliveList_.Get(), particleAliveListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     TransitionIfNeeded(commandList, particleDeadList_.Get(), particleDeadListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     TransitionIfNeeded(commandList, particleCounters_.Get(), particleCountersState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleEmitterStates_.Get(), particleEmitterStatesState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     TransitionIfNeeded(commandList, indirectArgs_.Get(), indirectArgsState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap};
@@ -997,6 +1145,7 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
     commandList->SetComputeRootDescriptorTable(4, particleDeadListUav_.gpu);
     commandList->SetComputeRootDescriptorTable(5, particleCountersUav_.gpu);
     commandList->SetComputeRootDescriptorTable(6, particleIndirectArgsUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(7, particleEmitterStatesUav_.gpu);
 
     const uint32_t dispatchGroupCount = (maxParticles_ + 255) / 256;
     D3D12_RESOURCE_BARRIER updateBarriers[] = {
@@ -1005,6 +1154,7 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
         MakeUavBarrier(particleAliveList_.Get()),
         MakeUavBarrier(particleDeadList_.Get()),
         MakeUavBarrier(particleCounters_.Get()),
+        MakeUavBarrier(particleEmitterStates_.Get()),
     };
     if (updateExistingParticles) {
         commandList->SetPipelineState(beginPipelineState);
@@ -1017,12 +1167,21 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
         commandList->ResourceBarrier(_countof(updateBarriers), updateBarriers);
     }
 
-    const uint32_t spawnRequest = spawnCount > 0.0f
-        ? static_cast<uint32_t>((std::min)(static_cast<float>(maxParticles_), (std::max)(1.0f, std::round(spawnCount))))
+    commandList->SetPipelineState(emitterUpdatePipelineState);
+    commandList->Dispatch(1, 1, 1);
+    commandList->ResourceBarrier(_countof(updateBarriers), updateBarriers);
+
+    commandList->SetPipelineState(emitterResetPipelineState);
+    commandList->Dispatch(dispatchGroupCount, 1, 1);
+    commandList->ResourceBarrier(_countof(updateBarriers), updateBarriers);
+
+    const float spawnDispatchMultiplier = spawnFrequency > 0.0f ? 16.0f : 1.0f;
+    const uint32_t maxSpawnDispatchCount = spawnCount > 0.0f
+        ? static_cast<uint32_t>((std::min)(static_cast<float>(maxParticles_), (std::max)(1.0f, std::ceil(spawnCount * spawnDispatchMultiplier))))
         : 0u;
-    if (spawnRequest > 0) {
+    if (maxSpawnDispatchCount > 0) {
         commandList->SetPipelineState(spawnPipelineState);
-        commandList->Dispatch((spawnRequest + 255) / 256, 1, 1);
+        commandList->Dispatch((maxSpawnDispatchCount + 255) / 256, 1, 1);
         commandList->ResourceBarrier(_countof(updateBarriers), updateBarriers);
     }
 
@@ -1040,6 +1199,10 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
     particleSimulationTelemetry_.stateBufferUav = stateUav_.gpu;
     particleSimulationTelemetry_.dispatchGroupCount = dispatchGroupCount;
     particleSimulationTelemetry_.maxParticles = maxParticles_;
+    particleSimulationTelemetry_.activeEmitterSlots = CountGpuManagedActiveEmitterSlots();
+    particleSimulationTelemetry_.emitterSlotCapacity = kMaxGpuParticleEmitters;
+    particleSimulationTelemetry_.emitterSlotOverflowCount = gpuManagedEmitterOverflowThisFrame_;
+    particleSimulationTelemetry_.emitterSlotOverflowTotal = gpuManagedEmitterOverflowTotal_;
 }
 
 void AppGpuParticleSystem::DeclareGraphBuffers(ge3::graphics::RenderGraph& renderGraph) const {
@@ -1711,7 +1874,9 @@ void AppGpuParticleSystem::Simulate(
         uint32_t maxParticles;
         uint32_t sliceOffset;
         uint32_t sliceCount;
-        float pad[3];
+        uint32_t emitterKey;
+        uint32_t emitterResetToken;
+        float timelineAge;
         Vector4 tint;
         Vector4 scaleAndParams;
         Vector4 effectParams;

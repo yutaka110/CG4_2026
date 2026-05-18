@@ -201,6 +201,7 @@ struct EffectParticleSettings {
     float pulseSpeed = 5.0f;
     float spawnRadius = 4.0f;
     float spawnCount = 0.0f;
+    float spawnFrequency = 0.0f;
     float randomRotation = 0.0f;
     float scaleYMin = 1.0f;
     float scaleYMax = 1.0f;

@@ -8,6 +8,8 @@ struct ParticleState
     float3 scale;
     float seed;
     float4 shape;
+    uint emitterKey;
+    uint3 pad;
 };
 
 cbuffer ResetConstants : register(b0)
@@ -18,7 +20,9 @@ cbuffer ResetConstants : register(b0)
     uint gMaxParticles;
     uint gSliceOffset;
     uint gSliceCount;
-    float3 gPad;
+    uint gEmitterKey;
+    uint gEmitterResetToken;
+    float gTimelineAge;
     float4 gTint;
     float4 gScaleAndParams;
     float4 gEffectParams;
@@ -73,6 +77,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     state.scale = float3(0.08f + seed * 0.08f, 0.08f + seed * 0.08f, 1.0f);
     state.seed = seed;
     state.shape = float4(0.0f, 0.0f, authoredScale, 0.0f);
+    state.emitterKey = gEmitterKey;
+    state.pad = 0;
 
     gParticleState[particleIndex] = state;
 }

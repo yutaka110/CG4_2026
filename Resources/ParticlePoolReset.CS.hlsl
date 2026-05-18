@@ -15,6 +15,20 @@ struct ParticleState
     float3 scale;
     float seed;
     float4 shape;
+    uint emitterKey;
+    uint3 pad;
+};
+
+struct EmitterState
+{
+    float frequencyTime;
+    float seed;
+    uint totalEmitted;
+    uint resetToken;
+    float lastTimelineAge;
+    float pad0;
+    uint emitterKey;
+    uint pad1;
 };
 
 cbuffer PoolConstants : register(b0)
@@ -25,7 +39,9 @@ cbuffer PoolConstants : register(b0)
     uint gMaxParticles;
     uint gSliceOffset;
     uint gSliceCount;
-    float3 gPad;
+    uint gEmitterKey;
+    uint gEmitterResetToken;
+    float gTimelineAge;
     float4 gTint;
     float4 gScaleAndParams;
     float4 gEffectParams;
@@ -38,6 +54,7 @@ RWStructuredBuffer<ParticleState> gParticleState : register(u1);
 RWStructuredBuffer<uint> gAliveList : register(u2);
 RWStructuredBuffer<uint> gDeadList : register(u3);
 RWByteAddressBuffer gCounters : register(u4);
+RWStructuredBuffer<EmitterState> gEmitterStates : register(u6);
 
 float4x4 MakeWorld(float3 position, float3 scale, float rotationZ)
 {
@@ -60,6 +77,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         gCounters.Store(4, gMaxParticles);
         gCounters.Store(8, 0);
         gCounters.Store(12, 0);
+        gCounters.Store(16, 0);
     }
     if (id >= gMaxParticles)
     {
@@ -75,9 +93,24 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     state.scale = 0.0f;
     state.seed = 0.0f;
     state.shape = 0.0f;
+    state.emitterKey = 0;
+    state.pad = 0;
     gParticleState[id] = state;
     gAliveList[id] = 0;
     gDeadList[id] = gMaxParticles - 1 - id;
+    if (id < 1024)
+    {
+        EmitterState emitter;
+        emitter.frequencyTime = 0.0f;
+        emitter.seed = frac((float)id * 0.754877666f + 0.12345f);
+        emitter.totalEmitted = 0;
+        emitter.resetToken = 0;
+        emitter.lastTimelineAge = 0.0f;
+        emitter.pad0 = 0.0f;
+        emitter.emitterKey = 0;
+        emitter.pad1 = 0;
+        gEmitterStates[id] = emitter;
+    }
 
     ParticleForGPU output;
     output.World = MakeWorld(float3(0.0f, 0.0f, 0.0f), float3(0.0f, 0.0f, 0.0f), 0.0f);
