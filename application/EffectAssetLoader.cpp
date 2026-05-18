@@ -124,6 +124,8 @@ bool ApplyParticleSettingsKey(
         settings.spawnRadius = ToFloat(value, settings.spawnRadius);
     } else if (key == "spawnCount" || key == "activeCount") {
         settings.spawnCount = ToFloat(value, settings.spawnCount);
+    } else if (key == "spawnFrequency" || key == "frequency" || key == "emitFrequency") {
+        settings.spawnFrequency = ToFloat(value, settings.spawnFrequency);
     } else if (key == "randomRotation" || key == "rotationRandom") {
         settings.randomRotation = ToFloat(value, settings.randomRotation);
     } else if (key == "scaleYMin" || key == "randomScaleYMin") {
@@ -354,6 +356,8 @@ bool ApplyLegacyAssetSettingsKey(
         asset.defaultParticle.spawnRadius = ToFloat(value, asset.defaultParticle.spawnRadius);
     } else if (key == "spawnCount" || key == "activeCount") {
         asset.defaultParticle.spawnCount = ToFloat(value, asset.defaultParticle.spawnCount);
+    } else if (key == "spawnFrequency" || key == "frequency" || key == "emitFrequency") {
+        asset.defaultParticle.spawnFrequency = ToFloat(value, asset.defaultParticle.spawnFrequency);
     } else if (key == "randomRotation" || key == "rotationRandom") {
         asset.defaultParticle.randomRotation = ToFloat(value, asset.defaultParticle.randomRotation);
     } else if (key == "scaleYMin" || key == "randomScaleYMin") {

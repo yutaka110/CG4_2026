@@ -29,6 +29,7 @@ bool IsAnyResourceName(const char* actual, const char* expected, const char* pro
 bool MatchesResourceName(const char* lhs, const char* rhs) {
     return std::string_view(lhs != nullptr ? lhs : "") == std::string_view(rhs != nullptr ? rhs : "");
 }
+
 } // namespace
 
 ParticleRendererOperationalStatus EvaluateParticleRendererOperationalStatus(
@@ -204,6 +205,33 @@ ParticleRendererOperationalStatus EvaluateParticleRendererOperationalStatus(
 }
 } // namespace vfx
 
+namespace {
+uint32_t HashGpuEmitterKey(uint32_t instanceId, uint32_t componentId, uint32_t renderQueue, uint32_t fallbackIndex) {
+    uint32_t key = 2166136261u;
+    key = (key ^ (instanceId != 0 ? instanceId : 0x9e3779b9u + fallbackIndex)) * 16777619u;
+    key = (key ^ (componentId != 0 ? componentId : 0x85ebca6bu)) * 16777619u;
+    key = (key ^ renderQueue) * 16777619u;
+    key &= 0x00ffffffu;
+    return key != 0 ? key : 1u;
+}
+
+uint32_t ResolveGpuEmitterKey(const ParticleRenderInput& input, uint32_t fallbackIndex) {
+    const uint32_t instanceId = input.primary.instance != nullptr ? input.primary.instance->id : 0u;
+    const uint32_t componentId = input.primary.componentCommon != nullptr ? input.primary.componentCommon->id : 0u;
+    return HashGpuEmitterKey(instanceId, componentId, input.primary.renderQueue, fallbackIndex);
+}
+
+float ResolveGpuEmitterTimelineAge(const ParticleRenderInput& input, float fallbackAge) {
+    if (input.primary.componentInstance != nullptr) {
+        return input.primary.componentInstance->age;
+    }
+    if (input.primary.instance != nullptr) {
+        return input.primary.instance->age;
+    }
+    return fallbackAge;
+}
+} // namespace
+
 void ParticleRenderer::RegisterPasses(
     const AppFrameGraphBuildContext& ctx,
     const vfx::VfxTypedResourceSet& resources) const {
@@ -274,6 +302,8 @@ void ParticleRenderer::Simulate(
         std::string_view(stateBufferResource) == "ParticleState" &&
         context.appPipelines->GetGpuParticlePoolBeginComputePSO() != nullptr &&
         context.appPipelines->GetGpuParticlePoolUpdateComputePSO() != nullptr &&
+        context.appPipelines->GetGpuParticleEmitterUpdateComputePSO() != nullptr &&
+        context.appPipelines->GetGpuParticleEmitterResetComputePSO() != nullptr &&
         context.appPipelines->GetGpuParticlePoolSpawnComputePSO() != nullptr &&
         context.appPipelines->GetGpuParticlePoolArgsComputePSO() != nullptr &&
         context.gpuParticleSystem->IsGpuManagedParticlePoolInitialized();
@@ -367,7 +397,7 @@ void ParticleRenderer::Simulate(
         return sliceCount;
     };
 
-    auto simulateGpuManaged = [&](const ParticleRenderInput& input, bool updateExistingParticles) -> uint32_t {
+    auto simulateGpuManaged = [&](const ParticleRenderInput& input, bool updateExistingParticles, uint32_t fallbackEmitterIndex) -> uint32_t {
         Vector4 tint = {1.0f, 1.0f, 1.0f, 1.0f};
         Vector3 scale = {1.0f, 1.0f, 1.0f};
         float emissive = 1.0f;
@@ -377,6 +407,7 @@ void ParticleRenderer::Simulate(
         float uvScrollSpeed = 0.0f;
         float particleLifetime = 0.0f;
         float spawnCount = 0.0f;
+        float spawnFrequency = 0.0f;
         float randomRotation = 0.0f;
         float scaleYMin = 1.0f;
         float scaleYMax = 1.0f;
@@ -403,6 +434,7 @@ void ParticleRenderer::Simulate(
             spawnRadius = settings.spawnRadius;
             uvScrollSpeed = settings.uvScrollSpeed;
             spawnCount = settings.spawnCount;
+            spawnFrequency = settings.spawnFrequency;
             randomRotation = settings.randomRotation;
             scaleYMin = settings.scaleYMin;
             scaleYMax = settings.scaleYMax;
@@ -416,6 +448,7 @@ void ParticleRenderer::Simulate(
             spawnRadius = input.fallbackSettings->spawnRadius;
             uvScrollSpeed = input.fallbackSettings->uvScrollSpeed;
             spawnCount = input.fallbackSettings->spawnCount;
+            spawnFrequency = input.fallbackSettings->spawnFrequency;
             randomRotation = input.fallbackSettings->randomRotation;
             scaleYMin = input.fallbackSettings->scaleYMin;
             scaleYMax = input.fallbackSettings->scaleYMax;
@@ -424,16 +457,22 @@ void ParticleRenderer::Simulate(
         const uint32_t requestedCount = spawnCount > 0.0f
             ? static_cast<uint32_t>((std::max)(1.0f, std::round(spawnCount)))
             : 0u;
+        const uint32_t emitterKey = ResolveGpuEmitterKey(input, fallbackEmitterIndex);
+        const uint32_t emitterResetToken = emitterKey;
+        const float emitterTimelineAge = ResolveGpuEmitterTimelineAge(input, context.beamTime);
+        const float deltaTime = context.frameState != nullptr ? context.frameState->deltaTime : 0.016f;
         context.gpuParticleSystem->SimulateGpuManagedParticles(
             commandList,
             context.srvDescriptorHeap,
             context.appPipelines->GetGpuParticleComputeRootSignature(),
             context.appPipelines->GetGpuParticlePoolBeginComputePSO(),
             context.appPipelines->GetGpuParticlePoolUpdateComputePSO(),
+            context.appPipelines->GetGpuParticleEmitterUpdateComputePSO(),
+            context.appPipelines->GetGpuParticleEmitterResetComputePSO(),
             context.appPipelines->GetGpuParticlePoolSpawnComputePSO(),
             context.appPipelines->GetGpuParticlePoolArgsComputePSO(),
             context.frameState->viewProjectionMatrix,
-            0.016f,
+            deltaTime,
             context.beamTime,
             tint,
             scale,
@@ -444,11 +483,16 @@ void ParticleRenderer::Simulate(
             uvScrollSpeed,
             particleLifetime,
             static_cast<float>(requestedCount),
+            spawnFrequency,
             randomRotation,
             scaleYMin,
             scaleYMax,
             emitterPosition,
-            updateExistingParticles);
+            updateExistingParticles,
+            fallbackEmitterIndex,
+            emitterKey,
+            emitterResetToken,
+            emitterTimelineAge);
         return requestedCount;
     };
 
@@ -456,6 +500,7 @@ void ParticleRenderer::Simulate(
     if (useGpuManagedPool) {
         if (!queue.empty()) {
             bool updateExistingParticles = true;
+            uint32_t emitterIndex = 0;
             for (const ParticleRenderItem& item : queue) {
                 ParticleRenderInput input{};
                 input.primary = {
@@ -472,14 +517,15 @@ void ParticleRenderer::Simulate(
                 input.settings = item.settings;
                 input.fallbackCommon = fallback.common;
                 input.fallbackSettings = fallback.settings;
-                simulateGpuManaged(input, updateExistingParticles);
+                simulateGpuManaged(input, updateExistingParticles, emitterIndex);
                 updateExistingParticles = false;
+                ++emitterIndex;
             }
         } else {
             ParticleRenderInput input{};
             input.fallbackCommon = fallback.common;
             input.fallbackSettings = fallback.settings;
-            simulateGpuManaged(input, true);
+            simulateGpuManaged(input, true, 0);
         }
         instanceCount = maxParticles;
     } else if (!queue.empty()) {

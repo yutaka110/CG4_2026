@@ -15,6 +15,20 @@ struct ParticleState
     float3 scale;
     float seed;
     float4 shape;
+    uint emitterKey;
+    uint3 pad;
+};
+
+struct EmitterState
+{
+    float frequencyTime;
+    float seed;
+    uint totalEmitted;
+    uint resetToken;
+    float lastTimelineAge;
+    float pad0;
+    uint emitterKey;
+    uint pad1;
 };
 
 cbuffer PoolConstants : register(b0)
@@ -25,7 +39,9 @@ cbuffer PoolConstants : register(b0)
     uint gMaxParticles;
     uint gSliceOffset;
     uint gSliceCount;
-    float3 gPad;
+    uint gEmitterKey;
+    uint gEmitterResetToken;
+    float gTimelineAge;
     float4 gTint;
     float4 gScaleAndParams;
     float4 gEffectParams;
@@ -38,6 +54,7 @@ RWStructuredBuffer<ParticleState> gParticleState : register(u1);
 RWStructuredBuffer<uint> gAliveList : register(u2);
 RWStructuredBuffer<uint> gDeadList : register(u3);
 RWByteAddressBuffer gCounters : register(u4);
+RWStructuredBuffer<EmitterState> gEmitterStates : register(u6);
 
 float Hash01(uint id, float seed, float salt)
 {
@@ -91,9 +108,7 @@ bool PopDead(out uint particleIndex)
 void main(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
     uint spawnThread = dispatchThreadId.x;
-    uint spawnRequest = gParticleShapeParams.x > 0.0f
-        ? min((uint)round(gParticleShapeParams.x), gMaxParticles)
-        : 0;
+    uint spawnRequest = min(gCounters.Load(8), gMaxParticles);
     if (spawnThread >= spawnRequest)
     {
         return;
@@ -105,7 +120,9 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
-    float seed = Hash01(particleIndex + spawnThread, gTime + 1.0f, 19.0f);
+    const uint emitterIndex = gCounters.Load(12);
+    EmitterState emitter = gEmitterStates[emitterIndex];
+    float seed = Hash01(particleIndex + spawnThread + emitter.totalEmitted, gTime + emitter.seed + 1.0f, 19.0f);
     float lifetime = gEmitterParams.w > 0.0f ? gEmitterParams.w : (2.0f + seed * 3.0f);
     float scaleMin = min(gParticleShapeParams.z, gParticleShapeParams.w);
     float scaleMax = max(gParticleShapeParams.z, gParticleShapeParams.w);
@@ -122,6 +139,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     state.scale = float3(0.08f + seed * 0.08f, 0.08f + seed * 0.08f, 1.0f);
     state.seed = seed;
     state.shape = float4(gParticleShapeParams.y > 0.5f ? seed * 6.2831853f : 0.0f, 0.0f, authoredScale, 1.0f);
+    state.emitterKey = gEmitterKey;
+    state.pad = 0;
     gParticleState[particleIndex] = state;
 
     uint aliveSlot;

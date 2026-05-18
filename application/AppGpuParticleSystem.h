@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string_view>
+#include <unordered_map>
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -18,6 +20,7 @@ public:
     static constexpr uint32_t kTrailTelemetryIndexSampleCount =
         kTrailTelemetrySegmentSampleCount * 6;
     static constexpr uint32_t kParticleDedicatedTelemetrySampleCount = 4;
+    static constexpr uint32_t kMaxGpuParticleEmitters = 1024;
 
     struct ParticleRenderSample {
         Matrix4x4 WVP{};
@@ -34,6 +37,19 @@ public:
         Vector3 scale{};
         float seed = 0.0f;
         Vector4 shape{};
+        uint32_t emitterKey = 0;
+        uint32_t pad[3]{};
+    };
+
+    struct ParticleEmitterStateSample {
+        float frequencyTime = 0.0f;
+        float seed = 0.0f;
+        uint32_t totalEmitted = 0;
+        uint32_t resetToken = 0;
+        float lastTimelineAge = 0.0f;
+        float pad0 = 0.0f;
+        uint32_t emitterKey = 0;
+        uint32_t pad1 = 0;
     };
 
     struct TrailMeshStreamControlPointSample {
@@ -77,6 +93,10 @@ public:
         D3D12_GPU_DESCRIPTOR_HANDLE stateBufferUav{};
         uint32_t dispatchGroupCount = 0;
         uint32_t maxParticles = 0;
+        uint32_t activeEmitterSlots = 0;
+        uint32_t emitterSlotCapacity = 0;
+        uint32_t emitterSlotOverflowCount = 0;
+        uint64_t emitterSlotOverflowTotal = 0;
     };
 
     struct ParticleDedicatedReadbackTelemetry {
@@ -170,6 +190,8 @@ public:
         ID3D12RootSignature* rootSignature,
         ID3D12PipelineState* beginPipelineState,
         ID3D12PipelineState* updatePipelineState,
+        ID3D12PipelineState* emitterUpdatePipelineState,
+        ID3D12PipelineState* emitterResetPipelineState,
         ID3D12PipelineState* spawnPipelineState,
         ID3D12PipelineState* argsPipelineState,
         const Matrix4x4& viewProjection,
@@ -184,11 +206,16 @@ public:
         float uvScrollSpeed,
         float particleLifetime,
         float spawnCount,
+        float spawnFrequency,
         float randomRotation,
         float scaleYMin,
         float scaleYMax,
         Vector3 emitterPosition,
-        bool updateExistingParticles = true);
+        bool updateExistingParticles = true,
+        uint32_t emitterIndex = 0,
+        uint32_t emitterKey = 0,
+        uint32_t emitterResetToken = 0,
+        float emitterTimelineAge = 0.0f);
 
     void DeclareGraphBuffers(ge3::graphics::RenderGraph& renderGraph) const;
     bool EnsureGraphBuffers(ID3D12Device* device, const ge3::graphics::RenderGraph& renderGraph);
@@ -253,6 +280,9 @@ private:
     static size_t TrailIndexBufferBytes(uint32_t maxSegments);
     static size_t TrailDrawArgsBufferBytes();
     static size_t TrailHistoryBufferBytes(uint32_t maxControlPoints);
+    void ResetGpuManagedEmitterAllocator();
+    uint32_t ResolveGpuManagedEmitterSlot(uint32_t emitterKey, uint32_t fallbackSlot, bool beginFrame);
+    uint32_t CountGpuManagedActiveEmitterSlots() const;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> particleOutput_;
     Microsoft::WRL::ComPtr<ID3D12Resource> dedicatedParticleOutput_;
@@ -267,6 +297,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> particleAliveList_;
     Microsoft::WRL::ComPtr<ID3D12Resource> particleDeadList_;
     Microsoft::WRL::ComPtr<ID3D12Resource> particleCounters_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> particleEmitterStates_;
     Microsoft::WRL::ComPtr<ID3D12Resource> dedicatedParticleState_;
     Microsoft::WRL::ComPtr<ID3D12Resource> dedicatedDistortionState_;
     Microsoft::WRL::ComPtr<ID3D12Resource> dedicatedBeamState_;
@@ -315,6 +346,7 @@ private:
     ge3::core::DescriptorHandle particleDeadListUav_{};
     ge3::core::DescriptorHandle particleCountersUav_{};
     ge3::core::DescriptorHandle particleIndirectArgsUav_{};
+    ge3::core::DescriptorHandle particleEmitterStatesUav_{};
     ge3::core::DescriptorHandle dedicatedStateUav_{};
     ge3::core::DescriptorHandle dedicatedDistortionStateUav_{};
     ge3::core::DescriptorHandle dedicatedBeamStateUav_{};
@@ -331,6 +363,7 @@ private:
     D3D12_RESOURCE_STATES particleAliveListState_ = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES particleDeadListState_ = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES particleCountersState_ = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES particleEmitterStatesState_ = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES dedicatedParticleStateState_ = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     D3D12_RESOURCE_STATES dedicatedDistortionStateState_ = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     D3D12_RESOURCE_STATES dedicatedBeamStateState_ = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -359,6 +392,12 @@ private:
     bool initialized_ = false;
     bool initialStateUploadReady_ = false;
     bool particlePoolInitialized_ = false;
+    uint64_t gpuManagedEmitterAllocatorEpoch_ = 0;
+    std::array<uint32_t, kMaxGpuParticleEmitters> gpuManagedEmitterSlotKeys_{};
+    std::array<uint64_t, kMaxGpuParticleEmitters> gpuManagedEmitterSlotTouched_{};
+    std::unordered_map<uint32_t, uint32_t> gpuManagedEmitterSlotByKey_;
+    uint32_t gpuManagedEmitterOverflowThisFrame_ = 0;
+    uint64_t gpuManagedEmitterOverflowTotal_ = 0;
     bool dedicatedParticleStateInitialized_ = false;
     bool dedicatedDistortionStateInitialized_ = false;
     bool dedicatedBeamStateInitialized_ = false;

@@ -138,6 +138,8 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
         L"resources/ParticlePoolReset.CS.hlsl",
         L"resources/ParticlePoolBegin.CS.hlsl",
         L"resources/ParticlePoolUpdate.CS.hlsl",
+        L"resources/ParticleEmitterUpdate.CS.hlsl",
+        L"resources/ParticleEmitterReset.CS.hlsl",
         L"resources/ParticlePoolSpawn.CS.hlsl",
         L"resources/ParticlePoolArgs.CS.hlsl",
         L"resources/TrailMeshStream.CS.hlsl",
@@ -727,7 +729,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     // ------------------------------
     // GPU Particle Compute RootSignature
     // b0: simulation constants, u0: render particle output, u1: simulation state,
-    // u2: alive list, u3: dead list, u4: pool counters, u5: indirect draw args
+    // u2: alive list, u3: dead list, u4: pool counters, u5: indirect draw args, u6: emitter state
     // ------------------------------
     D3D12_DESCRIPTOR_RANGE particleOutputUavRange{};
     particleOutputUavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
@@ -765,7 +767,13 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     particleDrawArgsUavRange.BaseShaderRegister = 5;
     particleDrawArgsUavRange.OffsetInDescriptorsFromTableStart = 0;
 
-    D3D12_ROOT_PARAMETER gpuParticleParams[7] = {};
+    D3D12_DESCRIPTOR_RANGE particleEmitterStateUavRange{};
+    particleEmitterStateUavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    particleEmitterStateUavRange.NumDescriptors = 1;
+    particleEmitterStateUavRange.BaseShaderRegister = 6;
+    particleEmitterStateUavRange.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_ROOT_PARAMETER gpuParticleParams[8] = {};
     gpuParticleParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     gpuParticleParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     gpuParticleParams[0].Constants.ShaderRegister = 0;
@@ -800,6 +808,11 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     gpuParticleParams[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     gpuParticleParams[6].DescriptorTable.NumDescriptorRanges = 1;
     gpuParticleParams[6].DescriptorTable.pDescriptorRanges = &particleDrawArgsUavRange;
+
+    gpuParticleParams[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    gpuParticleParams[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    gpuParticleParams[7].DescriptorTable.NumDescriptorRanges = 1;
+    gpuParticleParams[7].DescriptorTable.pDescriptorRanges = &particleEmitterStateUavRange;
 
     D3D12_ROOT_SIGNATURE_DESC gpuParticleRootDesc{};
     gpuParticleRootDesc.NumParameters = _countof(gpuParticleParams);
@@ -1019,6 +1032,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     gpuParticlePoolResetCs_ = Compile_(L"resources/ParticlePoolReset.CS.hlsl", L"cs_6_0");
     gpuParticlePoolBeginCs_ = Compile_(L"resources/ParticlePoolBegin.CS.hlsl", L"cs_6_0");
     gpuParticlePoolUpdateCs_ = Compile_(L"resources/ParticlePoolUpdate.CS.hlsl", L"cs_6_0");
+    gpuParticleEmitterUpdateCs_ = Compile_(L"resources/ParticleEmitterUpdate.CS.hlsl", L"cs_6_0");
+    gpuParticleEmitterResetCs_ = Compile_(L"resources/ParticleEmitterReset.CS.hlsl", L"cs_6_0");
     gpuParticlePoolSpawnCs_ = Compile_(L"resources/ParticlePoolSpawn.CS.hlsl", L"cs_6_0");
     gpuParticlePoolArgsCs_ = Compile_(L"resources/ParticlePoolArgs.CS.hlsl", L"cs_6_0");
     trailMeshStreamCs_ = Compile_(L"resources/TrailMeshStream.CS.hlsl", L"cs_6_0");
@@ -1047,7 +1062,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         !trailMeshVs_ || !trailMeshStreamVs_ || !trailMeshPs_ || !distortionSpriteVs_ || !distortionSpritePs_ ||
         !ringVs_ || !ringPs_ || !cylinderVs_ || !cylinderPs_ || !skeletonDebugVs_ || !skeletonDebugPs_ ||
         !gpuParticleCs_ || !gpuParticleResetCs_ || !gpuParticlePoolResetCs_ || !gpuParticlePoolBeginCs_ ||
-        !gpuParticlePoolUpdateCs_ || !gpuParticlePoolSpawnCs_ || !gpuParticlePoolArgsCs_ ||
+        !gpuParticlePoolUpdateCs_ || !gpuParticleEmitterUpdateCs_ || !gpuParticleEmitterResetCs_ ||
+        !gpuParticlePoolSpawnCs_ || !gpuParticlePoolArgsCs_ ||
         !trailMeshStreamCs_ || !trailMeshBuildCs_ || !compositeVs_ || !compositePs_ || !bloomExtractPs_ ||
         !bloomDownsamplePs_ || !bloomUpsamplePs_ || !blurHorizontalPs_ || !blurVerticalPs_ ||
         !boxBlurHorizontalPs_ || !boxBlurVerticalPs_ || !gaussianBlurHorizontalPs_ || !gaussianBlurVerticalPs_ ||
@@ -1284,6 +1300,18 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     gpuParticlePoolUpdateComputeDesc.CS = { gpuParticlePoolUpdateCs_->GetBufferPointer(), gpuParticlePoolUpdateCs_->GetBufferSize() };
     hr = device->CreateComputePipelineState(&gpuParticlePoolUpdateComputeDesc, IID_PPV_ARGS(&gpuParticlePoolUpdateComputePso_));
     if (FAILED(hr)) return FailHr("CreateComputePipelineState(GpuParticlePoolUpdate)", hr);
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC gpuParticleEmitterUpdateComputeDesc{};
+    gpuParticleEmitterUpdateComputeDesc.pRootSignature = gpuParticleComputeRootSignature_.Get();
+    gpuParticleEmitterUpdateComputeDesc.CS = { gpuParticleEmitterUpdateCs_->GetBufferPointer(), gpuParticleEmitterUpdateCs_->GetBufferSize() };
+    hr = device->CreateComputePipelineState(&gpuParticleEmitterUpdateComputeDesc, IID_PPV_ARGS(&gpuParticleEmitterUpdateComputePso_));
+    if (FAILED(hr)) return FailHr("CreateComputePipelineState(GpuParticleEmitterUpdate)", hr);
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC gpuParticleEmitterResetComputeDesc{};
+    gpuParticleEmitterResetComputeDesc.pRootSignature = gpuParticleComputeRootSignature_.Get();
+    gpuParticleEmitterResetComputeDesc.CS = { gpuParticleEmitterResetCs_->GetBufferPointer(), gpuParticleEmitterResetCs_->GetBufferSize() };
+    hr = device->CreateComputePipelineState(&gpuParticleEmitterResetComputeDesc, IID_PPV_ARGS(&gpuParticleEmitterResetComputePso_));
+    if (FAILED(hr)) return FailHr("CreateComputePipelineState(GpuParticleEmitterReset)", hr);
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC gpuParticlePoolSpawnComputeDesc{};
     gpuParticlePoolSpawnComputeDesc.pRootSignature = gpuParticleComputeRootSignature_.Get();
@@ -1767,6 +1795,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         L"resources/ParticlePoolReset.CS.hlsl",
         L"resources/ParticlePoolBegin.CS.hlsl",
         L"resources/ParticlePoolUpdate.CS.hlsl",
+        L"resources/ParticleEmitterUpdate.CS.hlsl",
+        L"resources/ParticleEmitterReset.CS.hlsl",
         L"resources/ParticlePoolSpawn.CS.hlsl",
         L"resources/ParticlePoolArgs.CS.hlsl",
         L"resources/TrailMeshStream.CS.hlsl",

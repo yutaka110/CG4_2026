@@ -377,6 +377,8 @@
     <FxCompile Include="Resources\ParticleReset.CS.hlsl" />
     <FxCompile Include="Resources\ParticlePoolBegin.CS.hlsl" />
     <FxCompile Include="Resources\ParticlePoolArgs.CS.hlsl" />
+    <FxCompile Include="Resources\ParticleEmitterUpdate.CS.hlsl" />
+    <FxCompile Include="Resources\ParticleEmitterReset.CS.hlsl" />
     <FxCompile Include="Resources\ParticlePoolReset.CS.hlsl" />
     <FxCompile Include="Resources\ParticlePoolSpawn.CS.hlsl" />
     <FxCompile Include="Resources\ParticlePoolUpdate.CS.hlsl" />

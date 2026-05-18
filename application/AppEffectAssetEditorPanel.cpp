@@ -518,6 +518,7 @@ bool DrawEffectTypeControls(EffectParticleSettings& particle) {
         particle.spawnCount = static_cast<float>(spawnCount);
         changed = true;
     }
+    changed |= ImGui::SliderFloat("Spawn Frequency", &particle.spawnFrequency, 0.0f, 2.0f, "%.3f s");
     bool randomRotation = particle.randomRotation > 0.5f;
     if (ImGui::Checkbox("Random Rotation", &randomRotation)) {
         particle.randomRotation = randomRotation ? 1.0f : 0.0f;
@@ -602,6 +603,7 @@ bool DrawEffectTypeControls(EffectCylinderSettings& cylinder) {
 void ResetEffectTypeToAssetDefault(EffectParticleSettings& particle, const EffectAsset& asset) {
     particle.emissive = asset.defaultParticle.emissive;
     particle.spawnCount = asset.defaultParticle.spawnCount;
+    particle.spawnFrequency = asset.defaultParticle.spawnFrequency;
     particle.randomRotation = asset.defaultParticle.randomRotation;
     particle.scaleYMin = asset.defaultParticle.scaleYMin;
     particle.scaleYMax = asset.defaultParticle.scaleYMax;

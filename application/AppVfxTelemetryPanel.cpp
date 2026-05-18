@@ -886,6 +886,15 @@ void DrawParticleDedicatedResourceProbePanel(
         ImGui::Text("last simulation state=%s uav=0x%llx",
             input.simulationTelemetry->stateBufferResource,
             static_cast<unsigned long long>(input.simulationTelemetry->stateBufferUav.ptr));
+        ImGui::TextColored(
+            input.simulationTelemetry->emitterSlotOverflowCount == 0
+                ? ImVec4(0.45f, 1.0f, 0.45f, 1.0f)
+                : ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
+            "gpuEmitterSlots active=%u capacity=%u overflowFrame=%u overflowTotal=%llu",
+            input.simulationTelemetry->activeEmitterSlots,
+            input.simulationTelemetry->emitterSlotCapacity,
+            input.simulationTelemetry->emitterSlotOverflowCount,
+            static_cast<unsigned long long>(input.simulationTelemetry->emitterSlotOverflowTotal));
     }
 
     if (input.readbackTelemetry != nullptr) {

@@ -15,6 +15,8 @@ struct ParticleState
     float3 scale;
     float seed;
     float4 shape;
+    uint emitterKey;
+    uint3 pad;
 };
 
 cbuffer SimConstants : register(b0)
@@ -25,7 +27,9 @@ cbuffer SimConstants : register(b0)
     uint gMaxParticles;
     uint gSliceOffset;
     uint gSliceCount;
-    float3 gPad;
+    uint gEmitterKey;
+    uint gEmitterResetToken;
+    float gTimelineAge;
     float4 gTint;
     float4 gScaleAndParams;
     float4 gEffectParams;

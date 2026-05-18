@@ -33,6 +33,7 @@ void ApplyLiveTuningToComponent(
     destination.depthFadeSoftness = source.settings->depthFadeSoftness;
     destination.edgeSoftness = source.settings->edgeSoftness;
     destination.spawnCount = source.settings->spawnCount;
+    destination.spawnFrequency = source.settings->spawnFrequency;
     destination.randomRotation = source.settings->randomRotation;
     destination.scaleYMin = source.settings->scaleYMin;
     destination.scaleYMax = source.settings->scaleYMax;
