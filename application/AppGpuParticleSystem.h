@@ -52,6 +52,17 @@ public:
         uint32_t pad1 = 0;
     };
 
+    struct ParticleEmitterSpawnRequestSample {
+        uint32_t spawnRequest = 0;
+        uint32_t emitterKey = 0;
+        uint32_t pad[2]{};
+        Vector4 tint{};
+        Vector4 scaleAndParams{};
+        Vector4 effectParams{};
+        Vector4 particleShapeParams{};
+        Vector4 emitterParams{};
+    };
+
     struct TrailMeshStreamControlPointSample {
         Vector4 positionAge{};
         Vector4 colorWidth{};
@@ -97,6 +108,13 @@ public:
         uint32_t emitterSlotCapacity = 0;
         uint32_t emitterSlotOverflowCount = 0;
         uint64_t emitterSlotOverflowTotal = 0;
+        bool gpuPoolTelemetryValid = false;
+        bool gpuPoolTelemetryCopiedThisFrame = false;
+        uint32_t totalSpawnRequest = 0;
+        uint32_t spawnThreadCount = 0;
+        uint32_t indirectDispatchGroups = 0;
+        uint32_t deadListAvailableBeforeSpawn = 0;
+        uint32_t deadListShortageCount = 0;
     };
 
     struct ParticleDedicatedReadbackTelemetry {
@@ -217,6 +235,25 @@ public:
         uint32_t emitterResetToken = 0,
         float emitterTimelineAge = 0.0f);
 
+    void FinishGpuManagedParticleFrame(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12DescriptorHeap* srvDescriptorHeap,
+        ID3D12RootSignature* rootSignature,
+        ID3D12PipelineState* updatePipelineState,
+        ID3D12PipelineState* spawnPreparePipelineState,
+        ID3D12PipelineState* spawnPipelineState,
+        ID3D12PipelineState* argsPipelineState,
+        const Matrix4x4& viewProjection,
+        float deltaTime,
+        float time,
+        const Vector4& tint,
+        const Vector3& scale,
+        float emissive,
+        float turbulence,
+        float pulseSpeed,
+        float spawnRadius,
+        float uvScrollSpeed);
+
     void DeclareGraphBuffers(ge3::graphics::RenderGraph& renderGraph) const;
     bool EnsureGraphBuffers(ID3D12Device* device, const ge3::graphics::RenderGraph& renderGraph);
     void InitializeDedicatedParticleResources(
@@ -237,6 +274,8 @@ public:
     D3D12_GPU_VIRTUAL_ADDRESS UpdateTrailViewProjection(const Matrix4x4& viewProjection);
     void CaptureTrailMeshStreamTelemetry(ID3D12GraphicsCommandList* commandList);
     void ResolveTrailMeshStreamTelemetry();
+    void CaptureParticlePoolTelemetry(ID3D12GraphicsCommandList* commandList);
+    void ResolveParticlePoolTelemetry();
     void CaptureParticleDedicatedReadbackTelemetry(ID3D12GraphicsCommandList* commandList);
     void ResolveParticleDedicatedReadbackTelemetry();
     void CaptureDistortionDedicatedReadbackTelemetry(ID3D12GraphicsCommandList* commandList);
@@ -253,6 +292,7 @@ public:
         return beamDedicatedReadbackTelemetry_;
     }
     ID3D12CommandSignature* CommandSignature() const { return commandSignature_.Get(); }
+    ID3D12CommandSignature* DispatchCommandSignature() const { return dispatchCommandSignature_.Get(); }
     ID3D12Resource* IndirectArgsBuffer() const { return indirectArgs_.Get(); }
     ID3D12Resource* IndirectArgsForResource(std::string_view name) const;
     bool WriteIndirectArgsForResource(
@@ -298,6 +338,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> particleDeadList_;
     Microsoft::WRL::ComPtr<ID3D12Resource> particleCounters_;
     Microsoft::WRL::ComPtr<ID3D12Resource> particleEmitterStates_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> particleEmitterSpawnRequests_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> particleEmitterSpawnOffsets_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> particleSpawnDispatchArgs_;
     Microsoft::WRL::ComPtr<ID3D12Resource> dedicatedParticleState_;
     Microsoft::WRL::ComPtr<ID3D12Resource> dedicatedDistortionState_;
     Microsoft::WRL::ComPtr<ID3D12Resource> dedicatedBeamState_;
@@ -317,11 +360,14 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> particleDedicatedRenderReadback_;
     Microsoft::WRL::ComPtr<ID3D12Resource> particleDedicatedStateReadback_;
     Microsoft::WRL::ComPtr<ID3D12Resource> particleDedicatedIndirectArgsReadback_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> particleCountersReadback_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> particleSpawnDispatchArgsReadback_;
     Microsoft::WRL::ComPtr<ID3D12Resource> distortionDedicatedRenderReadback_;
     Microsoft::WRL::ComPtr<ID3D12Resource> distortionDedicatedIndirectArgsReadback_;
     Microsoft::WRL::ComPtr<ID3D12Resource> beamDedicatedRenderReadback_;
     Microsoft::WRL::ComPtr<ID3D12Resource> beamDedicatedIndirectArgsReadback_;
     Microsoft::WRL::ComPtr<ID3D12CommandSignature> commandSignature_;
+    Microsoft::WRL::ComPtr<ID3D12CommandSignature> dispatchCommandSignature_;
     ge3::core::DescriptorHandle particleSrv_{};
     ge3::core::DescriptorHandle particleUav_{};
     ge3::core::DescriptorHandle dedicatedParticleSrv_{};
@@ -347,6 +393,9 @@ private:
     ge3::core::DescriptorHandle particleCountersUav_{};
     ge3::core::DescriptorHandle particleIndirectArgsUav_{};
     ge3::core::DescriptorHandle particleEmitterStatesUav_{};
+    ge3::core::DescriptorHandle particleEmitterSpawnRequestsUav_{};
+    ge3::core::DescriptorHandle particleEmitterSpawnOffsetsUav_{};
+    ge3::core::DescriptorHandle particleSpawnDispatchArgsUav_{};
     ge3::core::DescriptorHandle dedicatedStateUav_{};
     ge3::core::DescriptorHandle dedicatedDistortionStateUav_{};
     ge3::core::DescriptorHandle dedicatedBeamStateUav_{};
@@ -364,6 +413,9 @@ private:
     D3D12_RESOURCE_STATES particleDeadListState_ = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES particleCountersState_ = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES particleEmitterStatesState_ = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES particleEmitterSpawnRequestsState_ = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES particleEmitterSpawnOffsetsState_ = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES particleSpawnDispatchArgsState_ = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES dedicatedParticleStateState_ = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     D3D12_RESOURCE_STATES dedicatedDistortionStateState_ = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     D3D12_RESOURCE_STATES dedicatedBeamStateState_ = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -405,6 +457,7 @@ private:
     bool dedicatedDistortionIndirectArgsInitialized_ = false;
     bool dedicatedBeamIndirectArgsInitialized_ = false;
     bool trailTelemetryPending_ = false;
+    bool particlePoolTelemetryPending_ = false;
     bool particleDedicatedReadbackPending_ = false;
     bool distortionDedicatedReadbackPending_ = false;
     bool beamDedicatedReadbackPending_ = false;

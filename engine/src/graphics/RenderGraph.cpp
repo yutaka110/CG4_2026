@@ -92,7 +92,8 @@ D3D12_RESOURCE_STATES RenderGraph::StateForAccess(RenderResourceAccessType type)
         return D3D12_RESOURCE_STATE_DEPTH_WRITE;
     case RenderResourceAccessType::ReadSrv:
     default:
-        return D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        return D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     }
 }
 

@@ -18,6 +18,11 @@ struct TrailHistoryPointLayout {
 };
 
 constexpr size_t kParticlePoolCounterBytes = sizeof(uint32_t) * 8;
+constexpr size_t kParticleCounterAliveCountOffset = 0;
+constexpr size_t kParticleCounterDeadCountOffset = sizeof(uint32_t);
+constexpr size_t kParticleCounterSpawnThreadCountOffset = sizeof(uint32_t) * 5;
+constexpr size_t kParticleCounterTotalSpawnRequestOffset = sizeof(uint32_t) * 6;
+constexpr size_t kParticleCounterDeadListShortageOffset = sizeof(uint32_t) * 7;
 
 void LogGpuEmitterSlotOverflow(
     uint32_t emitterKey,
@@ -561,13 +566,19 @@ bool AppGpuParticleSystem::CreateParticlePoolViews(ID3D12Device* device) {
         particleDeadList_ == nullptr ||
         particleCounters_ == nullptr ||
         particleEmitterStates_ == nullptr ||
+        particleEmitterSpawnRequests_ == nullptr ||
+        particleEmitterSpawnOffsets_ == nullptr ||
+        particleSpawnDispatchArgs_ == nullptr ||
         indirectArgs_ == nullptr ||
         !particleAliveListSrv_.IsValid() ||
         !particleAliveListUav_.IsValid() ||
         !particleDeadListUav_.IsValid() ||
         !particleCountersUav_.IsValid() ||
         !particleIndirectArgsUav_.IsValid() ||
-        !particleEmitterStatesUav_.IsValid()) {
+        !particleEmitterStatesUav_.IsValid() ||
+        !particleEmitterSpawnRequestsUav_.IsValid() ||
+        !particleEmitterSpawnOffsetsUav_.IsValid() ||
+        !particleSpawnDispatchArgsUav_.IsValid()) {
         return false;
     }
 
@@ -607,6 +618,39 @@ bool AppGpuParticleSystem::CreateParticlePoolViews(ID3D12Device* device) {
     emitterUav.Buffer.NumElements = kMaxGpuParticleEmitters;
     emitterUav.Buffer.StructureByteStride = sizeof(ParticleEmitterStateSample);
     device->CreateUnorderedAccessView(particleEmitterStates_.Get(), nullptr, &emitterUav, particleEmitterStatesUav_.cpu);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC spawnRequestUav{};
+    spawnRequestUav.Format = DXGI_FORMAT_UNKNOWN;
+    spawnRequestUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    spawnRequestUav.Buffer.NumElements = kMaxGpuParticleEmitters;
+    spawnRequestUav.Buffer.StructureByteStride = sizeof(ParticleEmitterSpawnRequestSample);
+    device->CreateUnorderedAccessView(
+        particleEmitterSpawnRequests_.Get(),
+        nullptr,
+        &spawnRequestUav,
+        particleEmitterSpawnRequestsUav_.cpu);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC spawnOffsetUav{};
+    spawnOffsetUav.Format = DXGI_FORMAT_UNKNOWN;
+    spawnOffsetUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    spawnOffsetUav.Buffer.NumElements = kMaxGpuParticleEmitters;
+    spawnOffsetUav.Buffer.StructureByteStride = sizeof(uint32_t);
+    device->CreateUnorderedAccessView(
+        particleEmitterSpawnOffsets_.Get(),
+        nullptr,
+        &spawnOffsetUav,
+        particleEmitterSpawnOffsetsUav_.cpu);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC spawnDispatchArgsUav{};
+    spawnDispatchArgsUav.Format = DXGI_FORMAT_UNKNOWN;
+    spawnDispatchArgsUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    spawnDispatchArgsUav.Buffer.NumElements = 1;
+    spawnDispatchArgsUav.Buffer.StructureByteStride = sizeof(D3D12_DISPATCH_ARGUMENTS);
+    device->CreateUnorderedAccessView(
+        particleSpawnDispatchArgs_.Get(),
+        nullptr,
+        &spawnDispatchArgsUav,
+        particleSpawnDispatchArgsUav_.cpu);
     return true;
 }
 
@@ -668,6 +712,18 @@ bool AppGpuParticleSystem::Initialize(
         device,
         sizeof(ParticleEmitterStateSample) * kMaxGpuParticleEmitters,
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    particleEmitterSpawnRequests_ = CreateDefaultBuffer(
+        device,
+        sizeof(ParticleEmitterSpawnRequestSample) * kMaxGpuParticleEmitters,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    particleEmitterSpawnOffsets_ = CreateDefaultBuffer(
+        device,
+        sizeof(uint32_t) * kMaxGpuParticleEmitters,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    particleSpawnDispatchArgs_ = CreateDefaultBuffer(
+        device,
+        sizeof(D3D12_DISPATCH_ARGUMENTS),
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     uploadState_ = CreateUploadBuffer(device, stateBytes);
     indirectArgs_ = CreateDefaultBuffer(
         device,
@@ -698,6 +754,12 @@ bool AppGpuParticleSystem::Initialize(
     particleDedicatedIndirectArgsReadback_ = CreateReadbackBuffer(
         device,
         sizeof(D3D12_DRAW_INDEXED_ARGUMENTS));
+    particleCountersReadback_ = CreateReadbackBuffer(
+        device,
+        kParticlePoolCounterBytes);
+    particleSpawnDispatchArgsReadback_ = CreateReadbackBuffer(
+        device,
+        sizeof(D3D12_DISPATCH_ARGUMENTS));
     distortionDedicatedRenderReadback_ = CreateReadbackBuffer(
         device,
         sizeof(ParticleRenderSample) * kParticleDedicatedTelemetrySampleCount);
@@ -715,6 +777,9 @@ bool AppGpuParticleSystem::Initialize(
         particleDeadList_ == nullptr ||
         particleCounters_ == nullptr ||
         particleEmitterStates_ == nullptr ||
+        particleEmitterSpawnRequests_ == nullptr ||
+        particleEmitterSpawnOffsets_ == nullptr ||
+        particleSpawnDispatchArgs_ == nullptr ||
         uploadState_ == nullptr ||
         indirectArgs_ == nullptr ||
         uploadIndirectArgs_ == nullptr ||
@@ -728,6 +793,8 @@ bool AppGpuParticleSystem::Initialize(
         particleDedicatedRenderReadback_ == nullptr ||
         particleDedicatedStateReadback_ == nullptr ||
         particleDedicatedIndirectArgsReadback_ == nullptr ||
+        particleCountersReadback_ == nullptr ||
+        particleSpawnDispatchArgsReadback_ == nullptr ||
         distortionDedicatedRenderReadback_ == nullptr ||
         distortionDedicatedIndirectArgsReadback_ == nullptr ||
         beamDedicatedRenderReadback_ == nullptr ||
@@ -800,6 +867,9 @@ bool AppGpuParticleSystem::Initialize(
     particleCountersUav_ = heaps.srv.Allocate();
     particleIndirectArgsUav_ = heaps.srv.Allocate();
     particleEmitterStatesUav_ = heaps.srv.Allocate();
+    particleEmitterSpawnRequestsUav_ = heaps.srv.Allocate();
+    particleEmitterSpawnOffsetsUav_ = heaps.srv.Allocate();
+    particleSpawnDispatchArgsUav_ = heaps.srv.Allocate();
     dedicatedStateUav_ = heaps.srv.Allocate();
     dedicatedDistortionStateUav_ = heaps.srv.Allocate();
     dedicatedBeamStateUav_ = heaps.srv.Allocate();
@@ -850,6 +920,19 @@ bool AppGpuParticleSystem::Initialize(
             &signatureDesc,
             nullptr,
             IID_PPV_ARGS(&commandSignature_)))) {
+        return false;
+    }
+
+    D3D12_INDIRECT_ARGUMENT_DESC dispatchArgumentDesc{};
+    dispatchArgumentDesc.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH;
+    D3D12_COMMAND_SIGNATURE_DESC dispatchSignatureDesc{};
+    dispatchSignatureDesc.ByteStride = sizeof(D3D12_DISPATCH_ARGUMENTS);
+    dispatchSignatureDesc.NumArgumentDescs = 1;
+    dispatchSignatureDesc.pArgumentDescs = &dispatchArgumentDesc;
+    if (FAILED(device->CreateCommandSignature(
+            &dispatchSignatureDesc,
+            nullptr,
+            IID_PPV_ARGS(&dispatchCommandSignature_)))) {
         return false;
     }
 
@@ -973,12 +1056,18 @@ bool AppGpuParticleSystem::ResetGpuManagedParticlePool(
         particleDeadList_ == nullptr ||
         particleCounters_ == nullptr ||
         particleEmitterStates_ == nullptr ||
+        particleEmitterSpawnRequests_ == nullptr ||
+        particleEmitterSpawnOffsets_ == nullptr ||
+        particleSpawnDispatchArgs_ == nullptr ||
         particleUav_.gpu.ptr == 0 ||
         stateUav_.gpu.ptr == 0 ||
         particleAliveListUav_.gpu.ptr == 0 ||
         particleDeadListUav_.gpu.ptr == 0 ||
         particleCountersUav_.gpu.ptr == 0 ||
         particleEmitterStatesUav_.gpu.ptr == 0 ||
+        particleEmitterSpawnRequestsUav_.gpu.ptr == 0 ||
+        particleEmitterSpawnOffsetsUav_.gpu.ptr == 0 ||
+        particleSpawnDispatchArgsUav_.gpu.ptr == 0 ||
         maxParticles_ == 0) {
         return false;
     }
@@ -1011,6 +1100,21 @@ bool AppGpuParticleSystem::ResetGpuManagedParticlePool(
     TransitionIfNeeded(commandList, particleDeadList_.Get(), particleDeadListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     TransitionIfNeeded(commandList, particleCounters_.Get(), particleCountersState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     TransitionIfNeeded(commandList, particleEmitterStates_.Get(), particleEmitterStatesState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(
+        commandList,
+        particleEmitterSpawnRequests_.Get(),
+        particleEmitterSpawnRequestsState_,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(
+        commandList,
+        particleEmitterSpawnOffsets_.Get(),
+        particleEmitterSpawnOffsetsState_,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(
+        commandList,
+        particleSpawnDispatchArgs_.Get(),
+        particleSpawnDispatchArgsState_,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap};
     commandList->SetDescriptorHeaps(1, descriptorHeaps);
@@ -1023,6 +1127,9 @@ bool AppGpuParticleSystem::ResetGpuManagedParticlePool(
     commandList->SetComputeRootDescriptorTable(4, particleDeadListUav_.gpu);
     commandList->SetComputeRootDescriptorTable(5, particleCountersUav_.gpu);
     commandList->SetComputeRootDescriptorTable(7, particleEmitterStatesUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(8, particleEmitterSpawnRequestsUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(9, particleEmitterSpawnOffsetsUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(10, particleSpawnDispatchArgsUav_.gpu);
     commandList->Dispatch((maxParticles_ + 255) / 256, 1, 1);
     D3D12_RESOURCE_BARRIER barriers[] = {
         MakeUavBarrier(particleOutput_.Get()),
@@ -1031,6 +1138,9 @@ bool AppGpuParticleSystem::ResetGpuManagedParticlePool(
         MakeUavBarrier(particleDeadList_.Get()),
         MakeUavBarrier(particleCounters_.Get()),
         MakeUavBarrier(particleEmitterStates_.Get()),
+        MakeUavBarrier(particleEmitterSpawnRequests_.Get()),
+        MakeUavBarrier(particleEmitterSpawnOffsets_.Get()),
+        MakeUavBarrier(particleSpawnDispatchArgs_.Get()),
     };
     commandList->ResourceBarrier(_countof(barriers), barriers);
     ResetGpuManagedEmitterAllocator();
@@ -1087,9 +1197,15 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
         particleDeadList_ == nullptr ||
         particleCounters_ == nullptr ||
         particleEmitterStates_ == nullptr ||
+        particleEmitterSpawnRequests_ == nullptr ||
+        particleEmitterSpawnOffsets_ == nullptr ||
+        particleSpawnDispatchArgs_ == nullptr ||
         indirectArgs_ == nullptr ||
         particleIndirectArgsUav_.gpu.ptr == 0 ||
-        particleEmitterStatesUav_.gpu.ptr == 0) {
+        particleEmitterStatesUav_.gpu.ptr == 0 ||
+        particleEmitterSpawnRequestsUav_.gpu.ptr == 0 ||
+        particleEmitterSpawnOffsetsUav_.gpu.ptr == 0 ||
+        particleSpawnDispatchArgsUav_.gpu.ptr == 0) {
         return;
     }
 
@@ -1133,6 +1249,21 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
     TransitionIfNeeded(commandList, particleDeadList_.Get(), particleDeadListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     TransitionIfNeeded(commandList, particleCounters_.Get(), particleCountersState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     TransitionIfNeeded(commandList, particleEmitterStates_.Get(), particleEmitterStatesState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(
+        commandList,
+        particleEmitterSpawnRequests_.Get(),
+        particleEmitterSpawnRequestsState_,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(
+        commandList,
+        particleEmitterSpawnOffsets_.Get(),
+        particleEmitterSpawnOffsetsState_,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(
+        commandList,
+        particleSpawnDispatchArgs_.Get(),
+        particleSpawnDispatchArgsState_,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     TransitionIfNeeded(commandList, indirectArgs_.Get(), indirectArgsState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap};
@@ -1146,6 +1277,158 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
     commandList->SetComputeRootDescriptorTable(5, particleCountersUav_.gpu);
     commandList->SetComputeRootDescriptorTable(6, particleIndirectArgsUav_.gpu);
     commandList->SetComputeRootDescriptorTable(7, particleEmitterStatesUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(8, particleEmitterSpawnRequestsUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(9, particleEmitterSpawnOffsetsUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(10, particleSpawnDispatchArgsUav_.gpu);
+
+    const uint32_t dispatchGroupCount = (maxParticles_ + 255) / 256;
+    if (updateExistingParticles) {
+        commandList->SetPipelineState(beginPipelineState);
+        commandList->Dispatch((kMaxGpuParticleEmitters + 255) / 256, 1, 1);
+        D3D12_RESOURCE_BARRIER beginBarriers[] = {
+            MakeUavBarrier(particleCounters_.Get()),
+            MakeUavBarrier(particleEmitterSpawnRequests_.Get()),
+            MakeUavBarrier(particleEmitterSpawnOffsets_.Get()),
+            MakeUavBarrier(particleSpawnDispatchArgs_.Get()),
+        };
+        commandList->ResourceBarrier(_countof(beginBarriers), beginBarriers);
+    }
+
+    D3D12_RESOURCE_BARRIER emitterUpdateBarriers[] = {
+        MakeUavBarrier(particleCounters_.Get()),
+        MakeUavBarrier(particleEmitterStates_.Get()),
+        MakeUavBarrier(particleEmitterSpawnRequests_.Get()),
+        MakeUavBarrier(particleEmitterSpawnOffsets_.Get()),
+        MakeUavBarrier(particleSpawnDispatchArgs_.Get()),
+    };
+    commandList->SetPipelineState(emitterUpdatePipelineState);
+    commandList->Dispatch(1, 1, 1);
+    commandList->ResourceBarrier(_countof(emitterUpdateBarriers), emitterUpdateBarriers);
+
+    D3D12_RESOURCE_BARRIER emitterResetBarriers[] = {
+        MakeUavBarrier(particleOutput_.Get()),
+        MakeUavBarrier(particleState_.Get()),
+        MakeUavBarrier(particleCounters_.Get()),
+    };
+    commandList->SetPipelineState(emitterResetPipelineState);
+    commandList->Dispatch(dispatchGroupCount, 1, 1);
+    commandList->ResourceBarrier(_countof(emitterResetBarriers), emitterResetBarriers);
+}
+
+void AppGpuParticleSystem::FinishGpuManagedParticleFrame(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12DescriptorHeap* srvDescriptorHeap,
+    ID3D12RootSignature* rootSignature,
+    ID3D12PipelineState* updatePipelineState,
+    ID3D12PipelineState* spawnPreparePipelineState,
+    ID3D12PipelineState* spawnPipelineState,
+    ID3D12PipelineState* argsPipelineState,
+    const Matrix4x4& viewProjection,
+    float deltaTime,
+    float time,
+    const Vector4& tint,
+    const Vector3& scale,
+    float emissive,
+    float turbulence,
+    float pulseSpeed,
+    float spawnRadius,
+    float uvScrollSpeed) {
+    if (!initialized_ ||
+        !particlePoolInitialized_ ||
+        commandList == nullptr ||
+        srvDescriptorHeap == nullptr ||
+        rootSignature == nullptr ||
+        updatePipelineState == nullptr ||
+        spawnPreparePipelineState == nullptr ||
+        spawnPipelineState == nullptr ||
+        argsPipelineState == nullptr ||
+        dispatchCommandSignature_ == nullptr ||
+        particleOutput_ == nullptr ||
+        particleState_ == nullptr ||
+        particleAliveList_ == nullptr ||
+        particleDeadList_ == nullptr ||
+        particleCounters_ == nullptr ||
+        particleEmitterStates_ == nullptr ||
+        particleEmitterSpawnRequests_ == nullptr ||
+        particleEmitterSpawnOffsets_ == nullptr ||
+        particleSpawnDispatchArgs_ == nullptr ||
+        indirectArgs_ == nullptr ||
+        particleIndirectArgsUav_.gpu.ptr == 0 ||
+        particleEmitterStatesUav_.gpu.ptr == 0 ||
+        particleEmitterSpawnRequestsUav_.gpu.ptr == 0 ||
+        particleEmitterSpawnOffsetsUav_.gpu.ptr == 0 ||
+        particleSpawnDispatchArgsUav_.gpu.ptr == 0) {
+        return;
+    }
+
+    struct Constants {
+        Matrix4x4 viewProjection;
+        float deltaTime;
+        float time;
+        uint32_t maxParticles;
+        uint32_t sliceOffset;
+        uint32_t sliceCount;
+        uint32_t emitterKey;
+        uint32_t emitterResetToken;
+        float timelineAge;
+        Vector4 tint;
+        Vector4 scaleAndParams;
+        Vector4 effectParams;
+        Vector4 particleShapeParams;
+        Vector4 emitterParams;
+    } constants{};
+    constants.viewProjection = viewProjection;
+    constants.deltaTime = deltaTime;
+    constants.time = time;
+    constants.maxParticles = maxParticles_;
+    constants.sliceOffset = 0;
+    constants.sliceCount = maxParticles_;
+    constants.emitterKey = 0;
+    constants.emitterResetToken = 0;
+    constants.timelineAge = 0.0f;
+    constants.tint = tint;
+    constants.scaleAndParams = {scale.x, scale.y, emissive, turbulence};
+    constants.effectParams = {pulseSpeed, spawnRadius, uvScrollSpeed, 0.0f};
+    constants.particleShapeParams = {0.0f, 0.0f, 1.0f, 1.0f};
+    constants.emitterParams = {0.0f, 0.0f, 0.0f, 0.0f};
+
+    TransitionIfNeeded(commandList, particleOutput_.Get(), particleOutputState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleState_.Get(), particleStateState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleAliveList_.Get(), particleAliveListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleDeadList_.Get(), particleDeadListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleCounters_.Get(), particleCountersState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleEmitterStates_.Get(), particleEmitterStatesState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(
+        commandList,
+        particleEmitterSpawnRequests_.Get(),
+        particleEmitterSpawnRequestsState_,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(
+        commandList,
+        particleEmitterSpawnOffsets_.Get(),
+        particleEmitterSpawnOffsetsState_,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, indirectArgs_.Get(), indirectArgsState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(
+        commandList,
+        particleSpawnDispatchArgs_.Get(),
+        particleSpawnDispatchArgsState_,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap};
+    commandList->SetDescriptorHeaps(1, descriptorHeaps);
+    commandList->SetComputeRootSignature(rootSignature);
+    commandList->SetComputeRoot32BitConstants(0, 44, &constants, 0);
+    commandList->SetComputeRootDescriptorTable(1, particleUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(2, stateUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(3, particleAliveListUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(4, particleDeadListUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(5, particleCountersUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(6, particleIndirectArgsUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(7, particleEmitterStatesUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(8, particleEmitterSpawnRequestsUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(9, particleEmitterSpawnOffsetsUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(10, particleSpawnDispatchArgsUav_.gpu);
 
     const uint32_t dispatchGroupCount = (maxParticles_ + 255) / 256;
     D3D12_RESOURCE_BARRIER updateBarriers[] = {
@@ -1154,42 +1437,54 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
         MakeUavBarrier(particleAliveList_.Get()),
         MakeUavBarrier(particleDeadList_.Get()),
         MakeUavBarrier(particleCounters_.Get()),
-        MakeUavBarrier(particleEmitterStates_.Get()),
     };
-    if (updateExistingParticles) {
-        commandList->SetPipelineState(beginPipelineState);
-        commandList->Dispatch(1, 1, 1);
-        D3D12_RESOURCE_BARRIER counterBarrier = MakeUavBarrier(particleCounters_.Get());
-        commandList->ResourceBarrier(1, &counterBarrier);
-
-        commandList->SetPipelineState(updatePipelineState);
-        commandList->Dispatch(dispatchGroupCount, 1, 1);
-        commandList->ResourceBarrier(_countof(updateBarriers), updateBarriers);
-    }
-
-    commandList->SetPipelineState(emitterUpdatePipelineState);
-    commandList->Dispatch(1, 1, 1);
-    commandList->ResourceBarrier(_countof(updateBarriers), updateBarriers);
-
-    commandList->SetPipelineState(emitterResetPipelineState);
+    commandList->SetPipelineState(updatePipelineState);
     commandList->Dispatch(dispatchGroupCount, 1, 1);
     commandList->ResourceBarrier(_countof(updateBarriers), updateBarriers);
 
-    const float spawnDispatchMultiplier = spawnFrequency > 0.0f ? 16.0f : 1.0f;
-    const uint32_t maxSpawnDispatchCount = spawnCount > 0.0f
-        ? static_cast<uint32_t>((std::min)(static_cast<float>(maxParticles_), (std::max)(1.0f, std::ceil(spawnCount * spawnDispatchMultiplier))))
-        : 0u;
-    if (maxSpawnDispatchCount > 0) {
-        commandList->SetPipelineState(spawnPipelineState);
-        commandList->Dispatch((maxSpawnDispatchCount + 255) / 256, 1, 1);
-        commandList->ResourceBarrier(_countof(updateBarriers), updateBarriers);
-    }
+    commandList->SetPipelineState(spawnPreparePipelineState);
+    commandList->Dispatch(1, 1, 1);
+    D3D12_RESOURCE_BARRIER spawnPrepareBarriers[] = {
+        MakeUavBarrier(particleCounters_.Get()),
+        MakeUavBarrier(particleEmitterSpawnRequests_.Get()),
+        MakeUavBarrier(particleEmitterSpawnOffsets_.Get()),
+        MakeUavBarrier(particleSpawnDispatchArgs_.Get()),
+    };
+    commandList->ResourceBarrier(_countof(spawnPrepareBarriers), spawnPrepareBarriers);
+    TransitionIfNeeded(
+        commandList,
+        particleSpawnDispatchArgs_.Get(),
+        particleSpawnDispatchArgsState_,
+        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
 
+    commandList->SetPipelineState(spawnPipelineState);
+    commandList->ExecuteIndirect(
+        dispatchCommandSignature_.Get(),
+        1,
+        particleSpawnDispatchArgs_.Get(),
+        0,
+        nullptr,
+        0);
+    D3D12_RESOURCE_BARRIER spawnBarriers[] = {
+        MakeUavBarrier(particleOutput_.Get()),
+        MakeUavBarrier(particleState_.Get()),
+        MakeUavBarrier(particleAliveList_.Get()),
+        MakeUavBarrier(particleDeadList_.Get()),
+        MakeUavBarrier(particleCounters_.Get()),
+        MakeUavBarrier(particleEmitterSpawnOffsets_.Get()),
+        MakeUavBarrier(particleEmitterSpawnRequests_.Get()),
+    };
+    commandList->ResourceBarrier(_countof(spawnBarriers), spawnBarriers);
+
+    TransitionIfNeeded(
+        commandList,
+        particleSpawnDispatchArgs_.Get(),
+        particleSpawnDispatchArgsState_,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     commandList->SetPipelineState(argsPipelineState);
     commandList->Dispatch(1, 1, 1);
     D3D12_RESOURCE_BARRIER argsBarrier = MakeUavBarrier(indirectArgs_.Get());
     commandList->ResourceBarrier(1, &argsBarrier);
-    TransitionIfNeeded(commandList, indirectArgs_.Get(), indirectArgsState_, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
 
     particleSimulationTelemetry_.valid = true;
     particleSimulationTelemetry_.usedDedicatedResources = false;
@@ -1996,6 +2291,34 @@ void AppGpuParticleSystem::RegisterGraphResources(ge3::graphics::RenderGraph& re
         "ParticleState",
         particleState_.Get(),
         particleStateState_);
+    renderGraph.RegisterResource(
+        "ParticleAliveList",
+        particleAliveList_.Get(),
+        particleAliveListState_);
+    renderGraph.RegisterResource(
+        "ParticleDeadList",
+        particleDeadList_.Get(),
+        particleDeadListState_);
+    renderGraph.RegisterResource(
+        "ParticleCounters",
+        particleCounters_.Get(),
+        particleCountersState_);
+    renderGraph.RegisterResource(
+        "ParticleEmitterStates",
+        particleEmitterStates_.Get(),
+        particleEmitterStatesState_);
+    renderGraph.RegisterResource(
+        "ParticleEmitterSpawnRequests",
+        particleEmitterSpawnRequests_.Get(),
+        particleEmitterSpawnRequestsState_);
+    renderGraph.RegisterResource(
+        "ParticleEmitterSpawnOffsets",
+        particleEmitterSpawnOffsets_.Get(),
+        particleEmitterSpawnOffsetsState_);
+    renderGraph.RegisterResource(
+        "ParticleSpawnDispatchArgs",
+        particleSpawnDispatchArgs_.Get(),
+        particleSpawnDispatchArgsState_);
     if (dedicatedParticleState_ != nullptr) {
         renderGraph.RegisterResource(
             "ParticleDedicatedState",
@@ -2122,6 +2445,18 @@ D3D12_GPU_DESCRIPTOR_HANDLE AppGpuParticleSystem::UavHandleForResource(std::stri
     }
     if (name == "ParticleCounters") {
         return particleCountersUav_.gpu;
+    }
+    if (name == "ParticleEmitterStates") {
+        return particleEmitterStatesUav_.gpu;
+    }
+    if (name == "ParticleEmitterSpawnRequests") {
+        return particleEmitterSpawnRequestsUav_.gpu;
+    }
+    if (name == "ParticleEmitterSpawnOffsets") {
+        return particleEmitterSpawnOffsetsUav_.gpu;
+    }
+    if (name == "ParticleSpawnDispatchArgs") {
+        return particleSpawnDispatchArgsUav_.gpu;
     }
     if (name == "ParticleDedicatedState") {
         return dedicatedStateUav_.gpu;
@@ -2455,6 +2790,96 @@ void AppGpuParticleSystem::ResolveTrailMeshStreamTelemetry() {
 
     trailTelemetry_.valid = true;
     trailTelemetryPending_ = false;
+}
+
+void AppGpuParticleSystem::CaptureParticlePoolTelemetry(ID3D12GraphicsCommandList* commandList) {
+    particleSimulationTelemetry_.gpuPoolTelemetryCopiedThisFrame = false;
+    particlePoolTelemetryPending_ = false;
+    if (commandList == nullptr ||
+        particleCounters_ == nullptr ||
+        particleSpawnDispatchArgs_ == nullptr ||
+        particleCountersReadback_ == nullptr ||
+        particleSpawnDispatchArgsReadback_ == nullptr) {
+        return;
+    }
+
+    std::vector<D3D12_RESOURCE_BARRIER> barriers;
+    if (particleCountersState_ != D3D12_RESOURCE_STATE_COPY_SOURCE) {
+        barriers.push_back(MakeTransition(
+            particleCounters_.Get(),
+            particleCountersState_,
+            D3D12_RESOURCE_STATE_COPY_SOURCE));
+        particleCountersState_ = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    }
+    if (particleSpawnDispatchArgsState_ != D3D12_RESOURCE_STATE_COPY_SOURCE) {
+        barriers.push_back(MakeTransition(
+            particleSpawnDispatchArgs_.Get(),
+            particleSpawnDispatchArgsState_,
+            D3D12_RESOURCE_STATE_COPY_SOURCE));
+        particleSpawnDispatchArgsState_ = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    }
+    if (!barriers.empty()) {
+        commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+    }
+
+    commandList->CopyBufferRegion(
+        particleCountersReadback_.Get(),
+        0,
+        particleCounters_.Get(),
+        0,
+        kParticlePoolCounterBytes);
+    commandList->CopyBufferRegion(
+        particleSpawnDispatchArgsReadback_.Get(),
+        0,
+        particleSpawnDispatchArgs_.Get(),
+        0,
+        sizeof(D3D12_DISPATCH_ARGUMENTS));
+
+    particlePoolTelemetryPending_ = true;
+    particleSimulationTelemetry_.gpuPoolTelemetryCopiedThisFrame = true;
+}
+
+void AppGpuParticleSystem::ResolveParticlePoolTelemetry() {
+    if (!particlePoolTelemetryPending_ ||
+        particleCountersReadback_ == nullptr ||
+        particleSpawnDispatchArgsReadback_ == nullptr) {
+        particleSimulationTelemetry_.gpuPoolTelemetryCopiedThisFrame = false;
+        return;
+    }
+
+    uint32_t counters[kParticlePoolCounterBytes / sizeof(uint32_t)]{};
+    D3D12_RANGE countersReadRange{0, kParticlePoolCounterBytes};
+    void* mappedCounters = nullptr;
+    if (SUCCEEDED(particleCountersReadback_->Map(0, &countersReadRange, &mappedCounters))) {
+        if (mappedCounters != nullptr) {
+            std::memcpy(counters, mappedCounters, sizeof(counters));
+        }
+        const D3D12_RANGE emptyWriteRange{0, 0};
+        particleCountersReadback_->Unmap(0, &emptyWriteRange);
+    }
+
+    D3D12_DISPATCH_ARGUMENTS dispatchArgs{};
+    D3D12_RANGE dispatchReadRange{0, sizeof(D3D12_DISPATCH_ARGUMENTS)};
+    void* mappedDispatchArgs = nullptr;
+    if (SUCCEEDED(particleSpawnDispatchArgsReadback_->Map(0, &dispatchReadRange, &mappedDispatchArgs))) {
+        if (mappedDispatchArgs != nullptr) {
+            std::memcpy(&dispatchArgs, mappedDispatchArgs, sizeof(dispatchArgs));
+        }
+        const D3D12_RANGE emptyWriteRange{0, 0};
+        particleSpawnDispatchArgsReadback_->Unmap(0, &emptyWriteRange);
+    }
+
+    particleSimulationTelemetry_.deadListAvailableBeforeSpawn =
+        counters[kParticleCounterDeadCountOffset / sizeof(uint32_t)];
+    particleSimulationTelemetry_.spawnThreadCount =
+        counters[kParticleCounterSpawnThreadCountOffset / sizeof(uint32_t)];
+    particleSimulationTelemetry_.totalSpawnRequest =
+        counters[kParticleCounterTotalSpawnRequestOffset / sizeof(uint32_t)];
+    particleSimulationTelemetry_.deadListShortageCount =
+        counters[kParticleCounterDeadListShortageOffset / sizeof(uint32_t)];
+    particleSimulationTelemetry_.indirectDispatchGroups = dispatchArgs.ThreadGroupCountX;
+    particleSimulationTelemetry_.gpuPoolTelemetryValid = true;
+    particlePoolTelemetryPending_ = false;
 }
 
 
@@ -2811,6 +3236,20 @@ void AppGpuParticleSystem::SetResourceState(std::string_view name, D3D12_RESOURC
         trailDrawArgsState_ = state;
     } else if (name == "ParticleState") {
         particleStateState_ = state;
+    } else if (name == "ParticleAliveList") {
+        particleAliveListState_ = state;
+    } else if (name == "ParticleDeadList") {
+        particleDeadListState_ = state;
+    } else if (name == "ParticleCounters") {
+        particleCountersState_ = state;
+    } else if (name == "ParticleEmitterStates") {
+        particleEmitterStatesState_ = state;
+    } else if (name == "ParticleEmitterSpawnRequests") {
+        particleEmitterSpawnRequestsState_ = state;
+    } else if (name == "ParticleEmitterSpawnOffsets") {
+        particleEmitterSpawnOffsetsState_ = state;
+    } else if (name == "ParticleSpawnDispatchArgs") {
+        particleSpawnDispatchArgsState_ = state;
     } else if (name == "ParticleDedicatedState") {
         dedicatedParticleStateState_ = state;
     } else if (name == "DistortionDedicatedState") {

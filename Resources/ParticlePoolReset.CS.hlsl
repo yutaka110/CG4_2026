@@ -31,6 +31,25 @@ struct EmitterState
     uint pad1;
 };
 
+struct EmitterSpawnRequest
+{
+    uint spawnRequest;
+    uint emitterKey;
+    uint2 pad;
+    float4 tint;
+    float4 scaleAndParams;
+    float4 effectParams;
+    float4 particleShapeParams;
+    float4 emitterParams;
+};
+
+struct DispatchArgs
+{
+    uint threadGroupCountX;
+    uint threadGroupCountY;
+    uint threadGroupCountZ;
+};
+
 cbuffer PoolConstants : register(b0)
 {
     float4x4 gViewProjection;
@@ -55,6 +74,9 @@ RWStructuredBuffer<uint> gAliveList : register(u2);
 RWStructuredBuffer<uint> gDeadList : register(u3);
 RWByteAddressBuffer gCounters : register(u4);
 RWStructuredBuffer<EmitterState> gEmitterStates : register(u6);
+RWStructuredBuffer<EmitterSpawnRequest> gEmitterSpawnRequests : register(u7);
+RWStructuredBuffer<uint> gEmitterSpawnOffsets : register(u8);
+RWStructuredBuffer<DispatchArgs> gSpawnDispatchArgs : register(u9);
 
 float4x4 MakeWorld(float3 position, float3 scale, float rotationZ)
 {
@@ -78,6 +100,14 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         gCounters.Store(8, 0);
         gCounters.Store(12, 0);
         gCounters.Store(16, 0);
+        gCounters.Store(20, 0);
+        gCounters.Store(24, 0);
+        gCounters.Store(28, 0);
+        DispatchArgs args;
+        args.threadGroupCountX = 1;
+        args.threadGroupCountY = 1;
+        args.threadGroupCountZ = 1;
+        gSpawnDispatchArgs[0] = args;
     }
     if (id >= gMaxParticles)
     {
@@ -110,6 +140,9 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         emitter.emitterKey = 0;
         emitter.pad1 = 0;
         gEmitterStates[id] = emitter;
+        EmitterSpawnRequest request = (EmitterSpawnRequest)0;
+        gEmitterSpawnRequests[id] = request;
+        gEmitterSpawnOffsets[id] = 0;
     }
 
     ParticleForGPU output;

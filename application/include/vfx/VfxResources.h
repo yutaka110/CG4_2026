@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string_view>
 #include <vector>
 
 #include "graphics/RenderGraph.h"
@@ -243,6 +244,19 @@ inline std::vector<ge3::graphics::RenderPassResourceAccess> SimulationAccesses(
     accesses.push_back({resources.stateBuffer, RenderResourceAccessType::ReadUav});
     accesses.push_back({resources.stateBuffer, RenderResourceAccessType::WriteUav});
     accesses.push_back({resources.renderBuffer, RenderResourceAccessType::WriteUav});
+    if (std::string_view(resources.stateBuffer) == "ParticleState" &&
+        std::string_view(resources.renderBuffer) == "ParticleRenderBuffer" &&
+        std::string_view(resources.indirectArgs) == "ParticleIndirectArgs") {
+        accesses.push_back({"ParticleAliveList", RenderResourceAccessType::WriteUav});
+        accesses.push_back({"ParticleDeadList", RenderResourceAccessType::WriteUav});
+        accesses.push_back({"ParticleCounters", RenderResourceAccessType::WriteUav});
+        accesses.push_back({"ParticleEmitterStates", RenderResourceAccessType::WriteUav});
+        accesses.push_back({"ParticleEmitterSpawnRequests", RenderResourceAccessType::WriteUav});
+        accesses.push_back({"ParticleEmitterSpawnOffsets", RenderResourceAccessType::WriteUav});
+        accesses.push_back({"ParticleSpawnDispatchArgs", RenderResourceAccessType::WriteUav});
+        accesses.push_back({"ParticleSpawnDispatchArgs", RenderResourceAccessType::ReadIndirect});
+        accesses.push_back({resources.indirectArgs, RenderResourceAccessType::WriteUav});
+    }
     return accesses;
 }
 
@@ -259,6 +273,10 @@ inline std::vector<ge3::graphics::RenderPassResourceAccess> DrawAccesses(
     if (resources.usesIndirectSprite) {
         accesses.push_back({resources.renderBuffer, RenderResourceAccessType::ReadSrv});
         accesses.push_back({resources.indirectArgs, RenderResourceAccessType::ReadIndirect});
+        if (std::string_view(resources.renderBuffer) == "ParticleRenderBuffer" &&
+            std::string_view(resources.indirectArgs) == "ParticleIndirectArgs") {
+            accesses.push_back({"ParticleAliveList", RenderResourceAccessType::ReadSrv});
+        }
     }
 
     accesses.push_back({resources.accumulationTarget, RenderResourceAccessType::WriteRtv});

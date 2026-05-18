@@ -16,15 +16,57 @@ cbuffer PoolConstants : register(b0)
     float4 gEmitterParams;
 };
 
+struct EmitterSpawnRequest
+{
+    uint spawnRequest;
+    uint emitterKey;
+    uint2 pad;
+    float4 tint;
+    float4 scaleAndParams;
+    float4 effectParams;
+    float4 particleShapeParams;
+    float4 emitterParams;
+};
+
+struct DispatchArgs
+{
+    uint threadGroupCountX;
+    uint threadGroupCountY;
+    uint threadGroupCountZ;
+};
+
 RWStructuredBuffer<uint> gAliveList : register(u2);
 RWStructuredBuffer<uint> gDeadList : register(u3);
 RWByteAddressBuffer gCounters : register(u4);
+RWStructuredBuffer<EmitterSpawnRequest> gEmitterSpawnRequests : register(u7);
+RWStructuredBuffer<uint> gEmitterSpawnOffsets : register(u8);
+RWStructuredBuffer<DispatchArgs> gSpawnDispatchArgs : register(u9);
 
-[numthreads(1, 1, 1)]
+static const uint kMaxEmitters = 1024;
+
+[numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
-    gCounters.Store(0, 0);
-    gCounters.Store(8, 0);
-    gCounters.Store(12, 0);
-    gCounters.Store(16, 0);
+    uint id = dispatchThreadId.x;
+    if (id == 0)
+    {
+        gCounters.Store(0, 0);
+        gCounters.Store(8, 0);
+        gCounters.Store(12, 0);
+        gCounters.Store(16, 0);
+        gCounters.Store(20, 0);
+        gCounters.Store(24, 0);
+        gCounters.Store(28, 0);
+        DispatchArgs args;
+        args.threadGroupCountX = 1;
+        args.threadGroupCountY = 1;
+        args.threadGroupCountZ = 1;
+        gSpawnDispatchArgs[0] = args;
+    }
+    if (id < kMaxEmitters)
+    {
+        EmitterSpawnRequest request = (EmitterSpawnRequest)0;
+        gEmitterSpawnRequests[id] = request;
+        gEmitterSpawnOffsets[id] = 0;
+    }
 }

@@ -304,9 +304,17 @@ void ParticleRenderer::Simulate(
         context.appPipelines->GetGpuParticlePoolUpdateComputePSO() != nullptr &&
         context.appPipelines->GetGpuParticleEmitterUpdateComputePSO() != nullptr &&
         context.appPipelines->GetGpuParticleEmitterResetComputePSO() != nullptr &&
+        context.appPipelines->GetGpuParticlePoolSpawnPrepareComputePSO() != nullptr &&
         context.appPipelines->GetGpuParticlePoolSpawnComputePSO() != nullptr &&
         context.appPipelines->GetGpuParticlePoolArgsComputePSO() != nullptr &&
         context.gpuParticleSystem->IsGpuManagedParticlePoolInitialized();
+    Vector4 gpuManagedFrameTint = {1.0f, 1.0f, 1.0f, 1.0f};
+    Vector3 gpuManagedFrameScale = {1.0f, 1.0f, 1.0f};
+    float gpuManagedFrameEmissive = 1.0f;
+    float gpuManagedFrameTurbulence = 0.0f;
+    float gpuManagedFramePulseSpeed = 5.0f;
+    float gpuManagedFrameSpawnRadius = 4.0f;
+    float gpuManagedFrameUvScrollSpeed = 0.0f;
 
     auto simulateSlice = [&](const ParticleRenderInput& input, uint32_t sliceOffset, uint32_t sliceCapacity) -> uint32_t {
         Vector4 tint = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -461,6 +469,15 @@ void ParticleRenderer::Simulate(
         const uint32_t emitterResetToken = emitterKey;
         const float emitterTimelineAge = ResolveGpuEmitterTimelineAge(input, context.beamTime);
         const float deltaTime = context.frameState != nullptr ? context.frameState->deltaTime : 0.016f;
+        if (updateExistingParticles) {
+            gpuManagedFrameTint = tint;
+            gpuManagedFrameScale = scale;
+            gpuManagedFrameEmissive = emissive;
+            gpuManagedFrameTurbulence = turbulence;
+            gpuManagedFramePulseSpeed = pulseSpeed;
+            gpuManagedFrameSpawnRadius = spawnRadius;
+            gpuManagedFrameUvScrollSpeed = uvScrollSpeed;
+        }
         context.gpuParticleSystem->SimulateGpuManagedParticles(
             commandList,
             context.srvDescriptorHeap,
@@ -527,6 +544,24 @@ void ParticleRenderer::Simulate(
             input.fallbackSettings = fallback.settings;
             simulateGpuManaged(input, true, 0);
         }
+        context.gpuParticleSystem->FinishGpuManagedParticleFrame(
+            commandList,
+            context.srvDescriptorHeap,
+            context.appPipelines->GetGpuParticleComputeRootSignature(),
+            context.appPipelines->GetGpuParticlePoolUpdateComputePSO(),
+            context.appPipelines->GetGpuParticlePoolSpawnPrepareComputePSO(),
+            context.appPipelines->GetGpuParticlePoolSpawnComputePSO(),
+            context.appPipelines->GetGpuParticlePoolArgsComputePSO(),
+            context.frameState->viewProjectionMatrix,
+            context.frameState != nullptr ? context.frameState->deltaTime : 0.016f,
+            context.beamTime,
+            gpuManagedFrameTint,
+            gpuManagedFrameScale,
+            gpuManagedFrameEmissive,
+            gpuManagedFrameTurbulence,
+            gpuManagedFramePulseSpeed,
+            gpuManagedFrameSpawnRadius,
+            gpuManagedFrameUvScrollSpeed);
         instanceCount = maxParticles;
     } else if (!queue.empty()) {
         const uint32_t emitterCount = static_cast<uint32_t>(queue.size());

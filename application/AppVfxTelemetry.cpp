@@ -1597,7 +1597,7 @@ void WriteParticleDedicatedProbeTelemetry(
     }
 
     if (resetFile) {
-        stream << "frame ParticleDedicatedOperational simulationPath renderPath graph handles readback validation fallbackReason fallbackActive fallbackTarget autoFallback probeStableFrames activeStableFrames defaultONCandidate defaultOnHealth simulationTelemetry renderBuffer renderBufferUav state stateUav renderBufferResource indirectArgsResource groups maxParticles sampleReadback sampleValidation drawArgsReadback drawArgsValidation expectedDrawCount actualDrawCount expectedIndexCount actualIndexCount drawArgsFirstFailure okRows ngRows maxPosDelta firstFailure renderSamples stateSamples state0Pos state0Age render0World render0Color statusReason graphReason\n";
+        stream << "frame ParticleDedicatedOperational simulationPath renderPath graph handles readback validation fallbackReason fallbackActive fallbackTarget autoFallback probeStableFrames activeStableFrames defaultONCandidate defaultOnHealth simulationTelemetry renderBuffer renderBufferUav state stateUav renderBufferResource indirectArgsResource groups maxParticles gpuPoolTelemetry totalSpawnRequest spawnThreadCount indirectDispatchGroups deadListAvailableBeforeSpawn deadListShortage sampleReadback sampleValidation drawArgsReadback drawArgsValidation expectedDrawCount actualDrawCount expectedIndexCount actualIndexCount drawArgsFirstFailure okRows ngRows maxPosDelta firstFailure renderSamples stateSamples state0Pos state0Age render0World render0Color statusReason graphReason\n";
     }
 
     const bool telemetryValid = simulationTelemetry != nullptr && simulationTelemetry->valid;
@@ -1635,6 +1635,14 @@ void WriteParticleDedicatedProbeTelemetry(
            << " indirectArgsResource=\"" << probeStatus.indirectArgsResource << "\""
            << " groups=" << (telemetryValid ? simulationTelemetry->dispatchGroupCount : 0u)
            << " maxParticles=" << (telemetryValid ? simulationTelemetry->maxParticles : 0u)
+           << " gpuPoolTelemetry="
+           << (telemetryValid && simulationTelemetry->gpuPoolTelemetryValid ? "valid" : "waiting")
+           << " totalSpawnRequest=" << (telemetryValid ? simulationTelemetry->totalSpawnRequest : 0u)
+           << " spawnThreadCount=" << (telemetryValid ? simulationTelemetry->spawnThreadCount : 0u)
+           << " indirectDispatchGroups=" << (telemetryValid ? simulationTelemetry->indirectDispatchGroups : 0u)
+           << " deadListAvailableBeforeSpawn="
+           << (telemetryValid ? simulationTelemetry->deadListAvailableBeforeSpawn : 0u)
+           << " deadListShortage=" << (telemetryValid ? simulationTelemetry->deadListShortageCount : 0u)
            << " sampleReadback=" << (operationalHealth.readbackValid ? "valid" : "waiting")
            << " sampleValidation=" << (operationalHealth.readbackValidationOk ? "ok" : "attention")
            << " drawArgsReadback=" << (operationalHealth.drawArgsReadbackValid ? "valid" : "waiting")

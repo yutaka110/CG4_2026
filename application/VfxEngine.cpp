@@ -597,6 +597,7 @@ void VfxEngine::RegisterGraphResources(
 
 void VfxEngine::CaptureFrameTelemetry(ID3D12GraphicsCommandList* commandList) {
     gpuParticleSystem_.CaptureTrailMeshStreamTelemetry(commandList);
+    gpuParticleSystem_.CaptureParticlePoolTelemetry(commandList);
     gpuParticleSystem_.CaptureParticleDedicatedReadbackTelemetry(commandList);
     gpuParticleSystem_.CaptureDistortionDedicatedReadbackTelemetry(commandList);
     gpuParticleSystem_.CaptureBeamDedicatedReadbackTelemetry(commandList);
@@ -604,6 +605,7 @@ void VfxEngine::CaptureFrameTelemetry(ID3D12GraphicsCommandList* commandList) {
 
 void VfxEngine::ResolveFrameTelemetry() {
     gpuParticleSystem_.ResolveTrailMeshStreamTelemetry();
+    gpuParticleSystem_.ResolveParticlePoolTelemetry();
     gpuParticleSystem_.ResolveParticleDedicatedReadbackTelemetry();
     gpuParticleSystem_.ResolveDistortionDedicatedReadbackTelemetry();
     gpuParticleSystem_.ResolveBeamDedicatedReadbackTelemetry();
