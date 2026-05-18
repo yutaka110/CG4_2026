@@ -374,6 +374,12 @@
     <FxCompile Include="Resources\Beam3D.VS.hlsl" />
     <FxCompile Include="Resources\Beam3D.PS.hlsl" />
     <FxCompile Include="Resources\ParticleSim.CS.hlsl" />
+    <FxCompile Include="Resources\ParticleReset.CS.hlsl" />
+    <FxCompile Include="Resources\ParticlePoolBegin.CS.hlsl" />
+    <FxCompile Include="Resources\ParticlePoolArgs.CS.hlsl" />
+    <FxCompile Include="Resources\ParticlePoolReset.CS.hlsl" />
+    <FxCompile Include="Resources\ParticlePoolSpawn.CS.hlsl" />
+    <FxCompile Include="Resources\ParticlePoolUpdate.CS.hlsl" />
     <FxCompile Include="Resources\Skinning.CS.hlsl" />
     <FxCompile Include="Resources\TrailMeshStream.CS.hlsl" />
     <FxCompile Include="Resources\TrailMeshStream.VS.hlsl" />

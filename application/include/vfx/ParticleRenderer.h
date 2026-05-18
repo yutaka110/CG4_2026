@@ -45,7 +45,8 @@ public:
     void Simulate(
         ID3D12GraphicsCommandList* commandList,
         const VfxRenderContext& context,
-        const ParticleRenderInput& input) const;
+        const ParticleRenderQueue& queue,
+        const ParticleRenderFallback& fallback) const;
 
     void Draw(
         ID3D12GraphicsCommandList* commandList,

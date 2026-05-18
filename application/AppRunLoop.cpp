@@ -161,7 +161,8 @@ void AppRunLoop::RenderFrame() {
     vfxEngine_.InitializeGpuParticles(
         dev_.GetDevice(),
         commandList.Get(),
-        heaps_);
+        heaps_,
+        appPipelines_);
 
     ID3D12Resource* backBuffer = swapChain_.BackBuffer(backBufferIndex);
     auto dsvHandle = heaps_.dsv.GetHandle(engineContext_.GetMainDsvIndex()).cpu;

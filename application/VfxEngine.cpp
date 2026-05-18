@@ -3,11 +3,14 @@
 #include "AppRuntimeState.h"
 #include "AppSceneResources.h"
 #include "AppVfxRenderPipeline.h"
+#include "AppPipelines.h"
+#include "vfx/VfxRenderInputs.h"
 
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 
@@ -228,6 +231,36 @@ void PreserveLiveTuning(
     PreserveRingLiveTuning(currentAsset, reloadedAsset);
     PreserveCylinderLiveTuning(currentAsset, reloadedAsset);
 }
+
+Vector4 ResolveParticleTint(const ParticleRenderInput& input) {
+    if (input.primary.instance != nullptr && input.primary.componentCommon != nullptr) {
+        const EffectInstance& instance = *input.primary.instance;
+        const EffectComponentCommon& component = *input.primary.componentCommon;
+        return {
+            instance.color.x * component.color.x,
+            instance.color.y * component.color.y,
+            instance.color.z * component.color.z,
+            instance.color.w * component.color.w,
+        };
+    }
+
+    return input.fallbackCommon != nullptr ? input.fallbackCommon->color : Vector4{1.0f, 1.0f, 1.0f, 1.0f};
+}
+
+Vector3 ResolveParticleEmitterPosition(const ParticleRenderInput& input) {
+    return input.primary.instance != nullptr ? input.primary.instance->transform.translate : Vector3{};
+}
+
+float ResolveParticleLifetime(const ParticleRenderInput& input) {
+    if (input.primary.componentCommon != nullptr) {
+        return input.primary.componentCommon->duration;
+    }
+    return input.fallbackCommon != nullptr ? input.fallbackCommon->duration : 0.0f;
+}
+
+const EffectParticleSettings* ResolveParticleSettings(const ParticleRenderInput& input) {
+    return input.settings != nullptr ? input.settings : input.fallbackSettings;
+}
 } // namespace
 
 VfxEngine::VfxEngine() {
@@ -282,8 +315,15 @@ void VfxEngine::InitializeBeam(
 void VfxEngine::InitializeGpuParticles(
     ID3D12Device* device,
     ID3D12GraphicsCommandList* commandList,
-    ge3::core::DescriptorHeapSet& heaps) {
-    gpuParticleSystem_.Initialize(device, commandList, heaps);
+    ge3::core::DescriptorHeapSet& heaps,
+    AppPipelines& pipelines) {
+    gpuParticleSystem_.Initialize(
+        device,
+        commandList,
+        heaps,
+        AppGpuParticleSystem::kDefaultMaxParticles,
+        pipelines.GetGpuParticleComputeRootSignature(),
+        pipelines.GetGpuParticleResetComputePSO());
 }
 
 void VfxEngine::Shutdown() {
@@ -384,16 +424,90 @@ void VfxEngine::RegisterRenderPasses(
     graphContext.effectRuntime = &frameGraphEffectRuntimeFrame_;
     graphContext.primaryParticleFx = primaryParticleFx;
     graphContext.beamTime = beamTime_;
+    const vfx::VfxTypedResourceSet selectedResources =
+        resourceResolver_.SelectPassResources(graphContext.runtimeState->vfx);
 
     frameGraphBuilder.Build(
         graphContext,
-        [this](const AppFrameGraphBuildContext& context) {
+        [selectedResources](const AppFrameGraphBuildContext& context) {
             AppVfxRenderPipeline{}.RegisterPasses(
                 context,
-                resourceResolver_.SelectPassResources(context.runtimeState->vfx));
+                selectedResources);
         });
     gpuParticleSystem_.EnsureGraphBuffers(device, *graphContext.renderGraph);
-    gpuParticleSystem_.InitializeDedicatedParticleResources(commandList);
+    if (!gpuParticleSystem_.IsGpuManagedParticlePoolInitialized() &&
+        graphContext.appPipelines != nullptr &&
+        graphContext.srvDescriptorHeap != nullptr) {
+        gpuParticleSystem_.ResetGpuManagedParticlePool(
+            commandList,
+            graphContext.srvDescriptorHeap,
+            graphContext.appPipelines->GetGpuParticleComputeRootSignature(),
+            graphContext.appPipelines->GetGpuParticlePoolResetComputePSO());
+    }
+    gpuParticleSystem_.InitializeDedicatedParticleResources(
+        commandList,
+        graphContext.srvDescriptorHeap,
+        graphContext.appPipelines != nullptr ? graphContext.appPipelines->GetGpuParticleComputeRootSignature() : nullptr,
+        graphContext.appPipelines != nullptr ? graphContext.appPipelines->GetGpuParticleResetComputePSO() : nullptr);
+
+    const uint64_t resetSerial = effectRuntime_.ParticlePoolResetSerial();
+    if (resetSerial != consumedParticlePoolResetSerial_ &&
+        graphContext.appPipelines != nullptr &&
+        graphContext.srvDescriptorHeap != nullptr) {
+        bool consumed = false;
+        const ParticleRenderInput particleInput =
+            frameGraphEffectRuntimeFrame_.ParticleInput(primaryParticleFx);
+        if (selectedResources.particle.simulation.usesCompute &&
+            particleInput.primary.instance != nullptr) {
+            const EffectParticleSettings* settings = ResolveParticleSettings(particleInput);
+            if (std::string_view(selectedResources.particle.simulation.stateBuffer) == "ParticleState") {
+                consumed |= gpuParticleSystem_.ResetGpuManagedParticlePool(
+                    commandList,
+                    graphContext.srvDescriptorHeap,
+                    graphContext.appPipelines->GetGpuParticleComputeRootSignature(),
+                    graphContext.appPipelines->GetGpuParticlePoolResetComputePSO());
+            } else {
+                consumed |= gpuParticleSystem_.ResetParticlePool(
+                    commandList,
+                    graphContext.srvDescriptorHeap,
+                    graphContext.appPipelines->GetGpuParticleComputeRootSignature(),
+                    graphContext.appPipelines->GetGpuParticleResetComputePSO(),
+                    selectedResources.particle.simulation.stateBuffer,
+                    ResolveParticleEmitterPosition(particleInput),
+                    ResolveParticleLifetime(particleInput),
+                    settings != nullptr ? settings->spawnRadius : 4.0f,
+                    settings != nullptr ? settings->spawnCount : 0.0f,
+                    settings != nullptr ? settings->randomRotation : 0.0f,
+                    settings != nullptr ? settings->scaleYMin : 1.0f,
+                    settings != nullptr ? settings->scaleYMax : 1.0f,
+                    ResolveParticleTint(particleInput));
+            }
+        }
+        if (selectedResources.distortion.simulation.usesCompute &&
+            !frameGraphEffectRuntimeFrame_.distortionQueue.empty()) {
+            consumed |= gpuParticleSystem_.ResetParticlePool(
+                commandList,
+                graphContext.srvDescriptorHeap,
+                graphContext.appPipelines->GetGpuParticleComputeRootSignature(),
+                graphContext.appPipelines->GetGpuParticleResetComputePSO(),
+                selectedResources.distortion.simulation.stateBuffer);
+        }
+        if (selectedResources.beam.simulation.usesCompute &&
+            !frameGraphEffectRuntimeFrame_.beamQueue.empty()) {
+            consumed |= gpuParticleSystem_.ResetParticlePool(
+                commandList,
+                graphContext.srvDescriptorHeap,
+                graphContext.appPipelines->GetGpuParticleComputeRootSignature(),
+                graphContext.appPipelines->GetGpuParticleResetComputePSO(),
+                selectedResources.beam.simulation.stateBuffer);
+        }
+        if (consumed ||
+            (frameGraphEffectRuntimeFrame_.particleQueue.empty() &&
+             frameGraphEffectRuntimeFrame_.distortionQueue.empty() &&
+             frameGraphEffectRuntimeFrame_.beamQueue.empty())) {
+            consumedParticlePoolResetSerial_ = resetSerial;
+        }
+    }
 }
 
 VfxGraphResourceStats VfxEngine::PrepareGraphResources(

@@ -12,6 +12,8 @@
 #include "vfx/VfxPassRegistration.h"
 #include "vfx/VfxResources.h"
 
+#include <algorithm>
+#include <cmath>
 #include <string_view>
 
 namespace vfx {
@@ -215,7 +217,8 @@ void ParticleRenderer::RegisterPasses(
             Simulate(
                 passContext.commandList,
                 vfx::BuildPassRenderContext(ctx, vfxResources),
-                ctx.effectRuntime->ParticleInput(ctx.primaryParticleFx));
+                ctx.effectRuntime->particleQueue,
+                ctx.primaryParticleFx);
         }});
 
     ctx.renderGraph->AddPass({
@@ -238,7 +241,8 @@ void ParticleRenderer::RegisterPasses(
 void ParticleRenderer::Simulate(
     ID3D12GraphicsCommandList* commandList,
     const VfxRenderContext& context,
-    const ParticleRenderInput& input) const {
+    const ParticleRenderQueue& queue,
+    const ParticleRenderFallback& fallback) const {
     if (commandList == nullptr ||
         context.srvDescriptorHeap == nullptr ||
         context.appPipelines == nullptr ||
@@ -250,59 +254,6 @@ void ParticleRenderer::Simulate(
     ID3D12DescriptorHeap* descriptorHeaps[] = { context.srvDescriptorHeap };
     commandList->SetDescriptorHeaps(1, descriptorHeaps);
 
-    Vector4 tint = {1.0f, 1.0f, 1.0f, 1.0f};
-    Vector3 scale = {1.0f, 1.0f, 1.0f};
-    float emissive = 1.0f;
-    float turbulence = 0.0f;
-    float pulseSpeed = 5.0f;
-    float spawnRadius = 4.0f;
-    float uvScrollSpeed = 0.0f;
-    float particleLifetime = 0.0f;
-    float spawnCount = 0.0f;
-    float randomRotation = 0.0f;
-    float scaleYMin = 1.0f;
-    float scaleYMax = 1.0f;
-    Vector3 emitterPosition = {0.0f, 0.0f, 0.0f};
-
-    if (input.primary.instance != nullptr &&
-        input.primary.componentCommon != nullptr &&
-        input.settings != nullptr) {
-        const EffectInstance& instance = *input.primary.instance;
-        const EffectComponentCommon& component = *input.primary.componentCommon;
-        const EffectParticleSettings& settings = *input.settings;
-        tint = {
-            instance.color.x * component.color.x,
-            instance.color.y * component.color.y,
-            instance.color.z * component.color.z,
-            instance.color.w * component.color.w,
-        };
-        scale = instance.transform.scale;
-        emitterPosition = instance.transform.translate;
-        particleLifetime = component.duration;
-        emissive = settings.emissive;
-        turbulence = settings.noiseStrength + settings.distortionStrength;
-        pulseSpeed = settings.pulseSpeed;
-        spawnRadius = settings.spawnRadius;
-        uvScrollSpeed = settings.uvScrollSpeed;
-        spawnCount = settings.spawnCount;
-        randomRotation = settings.randomRotation;
-        scaleYMin = settings.scaleYMin;
-        scaleYMax = settings.scaleYMax;
-    } else if (input.fallbackCommon != nullptr && input.fallbackSettings != nullptr) {
-        tint = input.fallbackCommon->color;
-        scale = input.fallbackCommon->size;
-        particleLifetime = input.fallbackCommon->duration;
-        emissive = input.fallbackSettings->emissive;
-        turbulence = input.fallbackSettings->noiseStrength + input.fallbackSettings->distortionStrength;
-        pulseSpeed = input.fallbackSettings->pulseSpeed;
-        spawnRadius = input.fallbackSettings->spawnRadius;
-        uvScrollSpeed = input.fallbackSettings->uvScrollSpeed;
-        spawnCount = input.fallbackSettings->spawnCount;
-        randomRotation = input.fallbackSettings->randomRotation;
-        scaleYMin = input.fallbackSettings->scaleYMin;
-        scaleYMax = input.fallbackSettings->scaleYMax;
-    }
-
     const vfx::VfxSimulationResourceSet* simulationResources =
         context.typedResources != nullptr ? &context.typedResources->particle.simulation : nullptr;
     const char* renderBufferResource =
@@ -313,28 +264,270 @@ void ParticleRenderer::Simulate(
         simulationResources != nullptr && simulationResources->stateBuffer[0] != '\0'
             ? simulationResources->stateBuffer
             : "ParticleState";
-    context.gpuParticleSystem->Simulate(
-        commandList,
-        context.appPipelines->GetGpuParticleComputeRootSignature(),
-        context.appPipelines->GetGpuParticleComputePSO(),
-        context.frameState->viewProjectionMatrix,
-        0.016f,
-        context.beamTime,
-        tint,
-        scale,
-        emissive,
-        turbulence,
-        pulseSpeed,
-        spawnRadius,
-        uvScrollSpeed,
-        renderBufferResource,
-        stateBufferResource,
-        particleLifetime,
-        spawnCount,
-        randomRotation,
-        scaleYMin,
-        scaleYMax,
-        emitterPosition);
+
+    const uint32_t maxParticles = context.gpuParticleSystem->MaxParticles();
+    if (maxParticles == 0) {
+        return;
+    }
+    const bool useGpuManagedPool =
+        std::string_view(renderBufferResource) == "ParticleRenderBuffer" &&
+        std::string_view(stateBufferResource) == "ParticleState" &&
+        context.appPipelines->GetGpuParticlePoolBeginComputePSO() != nullptr &&
+        context.appPipelines->GetGpuParticlePoolUpdateComputePSO() != nullptr &&
+        context.appPipelines->GetGpuParticlePoolSpawnComputePSO() != nullptr &&
+        context.appPipelines->GetGpuParticlePoolArgsComputePSO() != nullptr &&
+        context.gpuParticleSystem->IsGpuManagedParticlePoolInitialized();
+
+    auto simulateSlice = [&](const ParticleRenderInput& input, uint32_t sliceOffset, uint32_t sliceCapacity) -> uint32_t {
+        Vector4 tint = {1.0f, 1.0f, 1.0f, 1.0f};
+        Vector3 scale = {1.0f, 1.0f, 1.0f};
+        float emissive = 1.0f;
+        float turbulence = 0.0f;
+        float pulseSpeed = 5.0f;
+        float spawnRadius = 4.0f;
+        float uvScrollSpeed = 0.0f;
+        float particleLifetime = 0.0f;
+        float spawnCount = 0.0f;
+        float randomRotation = 0.0f;
+        float scaleYMin = 1.0f;
+        float scaleYMax = 1.0f;
+        Vector3 emitterPosition = {0.0f, 0.0f, 0.0f};
+
+        if (input.primary.instance != nullptr &&
+            input.primary.componentCommon != nullptr &&
+            input.settings != nullptr) {
+            const EffectInstance& instance = *input.primary.instance;
+            const EffectComponentCommon& component = *input.primary.componentCommon;
+            const EffectParticleSettings& settings = *input.settings;
+            tint = {
+                instance.color.x * component.color.x,
+                instance.color.y * component.color.y,
+                instance.color.z * component.color.z,
+                instance.color.w * component.color.w,
+            };
+            scale = instance.transform.scale;
+            emitterPosition = instance.transform.translate;
+            particleLifetime = component.duration;
+            emissive = settings.emissive;
+            turbulence = settings.noiseStrength + settings.distortionStrength;
+            pulseSpeed = settings.pulseSpeed;
+            spawnRadius = settings.spawnRadius;
+            uvScrollSpeed = settings.uvScrollSpeed;
+            spawnCount = settings.spawnCount;
+            randomRotation = settings.randomRotation;
+            scaleYMin = settings.scaleYMin;
+            scaleYMax = settings.scaleYMax;
+        } else if (input.fallbackCommon != nullptr && input.fallbackSettings != nullptr) {
+            tint = input.fallbackCommon->color;
+            scale = input.fallbackCommon->size;
+            particleLifetime = input.fallbackCommon->duration;
+            emissive = input.fallbackSettings->emissive;
+            turbulence = input.fallbackSettings->noiseStrength + input.fallbackSettings->distortionStrength;
+            pulseSpeed = input.fallbackSettings->pulseSpeed;
+            spawnRadius = input.fallbackSettings->spawnRadius;
+            uvScrollSpeed = input.fallbackSettings->uvScrollSpeed;
+            spawnCount = input.fallbackSettings->spawnCount;
+            randomRotation = input.fallbackSettings->randomRotation;
+            scaleYMin = input.fallbackSettings->scaleYMin;
+            scaleYMax = input.fallbackSettings->scaleYMax;
+        }
+
+        const uint32_t requestedCount = spawnCount > 0.0f
+            ? static_cast<uint32_t>((std::max)(1.0f, std::round(spawnCount)))
+            : sliceCapacity;
+        const uint32_t sliceCount = (std::min)(sliceCapacity, requestedCount);
+        if (sliceCount == 0) {
+            return 0;
+        }
+
+        context.gpuParticleSystem->Simulate(
+            commandList,
+            context.appPipelines->GetGpuParticleComputeRootSignature(),
+            context.appPipelines->GetGpuParticleComputePSO(),
+            context.frameState->viewProjectionMatrix,
+            0.016f,
+            context.beamTime,
+            tint,
+            scale,
+            emissive,
+            turbulence,
+            pulseSpeed,
+            spawnRadius,
+            uvScrollSpeed,
+            renderBufferResource,
+            stateBufferResource,
+            particleLifetime,
+            static_cast<float>(sliceCount),
+            randomRotation,
+            scaleYMin,
+            scaleYMax,
+            emitterPosition,
+            sliceOffset,
+            sliceCount);
+        return sliceCount;
+    };
+
+    auto simulateGpuManaged = [&](const ParticleRenderInput& input, bool updateExistingParticles) -> uint32_t {
+        Vector4 tint = {1.0f, 1.0f, 1.0f, 1.0f};
+        Vector3 scale = {1.0f, 1.0f, 1.0f};
+        float emissive = 1.0f;
+        float turbulence = 0.0f;
+        float pulseSpeed = 5.0f;
+        float spawnRadius = 4.0f;
+        float uvScrollSpeed = 0.0f;
+        float particleLifetime = 0.0f;
+        float spawnCount = 0.0f;
+        float randomRotation = 0.0f;
+        float scaleYMin = 1.0f;
+        float scaleYMax = 1.0f;
+        Vector3 emitterPosition = {0.0f, 0.0f, 0.0f};
+
+        if (input.primary.instance != nullptr &&
+            input.primary.componentCommon != nullptr &&
+            input.settings != nullptr) {
+            const EffectInstance& instance = *input.primary.instance;
+            const EffectComponentCommon& component = *input.primary.componentCommon;
+            const EffectParticleSettings& settings = *input.settings;
+            tint = {
+                instance.color.x * component.color.x,
+                instance.color.y * component.color.y,
+                instance.color.z * component.color.z,
+                instance.color.w * component.color.w,
+            };
+            scale = instance.transform.scale;
+            emitterPosition = instance.transform.translate;
+            particleLifetime = component.duration;
+            emissive = settings.emissive;
+            turbulence = settings.noiseStrength + settings.distortionStrength;
+            pulseSpeed = settings.pulseSpeed;
+            spawnRadius = settings.spawnRadius;
+            uvScrollSpeed = settings.uvScrollSpeed;
+            spawnCount = settings.spawnCount;
+            randomRotation = settings.randomRotation;
+            scaleYMin = settings.scaleYMin;
+            scaleYMax = settings.scaleYMax;
+        } else if (input.fallbackCommon != nullptr && input.fallbackSettings != nullptr) {
+            tint = input.fallbackCommon->color;
+            scale = input.fallbackCommon->size;
+            particleLifetime = input.fallbackCommon->duration;
+            emissive = input.fallbackSettings->emissive;
+            turbulence = input.fallbackSettings->noiseStrength + input.fallbackSettings->distortionStrength;
+            pulseSpeed = input.fallbackSettings->pulseSpeed;
+            spawnRadius = input.fallbackSettings->spawnRadius;
+            uvScrollSpeed = input.fallbackSettings->uvScrollSpeed;
+            spawnCount = input.fallbackSettings->spawnCount;
+            randomRotation = input.fallbackSettings->randomRotation;
+            scaleYMin = input.fallbackSettings->scaleYMin;
+            scaleYMax = input.fallbackSettings->scaleYMax;
+        }
+
+        const uint32_t requestedCount = spawnCount > 0.0f
+            ? static_cast<uint32_t>((std::max)(1.0f, std::round(spawnCount)))
+            : 0u;
+        context.gpuParticleSystem->SimulateGpuManagedParticles(
+            commandList,
+            context.srvDescriptorHeap,
+            context.appPipelines->GetGpuParticleComputeRootSignature(),
+            context.appPipelines->GetGpuParticlePoolBeginComputePSO(),
+            context.appPipelines->GetGpuParticlePoolUpdateComputePSO(),
+            context.appPipelines->GetGpuParticlePoolSpawnComputePSO(),
+            context.appPipelines->GetGpuParticlePoolArgsComputePSO(),
+            context.frameState->viewProjectionMatrix,
+            0.016f,
+            context.beamTime,
+            tint,
+            scale,
+            emissive,
+            turbulence,
+            pulseSpeed,
+            spawnRadius,
+            uvScrollSpeed,
+            particleLifetime,
+            static_cast<float>(requestedCount),
+            randomRotation,
+            scaleYMin,
+            scaleYMax,
+            emitterPosition,
+            updateExistingParticles);
+        return requestedCount;
+    };
+
+    uint32_t instanceCount = 0;
+    if (useGpuManagedPool) {
+        if (!queue.empty()) {
+            bool updateExistingParticles = true;
+            for (const ParticleRenderItem& item : queue) {
+                ParticleRenderInput input{};
+                input.primary = {
+                    &item.common,
+                    item.common.asset,
+                    item.common.componentCommon,
+                    item.common.rendererDescriptor,
+                    item.common.simulationDescriptor,
+                    item.common.instance,
+                    item.common.componentInstance,
+                    item.common.normalizedAge,
+                    item.common.renderQueue
+                };
+                input.settings = item.settings;
+                input.fallbackCommon = fallback.common;
+                input.fallbackSettings = fallback.settings;
+                simulateGpuManaged(input, updateExistingParticles);
+                updateExistingParticles = false;
+            }
+        } else {
+            ParticleRenderInput input{};
+            input.fallbackCommon = fallback.common;
+            input.fallbackSettings = fallback.settings;
+            simulateGpuManaged(input, true);
+        }
+        instanceCount = maxParticles;
+    } else if (!queue.empty()) {
+        const uint32_t emitterCount = static_cast<uint32_t>(queue.size());
+        const uint32_t defaultSliceCapacity = (std::max)(1u, maxParticles / emitterCount);
+        for (const ParticleRenderItem& item : queue) {
+            if (instanceCount >= maxParticles) {
+                break;
+            }
+            ParticleRenderInput input{};
+            input.primary = {
+                &item.common,
+                item.common.asset,
+                item.common.componentCommon,
+                item.common.rendererDescriptor,
+                item.common.simulationDescriptor,
+                item.common.instance,
+                item.common.componentInstance,
+                item.common.normalizedAge,
+                item.common.renderQueue
+            };
+            input.settings = item.settings;
+            input.fallbackCommon = fallback.common;
+            input.fallbackSettings = fallback.settings;
+            const uint32_t remaining = maxParticles - instanceCount;
+            const uint32_t sliceCapacity = (std::min)(defaultSliceCapacity, remaining);
+            instanceCount += simulateSlice(input, instanceCount, sliceCapacity);
+        }
+    } else {
+        ParticleRenderInput input{};
+        input.fallbackCommon = fallback.common;
+        input.fallbackSettings = fallback.settings;
+        instanceCount = simulateSlice(input, 0, maxParticles);
+    }
+
+    const char* indirectArgsResource =
+        simulationResources != nullptr && simulationResources->indirectArgs[0] != '\0'
+            ? simulationResources->indirectArgs
+            : "ParticleIndirectArgs";
+    D3D12_DRAW_INDEXED_ARGUMENTS args{};
+    args.IndexCountPerInstance = 6;
+    args.InstanceCount = instanceCount;
+    if (!useGpuManagedPool) {
+        context.gpuParticleSystem->WriteIndirectArgsForResource(
+            commandList,
+            indirectArgsResource,
+            args);
+    }
 }
 
 void ParticleRenderer::Draw(

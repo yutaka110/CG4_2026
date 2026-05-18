@@ -937,6 +937,8 @@ public:
     const EffectInstance* FindInstance(uint32_t id) const;
     void SetEffectPreviewLoop(uint32_t id, bool enabled);
     void RestartInstance(uint32_t id);
+    void SetInstanceAge(uint32_t id, float age);
+    uint64_t ParticlePoolResetSerial() const { return particlePoolResetSerial_; }
 
     const std::vector<EffectInstance>& Instances() const { return instances_; }
     std::vector<EffectInstance>& MutableInstances() { return instances_; }
@@ -950,6 +952,7 @@ private:
         const EffectAuthoringRegistry& authoringRegistry);
 
     uint32_t nextInstanceId_ = 1;
+    uint64_t particlePoolResetSerial_ = 0;
     std::unordered_map<std::string, EffectAsset> assets_;
     std::vector<EffectInstance> instances_;
 };

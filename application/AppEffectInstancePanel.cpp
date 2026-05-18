@@ -394,6 +394,10 @@ void DrawEffectInstancePanel(
                 static_cast<unsigned int>(selectedInstance->components.size()));
             DrawLoaderDiagnosticSummary(
                 FindLoadedEffectAsset(input.loadedEffectAssets, selectedInstance->asset->name));
+            float timelineAge = selectedInstance->age;
+            if (ImGui::DragFloat("Timeline Age", &timelineAge, 0.02f, 0.0f, 60.0f, "%.2f")) {
+                effectRuntime.SetInstanceAge(selectedInstance->id, timelineAge);
+            }
             ImGui::DragFloat3("Position", &selectedInstance->transform.translate.x, 0.05f, -100.0f, 100.0f);
             ImGui::DragFloat3("Scale", &selectedInstance->transform.scale.x, 0.02f, 0.01f, 20.0f);
             ImGui::ColorEdit4("Color", &selectedInstance->color.x);

@@ -112,7 +112,26 @@ public:
         ID3D12Device* device,
         ID3D12GraphicsCommandList* commandList,
         ge3::core::DescriptorHeapSet& heaps,
-        uint32_t maxParticles = kDefaultMaxParticles);
+        uint32_t maxParticles = kDefaultMaxParticles,
+        ID3D12RootSignature* resetRootSignature = nullptr,
+        ID3D12PipelineState* resetPipelineState = nullptr);
+
+    bool ResetParticlePool(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12DescriptorHeap* srvDescriptorHeap,
+        ID3D12RootSignature* rootSignature,
+        ID3D12PipelineState* pipelineState,
+        std::string_view stateBufferResource = "ParticleState",
+        Vector3 emitterPosition = {},
+        float particleLifetime = 0.0f,
+        float spawnRadius = 4.0f,
+        float spawnCount = 0.0f,
+        float randomRotation = 0.0f,
+        float scaleYMin = 1.0f,
+        float scaleYMax = 1.0f,
+        Vector4 tint = {0.25f, 0.55f, 1.0f, 1.0f},
+        uint32_t sliceOffset = 0,
+        uint32_t sliceCount = 0);
 
     void Simulate(
         ID3D12GraphicsCommandList* commandList,
@@ -135,11 +154,49 @@ public:
         float randomRotation = 0.0f,
         float scaleYMin = 1.0f,
         float scaleYMax = 1.0f,
-        Vector3 emitterPosition = {});
+        Vector3 emitterPosition = {},
+        uint32_t sliceOffset = 0,
+        uint32_t sliceCount = 0);
+
+    bool ResetGpuManagedParticlePool(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12DescriptorHeap* srvDescriptorHeap,
+        ID3D12RootSignature* rootSignature,
+        ID3D12PipelineState* pipelineState);
+
+    void SimulateGpuManagedParticles(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12DescriptorHeap* srvDescriptorHeap,
+        ID3D12RootSignature* rootSignature,
+        ID3D12PipelineState* beginPipelineState,
+        ID3D12PipelineState* updatePipelineState,
+        ID3D12PipelineState* spawnPipelineState,
+        ID3D12PipelineState* argsPipelineState,
+        const Matrix4x4& viewProjection,
+        float deltaTime,
+        float time,
+        const Vector4& tint,
+        const Vector3& scale,
+        float emissive,
+        float turbulence,
+        float pulseSpeed,
+        float spawnRadius,
+        float uvScrollSpeed,
+        float particleLifetime,
+        float spawnCount,
+        float randomRotation,
+        float scaleYMin,
+        float scaleYMax,
+        Vector3 emitterPosition,
+        bool updateExistingParticles = true);
 
     void DeclareGraphBuffers(ge3::graphics::RenderGraph& renderGraph) const;
     bool EnsureGraphBuffers(ID3D12Device* device, const ge3::graphics::RenderGraph& renderGraph);
-    void InitializeDedicatedParticleResources(ID3D12GraphicsCommandList* commandList);
+    void InitializeDedicatedParticleResources(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12DescriptorHeap* srvDescriptorHeap = nullptr,
+        ID3D12RootSignature* resetRootSignature = nullptr,
+        ID3D12PipelineState* resetPipelineState = nullptr);
     void RegisterGraphResources(ge3::graphics::RenderGraph& renderGraph) const;
     void SetResourceState(std::string_view name, D3D12_RESOURCE_STATES state);
 
@@ -177,14 +234,17 @@ public:
         const D3D12_DRAW_INDEXED_ARGUMENTS& args);
     uint32_t MaxParticles() const { return maxParticles_; }
     bool IsInitialized() const { return initialized_; }
+    bool IsGpuManagedParticlePoolInitialized() const { return particlePoolInitialized_; }
 
 private:
     bool CreateParticleOutputViews(ID3D12Device* device);
+    bool CreateParticlePoolViews(ID3D12Device* device);
     bool CreateDedicatedParticleOutputViews(ID3D12Device* device);
     bool CreateDedicatedDistortionOutputViews(ID3D12Device* device);
     bool CreateDedicatedBeamOutputViews(ID3D12Device* device);
     bool CreateTrailMeshStreamViews(ID3D12Device* device);
     bool CreateTrailHistoryView(ID3D12Device* device);
+    bool EnsureInitialStateUpload();
     static size_t ParticleRenderBufferBytes(uint32_t maxParticles);
     static size_t ParticleStateBytes(uint32_t maxParticles);
     static size_t TrailControlPointBufferBytes(uint32_t maxSegments);
@@ -204,6 +264,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> trailIndexBuffer_;
     Microsoft::WRL::ComPtr<ID3D12Resource> trailDrawArgs_;
     Microsoft::WRL::ComPtr<ID3D12Resource> particleState_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> particleAliveList_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> particleDeadList_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> particleCounters_;
     Microsoft::WRL::ComPtr<ID3D12Resource> dedicatedParticleState_;
     Microsoft::WRL::ComPtr<ID3D12Resource> dedicatedDistortionState_;
     Microsoft::WRL::ComPtr<ID3D12Resource> dedicatedBeamState_;
@@ -247,6 +310,11 @@ private:
     ge3::core::DescriptorHandle trailDrawArgsUav_{};
     ge3::core::DescriptorHandle trailHistorySrv_{};
     ge3::core::DescriptorHandle stateUav_{};
+    ge3::core::DescriptorHandle particleAliveListSrv_{};
+    ge3::core::DescriptorHandle particleAliveListUav_{};
+    ge3::core::DescriptorHandle particleDeadListUav_{};
+    ge3::core::DescriptorHandle particleCountersUav_{};
+    ge3::core::DescriptorHandle particleIndirectArgsUav_{};
     ge3::core::DescriptorHandle dedicatedStateUav_{};
     ge3::core::DescriptorHandle dedicatedDistortionStateUav_{};
     ge3::core::DescriptorHandle dedicatedBeamStateUav_{};
@@ -260,6 +328,9 @@ private:
     D3D12_RESOURCE_STATES trailIndexState_ = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES trailDrawArgsState_ = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
     D3D12_RESOURCE_STATES particleStateState_ = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES particleAliveListState_ = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES particleDeadListState_ = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES particleCountersState_ = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES dedicatedParticleStateState_ = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     D3D12_RESOURCE_STATES dedicatedDistortionStateState_ = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     D3D12_RESOURCE_STATES dedicatedBeamStateState_ = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -286,6 +357,8 @@ private:
     Matrix4x4* mappedTrailViewProjection_ = nullptr;
     uint32_t maxParticles_ = 0;
     bool initialized_ = false;
+    bool initialStateUploadReady_ = false;
+    bool particlePoolInitialized_ = false;
     bool dedicatedParticleStateInitialized_ = false;
     bool dedicatedDistortionStateInitialized_ = false;
     bool dedicatedBeamStateInitialized_ = false;
