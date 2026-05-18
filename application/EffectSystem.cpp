@@ -388,6 +388,7 @@ uint32_t EffectSystem::PlayEffectWithParams(
         asset->color.w * color.w,
     };
     instances_.push_back(instance);
+    ++particlePoolResetSerial_;
     return instance.id;
 }
 
@@ -426,6 +427,7 @@ void EffectSystem::Update(float deltaTime) {
         const float totalLifetime = ComputeTotalLifetime(instance);
         if (instance.previewLoop && totalLifetime > 0.0f && instance.age >= totalLifetime) {
             RestartEffectInstanceState(instance);
+            ++particlePoolResetSerial_;
         }
     }
 
@@ -443,6 +445,7 @@ void EffectSystem::Update(float deltaTime) {
 
 void EffectSystem::ClearInstances() {
     instances_.clear();
+    ++particlePoolResetSerial_;
 }
 
 EffectInstance* EffectSystem::FindInstance(uint32_t id) {
@@ -473,6 +476,25 @@ void EffectSystem::RestartInstance(uint32_t id) {
     EffectInstance* instance = FindInstance(id);
     if (instance != nullptr) {
         RestartEffectInstanceState(*instance);
+        ++particlePoolResetSerial_;
+    }
+}
+
+void EffectSystem::SetInstanceAge(uint32_t id, float age) {
+    EffectInstance* instance = FindInstance(id);
+    if (instance == nullptr) {
+        return;
+    }
+
+    const float clampedAge = (std::max)(0.0f, age);
+    if (clampedAge != instance->age) {
+        instance->age = clampedAge;
+        instance->previousPosition = instance->transform.translate;
+        for (EffectComponentInstance& component : instance->components) {
+            component.age = clampedAge;
+            component.active = true;
+        }
+        ++particlePoolResetSerial_;
     }
 }
 

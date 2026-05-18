@@ -23,7 +23,9 @@ cbuffer SimConstants : register(b0)
     float gDeltaTime;
     float gTime;
     uint gMaxParticles;
-    float gPad;
+    uint gSliceOffset;
+    uint gSliceCount;
+    float3 gPad;
     float4 gTint;
     float4 gScaleAndParams;
     float4 gEffectParams;
@@ -62,22 +64,27 @@ float4x4 MakeWorld(float3 position, float3 scale, float rotationZ)
 void main(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
     uint id = dispatchThreadId.x;
-    if (id >= gMaxParticles)
+    if (id >= gSliceCount)
+    {
+        return;
+    }
+    uint particleIndex = gSliceOffset + id;
+    if (particleIndex >= gMaxParticles)
     {
         return;
     }
 
-    ParticleState state = gParticleState[id];
+    ParticleState state = gParticleState[particleIndex];
     uint activeCount = gParticleShapeParams.x > 0.0f
-        ? min((uint)round(gParticleShapeParams.x), gMaxParticles)
-        : gMaxParticles;
+        ? min((uint)round(gParticleShapeParams.x), gSliceCount)
+        : gSliceCount;
     if (id >= activeCount)
     {
         ParticleForGPU inactive;
         inactive.World = MakeWorld(float3(0.0f, 0.0f, 0.0f), float3(0.0f, 0.0f, 0.0f), 0.0f);
         inactive.WVP = inactive.World;
         inactive.color = float4(0.0f, 0.0f, 0.0f, 0.0f);
-        gParticleOutput[id] = inactive;
+        gParticleOutput[particleIndex] = inactive;
         return;
     }
 
@@ -107,7 +114,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     state.velocity.x += curl * gDeltaTime;
     state.velocity.y += (0.15f - normalizedAge * 0.2f) * gDeltaTime;
     state.position += state.velocity * gDeltaTime;
-    gParticleState[id] = state;
+    gParticleState[particleIndex] = state;
 
     float alpha = 1.0f - normalizedAge;
     float pulse = 0.65f + 0.35f * sin(gTime * max(gEffectParams.x, 0.01f) + state.seed * 6.28318f);
@@ -121,5 +128,5 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     output.World = world;
     output.WVP = mul(world, gViewProjection);
     output.color = float4(state.color.rgb * gTint.rgb * pulse * max(gScaleAndParams.z, 0.01f), alpha * gTint.a);
-    gParticleOutput[id] = output;
+    gParticleOutput[particleIndex] = output;
 }

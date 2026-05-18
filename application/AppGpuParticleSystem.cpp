@@ -1,6 +1,7 @@
 #include "AppGpuParticleSystem.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -14,6 +15,8 @@ struct ParticleForGpuLayout {
 struct TrailHistoryPointLayout {
     Vector4 position;
 };
+
+constexpr size_t kParticlePoolCounterBytes = sizeof(uint32_t) * 4;
 
 Microsoft::WRL::ComPtr<ID3D12Resource> CreateDefaultBuffer(
     ID3D12Device* device,
@@ -113,6 +116,13 @@ D3D12_RESOURCE_BARRIER MakeTransition(
     return barrier;
 }
 
+D3D12_RESOURCE_BARRIER MakeUavBarrier(ID3D12Resource* resource) {
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barrier.UAV.pResource = resource;
+    return barrier;
+}
+
 void TransitionIfNeeded(
     ID3D12GraphicsCommandList* commandList,
     ID3D12Resource* resource,
@@ -146,6 +156,56 @@ bool EnsureDefaultBuffer(
     currentBytes = desc.sizeInBytes;
     currentState = desc.initialState;
     return true;
+}
+
+std::vector<AppGpuParticleSystem::ParticleStateSample> BuildInitialParticleStates(uint32_t maxParticles) {
+    std::vector<AppGpuParticleSystem::ParticleStateSample> initial(maxParticles);
+    for (uint32_t i = 0; i < maxParticles; ++i) {
+        const float seed = static_cast<float>((i * 1664525u + 1013904223u) & 0xffffu) / 65535.0f;
+        initial[i].position = {
+            (static_cast<float>(i % 256) / 255.0f - 0.5f) * 8.0f,
+            (static_cast<float>((i / 256) % 256) / 255.0f - 0.5f) * 4.0f,
+            2.0f + seed * 4.0f};
+        initial[i].velocity = {
+            seed * 0.6f - 0.3f,
+            0.4f + seed * 0.8f,
+            seed * 0.4f - 0.2f};
+        initial[i].lifetime = 2.0f + seed * 3.0f;
+        initial[i].age = seed * initial[i].lifetime;
+        initial[i].color = {0.25f + seed * 0.75f, 0.55f, 1.0f, 1.0f};
+        initial[i].scale = {0.08f + seed * 0.08f, 0.08f + seed * 0.08f, 1.0f};
+        initial[i].seed = seed;
+        initial[i].shape = {};
+    }
+    return initial;
+}
+
+void UploadInitialParticleState(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12Resource* destination,
+    ID3D12Resource* upload,
+    D3D12_RESOURCE_STATES& destinationState,
+    uint32_t maxParticles) {
+    if (commandList == nullptr || destination == nullptr || upload == nullptr || maxParticles == 0) {
+        return;
+    }
+
+    D3D12_RESOURCE_BARRIER stateCopy =
+        MakeTransition(destination, destinationState, D3D12_RESOURCE_STATE_COPY_DEST);
+    commandList->ResourceBarrier(1, &stateCopy);
+    destinationState = D3D12_RESOURCE_STATE_COPY_DEST;
+
+    commandList->CopyBufferRegion(
+        destination,
+        0,
+        upload,
+        0,
+        sizeof(AppGpuParticleSystem::ParticleStateSample) * maxParticles);
+
+    D3D12_RESOURCE_BARRIER stateReady =
+        MakeTransition(destination, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    commandList->ResourceBarrier(1, &stateReady);
+    destinationState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 }
 } // namespace
 
@@ -393,11 +453,79 @@ bool AppGpuParticleSystem::CreateTrailHistoryView(ID3D12Device* device) {
     return true;
 }
 
+bool AppGpuParticleSystem::CreateParticlePoolViews(ID3D12Device* device) {
+    if (device == nullptr ||
+        particleAliveList_ == nullptr ||
+        particleDeadList_ == nullptr ||
+        particleCounters_ == nullptr ||
+        indirectArgs_ == nullptr ||
+        !particleAliveListSrv_.IsValid() ||
+        !particleAliveListUav_.IsValid() ||
+        !particleDeadListUav_.IsValid() ||
+        !particleCountersUav_.IsValid() ||
+        !particleIndirectArgsUav_.IsValid()) {
+        return false;
+    }
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC aliveSrv{};
+    aliveSrv.Format = DXGI_FORMAT_UNKNOWN;
+    aliveSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    aliveSrv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    aliveSrv.Buffer.NumElements = maxParticles_;
+    aliveSrv.Buffer.StructureByteStride = sizeof(uint32_t);
+    device->CreateShaderResourceView(particleAliveList_.Get(), &aliveSrv, particleAliveListSrv_.cpu);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC listUav{};
+    listUav.Format = DXGI_FORMAT_UNKNOWN;
+    listUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    listUav.Buffer.NumElements = maxParticles_;
+    listUav.Buffer.StructureByteStride = sizeof(uint32_t);
+    device->CreateUnorderedAccessView(particleAliveList_.Get(), nullptr, &listUav, particleAliveListUav_.cpu);
+    device->CreateUnorderedAccessView(particleDeadList_.Get(), nullptr, &listUav, particleDeadListUav_.cpu);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC counterUav{};
+    counterUav.Format = DXGI_FORMAT_R32_TYPELESS;
+    counterUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    counterUav.Buffer.NumElements = static_cast<UINT>(kParticlePoolCounterBytes / sizeof(uint32_t));
+    counterUav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+    device->CreateUnorderedAccessView(particleCounters_.Get(), nullptr, &counterUav, particleCountersUav_.cpu);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC argsUav{};
+    argsUav.Format = DXGI_FORMAT_UNKNOWN;
+    argsUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    argsUav.Buffer.NumElements = 1;
+    argsUav.Buffer.StructureByteStride = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+    device->CreateUnorderedAccessView(indirectArgs_.Get(), nullptr, &argsUav, particleIndirectArgsUav_.cpu);
+    return true;
+}
+
+bool AppGpuParticleSystem::EnsureInitialStateUpload() {
+    if (initialStateUploadReady_) {
+        return true;
+    }
+    if (uploadState_ == nullptr || maxParticles_ == 0) {
+        return false;
+    }
+
+    const std::vector<ParticleStateSample> initial = BuildInitialParticleStates(maxParticles_);
+    void* mapped = nullptr;
+    if (FAILED(uploadState_->Map(0, nullptr, &mapped))) {
+        return false;
+    }
+
+    std::memcpy(mapped, initial.data(), sizeof(ParticleStateSample) * maxParticles_);
+    uploadState_->Unmap(0, nullptr);
+    initialStateUploadReady_ = true;
+    return true;
+}
+
 bool AppGpuParticleSystem::Initialize(
     ID3D12Device* device,
     ID3D12GraphicsCommandList* commandList,
     ge3::core::DescriptorHeapSet& heaps,
-    uint32_t maxParticles) {
+    uint32_t maxParticles,
+    ID3D12RootSignature* resetRootSignature,
+    ID3D12PipelineState* resetPipelineState) {
     if (initialized_) {
         return true;
     }
@@ -413,8 +541,23 @@ bool AppGpuParticleSystem::Initialize(
         device,
         stateBytes,
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    particleAliveList_ = CreateDefaultBuffer(
+        device,
+        sizeof(uint32_t) * maxParticles_,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    particleDeadList_ = CreateDefaultBuffer(
+        device,
+        sizeof(uint32_t) * maxParticles_,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    particleCounters_ = CreateDefaultBuffer(
+        device,
+        kParticlePoolCounterBytes,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     uploadState_ = CreateUploadBuffer(device, stateBytes);
-    indirectArgs_ = CreateDefaultBuffer(device, sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), D3D12_RESOURCE_FLAG_NONE);
+    indirectArgs_ = CreateDefaultBuffer(
+        device,
+        sizeof(D3D12_DRAW_INDEXED_ARGUMENTS),
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     uploadIndirectArgs_ = CreateUploadBuffer(device, sizeof(D3D12_DRAW_INDEXED_ARGUMENTS));
     trailHistoryBuffer_ = CreateUploadBuffer(device, TrailHistoryBufferBytes(maxParticles_ + 1));
     trailViewProjection_ = CreateUploadBuffer(device, sizeof(Matrix4x4));
@@ -453,6 +596,9 @@ bool AppGpuParticleSystem::Initialize(
         device,
         sizeof(D3D12_DRAW_INDEXED_ARGUMENTS));
     if (particleState_ == nullptr ||
+        particleAliveList_ == nullptr ||
+        particleDeadList_ == nullptr ||
+        particleCounters_ == nullptr ||
         uploadState_ == nullptr ||
         indirectArgs_ == nullptr ||
         uploadIndirectArgs_ == nullptr ||
@@ -493,40 +639,6 @@ bool AppGpuParticleSystem::Initialize(
     }
     *mappedTrailViewProjection_ = MakeIdentity4x4();
 
-    std::vector<ParticleStateSample> initial(maxParticles_);
-    for (uint32_t i = 0; i < maxParticles_; ++i) {
-        const float seed = static_cast<float>((i * 1664525u + 1013904223u) & 0xffffu) / 65535.0f;
-        initial[i].position = {
-            (static_cast<float>(i % 256) / 255.0f - 0.5f) * 8.0f,
-            (static_cast<float>((i / 256) % 256) / 255.0f - 0.5f) * 4.0f,
-            2.0f + seed * 4.0f};
-        initial[i].velocity = {
-            seed * 0.6f - 0.3f,
-            0.4f + seed * 0.8f,
-            seed * 0.4f - 0.2f};
-        initial[i].lifetime = 2.0f + seed * 3.0f;
-        initial[i].age = seed * initial[i].lifetime;
-        initial[i].color = {0.25f + seed * 0.75f, 0.55f, 1.0f, 1.0f};
-        initial[i].scale = {0.08f + seed * 0.08f, 0.08f + seed * 0.08f, 1.0f};
-        initial[i].seed = seed;
-        initial[i].shape = {};
-    }
-
-    void* mapped = nullptr;
-    if (SUCCEEDED(uploadState_->Map(0, nullptr, &mapped))) {
-        std::memcpy(mapped, initial.data(), stateBytes);
-        uploadState_->Unmap(0, nullptr);
-    }
-    D3D12_RESOURCE_BARRIER stateCopy =
-        MakeTransition(particleState_.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
-    commandList->ResourceBarrier(1, &stateCopy);
-    particleStateState_ = D3D12_RESOURCE_STATE_COPY_DEST;
-
-    commandList->CopyBufferRegion(particleState_.Get(), 0, uploadState_.Get(), 0, stateBytes);
-    D3D12_RESOURCE_BARRIER stateReady =
-        MakeTransition(particleState_.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    commandList->ResourceBarrier(1, &stateReady);
-    particleStateState_ = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     particleOutputState_ = D3D12_RESOURCE_STATE_COMMON;
 
     D3D12_DRAW_INDEXED_ARGUMENTS args{};
@@ -566,6 +678,11 @@ bool AppGpuParticleSystem::Initialize(
     trailDrawArgsUav_ = heaps.srv.Allocate();
     trailHistorySrv_ = heaps.srv.Allocate();
     stateUav_ = heaps.srv.Allocate();
+    particleAliveListSrv_ = heaps.srv.Allocate();
+    particleAliveListUav_ = heaps.srv.Allocate();
+    particleDeadListUav_ = heaps.srv.Allocate();
+    particleCountersUav_ = heaps.srv.Allocate();
+    particleIndirectArgsUav_ = heaps.srv.Allocate();
     dedicatedStateUav_ = heaps.srv.Allocate();
     dedicatedDistortionStateUav_ = heaps.srv.Allocate();
     dedicatedBeamStateUav_ = heaps.srv.Allocate();
@@ -576,6 +693,32 @@ bool AppGpuParticleSystem::Initialize(
     stateUav.Buffer.NumElements = maxParticles_;
     stateUav.Buffer.StructureByteStride = sizeof(ParticleStateSample);
     device->CreateUnorderedAccessView(particleState_.Get(), nullptr, &stateUav, stateUav_.cpu);
+    if (!CreateParticlePoolViews(device)) {
+        return false;
+    }
+    if (!ResetParticlePool(
+            commandList,
+            heaps.srv.GetHeap(),
+            resetRootSignature,
+            resetPipelineState,
+            "ParticleState",
+            {},
+            0.0f,
+            4.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+            1.0f,
+            {0.25f, 0.55f, 1.0f, 1.0f})) {
+        if (EnsureInitialStateUpload()) {
+            UploadInitialParticleState(
+                commandList,
+                particleState_.Get(),
+                uploadState_.Get(),
+                particleStateState_,
+                maxParticles_);
+        }
+    }
     if (!CreateTrailHistoryView(device)) {
         return false;
     }
@@ -597,6 +740,308 @@ bool AppGpuParticleSystem::Initialize(
     return true;
 }
 
+bool AppGpuParticleSystem::ResetParticlePool(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12DescriptorHeap* srvDescriptorHeap,
+    ID3D12RootSignature* rootSignature,
+    ID3D12PipelineState* pipelineState,
+    std::string_view stateBufferResource,
+    Vector3 emitterPosition,
+    float particleLifetime,
+    float spawnRadius,
+    float spawnCount,
+    float randomRotation,
+    float scaleYMin,
+    float scaleYMax,
+    Vector4 tint,
+    uint32_t sliceOffset,
+    uint32_t sliceCount) {
+    if (commandList == nullptr ||
+        srvDescriptorHeap == nullptr ||
+        rootSignature == nullptr ||
+        pipelineState == nullptr ||
+        maxParticles_ == 0) {
+        return false;
+    }
+
+    ID3D12Resource* stateResource = nullptr;
+    D3D12_RESOURCE_STATES* stateState = nullptr;
+    D3D12_GPU_DESCRIPTOR_HANDLE stateUav{};
+    if (stateBufferResource == "ParticleDedicatedState") {
+        stateResource = dedicatedParticleState_.Get();
+        stateState = &dedicatedParticleStateState_;
+        stateUav = dedicatedStateUav_.gpu;
+    } else if (stateBufferResource == "DistortionDedicatedState") {
+        stateResource = dedicatedDistortionState_.Get();
+        stateState = &dedicatedDistortionStateState_;
+        stateUav = dedicatedDistortionStateUav_.gpu;
+    } else if (stateBufferResource == "BeamDedicatedState") {
+        stateResource = dedicatedBeamState_.Get();
+        stateState = &dedicatedBeamStateState_;
+        stateUav = dedicatedBeamStateUav_.gpu;
+    } else if (stateBufferResource == "ParticleState") {
+        stateResource = particleState_.Get();
+        stateState = &particleStateState_;
+        stateUav = stateUav_.gpu;
+    }
+
+    if (stateResource == nullptr || stateState == nullptr || stateUav.ptr == 0) {
+        return false;
+    }
+
+    struct Constants {
+        Matrix4x4 viewProjection;
+        float deltaTime;
+        float time;
+        uint32_t maxParticles;
+        uint32_t sliceOffset;
+        uint32_t sliceCount;
+        float pad[3];
+        Vector4 tint;
+        Vector4 scaleAndParams;
+        Vector4 effectParams;
+        Vector4 particleShapeParams;
+        Vector4 emitterParams;
+    } constants{};
+    constants.viewProjection = MakeIdentity4x4();
+    constants.deltaTime = 0.0f;
+    constants.time = 0.0f;
+    constants.maxParticles = maxParticles_;
+    constants.sliceOffset = (std::min)(sliceOffset, maxParticles_);
+    constants.sliceCount = sliceCount == 0
+        ? maxParticles_ - constants.sliceOffset
+        : (std::min)(sliceCount, maxParticles_ - constants.sliceOffset);
+    constants.tint = tint;
+    constants.scaleAndParams = {1.0f, 1.0f, 1.0f, 0.0f};
+    constants.effectParams = {1.0f, spawnRadius, 0.0f, 0.0f};
+    constants.particleShapeParams = {spawnCount, randomRotation, scaleYMin, scaleYMax};
+    constants.emitterParams = {emitterPosition.x, emitterPosition.y, emitterPosition.z, particleLifetime};
+
+    TransitionIfNeeded(
+        commandList,
+        stateResource,
+        *stateState,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap};
+    commandList->SetDescriptorHeaps(1, descriptorHeaps);
+    commandList->SetComputeRootSignature(rootSignature);
+    commandList->SetPipelineState(pipelineState);
+    if (constants.sliceCount == 0) {
+        return false;
+    }
+
+    commandList->SetComputeRoot32BitConstants(0, 44, &constants, 0);
+    commandList->SetComputeRootDescriptorTable(2, stateUav);
+    const uint32_t dispatchGroupCount = (constants.sliceCount + 255) / 256;
+    commandList->Dispatch(dispatchGroupCount, 1, 1);
+    return true;
+}
+
+bool AppGpuParticleSystem::ResetGpuManagedParticlePool(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12DescriptorHeap* srvDescriptorHeap,
+    ID3D12RootSignature* rootSignature,
+    ID3D12PipelineState* pipelineState) {
+    if (!initialized_ ||
+        commandList == nullptr ||
+        srvDescriptorHeap == nullptr ||
+        rootSignature == nullptr ||
+        pipelineState == nullptr ||
+        particleOutput_ == nullptr ||
+        particleState_ == nullptr ||
+        particleAliveList_ == nullptr ||
+        particleDeadList_ == nullptr ||
+        particleCounters_ == nullptr ||
+        particleUav_.gpu.ptr == 0 ||
+        stateUav_.gpu.ptr == 0 ||
+        particleAliveListUav_.gpu.ptr == 0 ||
+        particleDeadListUav_.gpu.ptr == 0 ||
+        particleCountersUav_.gpu.ptr == 0 ||
+        maxParticles_ == 0) {
+        return false;
+    }
+
+    struct Constants {
+        Matrix4x4 viewProjection;
+        float deltaTime;
+        float time;
+        uint32_t maxParticles;
+        uint32_t sliceOffset;
+        uint32_t sliceCount;
+        float pad[3];
+        Vector4 tint;
+        Vector4 scaleAndParams;
+        Vector4 effectParams;
+        Vector4 particleShapeParams;
+        Vector4 emitterParams;
+    } constants{};
+    constants.viewProjection = MakeIdentity4x4();
+    constants.maxParticles = maxParticles_;
+    constants.sliceCount = maxParticles_;
+    constants.tint = {1.0f, 1.0f, 1.0f, 1.0f};
+    constants.scaleAndParams = {1.0f, 1.0f, 1.0f, 0.0f};
+
+    TransitionIfNeeded(commandList, particleOutput_.Get(), particleOutputState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleState_.Get(), particleStateState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleAliveList_.Get(), particleAliveListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleDeadList_.Get(), particleDeadListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleCounters_.Get(), particleCountersState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap};
+    commandList->SetDescriptorHeaps(1, descriptorHeaps);
+    commandList->SetComputeRootSignature(rootSignature);
+    commandList->SetPipelineState(pipelineState);
+    commandList->SetComputeRoot32BitConstants(0, 44, &constants, 0);
+    commandList->SetComputeRootDescriptorTable(1, particleUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(2, stateUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(3, particleAliveListUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(4, particleDeadListUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(5, particleCountersUav_.gpu);
+    commandList->Dispatch((maxParticles_ + 255) / 256, 1, 1);
+    D3D12_RESOURCE_BARRIER barriers[] = {
+        MakeUavBarrier(particleOutput_.Get()),
+        MakeUavBarrier(particleState_.Get()),
+        MakeUavBarrier(particleAliveList_.Get()),
+        MakeUavBarrier(particleDeadList_.Get()),
+        MakeUavBarrier(particleCounters_.Get()),
+    };
+    commandList->ResourceBarrier(_countof(barriers), barriers);
+    particlePoolInitialized_ = true;
+    return true;
+}
+
+void AppGpuParticleSystem::SimulateGpuManagedParticles(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12DescriptorHeap* srvDescriptorHeap,
+    ID3D12RootSignature* rootSignature,
+    ID3D12PipelineState* beginPipelineState,
+    ID3D12PipelineState* updatePipelineState,
+    ID3D12PipelineState* spawnPipelineState,
+    ID3D12PipelineState* argsPipelineState,
+    const Matrix4x4& viewProjection,
+    float deltaTime,
+    float time,
+    const Vector4& tint,
+    const Vector3& scale,
+    float emissive,
+    float turbulence,
+    float pulseSpeed,
+    float spawnRadius,
+    float uvScrollSpeed,
+    float particleLifetime,
+    float spawnCount,
+    float randomRotation,
+    float scaleYMin,
+    float scaleYMax,
+    Vector3 emitterPosition,
+    bool updateExistingParticles) {
+    if (!initialized_ ||
+        !particlePoolInitialized_ ||
+        commandList == nullptr ||
+        srvDescriptorHeap == nullptr ||
+        rootSignature == nullptr ||
+        beginPipelineState == nullptr ||
+        updatePipelineState == nullptr ||
+        spawnPipelineState == nullptr ||
+        argsPipelineState == nullptr ||
+        particleOutput_ == nullptr ||
+        particleState_ == nullptr ||
+        particleAliveList_ == nullptr ||
+        particleDeadList_ == nullptr ||
+        particleCounters_ == nullptr ||
+        indirectArgs_ == nullptr ||
+        particleIndirectArgsUav_.gpu.ptr == 0) {
+        return;
+    }
+
+    struct Constants {
+        Matrix4x4 viewProjection;
+        float deltaTime;
+        float time;
+        uint32_t maxParticles;
+        uint32_t sliceOffset;
+        uint32_t sliceCount;
+        float pad[3];
+        Vector4 tint;
+        Vector4 scaleAndParams;
+        Vector4 effectParams;
+        Vector4 particleShapeParams;
+        Vector4 emitterParams;
+    } constants{};
+    constants.viewProjection = viewProjection;
+    constants.deltaTime = deltaTime;
+    constants.time = time;
+    constants.maxParticles = maxParticles_;
+    constants.sliceCount = maxParticles_;
+    constants.tint = tint;
+    constants.scaleAndParams = {scale.x, scale.y, emissive, turbulence};
+    constants.effectParams = {pulseSpeed, spawnRadius, uvScrollSpeed, 0.0f};
+    constants.particleShapeParams = {spawnCount, randomRotation, scaleYMin, scaleYMax};
+    constants.emitterParams = {emitterPosition.x, emitterPosition.y, emitterPosition.z, particleLifetime};
+
+    TransitionIfNeeded(commandList, particleOutput_.Get(), particleOutputState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleState_.Get(), particleStateState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleAliveList_.Get(), particleAliveListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleDeadList_.Get(), particleDeadListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleCounters_.Get(), particleCountersState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, indirectArgs_.Get(), indirectArgsState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap};
+    commandList->SetDescriptorHeaps(1, descriptorHeaps);
+    commandList->SetComputeRootSignature(rootSignature);
+    commandList->SetComputeRoot32BitConstants(0, 44, &constants, 0);
+    commandList->SetComputeRootDescriptorTable(1, particleUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(2, stateUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(3, particleAliveListUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(4, particleDeadListUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(5, particleCountersUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(6, particleIndirectArgsUav_.gpu);
+
+    const uint32_t dispatchGroupCount = (maxParticles_ + 255) / 256;
+    D3D12_RESOURCE_BARRIER updateBarriers[] = {
+        MakeUavBarrier(particleOutput_.Get()),
+        MakeUavBarrier(particleState_.Get()),
+        MakeUavBarrier(particleAliveList_.Get()),
+        MakeUavBarrier(particleDeadList_.Get()),
+        MakeUavBarrier(particleCounters_.Get()),
+    };
+    if (updateExistingParticles) {
+        commandList->SetPipelineState(beginPipelineState);
+        commandList->Dispatch(1, 1, 1);
+        D3D12_RESOURCE_BARRIER counterBarrier = MakeUavBarrier(particleCounters_.Get());
+        commandList->ResourceBarrier(1, &counterBarrier);
+
+        commandList->SetPipelineState(updatePipelineState);
+        commandList->Dispatch(dispatchGroupCount, 1, 1);
+        commandList->ResourceBarrier(_countof(updateBarriers), updateBarriers);
+    }
+
+    const uint32_t spawnRequest = spawnCount > 0.0f
+        ? static_cast<uint32_t>((std::min)(static_cast<float>(maxParticles_), (std::max)(1.0f, std::round(spawnCount))))
+        : 0u;
+    if (spawnRequest > 0) {
+        commandList->SetPipelineState(spawnPipelineState);
+        commandList->Dispatch((spawnRequest + 255) / 256, 1, 1);
+        commandList->ResourceBarrier(_countof(updateBarriers), updateBarriers);
+    }
+
+    commandList->SetPipelineState(argsPipelineState);
+    commandList->Dispatch(1, 1, 1);
+    D3D12_RESOURCE_BARRIER argsBarrier = MakeUavBarrier(indirectArgs_.Get());
+    commandList->ResourceBarrier(1, &argsBarrier);
+    TransitionIfNeeded(commandList, indirectArgs_.Get(), indirectArgsState_, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+
+    particleSimulationTelemetry_.valid = true;
+    particleSimulationTelemetry_.usedDedicatedResources = false;
+    particleSimulationTelemetry_.renderBufferResource = "ParticleRenderBuffer";
+    particleSimulationTelemetry_.stateBufferResource = "ParticleState";
+    particleSimulationTelemetry_.renderBufferUav = particleUav_.gpu;
+    particleSimulationTelemetry_.stateBufferUav = stateUav_.gpu;
+    particleSimulationTelemetry_.dispatchGroupCount = dispatchGroupCount;
+    particleSimulationTelemetry_.maxParticles = maxParticles_;
+}
+
 void AppGpuParticleSystem::DeclareGraphBuffers(ge3::graphics::RenderGraph& renderGraph) const {
     if (!initialized_ || maxParticles_ == 0) {
         return;
@@ -615,7 +1060,7 @@ void AppGpuParticleSystem::DeclareGraphBuffers(ge3::graphics::RenderGraph& rende
     renderGraph.DeclarePersistentBuffer(
         "ParticleIndirectArgs",
         sizeof(D3D12_DRAW_INDEXED_ARGUMENTS),
-        D3D12_RESOURCE_FLAG_NONE,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
         D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     renderGraph.DeclarePersistentBuffer(
         "ParticleDedicatedState",
@@ -747,6 +1192,7 @@ bool AppGpuParticleSystem::EnsureGraphBuffers(
                 if (!CreateParticleOutputViews(device)) {
                     return false;
                 }
+                particlePoolInitialized_ = false;
             }
             particleOutputReady = true;
         } else if (buffer.name == "ParticleDedicatedState") {
@@ -1043,86 +1489,69 @@ bool AppGpuParticleSystem::EnsureGraphBuffers(
         (!trailDrawArgsRequired || trailDrawArgsReady);
 }
 
-void AppGpuParticleSystem::InitializeDedicatedParticleResources(ID3D12GraphicsCommandList* commandList) {
+void AppGpuParticleSystem::InitializeDedicatedParticleResources(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12DescriptorHeap* srvDescriptorHeap,
+    ID3D12RootSignature* resetRootSignature,
+    ID3D12PipelineState* resetPipelineState) {
     if (!initialized_ || commandList == nullptr) {
         return;
     }
 
-    if (dedicatedParticleState_ != nullptr &&
-        uploadState_ != nullptr &&
-        !dedicatedParticleStateInitialized_) {
-        D3D12_RESOURCE_BARRIER stateCopy =
-            MakeTransition(
-                dedicatedParticleState_.Get(),
-                dedicatedParticleStateState_,
-                D3D12_RESOURCE_STATE_COPY_DEST);
-        commandList->ResourceBarrier(1, &stateCopy);
-        dedicatedParticleStateState_ = D3D12_RESOURCE_STATE_COPY_DEST;
-        commandList->CopyBufferRegion(
-            dedicatedParticleState_.Get(),
-            0,
-            uploadState_.Get(),
-            0,
-            ParticleStateBytes(maxParticles_));
-        D3D12_RESOURCE_BARRIER stateReady =
-            MakeTransition(
-                dedicatedParticleState_.Get(),
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        commandList->ResourceBarrier(1, &stateReady);
-        dedicatedParticleStateState_ = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    if (dedicatedParticleState_ != nullptr && !dedicatedParticleStateInitialized_) {
+        if (!ResetParticlePool(
+                commandList,
+                srvDescriptorHeap,
+                resetRootSignature,
+                resetPipelineState,
+                "ParticleDedicatedState")) {
+            if (EnsureInitialStateUpload()) {
+                UploadInitialParticleState(
+                    commandList,
+                    dedicatedParticleState_.Get(),
+                    uploadState_.Get(),
+                    dedicatedParticleStateState_,
+                    maxParticles_);
+            }
+        }
         dedicatedParticleStateInitialized_ = true;
     }
 
-    if (dedicatedDistortionState_ != nullptr &&
-        uploadState_ != nullptr &&
-        !dedicatedDistortionStateInitialized_) {
-        D3D12_RESOURCE_BARRIER stateCopy =
-            MakeTransition(
-                dedicatedDistortionState_.Get(),
-                dedicatedDistortionStateState_,
-                D3D12_RESOURCE_STATE_COPY_DEST);
-        commandList->ResourceBarrier(1, &stateCopy);
-        dedicatedDistortionStateState_ = D3D12_RESOURCE_STATE_COPY_DEST;
-        commandList->CopyBufferRegion(
-            dedicatedDistortionState_.Get(),
-            0,
-            uploadState_.Get(),
-            0,
-            ParticleStateBytes(maxParticles_));
-        D3D12_RESOURCE_BARRIER stateReady =
-            MakeTransition(
-                dedicatedDistortionState_.Get(),
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        commandList->ResourceBarrier(1, &stateReady);
-        dedicatedDistortionStateState_ = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    if (dedicatedDistortionState_ != nullptr && !dedicatedDistortionStateInitialized_) {
+        if (!ResetParticlePool(
+                commandList,
+                srvDescriptorHeap,
+                resetRootSignature,
+                resetPipelineState,
+                "DistortionDedicatedState")) {
+            if (EnsureInitialStateUpload()) {
+                UploadInitialParticleState(
+                    commandList,
+                    dedicatedDistortionState_.Get(),
+                    uploadState_.Get(),
+                    dedicatedDistortionStateState_,
+                    maxParticles_);
+            }
+        }
         dedicatedDistortionStateInitialized_ = true;
     }
 
-    if (dedicatedBeamState_ != nullptr &&
-        uploadState_ != nullptr &&
-        !dedicatedBeamStateInitialized_) {
-        D3D12_RESOURCE_BARRIER stateCopy =
-            MakeTransition(
-                dedicatedBeamState_.Get(),
-                dedicatedBeamStateState_,
-                D3D12_RESOURCE_STATE_COPY_DEST);
-        commandList->ResourceBarrier(1, &stateCopy);
-        dedicatedBeamStateState_ = D3D12_RESOURCE_STATE_COPY_DEST;
-        commandList->CopyBufferRegion(
-            dedicatedBeamState_.Get(),
-            0,
-            uploadState_.Get(),
-            0,
-            ParticleStateBytes(maxParticles_));
-        D3D12_RESOURCE_BARRIER stateReady =
-            MakeTransition(
-                dedicatedBeamState_.Get(),
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        commandList->ResourceBarrier(1, &stateReady);
-        dedicatedBeamStateState_ = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    if (dedicatedBeamState_ != nullptr && !dedicatedBeamStateInitialized_) {
+        if (!ResetParticlePool(
+                commandList,
+                srvDescriptorHeap,
+                resetRootSignature,
+                resetPipelineState,
+                "BeamDedicatedState")) {
+            if (EnsureInitialStateUpload()) {
+                UploadInitialParticleState(
+                    commandList,
+                    dedicatedBeamState_.Get(),
+                    uploadState_.Get(),
+                    dedicatedBeamStateState_,
+                    maxParticles_);
+            }
+        }
         dedicatedBeamStateInitialized_ = true;
     }
 
@@ -1226,7 +1655,9 @@ void AppGpuParticleSystem::Simulate(
         float randomRotation,
         float scaleYMin,
         float scaleYMax,
-        Vector3 emitterPosition) {
+        Vector3 emitterPosition,
+        uint32_t sliceOffset,
+        uint32_t sliceCount) {
     if (!initialized_ || commandList == nullptr || rootSignature == nullptr || pipelineState == nullptr) {
         return;
     }
@@ -1278,7 +1709,9 @@ void AppGpuParticleSystem::Simulate(
         float deltaTime;
         float time;
         uint32_t maxParticles;
-        float pad;
+        uint32_t sliceOffset;
+        uint32_t sliceCount;
+        float pad[3];
         Vector4 tint;
         Vector4 scaleAndParams;
         Vector4 effectParams;
@@ -1289,6 +1722,10 @@ void AppGpuParticleSystem::Simulate(
     constants.deltaTime = deltaTime;
     constants.time = time;
     constants.maxParticles = maxParticles_;
+    constants.sliceOffset = (std::min)(sliceOffset, maxParticles_);
+    constants.sliceCount = sliceCount == 0
+        ? maxParticles_ - constants.sliceOffset
+        : (std::min)(sliceCount, maxParticles_ - constants.sliceOffset);
     constants.tint = tint;
     constants.scaleAndParams = {scale.x, scale.y, emissive, turbulence};
     constants.effectParams = {pulseSpeed, spawnRadius, uvScrollSpeed, 0.0f};
@@ -1310,10 +1747,14 @@ void AppGpuParticleSystem::Simulate(
 
     commandList->SetComputeRootSignature(rootSignature);
     commandList->SetPipelineState(pipelineState);
-    commandList->SetComputeRoot32BitConstants(0, 40, &constants, 0);
+    if (constants.sliceCount == 0) {
+        return;
+    }
+
+    commandList->SetComputeRoot32BitConstants(0, 44, &constants, 0);
     commandList->SetComputeRootDescriptorTable(1, outputUav);
     commandList->SetComputeRootDescriptorTable(2, stateUav);
-    const uint32_t dispatchGroupCount = (maxParticles_ + 255) / 256;
+    const uint32_t dispatchGroupCount = (constants.sliceCount + 255) / 256;
     particleSimulationTelemetry_.valid = true;
     particleSimulationTelemetry_.usedDedicatedResources =
         renderBufferResource == "ParticleDedicatedRenderBuffer" ||
@@ -1453,6 +1894,9 @@ D3D12_GPU_DESCRIPTOR_HANDLE AppGpuParticleSystem::SrvHandleForResource(std::stri
     if (name == "ParticleDedicatedRenderBuffer") {
         return dedicatedParticleSrv_.gpu;
     }
+    if (name == "ParticleAliveList") {
+        return particleAliveListSrv_.gpu;
+    }
     if (name == "DistortionDedicatedRenderBuffer") {
         return dedicatedDistortionSrv_.gpu;
     }
@@ -1504,6 +1948,15 @@ D3D12_GPU_DESCRIPTOR_HANDLE AppGpuParticleSystem::UavHandleForResource(std::stri
     }
     if (name == "ParticleState") {
         return stateUav_.gpu;
+    }
+    if (name == "ParticleAliveList") {
+        return particleAliveListUav_.gpu;
+    }
+    if (name == "ParticleDeadList") {
+        return particleDeadListUav_.gpu;
+    }
+    if (name == "ParticleCounters") {
+        return particleCountersUav_.gpu;
     }
     if (name == "ParticleDedicatedState") {
         return dedicatedStateUav_.gpu;

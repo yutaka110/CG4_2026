@@ -29,6 +29,7 @@ public:
         const Vector3& scale);
     void StopEffect(uint32_t id);
     void RestartInstance(uint32_t id);
+    void SetInstanceAge(uint32_t id, float age);
     void SetEffectPreviewLoop(uint32_t id, bool enabled);
     EffectInstance* FindInstance(uint32_t id);
     const EffectInstance* FindInstance(uint32_t id) const;
@@ -47,6 +48,7 @@ public:
     std::unordered_map<std::string, EffectAsset>& MutableAssets();
     const std::vector<EffectInstance>& Instances() const;
     std::vector<EffectInstance>& MutableInstances();
+    uint64_t ParticlePoolResetSerial() const;
 
 private:
     struct ActiveComponentCore {

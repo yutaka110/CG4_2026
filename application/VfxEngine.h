@@ -27,6 +27,7 @@
 struct AppRuntimeState;
 struct AppVfxRuntimeState;
 class AppSceneResources;
+class AppPipelines;
 
 struct VfxGraphResourceStats {
     uint32_t transientTargetCount = 0;
@@ -50,7 +51,8 @@ public:
     void InitializeGpuParticles(
         ID3D12Device* device,
         ID3D12GraphicsCommandList* commandList,
-        ge3::core::DescriptorHeapSet& heaps);
+        ge3::core::DescriptorHeapSet& heaps,
+        AppPipelines& pipelines);
     void Shutdown();
 
     void BeginFrame();
@@ -121,5 +123,6 @@ private:
     ge3::resources::EffectResourceCache effectResourceCache_;
     vfx::VfxResourceResolver resourceResolver_;
     EffectRuntimeFrame frameGraphEffectRuntimeFrame_{};
+    uint64_t consumedParticlePoolResetSerial_ = 0;
     float beamTime_ = 0.0f;
 };

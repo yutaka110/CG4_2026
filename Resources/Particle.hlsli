@@ -26,11 +26,18 @@ struct ParticleForGPU
 };
 
 StructuredBuffer<ParticleForGPU> gParticle : register(t0);
+StructuredBuffer<uint> gAliveList : register(t1);
 
 
 cbuffer CameraCB : register(b0)
 {
     float4x4 gViewProj;
+};
+
+cbuffer ParticleDrawCB : register(b1)
+{
+    uint gUseAliveList;
+    uint3 gParticleDrawPad;
 };
 
 //StructuredBuffer<TransformationMatrix> gTransformationMatrices : register(t0);

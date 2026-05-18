@@ -6,6 +6,8 @@
 #include "../../AppSceneResources.h"
 #include "vfx/VfxResources.h"
 
+#include <string_view>
+
 namespace vfx {
 ComponentDrawParams ResolveParticleDrawParams(
     const EffectParticleSettings* settings,
@@ -85,11 +87,18 @@ void DrawIndirectSpriteComponents(
 
     const D3D12_GPU_DESCRIPTOR_HANDLE renderBufferSrv =
         context.gpuParticleSystem->SrvHandleForResource(renderBufferResource);
+    const D3D12_GPU_DESCRIPTOR_HANDLE aliveListSrv =
+        context.gpuParticleSystem->SrvHandleForResource("ParticleAliveList");
     ID3D12Resource* indirectArgs =
         context.gpuParticleSystem->IndirectArgsForResource(indirectArgsResource);
-    if (renderBufferSrv.ptr == 0 || indirectArgs == nullptr) {
+    if (renderBufferSrv.ptr == 0 || aliveListSrv.ptr == 0 || indirectArgs == nullptr) {
         return;
     }
+    const uint32_t useAliveList =
+        std::string_view(renderBufferResource) == "ParticleRenderBuffer" &&
+        std::string_view(indirectArgsResource) == "ParticleIndirectArgs"
+            ? 1u
+            : 0u;
 
     commandList->SetGraphicsRootSignature(context.appPipelines->GetParticleRootSignature());
     commandList->SetPipelineState(pipelineState);
@@ -111,6 +120,9 @@ void DrawIndirectSpriteComponents(
         drawParams.trailTailFade
     };
     commandList->SetGraphicsRoot32BitConstants(4, 4, depthFadeParams, 0);
+    commandList->SetGraphicsRootDescriptorTable(5, aliveListSrv);
+    const uint32_t particleDrawParams[4] = {useAliveList, 0u, 0u, 0u};
+    commandList->SetGraphicsRoot32BitConstants(6, 4, particleDrawParams, 0);
     commandList->ExecuteIndirect(
         context.gpuParticleSystem->CommandSignature(),
         1,

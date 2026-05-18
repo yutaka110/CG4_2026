@@ -227,6 +227,12 @@ void EffectRuntime::RestartInstance(uint32_t id) {
     }
 }
 
+void EffectRuntime::SetInstanceAge(uint32_t id, float age) {
+    if (effectSystem_ != nullptr) {
+        effectSystem_->SetInstanceAge(id, age);
+    }
+}
+
 void EffectRuntime::SetEffectPreviewLoop(uint32_t id, bool enabled) {
     if (effectSystem_ != nullptr) {
         effectSystem_->SetEffectPreviewLoop(id, enabled);
@@ -709,4 +715,8 @@ std::vector<EffectInstance>& EffectRuntime::MutableInstances() {
         return EmptyMutableInstances();
     }
     return effectSystem_->MutableInstances();
+}
+
+uint64_t EffectRuntime::ParticlePoolResetSerial() const {
+    return effectSystem_ != nullptr ? effectSystem_->ParticlePoolResetSerial() : 0;
 }
