@@ -219,6 +219,8 @@ copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dx
     <ClCompile Include="application\AppPipelines.cpp" />
     <ClCompile Include="application\AppRuntimeConfig.cpp" />
     <ClCompile Include="application\AppRuntimeUtils.cpp" />
+    <ClCompile Include="application\AppSceneState.cpp" />
+    <ClCompile Include="application\AppSceneStateManager.cpp" />
     <ClCompile Include="application\AppSceneResources.cpp" />
     <ClCompile Include="application\Skeleton.cpp" />
     <ClCompile Include="application\AppVfxRenderTargets.cpp" />
@@ -624,6 +626,8 @@ copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dx
     <ClInclude Include="application\AppVfxTelemetryPanel.h" />
     <ClInclude Include="application\AppRuntimeConfig.h" />
     <ClInclude Include="application\AppRuntimeUtils.h" />
+    <ClInclude Include="application\AppSceneState.h" />
+    <ClInclude Include="application\AppSceneStateManager.h" />
     <ClInclude Include="application\AppSceneResources.h" />
     <ClInclude Include="application\Skeleton.h" />
     <ClInclude Include="application\AppVfxRenderTargets.h" />

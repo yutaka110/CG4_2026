@@ -16,6 +16,8 @@
 #include "graphics/SwapChain.h"
 #include "resources/ResourceRegistry.h"
 #include "utils/math/MathUtils.h"
+#include "AppSceneState.h"
+#include "AppSceneStateManager.h"
 #include "VfxEngine.h"
 
 class AppFrameRenderer;
@@ -27,7 +29,7 @@ struct AppRuntimeState;
 class AppSceneResources;
 class EngineContext;
 
-class AppRunLoop {
+class AppRunLoop : private AppSceneHost {
 public:
     AppRunLoop(
         DebugCamera& debugCamera,
@@ -58,11 +60,12 @@ public:
         uint32_t descriptorSizeSRV,
         DXGI_FORMAT rtvFormat,
         DXGI_FORMAT dsvFormat);
-    void UpdateFrame();
     void RenderFrame();
     void Shutdown();
 
 private:
+    void UpdateVfxPreviewFrame() override;
+    void RenderVfxPreviewFrame() override;
     void BeginFrameSystems();
     void SignalAndWaitGpu();
 
@@ -87,6 +90,7 @@ private:
     ID3D12CommandQueue* commandQueue_;
     ID3D12Fence* fence_;
     HANDLE fenceEvent_;
+    AppSceneStateManager sceneStateManager_;
     VfxEngine vfxEngine_;
     AppFrameGraphBuilder frameGraphBuilder_;
     ge3::graphics::RenderGraph renderGraph_;
