@@ -840,9 +840,9 @@ AppFrameRenderer frameRenderer;
 	audio.Initialize();
 
 
-    ::audio::SoundData soundData1 = audio.LoadWave("Resources/Alarm01.wav");
+    audio::SoundHandle alarmSound = audio.LoadSound("Resources/Alarm01.wav");
 
-	audio.PlayWave(soundData1);
+	audio.Play(alarmSound);
 	DebugCamera debugCamera;
 	debugCamera.Initialize();
 
@@ -902,13 +902,13 @@ AppFrameRenderer frameRenderer;
 			DispatchMessage(&msg);
 		}
 		else {
+			audio.Update();
 			runLoop.RenderFrame();
 		}
 
 	}
 
-	MFShutdown();
-
+	audio.Finalize();
 	//**************************
 	//**************************
 	std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
@@ -1015,10 +1015,7 @@ AppFrameRenderer frameRenderer;
 	
 	
 
-	audio.Finalize();
-
 	runLoop.Shutdown();
-	audio.Unload(&soundData1);
 
 	// materialResource->Release();
 

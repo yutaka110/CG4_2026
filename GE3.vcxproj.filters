@@ -231,6 +231,9 @@
     <ClCompile Include="engine\src\audio\AudioWave.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="engine\src\audio\AudioSystem.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
     <ClCompile Include="application\AppAudio.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -579,6 +582,9 @@
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="engine\include\audio\AudioWave.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\include\audio\AudioSystem.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="engine\include\assets\ObjLoader.h">
