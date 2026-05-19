@@ -162,6 +162,7 @@ copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dx
     <ClCompile Include="application\AnimationClip.cpp" />
     <ClCompile Include="application\AppAudio.cpp" />
     <ClCompile Include="application\AppBootstrap.cpp" />
+    <ClCompile Include="application\AppCommandLineRunner.cpp" />
     <ClCompile Include="application\AppFrameGraphBuilder.cpp" />
     <ClCompile Include="application\AppPostProcessPipeline.cpp" />
     <ClCompile Include="application\AppSceneRenderPipeline.cpp" />
@@ -586,6 +587,7 @@ copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dx
     <ClInclude Include="application\VfxEngine.h" />
     <ClInclude Include="application\AppAudio.h" />
     <ClInclude Include="application\AppBootstrap.h" />
+    <ClInclude Include="application\AppCommandLineRunner.h" />
     <ClInclude Include="application\AppFrameState.h" />
     <ClInclude Include="application\AppFrameGraphBuilder.h" />
     <ClInclude Include="application\AppPostProcessPipeline.h" />
