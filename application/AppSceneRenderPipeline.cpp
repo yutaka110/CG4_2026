@@ -695,6 +695,35 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     ctx.scene->animatedCubeMesh.indexCount);
             }
 
+            for (const AppModelObjectInstance& object : ctx.scene->ModelObjectInstances()) {
+                const AppManagedModelResource* model =
+                    ctx.scene->FindManagedModel(object.modelIndex);
+                if (!object.visible ||
+                    model == nullptr ||
+                    !object.transformResource ||
+                    model->textureGpu.ptr == 0 ||
+                    model->mesh.indexCount == 0 ||
+                    !prepareMainPass()) {
+                    continue;
+                }
+
+                ctx.frameRenderer->DrawMainModel(
+                    passContext.commandList,
+                    model->mesh.vbv,
+                    model->mesh.ibv,
+                    ctx.scene->materialResource->GetGPUVirtualAddress(),
+                    object.transformResource->GetGPUVirtualAddress(),
+                    model->textureGpu,
+                    ctx.scene->textureSrvHandleGPU2,
+                    ctx.scene->textureSrvHandleGPU2,
+                    ctx.scene->skyboxTextureSrvHandleGPU,
+                    ctx.scene->directionalLightResource->GetGPUVirtualAddress(),
+                    ctx.scene->cameraResource->GetGPUVirtualAddress(),
+                    ctx.scene->pointLightResource->GetGPUVirtualAddress(),
+                    ctx.scene->spotLightResource->GetGPUVirtualAddress(),
+                    model->mesh.indexCount);
+            }
+
             if (ctx.runtimeState->showSkinnedModel) {
                 if (SkinnedModelInstance* activeSkinnedModel =
                         ctx.scene->GetActiveSkinnedModel()) {
