@@ -290,9 +290,6 @@ MaterialData LoadMaterialTemplateFile(const std::string& directoryPath,
 //	Log(ConvertString(std::format(L"Compile Succeeded, path:{}, profile:{}\n",
 //		filePath, profile)));
 //
-//	shaderSource->Release();
-//	shaderResult->Release();
-//
 //	return shaderBlob;
 //}
 
@@ -926,98 +923,7 @@ AppFrameRenderer frameRenderer;
 
 	engineContext.Shutdown();
 
-	/*if (fence)
-	{
-			fence->Release();
-			fence = nullptr;
-	}*/
-
-	/*if (rtvDescriptorHeap)
-	{
-			rtvDescriptorHeap->Release();
-			rtvDescriptorHeap = nullptr;
-	}*/
-
-	/*if (commandList)
-	{
-			commandList->Release();
-			commandList = nullptr;
-	}*/
-
-	/*if (commandAllocator)
-	{
-			commandAllocator->Release();
-			commandAllocator = nullptr;
-	}*/
-
-	/*if (commandQueue) {
-			commandQueue->Release();
-			commandQueue = nullptr;
-	}*/
-
-	// if (rtvDescriptorHeap)
-	//{
-	//	rtvDescriptorHeap->Release();
-	//	rtvDescriptorHeap = nullptr;
-	// }
-
-	/*for (int i = 0; i < 2; ++i)
-	{
-			if (swapChainResources[i])
-			{
-					swapChainResources[i]->Release();
-					swapChainResources[i] = nullptr;
-			}
-	}*/
-
-	/*if (swapChain)
-	{
-			swapChain->Release();
-			swapChain = nullptr;
-	}*/
-
-	/*if (device)
-	{
-			device->Release();
-			device = nullptr;
-	}*/
-
-	/*if (useAdapter)
-	{
-			useAdapter->Release();
-			useAdapter = nullptr;
-	}*/
-
-	/*if (dxgiFactory)
-	{
-			dxgiFactory->Release();
-			dxgiFactory = nullptr;
-	}*/
-
-	/*vertexResourceSphere->Release();*/
-
-	/*if (sphere.vertexResource) {
-			sphere.vertexResource->Release();
-			sphere.vertexResource = nullptr;
-	}
-	if (sphere.cbvResource) {
-			sphere.cbvResource->Release();
-			sphere.cbvResource = nullptr;
-	}*/
-
-	/*includeHandler->Release();
-	dxcCompiler->Release();
-	dxcUtils->Release();*/
-
-	// graphicsPipelineState->Release();
-
-	// rootSignature->Release();
-	
-	
-
 	runLoop.Shutdown();
-
-	// materialResource->Release();
 
 #if defined(_DEBUG) || defined(DEVELOP)
 	ComPtr<ID3D12Debug1> debugController = nullptr;

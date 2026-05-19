@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <xaudio2.h>
 #include <Windows.h>
 #include <wrl.h>
@@ -29,13 +30,13 @@ struct FormatChunk {
 struct SoundData {
 
 	// 波形フォーマット
-	WAVEFORMATEX wfex;
+	WAVEFORMATEX wfex{};
 
 	// バッファの先頭アドレス
-	BYTE* pBuffer;
+	std::vector<BYTE> buffer;
 
 	// バッファのサイズ
-	unsigned int bufferSize;
+	unsigned int bufferSize = 0;
 };
 
 

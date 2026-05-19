@@ -48,7 +48,7 @@ TechniqueRegistry BuildDefaultTechniqueRegistry() {
             "AuthoringSpark",
             "Authoring Spark",
             "Authoring Samples",
-            "Sample particle technique that proves new .effect technique IDs can route through the registry without adding a new legacy enum.",
+            "Sample particle technique that proves fresh .effect technique IDs can route through the registry without adding another legacy enum.",
             EffectTechnique::ParticleAdditive,
             EffectComponentType::Particle,
             "ParticleRenderer",

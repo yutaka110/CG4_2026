@@ -4,6 +4,7 @@
 #include <fstream>
 #include <ios>
 #include <cstring>
+#include <utility>
 
 namespace audio {
 
@@ -68,8 +69,8 @@ SoundData SoundLoadWave(const char* filename) {
 	}
 
 	// Dataチャンクのデータ部（波形データ）の読み込み
-	char* pBuffer = new char[data.size];
-	file.read(pBuffer, data.size);
+	std::vector<BYTE> buffer(static_cast<size_t>(data.size));
+	file.read(reinterpret_cast<char*>(buffer.data()), data.size);
 
 	// ファイルクローズ
 	//  Waveファイルを閉じる
@@ -79,7 +80,7 @@ SoundData SoundLoadWave(const char* filename) {
 	SoundData soundData = {};
 
 	soundData.wfex = format.fmt;
-	soundData.pBuffer = reinterpret_cast<BYTE*>(pBuffer);
+	soundData.buffer = std::move(buffer);
 	soundData.bufferSize = data.size;
 
 	return soundData;
@@ -89,9 +90,8 @@ SoundData SoundLoadWave(const char* filename) {
 void SoundUnload(SoundData* soundData) {
 
 	// バッファのメモリを解放
-	delete[] soundData->pBuffer;
-
-	soundData->pBuffer = 0;
+	soundData->buffer.clear();
+	soundData->buffer.shrink_to_fit();
 	soundData->bufferSize = 0;
 	soundData->wfex = {};
 }
@@ -107,7 +107,7 @@ void SoundPlayWave(IXAudio2* xAudio2, const SoundData& soundData) {
 
 	// 再生する波形データの設定
 	XAUDIO2_BUFFER buf{};
-	buf.pAudioData = soundData.pBuffer;
+	buf.pAudioData = soundData.buffer.data();
 	buf.AudioBytes = soundData.bufferSize;
 	buf.Flags = XAUDIO2_END_OF_STREAM;
 

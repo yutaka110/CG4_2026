@@ -3,6 +3,7 @@
 #include <dinput.h>
 #include <array>
 #include <windows.h>
+#include <wrl/client.h>
 
 class KeyInputDI {
 public:
@@ -25,8 +26,8 @@ public:
 private:
     bool AcquireIfNeeded();
 
-    IDirectInput8* di_ = nullptr;
-    IDirectInputDevice8* kb_ = nullptr;
+    Microsoft::WRL::ComPtr<IDirectInput8> di_;
+    Microsoft::WRL::ComPtr<IDirectInputDevice8> kb_;
     HWND                 hwnd_ = nullptr;
 
     std::array<unsigned char, 256> curr_{};

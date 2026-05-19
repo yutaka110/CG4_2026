@@ -6,20 +6,29 @@ bool KeyInputDI::Initialize(HINSTANCE hInst, HWND hwnd) {
 
     HRESULT hr = DirectInput8Create(
         hInst, DIRECTINPUT_VERSION, IID_IDirectInput8,
-        reinterpret_cast<void**>(&di_), nullptr);
+        reinterpret_cast<void**>(di_.GetAddressOf()), nullptr);
     if (FAILED(hr) || !di_) return false;
 
-    hr = di_->CreateDevice(GUID_SysKeyboard, &kb_, nullptr);
-    if (FAILED(hr) || !kb_) return false;
+    hr = di_->CreateDevice(GUID_SysKeyboard, kb_.GetAddressOf(), nullptr);
+    if (FAILED(hr) || !kb_) {
+        di_.Reset();
+        return false;
+    }
 
     // 標準キーボードデータフォーマット
     hr = kb_->SetDataFormat(&c_dfDIKeyboard);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) {
+        Finalize();
+        return false;
+    }
 
     // 協調レベル：フォアグラウンド / 非独占 / WinKey無効（Alt+Tab等は可）
     hr = kb_->SetCooperativeLevel(
         hwnd_, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE | DISCL_NOWINKEY);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) {
+        Finalize();
+        return false;
+    }
 
     // 初回 Acquire
     AcquireIfNeeded();
@@ -33,13 +42,9 @@ bool KeyInputDI::Initialize(HINSTANCE hInst, HWND hwnd) {
 void KeyInputDI::Finalize() {
     if (kb_) {
         kb_->Unacquire();
-        kb_->Release();
-        kb_ = nullptr;
+        kb_.Reset();
     }
-    if (di_) {
-        di_->Release();
-        di_ = nullptr;
-    }
+    di_.Reset();
 }
 
 bool KeyInputDI::AcquireIfNeeded() {

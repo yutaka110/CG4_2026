@@ -93,7 +93,6 @@ bool Device::Initialize(bool enableDebugLayer)
 //		infoQueue->PushStorageFilter(&filter);
 //
 //		// 解放
-//		infoQueue->Release();
 //	}
 //#endif
 
