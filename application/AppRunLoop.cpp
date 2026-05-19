@@ -1,6 +1,5 @@
 #include "AppRunLoop.h"
 
-#include "../../externals/imgui/imgui.h"
 #include <DirectXMath.h>
 
 #include "AppFrameRenderer.h"

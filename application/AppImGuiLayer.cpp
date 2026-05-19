@@ -1,5 +1,7 @@
 #include "AppImGuiLayer.h"
 
+#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
+
 #include "AppDebugViewsPanel.h"
 #include "AppEffectAssetEditorPanel.h"
 #include "AppEffectInstancePanel.h"
@@ -421,3 +423,47 @@ void AppImGuiLayer::Shutdown() {
     ImGui::DestroyContext();
     initialized_ = false;
 }
+
+bool AppImGuiLayer::IsEnabled() const {
+    return initialized_;
+}
+
+#else
+
+bool AppImGuiLayer::Initialize(HWND hwnd,
+    ID3D12Device* device,
+    int bufferCount,
+    DXGI_FORMAT rtvFormat,
+    ID3D12DescriptorHeap* srvHeap) {
+    (void)hwnd;
+    (void)device;
+    (void)bufferCount;
+    (void)rtvFormat;
+    (void)srvHeap;
+    initialized_ = false;
+    return true;
+}
+
+void AppImGuiLayer::BeginFrame() {
+}
+
+void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
+    (void)context;
+}
+
+void AppImGuiLayer::EndFrame() {
+}
+
+void AppImGuiLayer::Render(ID3D12GraphicsCommandList* cmdList) {
+    (void)cmdList;
+}
+
+bool AppImGuiLayer::IsEnabled() const {
+    return false;
+}
+
+void AppImGuiLayer::Shutdown() {
+    initialized_ = false;
+}
+
+#endif
