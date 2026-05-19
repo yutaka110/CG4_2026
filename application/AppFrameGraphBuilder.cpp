@@ -134,14 +134,16 @@ void AppFrameGraphBuilder::Build(
     emissivePreviewPass.forceExecute = true;
     ctx.renderGraph->AddPass(std::move(emissivePreviewPass));
 
-    ctx.renderGraph->AddPass({
-        "UI.ImGui",
-        ge3::graphics::RenderPassLayer::Ui,
-        {
-            {"BackBuffer", ge3::graphics::RenderResourceAccessType::WriteRtv},
-        },
-        "",
-        [ctx](ge3::graphics::RenderPassContext& passContext) {
-            ctx.imguiLayer->Render(passContext.commandList);
-        }});
+    if (ctx.imguiLayer->IsEnabled()) {
+        ctx.renderGraph->AddPass({
+            "UI.ImGui",
+            ge3::graphics::RenderPassLayer::Ui,
+            {
+                {"BackBuffer", ge3::graphics::RenderResourceAccessType::WriteRtv},
+            },
+            "",
+            [ctx](ge3::graphics::RenderPassContext& passContext) {
+                ctx.imguiLayer->Render(passContext.commandList);
+            }});
+    }
 }

@@ -57,6 +57,7 @@ public:
     void EndFrame();
 
     void Render(ID3D12GraphicsCommandList* cmdList);
+    bool IsEnabled() const;
 
     void Shutdown();
 
