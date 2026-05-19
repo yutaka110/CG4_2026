@@ -35,6 +35,8 @@ void AppParticleSystem::InitializeInstancingBuffer(
     for (uint32_t i = 0; i < maxInstances_; ++i) {
         instancingData_[i].World = MakeIdentity4x4();
         instancingData_[i].WVP = MakeIdentity4x4();
+        instancingData_[i].uvRect = {0.0f, 0.0f, 1.0f, 1.0f};
+        instancingData_[i].textureIndex = 1;
     }
 }
 
@@ -170,6 +172,8 @@ uint32_t AppParticleSystem::UpdateInstances(
         color.z *= alpha;
         color.w = alpha;
         instancingData_[numInstances].color = color;
+        instancingData_[numInstances].uvRect = {0.0f, 0.0f, 1.0f, 1.0f};
+        instancingData_[numInstances].textureIndex = 1;
 
         ++numInstances;
         ++it;

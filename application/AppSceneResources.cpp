@@ -1031,6 +1031,7 @@ bool AppSceneResources::Initialize(
         ComPtr<ID3D12Resource> resource,
         D3D12_CPU_DESCRIPTOR_HANDLE cpu,
         D3D12_GPU_DESCRIPTOR_HANDLE gpu,
+        uint32_t descriptorIndex,
         const DirectX::TexMetadata& textureMetadata) {
         if (resource == nullptr || gpu.ptr == 0) {
             return;
@@ -1041,6 +1042,7 @@ bool AppSceneResources::Initialize(
             resource,
             cpu,
             gpu,
+            descriptorIndex,
             static_cast<uint32_t>(textureMetadata.width),
             static_cast<uint32_t>(textureMetadata.height)
         });
@@ -1052,6 +1054,7 @@ bool AppSceneResources::Initialize(
         textureResource,
         textureSrvHandleCPU,
         textureSrvHandleGPU,
+        1,
         metadata);
     registerExistingVfxTexture(
         "monsterBall",
@@ -1059,6 +1062,7 @@ bool AppSceneResources::Initialize(
         textureResource2,
         textureSrvHandleCPU2,
         textureSrvHandleGPU2,
+        2,
         metadata2);
     registerExistingVfxTexture(
         "circle2",
@@ -1066,6 +1070,7 @@ bool AppSceneResources::Initialize(
         circle2TextureResource,
         circle2TextureSrvHandleCPU,
         circle2TextureSrvHandleGPU,
+        5,
         circle2Metadata);
     registerExistingVfxTexture(
         "gradationLine",
@@ -1073,6 +1078,7 @@ bool AppSceneResources::Initialize(
         gradationLineTextureResource,
         gradationLineTextureSrvHandleCPU,
         gradationLineTextureSrvHandleGPU,
+        6,
         gradationLineMetadata);
 
     struct VfxTextureLoadSpec {
@@ -1119,6 +1125,7 @@ bool AppSceneResources::Initialize(
             vfxTextureResource,
             cpu,
             gpu,
+            descriptorIndex,
             static_cast<uint32_t>(vfxTextureMetadata.width),
             static_cast<uint32_t>(vfxTextureMetadata.height)
         });

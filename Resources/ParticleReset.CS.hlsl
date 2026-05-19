@@ -9,7 +9,8 @@ struct ParticleState
     float seed;
     float4 shape;
     uint emitterKey;
-    uint3 pad;
+    uint textureIndex;
+    uint2 pad;
 };
 
 cbuffer ResetConstants : register(b0)
@@ -29,6 +30,8 @@ cbuffer ResetConstants : register(b0)
     float4 gParticleShapeParams;
     float4 gEmitterParams;
     float4 gUvRect;
+    uint gTextureIndex;
+    uint3 gTextureIndexPad;
 };
 
 RWStructuredBuffer<ParticleState> gParticleState : register(u1);
@@ -79,6 +82,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     state.seed = seed;
     state.shape = float4(0.0f, 0.0f, authoredScale, 0.0f);
     state.emitterKey = gEmitterKey;
+    state.textureIndex = gTextureIndex;
     state.pad = 0;
 
     gParticleState[particleIndex] = state;

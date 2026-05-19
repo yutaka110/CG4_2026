@@ -731,6 +731,13 @@ runtimeState.skinnedModelTransform.scale = { 0.45f, 0.45f, 0.45f };
 runtimeState.skinnedModelTransform.rotate = { 0.0f, 0.0f, 0.0f };
 runtimeState.skinnedModelTransform.translate = { 0.0f, -0.4f, -6.3f };
 
+runtimeState.camera.transform.scale = { 1.0f, 1.0f, 1.0f };
+runtimeState.camera.transform.rotate = { 0.0f, 0.0f, 0.0f };
+runtimeState.camera.transform.translate = { 0.0f, 0.0f, -8.0f };
+runtimeState.camera.fovY = 0.25f * std::numbers::pi_v<float>;
+runtimeState.camera.nearZ = 0.1f;
+runtimeState.camera.farZ = 1000.0f;
+
 runtimeState.vfxModelObjects[0].modelIndex = 0;
 runtimeState.vfxModelObjects[0].transform.scale = { 1.25f, 1.25f, 1.25f };
 runtimeState.vfxModelObjects[0].transform.rotate = { 0.0f, 0.0f, 0.0f };
@@ -784,7 +791,7 @@ imguiLayer.Initialize(
 
 
 AppRenderResources renderResources;
-assert(renderResources.InitializeParticleQuad(device));
+assert(renderResources.InitializeSharedSpriteQuad(device));
 AppFrameRenderer frameRenderer;
 
 

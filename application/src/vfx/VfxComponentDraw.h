@@ -32,5 +32,6 @@ void DrawIndirectSpriteComponents(
     const VfxRenderContext& context,
     ID3D12PipelineState* pipelineState,
     const ComponentDrawParams& drawParams,
-    const VfxRendererResourceSet* rendererResources = nullptr);
+    const VfxRendererResourceSet* rendererResources = nullptr,
+    bool useTextureIndexing = false);
 } // namespace vfx

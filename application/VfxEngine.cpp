@@ -390,16 +390,17 @@ void VfxEngine::ReloadChangedEffectAssets() {
 }
 
 void VfxEngine::RegisterDefaultTextures(const AppSceneResources& scene) {
-    effectResourceCache_.RegisterTexture({"default", scene.textureSrvHandleCPU, scene.textureSrvHandleGPU, 1, 1});
-    effectResourceCache_.RegisterTexture({"monsterBall", scene.textureSrvHandleCPU2, scene.textureSrvHandleGPU2, 1, 1});
-    effectResourceCache_.RegisterTexture({"streakNoise", scene.textureSrvHandleCPU, scene.textureSrvHandleGPU, 1, 1});
-    effectResourceCache_.RegisterTexture({"circle2", scene.circle2TextureSrvHandleCPU, scene.circle2TextureSrvHandleGPU, 1, 1});
-    effectResourceCache_.RegisterTexture({"gradationLine", scene.gradationLineTextureSrvHandleCPU, scene.gradationLineTextureSrvHandleGPU, 1, 1});
+    effectResourceCache_.RegisterTexture({"default", scene.textureSrvHandleCPU, scene.textureSrvHandleGPU, 1, 1, 1});
+    effectResourceCache_.RegisterTexture({"monsterBall", scene.textureSrvHandleCPU2, scene.textureSrvHandleGPU2, 2, 1, 1});
+    effectResourceCache_.RegisterTexture({"streakNoise", scene.textureSrvHandleCPU, scene.textureSrvHandleGPU, 1, 1, 1});
+    effectResourceCache_.RegisterTexture({"circle2", scene.circle2TextureSrvHandleCPU, scene.circle2TextureSrvHandleGPU, 5, 1, 1});
+    effectResourceCache_.RegisterTexture({"gradationLine", scene.gradationLineTextureSrvHandleCPU, scene.gradationLineTextureSrvHandleGPU, 6, 1, 1});
     for (const AppManagedTextureResource& texture : scene.vfxTextureLibrary) {
         effectResourceCache_.RegisterTexture({
             texture.name,
             texture.cpu,
             texture.gpu,
+            texture.descriptorIndex,
             texture.width,
             texture.height
         });
@@ -408,6 +409,7 @@ void VfxEngine::RegisterDefaultTextures(const AppSceneResources& scene) {
                 texture.path,
                 texture.cpu,
                 texture.gpu,
+                texture.descriptorIndex,
                 texture.width,
                 texture.height
             });
@@ -433,6 +435,10 @@ void VfxEngine::RegisterRenderPasses(
         primaryParticleFx.common != nullptr
             ? ResolveTexture(primaryParticleFx.common->texture, spriteTextureHandle)
             : spriteTextureHandle;
+    const uint32_t vfxTextureDescriptorIndex =
+        primaryParticleFx.common != nullptr
+            ? ResolveTextureIndex(primaryParticleFx.common->texture, 1)
+            : 1;
 
     graphContext.vfxRenderTargets = &vfxRenderTargets_;
     graphContext.gpuParticleSystem = &gpuParticleSystem_;
@@ -440,6 +446,8 @@ void VfxEngine::RegisterRenderPasses(
     graphContext.postProcessStack = &postProcessStack_;
     graphContext.spriteTextureHandle = spriteTextureHandle;
     graphContext.vfxTextureHandle = vfxTextureHandle;
+    graphContext.vfxTextureDescriptorIndex = vfxTextureDescriptorIndex;
+    graphContext.effectResourceCache = &effectResourceCache_;
     graphContext.effectRuntime = &frameGraphEffectRuntimeFrame_;
     graphContext.primaryParticleFx = primaryParticleFx;
     graphContext.beamTime = beamTime_;
@@ -479,6 +487,9 @@ void VfxEngine::RegisterRenderPasses(
         if (selectedResources.particle.simulation.usesCompute &&
             particleInput.primary.instance != nullptr) {
             const EffectParticleSettings* settings = ResolveParticleSettings(particleInput);
+            const EffectComponentCommon* common = particleInput.primary.componentCommon != nullptr
+                ? particleInput.primary.componentCommon
+                : particleInput.fallbackCommon;
             if (std::string_view(selectedResources.particle.simulation.stateBuffer) == "ParticleState") {
                 consumed |= gpuParticleSystem_.ResetGpuManagedParticlePool(
                     commandList,
@@ -499,6 +510,8 @@ void VfxEngine::RegisterRenderPasses(
                     settings != nullptr ? settings->randomRotation : 0.0f,
                     settings != nullptr ? settings->scaleYMin : 1.0f,
                     settings != nullptr ? settings->scaleYMax : 1.0f,
+                    common != nullptr ? common->uvRect : Vector4{0.0f, 0.0f, 1.0f, 1.0f},
+                    common != nullptr ? ResolveTextureIndex(common->texture, 1) : 1,
                     ResolveParticleTint(particleInput));
             }
         }
@@ -641,4 +654,10 @@ D3D12_GPU_DESCRIPTOR_HANDLE VfxEngine::ResolveTexture(
     std::string_view textureName,
     D3D12_GPU_DESCRIPTOR_HANDLE fallback) const {
     return effectResourceCache_.ResolveTexture(textureName, fallback);
+}
+
+uint32_t VfxEngine::ResolveTextureIndex(
+    std::string_view textureName,
+    uint32_t fallback) const {
+    return effectResourceCache_.ResolveTextureIndex(textureName, fallback);
 }

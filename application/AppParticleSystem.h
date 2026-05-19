@@ -26,6 +26,9 @@ struct ParticleForGPU {
     Matrix4x4 WVP;
     Matrix4x4 World;
     Vector4 color;
+    Vector4 uvRect = {0.0f, 0.0f, 1.0f, 1.0f};
+    uint32_t textureIndex = 1;
+    uint32_t pad[3]{};
 };
 
 struct Emitter {

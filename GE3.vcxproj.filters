@@ -192,6 +192,9 @@
     <ClCompile Include="engine\src\camera\debugCamera.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="engine\src\camera\VfxCamera.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
     <ClCompile Include="engine\src\utils\math\MathUtils.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -555,6 +558,9 @@
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="engine\include\camera\debugCamera.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\include\camera\VfxCamera.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="engine\include\utils\dx12\BufferHelper.h">

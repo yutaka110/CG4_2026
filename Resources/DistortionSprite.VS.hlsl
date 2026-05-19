@@ -14,5 +14,6 @@ VSOutput main(VSInput input, uint instanceId : SV_InstanceID)
     output.position = mul(local, particle.WVP);
     output.texcoord = particle.uvRect.xy + input.texcoord * particle.uvRect.zw;
     output.color = particle.color;
+    output.textureIndex = particle.textureIndex;
     return output;
 }

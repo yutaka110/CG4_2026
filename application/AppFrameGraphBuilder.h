@@ -16,6 +16,9 @@ class AppVfxRenderTargets;
 struct AppVfxRendererSet;
 class PostProcessStack;
 struct AppRuntimeState;
+namespace ge3::resources {
+class EffectResourceCache;
+}
 
 namespace ge3::graphics {
 class RenderGraph;
@@ -40,6 +43,8 @@ struct AppFrameGraphBuildContext {
     D3D12_CPU_DESCRIPTOR_HANDLE dsv{};
     D3D12_GPU_DESCRIPTOR_HANDLE spriteTextureHandle{};
     D3D12_GPU_DESCRIPTOR_HANDLE vfxTextureHandle{};
+    uint32_t vfxTextureDescriptorIndex = 0;
+    const ge3::resources::EffectResourceCache* effectResourceCache = nullptr;
     D3D12_GPU_DESCRIPTOR_HANDLE depthTextureHandle{};
     const EffectRuntimeFrame* effectRuntime = nullptr;
     ParticleRenderFallback primaryParticleFx{};

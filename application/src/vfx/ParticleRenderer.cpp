@@ -9,6 +9,7 @@
 #include "../../AppSceneResources.h"
 #include "VfxComponentDraw.h"
 #include "graphics/RenderGraph.h"
+#include "resources/ResourceRegistry.h"
 #include "vfx/VfxPassRegistration.h"
 #include "vfx/VfxResources.h"
 
@@ -230,6 +231,20 @@ float ResolveGpuEmitterTimelineAge(const ParticleRenderInput& input, float fallb
     }
     return fallbackAge;
 }
+
+uint32_t ResolveParticleTextureIndex(
+    const VfxRenderContext& context,
+    const ParticleRenderInput& input) {
+    const EffectComponentCommon* common = input.primary.componentCommon != nullptr
+        ? input.primary.componentCommon
+        : input.fallbackCommon;
+    if (common == nullptr || context.effectResourceCache == nullptr) {
+        return context.vfxTextureDescriptorIndex != 0 ? context.vfxTextureDescriptorIndex : 1;
+    }
+    return context.effectResourceCache->ResolveTextureIndex(
+        common->texture,
+        context.vfxTextureDescriptorIndex != 0 ? context.vfxTextureDescriptorIndex : 1);
+}
 } // namespace
 
 void ParticleRenderer::RegisterPasses(
@@ -316,6 +331,8 @@ void ParticleRenderer::Simulate(
     float gpuManagedFrameSpawnRadius = 4.0f;
     float gpuManagedFrameUvScrollSpeed = 0.0f;
     Vector4 gpuManagedFrameUvRect = {0.0f, 0.0f, 1.0f, 1.0f};
+    uint32_t gpuManagedFrameTextureIndex =
+        context.vfxTextureDescriptorIndex != 0 ? context.vfxTextureDescriptorIndex : 1;
 
     auto simulateSlice = [&](const ParticleRenderInput& input, uint32_t sliceOffset, uint32_t sliceCapacity) -> uint32_t {
         Vector4 tint = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -373,6 +390,7 @@ void ParticleRenderer::Simulate(
             scaleYMax = input.fallbackSettings->scaleYMax;
             uvRect = input.fallbackCommon->uvRect;
         }
+        const uint32_t textureIndex = ResolveParticleTextureIndex(context, input);
 
         const uint32_t requestedCount = spawnCount > 0.0f
             ? static_cast<uint32_t>((std::max)(1.0f, std::round(spawnCount)))
@@ -404,6 +422,7 @@ void ParticleRenderer::Simulate(
             scaleYMin,
             scaleYMax,
             uvRect,
+            textureIndex,
             emitterPosition,
             sliceOffset,
             sliceCount);
@@ -469,6 +488,7 @@ void ParticleRenderer::Simulate(
             scaleYMax = input.fallbackSettings->scaleYMax;
             uvRect = input.fallbackCommon->uvRect;
         }
+        const uint32_t textureIndex = ResolveParticleTextureIndex(context, input);
 
         const uint32_t requestedCount = spawnCount > 0.0f
             ? static_cast<uint32_t>((std::max)(1.0f, std::round(spawnCount)))
@@ -486,6 +506,7 @@ void ParticleRenderer::Simulate(
             gpuManagedFrameSpawnRadius = spawnRadius;
             gpuManagedFrameUvScrollSpeed = uvScrollSpeed;
             gpuManagedFrameUvRect = uvRect;
+            gpuManagedFrameTextureIndex = textureIndex;
         }
         context.gpuParticleSystem->SimulateGpuManagedParticles(
             commandList,
@@ -512,6 +533,7 @@ void ParticleRenderer::Simulate(
             scaleYMin,
             scaleYMax,
             uvRect,
+            textureIndex,
             emitterPosition,
             updateExistingParticles,
             fallbackEmitterIndex,
@@ -570,7 +592,8 @@ void ParticleRenderer::Simulate(
             gpuManagedFramePulseSpeed,
             gpuManagedFrameSpawnRadius,
             gpuManagedFrameUvScrollSpeed,
-            gpuManagedFrameUvRect);
+            gpuManagedFrameUvRect,
+            gpuManagedFrameTextureIndex);
         instanceCount = maxParticles;
     } else if (!queue.empty()) {
         const uint32_t emitterCount = static_cast<uint32_t>(queue.size());
@@ -636,5 +659,6 @@ void ParticleRenderer::Draw(
         context,
         context.appPipelines != nullptr ? context.appPipelines->GetParticleAlphaPSO() : nullptr,
         drawParams,
-        rendererResources);
+        rendererResources,
+        true);
 }

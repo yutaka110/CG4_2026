@@ -34,11 +34,15 @@ public:
         uint32_t descriptorSize,
         uint32_t index);
 
-    bool InitializeParticleQuad(Microsoft::WRL::ComPtr<ID3D12Device> device);
+    bool InitializeSharedSpriteQuad(Microsoft::WRL::ComPtr<ID3D12Device> device);
+    bool InitializeParticleQuad(Microsoft::WRL::ComPtr<ID3D12Device> device) {
+        return InitializeSharedSpriteQuad(device);
+    }
 
+    const D3D12_VERTEX_BUFFER_VIEW& SharedSpriteQuadVertexBufferView() const;
     const D3D12_VERTEX_BUFFER_VIEW& ParticleVertexBufferView() const;
 
 private:
-    Microsoft::WRL::ComPtr<ID3D12Resource> particleVertexResource_;
-    D3D12_VERTEX_BUFFER_VIEW particleVertexBufferView_{};
+    Microsoft::WRL::ComPtr<ID3D12Resource> sharedSpriteQuadVertexResource_;
+    D3D12_VERTEX_BUFFER_VIEW sharedSpriteQuadVertexBufferView_{};
 };

@@ -61,7 +61,8 @@ void DrawIndirectSpriteComponents(
     const VfxRenderContext& context,
     ID3D12PipelineState* pipelineState,
     const ComponentDrawParams& drawParams,
-    const VfxRendererResourceSet* rendererResources) {
+    const VfxRendererResourceSet* rendererResources,
+    bool useTextureIndexing) {
     const char* renderBufferResource =
         rendererResources != nullptr && rendererResources->renderBuffer[0] != '\0'
             ? rendererResources->renderBuffer
@@ -108,7 +109,11 @@ void DrawIndirectSpriteComponents(
     commandList->IASetVertexBuffers(0, 1, &context.renderResources->ParticleVertexBufferView());
     commandList->IASetIndexBuffer(&context.scene->indexBufferViewSprite);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    commandList->SetGraphicsRootDescriptorTable(2, context.vfxTextureHandle);
+    D3D12_GPU_DESCRIPTOR_HANDLE textureTable = context.vfxTextureHandle;
+    if (useTextureIndexing && context.srvDescriptorHeap != nullptr) {
+        textureTable = context.srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+    }
+    commandList->SetGraphicsRootDescriptorTable(2, textureTable);
     if (context.depthTextureHandle.ptr != 0) {
         commandList->SetGraphicsRootDescriptorTable(3, context.depthTextureHandle);
     }

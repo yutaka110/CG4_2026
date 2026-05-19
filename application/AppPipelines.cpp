@@ -430,12 +430,12 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
     D3D12_DESCRIPTOR_RANGE particleTextureRange{};
     particleTextureRange.BaseShaderRegister = 0;
-    particleTextureRange.NumDescriptors = 1;
+    particleTextureRange.NumDescriptors = 160;
     particleTextureRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     particleTextureRange.OffsetInDescriptorsFromTableStart = 0;
 
     D3D12_DESCRIPTOR_RANGE particleDepthRange{};
-    particleDepthRange.BaseShaderRegister = 1;
+    particleDepthRange.BaseShaderRegister = 160;
     particleDepthRange.NumDescriptors = 1;
     particleDepthRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     particleDepthRange.OffsetInDescriptorsFromTableStart = 0;

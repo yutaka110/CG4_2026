@@ -4,6 +4,8 @@ struct ParticleForGPU
     float4x4 World;
     float4 color;
     float4 uvRect;
+    uint textureIndex;
+    uint3 pad;
 };
 
 struct ParticleState
@@ -17,7 +19,8 @@ struct ParticleState
     float seed;
     float4 shape;
     uint emitterKey;
-    uint3 pad;
+    uint textureIndex;
+    uint2 pad;
 };
 
 cbuffer SimConstants : register(b0)
@@ -37,6 +40,8 @@ cbuffer SimConstants : register(b0)
     float4 gParticleShapeParams;
     float4 gEmitterParams;
     float4 gUvRect;
+    uint gTextureIndex;
+    uint3 gTextureIndexPad;
 };
 
 RWStructuredBuffer<ParticleForGPU> gParticleOutput : register(u0);
@@ -91,6 +96,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         inactive.WVP = inactive.World;
         inactive.color = float4(0.0f, 0.0f, 0.0f, 0.0f);
         inactive.uvRect = gUvRect;
+        inactive.textureIndex = gTextureIndex;
+        inactive.pad = 0;
         gParticleOutput[particleIndex] = inactive;
         return;
     }
@@ -113,6 +120,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         float jitter = (Hash01(id, state.seed + gTime, 21.4f) - 0.5f) * 0.65f;
         state.shape.x = gParticleShapeParams.y > 0.5f ? radialAngle + jitter : 0.0f;
         state.shape.y = 0.0f;
+        state.textureIndex = gTextureIndex;
     }
 
     float normalizedAge = saturate(state.age / max(state.lifetime, 0.001f));
@@ -136,5 +144,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     output.WVP = mul(world, gViewProjection);
     output.color = float4(state.color.rgb * gTint.rgb * pulse * max(gScaleAndParams.z, 0.01f), alpha * gTint.a);
     output.uvRect = gUvRect;
+    output.textureIndex = state.textureIndex;
+    output.pad = 0;
     gParticleOutput[particleIndex] = output;
 }

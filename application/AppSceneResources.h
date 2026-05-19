@@ -127,6 +127,7 @@ struct AppManagedTextureResource {
     Microsoft::WRL::ComPtr<ID3D12Resource> resource;
     D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+    uint32_t descriptorIndex = 0;
     uint32_t width = 0;
     uint32_t height = 0;
 };

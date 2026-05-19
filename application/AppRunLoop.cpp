@@ -114,8 +114,19 @@ void AppRunLoop::UpdateFrame() {
     runtimeState_.scissorRect.right = static_cast<LONG>(windowWidth_);
     runtimeState_.scissorRect.bottom = static_cast<LONG>(windowHeight_);
 
+    const float aspectRatio = windowHeight_ > 0
+        ? static_cast<float>(windowWidth_) / static_cast<float>(windowHeight_)
+        : 16.0f / 9.0f;
+    debugCamera_.SetInputEnabled(runtimeState_.camera.enableDebugInput);
+    debugCamera_.SetTransform(runtimeState_.camera.transform);
+    debugCamera_.SetLens(
+        runtimeState_.camera.fovY,
+        aspectRatio,
+        runtimeState_.camera.nearZ,
+        runtimeState_.camera.farZ);
     debugCamera_.Update();
-    runtimeState_.cameraWorldPosition = debugCamera_.translation_;
+    runtimeState_.camera.transform = debugCamera_.GetTransform();
+    runtimeState_.cameraWorldPosition = debugCamera_.GetWorldPosition();
     frameState_.cameraWorldPosition = runtimeState_.cameraWorldPosition;
     scene_.UpdateCameraWorldPosition(runtimeState_.cameraWorldPosition);
     frameState_.viewMatrix = debugCamera_.GetViewMatrix();
@@ -126,7 +137,7 @@ void AppRunLoop::UpdateFrame() {
     BYTE key[256] = {};
     (void)key;
 
-    frameState_.viewProjectionMatrix = Multiply(frameState_.viewMatrix, frameState_.projMatrix);
+    frameState_.viewProjectionMatrix = debugCamera_.GetViewProjectionMatrix();
     frameState_.deltaTime = 0.016f;
     frameState_.drawCount = particleSystem_.UpdateInstances(
         frameState_.viewProjectionMatrix,

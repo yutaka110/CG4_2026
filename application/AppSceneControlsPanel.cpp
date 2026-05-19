@@ -217,6 +217,24 @@ void DrawMaterialSettingsControlsPanel(
         -100.0f,
         100.0f);
 
+    ImGui::SeparatorText("Camera");
+    ImGui::Checkbox("Debug Camera Input", &runtimeState.camera.enableDebugInput);
+    ImGui::DragFloat3(
+        "Camera Position",
+        reinterpret_cast<float*>(&runtimeState.camera.transform.translate),
+        0.05f,
+        -100.0f,
+        100.0f);
+    ImGui::DragFloat3(
+        "Camera Rotation",
+        reinterpret_cast<float*>(&runtimeState.camera.transform.rotate),
+        0.01f,
+        -3.14f,
+        3.14f);
+    ImGui::SliderAngle("Camera FOV", &runtimeState.camera.fovY, 10.0f, 120.0f);
+    ImGui::DragFloat("Camera Near", &runtimeState.camera.nearZ, 0.01f, 0.001f, 100.0f);
+    ImGui::DragFloat("Camera Far", &runtimeState.camera.farZ, 1.0f, 1.0f, 5000.0f);
+
     ImGui::SeparatorText("VFX Model Objects");
     ImGui::Checkbox("Show VFX Model Objects", &runtimeState.showVfxModelObjects);
     const char* modelObjectLabels[] = {

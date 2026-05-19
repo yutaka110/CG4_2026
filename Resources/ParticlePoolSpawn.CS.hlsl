@@ -4,6 +4,8 @@ struct ParticleForGPU
     float4x4 World;
     float4 color;
     float4 uvRect;
+    uint textureIndex;
+    uint3 pad;
 };
 
 struct ParticleState
@@ -17,7 +19,8 @@ struct ParticleState
     float seed;
     float4 shape;
     uint emitterKey;
-    uint3 pad;
+    uint textureIndex;
+    uint2 pad;
 };
 
 struct EmitterState
@@ -43,6 +46,8 @@ struct EmitterSpawnRequest
     float4 particleShapeParams;
     float4 emitterParams;
     float4 uvRect;
+    uint textureIndex;
+    uint3 pad1;
 };
 
 cbuffer PoolConstants : register(b0)
@@ -62,6 +67,8 @@ cbuffer PoolConstants : register(b0)
     float4 gParticleShapeParams;
     float4 gEmitterParams;
     float4 gUvRect;
+    uint gTextureIndex;
+    uint3 gTextureIndexPad;
 };
 
 RWStructuredBuffer<ParticleForGPU> gParticleOutput : register(u0);
@@ -189,6 +196,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     state.seed = seed;
     state.shape = float4(request.particleShapeParams.y > 0.5f ? seed * 6.2831853f : 0.0f, 0.0f, authoredScale, 1.0f);
     state.emitterKey = request.emitterKey;
+    state.textureIndex = request.textureIndex;
     state.pad = 0;
     gParticleState[particleIndex] = state;
 
@@ -206,5 +214,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     output.WVP = mul(world, gViewProjection);
     output.color = float4(state.color.rgb * request.tint.rgb * max(request.scaleAndParams.z, 0.01f), request.tint.a);
     output.uvRect = request.uvRect;
+    output.textureIndex = state.textureIndex;
+    output.pad = 0;
     gParticleOutput[particleIndex] = output;
 }

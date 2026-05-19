@@ -15,6 +15,8 @@ cbuffer PoolConstants : register(b0)
     float4 gParticleShapeParams;
     float4 gEmitterParams;
     float4 gUvRect;
+    uint gTextureIndex;
+    uint3 gTextureIndexPad;
 };
 
 struct EmitterSpawnRequest
@@ -28,6 +30,8 @@ struct EmitterSpawnRequest
     float4 particleShapeParams;
     float4 emitterParams;
     float4 uvRect;
+    uint textureIndex;
+    uint3 pad1;
 };
 
 struct DispatchArgs

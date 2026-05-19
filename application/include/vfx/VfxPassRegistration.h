@@ -18,6 +18,8 @@ inline VfxRenderContext BuildPassRenderContext(
         ctx.frameState,
         ctx.srvDescriptorHeap,
         ctx.vfxTextureHandle,
+        ctx.vfxTextureDescriptorIndex,
+        ctx.effectResourceCache,
         ctx.depthTextureHandle,
         ctx.beamTime,
         &resources
