@@ -65,7 +65,8 @@ struct Material
     Matrix4x4 uvTransform;
     float shininess;
     float environmentCoefficient;
-    float padding2[2];
+    int32_t specularMode; // 0: Phong, 1: Blinn-Phong
+    float padding2[1];
 };
 
 struct DirectionalLight

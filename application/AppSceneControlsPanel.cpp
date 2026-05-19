@@ -130,6 +130,16 @@ void DrawMaterialSettingsControlsPanel(
     ImGui::ColorEdit4("Material Color",
         reinterpret_cast<float*>(&runtimeState.materialData.color));
     ImGui::Checkbox("Enable Lighting", reinterpret_cast<bool*>(&runtimeState.materialData.enableLighting));
+    const char* specularModeLabels[] = {"Phong", "Blinn-Phong"};
+    int specularMode = std::clamp(runtimeState.materialData.specularMode, 0, 1);
+    runtimeState.materialData.specularMode = specularMode;
+    if (ImGui::Combo(
+            "Specular Mode",
+            &specularMode,
+            specularModeLabels,
+            IM_ARRAYSIZE(specularModeLabels))) {
+        runtimeState.materialData.specularMode = specularMode;
+    }
     ImGui::SliderFloat("Shininess", &runtimeState.materialData.shininess, 1.0f, 64.0f);
     ImGui::SliderFloat(
         "Environment Reflection",

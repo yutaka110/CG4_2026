@@ -5,6 +5,9 @@ struct Material
     float3 padding;
     float4x4 uvTransform;
     float shininess;
+    float environmentCoefficient;
+    int specularMode;
+    float padding2;
 };
 
 ConstantBuffer<Material> gMaterial : register(b0);

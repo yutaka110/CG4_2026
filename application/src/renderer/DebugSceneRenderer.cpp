@@ -173,6 +173,7 @@ bool DebugSceneRenderer::CreateRootSignatureAndPSO(
         materialData->enableLighting = 1;
         materialData->shininess = 8.0f;
         materialData->environmentCoefficient = 0.0f;
+        materialData->specularMode = 1;
         materialData->uvTransform = MakeIdentity4x4();
         // メンバに保持
         // （ヘッダ側の型が Material* なら）
@@ -394,6 +395,14 @@ bool DebugSceneRenderer::CreateConstantBuffers() {
     materialResourceSprite_ = CreateBufferResource(device_, sizeof(Material));
     materialResourceSprite_->Map(
         0, nullptr, reinterpret_cast<void**>(&materialDataSprite_));
+    if (materialDataSprite_ != nullptr) {
+        materialDataSprite_->color = {1.0f, 1.0f, 1.0f, 1.0f};
+        materialDataSprite_->enableLighting = 1;
+        materialDataSprite_->shininess = 8.0f;
+        materialDataSprite_->environmentCoefficient = 0.0f;
+        materialDataSprite_->specularMode = 1;
+        materialDataSprite_->uvTransform = MakeIdentity4x4();
+    }
 
     // WVP（CreateRootSignatureAndPSO で作っても OK。どちらか片方で）
     if (!wvpResource_) {
