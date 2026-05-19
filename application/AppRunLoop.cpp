@@ -1,6 +1,7 @@
 #include "AppRunLoop.h"
 
 #include <DirectXMath.h>
+#include <memory>
 
 #include "AppFrameRenderer.h"
 #include "AppImGuiLayer.h"
@@ -78,7 +79,9 @@ AppRunLoop::AppRunLoop(
       frameState_(frameState),
       commandQueue_(commandQueue),
       fence_(fence),
-      fenceEvent_(fenceEvent) {}
+      fenceEvent_(fenceEvent) {
+    sceneStateManager_.Initialize(std::make_unique<VfxPreviewSceneState>(), *this);
+}
 
 void AppRunLoop::InitializeBeam(
     ID3D12Device* device,
@@ -97,10 +100,11 @@ void AppRunLoop::InitializeBeam(
 }
 
 void AppRunLoop::Shutdown() {
+    sceneStateManager_.Shutdown(*this);
     vfxEngine_.Shutdown();
 }
 
-void AppRunLoop::UpdateFrame() {
+void AppRunLoop::UpdateVfxPreviewFrame() {
     appPipelines_.HotReloadIfNeeded(dev_.GetDevice());
     runtimeState_.viewport.Width = static_cast<float>(windowWidth_);
     runtimeState_.viewport.Height = static_cast<float>(windowHeight_);
@@ -163,6 +167,11 @@ void AppRunLoop::SignalAndWaitGpu() {
 }
 
 void AppRunLoop::RenderFrame() {
+    sceneStateManager_.Update(*this);
+    sceneStateManager_.Render(*this);
+}
+
+void AppRunLoop::RenderVfxPreviewFrame() {
     BeginFrameSystems();
 
     UINT backBufferIndex = swapChain_.CurrentIndex();
@@ -178,8 +187,6 @@ void AppRunLoop::RenderFrame() {
     auto dsvHandle = heaps_.dsv.GetHandle(engineContext_.GetMainDsvIndex()).cpu;
     auto readOnlyDsvHandle = heaps_.dsv.GetHandle(engineContext_.GetReadOnlyDsvIndex()).cpu;
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = swapChain_.RTV(backBufferIndex);
-
-    UpdateFrame();
 
     scene_.UpdateTransforms(
         runtimeState_,
