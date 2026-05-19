@@ -216,6 +216,7 @@ copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dx
     <ClCompile Include="engine\src\assets\ObjLoader.cpp" />
     <ClCompile Include="engine\src\audio\AudioWave.cpp" />
     <ClCompile Include="engine\src\camera\debugCamera.cpp" />
+    <ClCompile Include="engine\src\camera\VfxCamera.cpp" />
     <ClCompile Include="engine\src\core\CommandListPool.cpp" />
     <ClCompile Include="engine\src\core\DescriptorHeap.cpp" />
     <ClCompile Include="engine\src\core\Device.cpp" />
@@ -609,6 +610,7 @@ copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dx
     <ClInclude Include="engine\include\audio\AudioWave.h" />
     <ClInclude Include="engine\include\audio\WaveAudio.h" />
     <ClInclude Include="engine\include\camera\debugCamera.h" />
+    <ClInclude Include="engine\include\camera\VfxCamera.h" />
     <ClInclude Include="engine\include\core\CommandListPool.h" />
     <ClInclude Include="engine\include\core\DescriptorHeap.h" />
     <ClInclude Include="engine\include\core\Device.h" />

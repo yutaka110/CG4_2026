@@ -8,6 +8,9 @@ class AppRenderResources;
 class AppSceneResources;
 class BeamRenderer;
 struct FrameLoopState;
+namespace ge3::resources {
+class EffectResourceCache;
+}
 namespace vfx {
 struct VfxTypedResourceSet;
 }
@@ -21,6 +24,8 @@ struct VfxRenderContext {
     const FrameLoopState* frameState = nullptr;
     ID3D12DescriptorHeap* srvDescriptorHeap = nullptr;
     D3D12_GPU_DESCRIPTOR_HANDLE vfxTextureHandle{};
+    uint32_t vfxTextureDescriptorIndex = 0;
+    const ge3::resources::EffectResourceCache* effectResourceCache = nullptr;
     D3D12_GPU_DESCRIPTOR_HANDLE depthTextureHandle{};
     float beamTime = 0.0f;
     const vfx::VfxTypedResourceSet* typedResources = nullptr;

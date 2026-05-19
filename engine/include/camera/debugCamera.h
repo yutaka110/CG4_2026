@@ -1,43 +1,27 @@
 #pragma once
+
+#include "camera/VfxCamera.h"
 #include "utils/math/MathUtils.h"
-/// <summary>
-/// デバッグカメラ
-/// </summary>
+
 class DebugCamera {
-
 public:
+    void Initialize();
+    void Update();
 
-	/// <summary>
-   /// コンストラクタ
-   /// </summary>
-	//DebugCamera();
+    Matrix4x4 GetViewMatrix() const { return camera_.GetViewMatrix(); }
+    Matrix4x4 GetProjectionMatrix() const { return camera_.GetProjectionMatrix(); }
+    Matrix4x4 GetViewProjectionMatrix() const { return camera_.GetViewProjectionMatrix(); }
+    const Vector3& GetWorldPosition() const { return camera_.GetPosition(); }
+    const Transform& GetTransform() const { return camera_.GetTransform(); }
+    void SetTransform(const Transform& transform);
+    void SetLens(float fovY, float aspectRatio, float nearZ, float farZ);
+    void SetInputEnabled(bool enabled) { inputEnabled_ = enabled; }
 
+    Vector3 rotation_ = {0.0f, 0.0f, 0.0f};
+    Matrix4x4 matRot_{};
+    Vector3 translation_ = {0.0f, 0.0f, -50.0f};
 
-	/// <summary>
-   /// 初期化
-   /// </summary>
-	void Initialize();
-
-	Matrix4x4 GetViewMatrix() const { return viewMatrix_; }
-	Matrix4x4 GetProjectionMatrix() const { return projectionMatrix_; }
-
-	/// <summary>
-	/// 更新
-	/// </summary>
-	void Update();
-
-	// X, Y, Z軸回りのローカル回転角
-	Vector3 rotation_ = { 0, 0, 0 };
-
-	Matrix4x4 matRot_;
-
-	// ローカル座標
-	Vector3 translation_ = { 0, 0, -50 };
-
-	// ビュー行列
-	Matrix4x4 viewMatrix_;
-
-	// 射影行列
-	Matrix4x4 projectionMatrix_;
-
+private:
+    VfxCamera camera_{};
+    bool inputEnabled_ = true;
 };

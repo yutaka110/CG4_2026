@@ -152,14 +152,14 @@ D3D12_GPU_DESCRIPTOR_HANDLE AppRenderResources::GetGPUDescriptorHandle(
     return handleGPU;
 }
 
-bool AppRenderResources::InitializeParticleQuad(ComPtr<ID3D12Device> device) {
-    particleVertexResource_ = CreateBufferResource(device, sizeof(VertexData) * 6);
-    if (particleVertexResource_ == nullptr) {
+bool AppRenderResources::InitializeSharedSpriteQuad(ComPtr<ID3D12Device> device) {
+    sharedSpriteQuadVertexResource_ = CreateBufferResource(device, sizeof(VertexData) * 6);
+    if (sharedSpriteQuadVertexResource_ == nullptr) {
         return false;
     }
 
     VertexData* vertices = nullptr;
-    HRESULT hr = particleVertexResource_->Map(
+    HRESULT hr = sharedSpriteQuadVertexResource_->Map(
         0,
         nullptr,
         reinterpret_cast<void**>(&vertices));
@@ -169,30 +169,41 @@ bool AppRenderResources::InitializeParticleQuad(ComPtr<ID3D12Device> device) {
 
     vertices[0].position = {-0.5f, -0.5f, 0.0f, 1.0f};
     vertices[0].texcoord = {0.0f, 1.0f};
+    vertices[0].normal = {0.0f, 0.0f, -1.0f};
 
     vertices[1].position = {-0.5f, 0.5f, 0.0f, 1.0f};
     vertices[1].texcoord = {0.0f, 0.0f};
+    vertices[1].normal = {0.0f, 0.0f, -1.0f};
 
     vertices[2].position = {0.5f, -0.5f, 0.0f, 1.0f};
     vertices[2].texcoord = {1.0f, 1.0f};
+    vertices[2].normal = {0.0f, 0.0f, -1.0f};
 
     vertices[3].position = {-0.5f, 0.5f, 0.0f, 1.0f};
     vertices[3].texcoord = {0.0f, 0.0f};
+    vertices[3].normal = {0.0f, 0.0f, -1.0f};
 
     vertices[4].position = {0.5f, 0.5f, 0.0f, 1.0f};
     vertices[4].texcoord = {1.0f, 0.0f};
+    vertices[4].normal = {0.0f, 0.0f, -1.0f};
 
     vertices[5].position = {0.5f, -0.5f, 0.0f, 1.0f};
     vertices[5].texcoord = {1.0f, 1.0f};
+    vertices[5].normal = {0.0f, 0.0f, -1.0f};
 
-    particleVertexResource_->Unmap(0, nullptr);
+    sharedSpriteQuadVertexResource_->Unmap(0, nullptr);
 
-    particleVertexBufferView_.BufferLocation = particleVertexResource_->GetGPUVirtualAddress();
-    particleVertexBufferView_.SizeInBytes = sizeof(VertexData) * 6;
-    particleVertexBufferView_.StrideInBytes = sizeof(VertexData);
+    sharedSpriteQuadVertexBufferView_.BufferLocation =
+        sharedSpriteQuadVertexResource_->GetGPUVirtualAddress();
+    sharedSpriteQuadVertexBufferView_.SizeInBytes = sizeof(VertexData) * 6;
+    sharedSpriteQuadVertexBufferView_.StrideInBytes = sizeof(VertexData);
     return true;
 }
 
+const D3D12_VERTEX_BUFFER_VIEW& AppRenderResources::SharedSpriteQuadVertexBufferView() const {
+    return sharedSpriteQuadVertexBufferView_;
+}
+
 const D3D12_VERTEX_BUFFER_VIEW& AppRenderResources::ParticleVertexBufferView() const {
-    return particleVertexBufferView_;
+    return sharedSpriteQuadVertexBufferView_;
 }

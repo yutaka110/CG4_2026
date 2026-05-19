@@ -16,6 +16,7 @@ struct VSOutput
     float4 position : SV_POSITION;
     float2 texcoord : TEXCOORD;
     float4 color : COLOR0;
+    nointerpolation uint textureIndex : TEXCOORD1;
 };
 
 struct ParticleForGPU
@@ -24,6 +25,8 @@ struct ParticleForGPU
     float4x4 World;
     float4 color;
     float4 uvRect;
+    uint textureIndex;
+    uint3 pad;
 };
 
 StructuredBuffer<ParticleForGPU> gParticle : register(t0);

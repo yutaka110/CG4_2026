@@ -16,6 +16,8 @@ VfxRenderContext BuildDebugRenderContext(
         context.frameState,
         context.srvDescriptorHeap,
         context.vfxTextureHandle,
+        1,
+        nullptr,
         context.depthTextureHandle,
         0.0f,
         &resources
@@ -34,6 +36,8 @@ VfxRenderContext BuildTrailDebugRenderContext(
         context.frameState,
         context.srvDescriptorHeap,
         context.vfxTextureHandle,
+        1,
+        nullptr,
         context.depthTextureHandle,
         0.0f,
         &resources

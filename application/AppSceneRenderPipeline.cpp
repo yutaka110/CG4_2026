@@ -5,6 +5,7 @@
 #include "AppFrameGraphBuilder.h"
 #include "AppFrameRenderer.h"
 #include "AppPipelines.h"
+#include "AppRenderResources.h"
 #include "AppRuntimeState.h"
 #include "AppSceneResources.h"
 #include "graphics/RenderGraph.h"
@@ -624,7 +625,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     passContext.commandList,
                     ctx.srvDescriptorHeap,
                     ctx.scene->indexBufferViewSprite,
-                    ctx.scene->vertexBufferViewSprite,
+                    ctx.renderResources->SharedSpriteQuadVertexBufferView(),
                     ctx.scene->materialResourceSprite->GetGPUVirtualAddress(),
                     ctx.scene->transformationMatrixResourceSprite->GetGPUVirtualAddress(),
                     ctx.spriteTextureHandle);

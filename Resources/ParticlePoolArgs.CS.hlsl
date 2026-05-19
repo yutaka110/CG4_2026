@@ -15,6 +15,8 @@ cbuffer PoolConstants : register(b0)
     float4 gParticleShapeParams;
     float4 gEmitterParams;
     float4 gUvRect;
+    uint gTextureIndex;
+    uint3 gTextureIndexPad;
 };
 
 struct DrawIndexedArgs

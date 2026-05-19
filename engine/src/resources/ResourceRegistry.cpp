@@ -74,6 +74,16 @@ D3D12_GPU_DESCRIPTOR_HANDLE EffectResourceCache::ResolveTexture(
     return texture->gpu;
 }
 
+uint32_t EffectResourceCache::ResolveTextureIndex(
+    std::string_view name,
+    uint32_t fallback) const {
+    const EffectTextureResource* texture = FindTexture(name);
+    if (texture == nullptr) {
+        return fallback;
+    }
+    return texture->descriptorIndex;
+}
+
 void FrameTransientAllocator::BeginFrame() {
     frameResources_.clear();
 }

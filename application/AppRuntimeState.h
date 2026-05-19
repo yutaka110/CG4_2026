@@ -47,6 +47,14 @@ struct RuntimeVfxModelObjectState {
     bool visible = true;
 };
 
+struct RuntimeCameraState {
+    Transform transform{};
+    float fovY = 0.25f * 3.14159265358979323846f;
+    float nearZ = 0.1f;
+    float farZ = 1000.0f;
+    bool enableDebugInput = true;
+};
+
 struct AppRuntimeState {
     Transform transform{};
     Transform animatedCubeTransform{};
@@ -65,6 +73,7 @@ struct AppRuntimeState {
     DirectionalLight directionalLightData{};
     PointLight pointLightData{};
     SpotLight spotLight{};
+    RuntimeCameraState camera{};
     Vector3 cameraWorldPosition{};
 
     bool useMonsterBall = true;

@@ -1,5 +1,5 @@
 Texture2D gTrailTex : register(t0);
-Texture2D<float> gSceneDepth : register(t1);
+Texture2D<float> gSceneDepth : register(t160);
 SamplerState gSampler : register(s0);
 
 cbuffer VfxDrawCB : register(b0)

@@ -21,6 +21,8 @@ struct EmitterSpawnRequest
     float4 particleShapeParams;
     float4 emitterParams;
     float4 uvRect;
+    uint textureIndex;
+    uint3 pad1;
 };
 
 cbuffer PoolConstants : register(b0)
@@ -40,6 +42,8 @@ cbuffer PoolConstants : register(b0)
     float4 gParticleShapeParams;
     float4 gEmitterParams;
     float4 gUvRect;
+    uint gTextureIndex;
+    uint3 gTextureIndexPad;
 };
 
 RWByteAddressBuffer gCounters : register(u4);
@@ -116,5 +120,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     request.particleShapeParams = gParticleShapeParams;
     request.emitterParams = gEmitterParams;
     request.uvRect = gUvRect;
+    request.textureIndex = gTextureIndex;
+    request.pad1 = 0;
     gEmitterSpawnRequests[emitterIndex] = request;
 }

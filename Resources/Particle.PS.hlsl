@@ -1,5 +1,5 @@
-Texture2D gParticleTex : register(t0);
-Texture2D<float> gSceneDepth : register(t1);
+Texture2D gParticleTextures[160] : register(t0);
+Texture2D<float> gSceneDepth : register(t160);
 SamplerState gSampler : register(s0);
 
 cbuffer VfxDrawCB : register(b0)
@@ -15,6 +15,7 @@ struct PSIn
     float4 position : SV_POSITION;
     float2 texcoord : TEXCOORD;
     float4 color : COLOR0;
+    nointerpolation uint textureIndex : TEXCOORD1;
 };
 
 float ComputeSoftParticleFade(float4 position)
@@ -41,7 +42,7 @@ float ComputeEdgeFade(float2 uv)
 
 float4 main(PSIn input) : SV_TARGET
 {
-    float4 tex = gParticleTex.Sample(gSampler, input.texcoord);
+    float4 tex = gParticleTextures[min(input.textureIndex, 159)].Sample(gSampler, input.texcoord);
     float4 outc = tex * input.color;
     outc.a *= ComputeSoftParticleFade(input.position);
     outc.a *= ComputeEdgeFade(input.texcoord);

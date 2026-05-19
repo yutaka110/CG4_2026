@@ -27,6 +27,8 @@ public:
         Matrix4x4 World{};
         Vector4 color{};
         Vector4 uvRect{0.0f, 0.0f, 1.0f, 1.0f};
+        uint32_t textureIndex = 1;
+        uint32_t pad[3]{};
     };
 
     struct ParticleStateSample {
@@ -39,7 +41,8 @@ public:
         float seed = 0.0f;
         Vector4 shape{};
         uint32_t emitterKey = 0;
-        uint32_t pad[3]{};
+        uint32_t textureIndex = 1;
+        uint32_t pad[2]{};
     };
 
     struct ParticleEmitterStateSample {
@@ -63,6 +66,8 @@ public:
         Vector4 particleShapeParams{};
         Vector4 emitterParams{};
         Vector4 uvRect{0.0f, 0.0f, 1.0f, 1.0f};
+        uint32_t textureIndex = 1;
+        uint32_t pad1[3]{};
     };
 
     struct TrailMeshStreamControlPointSample {
@@ -170,6 +175,7 @@ public:
         float scaleYMin = 1.0f,
         float scaleYMax = 1.0f,
         Vector4 uvRect = {0.0f, 0.0f, 1.0f, 1.0f},
+        uint32_t textureIndex = 1,
         Vector4 tint = {0.25f, 0.55f, 1.0f, 1.0f},
         uint32_t sliceOffset = 0,
         uint32_t sliceCount = 0);
@@ -196,6 +202,7 @@ public:
         float scaleYMin = 1.0f,
         float scaleYMax = 1.0f,
         Vector4 uvRect = {0.0f, 0.0f, 1.0f, 1.0f},
+        uint32_t textureIndex = 1,
         Vector3 emitterPosition = {},
         uint32_t sliceOffset = 0,
         uint32_t sliceCount = 0);
@@ -231,6 +238,7 @@ public:
         float scaleYMin,
         float scaleYMax,
         const Vector4& uvRect,
+        uint32_t textureIndex,
         Vector3 emitterPosition,
         bool updateExistingParticles = true,
         uint32_t emitterIndex = 0,
@@ -256,7 +264,8 @@ public:
         float pulseSpeed,
         float spawnRadius,
         float uvScrollSpeed,
-        const Vector4& uvRect);
+        const Vector4& uvRect,
+        uint32_t textureIndex);
 
     void DeclareGraphBuffers(ge3::graphics::RenderGraph& renderGraph) const;
     bool EnsureGraphBuffers(ID3D12Device* device, const ge3::graphics::RenderGraph& renderGraph);
@@ -343,6 +352,8 @@ private:
         Vector4 particleShapeParams{};
         Vector4 emitterParams{};
         Vector4 uvRect{0.0f, 0.0f, 1.0f, 1.0f};
+        uint32_t textureIndex = 1;
+        uint32_t pad[3]{};
     };
     GpuManagedParticleConstants MakeGpuManagedParticleConstants(
         const Matrix4x4& viewProjection,
@@ -362,6 +373,7 @@ private:
         float scaleYMin,
         float scaleYMax,
         const Vector4& uvRect,
+        uint32_t textureIndex,
         Vector3 emitterPosition,
         uint32_t sliceOffset,
         uint32_t emitterKey,

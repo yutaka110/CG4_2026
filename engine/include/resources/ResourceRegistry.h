@@ -36,6 +36,7 @@ struct EffectTextureResource {
     std::string name;
     D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+    uint32_t descriptorIndex = 0;
     uint32_t width = 0;
     uint32_t height = 0;
 };
@@ -48,6 +49,9 @@ public:
     D3D12_GPU_DESCRIPTOR_HANDLE ResolveTexture(
         std::string_view name,
         D3D12_GPU_DESCRIPTOR_HANDLE fallback) const;
+    uint32_t ResolveTextureIndex(
+        std::string_view name,
+        uint32_t fallback) const;
     size_t TextureCount() const { return textures_.size(); }
 
 private:

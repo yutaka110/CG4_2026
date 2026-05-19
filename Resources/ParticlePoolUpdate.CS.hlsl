@@ -4,6 +4,8 @@ struct ParticleForGPU
     float4x4 World;
     float4 color;
     float4 uvRect;
+    uint textureIndex;
+    uint3 pad;
 };
 
 struct ParticleState
@@ -17,7 +19,8 @@ struct ParticleState
     float seed;
     float4 shape;
     uint emitterKey;
-    uint3 pad;
+    uint textureIndex;
+    uint2 pad;
 };
 
 cbuffer PoolConstants : register(b0)
@@ -37,6 +40,8 @@ cbuffer PoolConstants : register(b0)
     float4 gParticleShapeParams;
     float4 gEmitterParams;
     float4 gUvRect;
+    uint gTextureIndex;
+    uint3 gTextureIndexPad;
 };
 
 RWStructuredBuffer<ParticleForGPU> gParticleOutput : register(u0);
@@ -63,6 +68,8 @@ void StoreInactive(uint index)
     output.WVP = output.World;
     output.color = 0.0f;
     output.uvRect = gUvRect;
+    output.textureIndex = gTextureIndex;
+    output.pad = 0;
     gParticleOutput[index] = output;
 }
 
@@ -139,5 +146,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     output.WVP = mul(world, gViewProjection);
     output.color = float4(state.color.rgb * gTint.rgb * pulse * max(gScaleAndParams.z, 0.01f), alpha * gTint.a);
     output.uvRect = gUvRect;
+    output.textureIndex = state.textureIndex;
+    output.pad = 0;
     gParticleOutput[id] = output;
 }

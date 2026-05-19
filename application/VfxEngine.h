@@ -85,6 +85,9 @@ public:
     D3D12_GPU_DESCRIPTOR_HANDLE ResolveTexture(
         std::string_view textureName,
         D3D12_GPU_DESCRIPTOR_HANDLE fallback) const;
+    uint32_t ResolveTextureIndex(
+        std::string_view textureName,
+        uint32_t fallback) const;
 
     EffectRuntime& Runtime() { return effectRuntime_; }
     const EffectRuntime& Runtime() const { return effectRuntime_; }
