@@ -10,7 +10,8 @@ struct Material
     float32_t4x4 uvTransform;
     float shininess;
     float environmentCoefficient;
-    float2 pad_; // 16byte alignment
+    int32_t specularMode;
+    float pad_; // 16byte alignment
 };
 
 struct DirectionalLight
@@ -77,13 +78,6 @@ struct PixelShaderOutput
 };
 
 // ------------------------------------------------------------
-// Switch (optional)
-// 1 = Blinn-Phong (HalfVector)
-// 0 = Phong (Reflect)
-// ------------------------------------------------------------
-#define USE_BLINN_PHONG 1
-
-// ------------------------------------------------------------
 // Safe normalize (prevents NaN when vector length is near zero)
 // ------------------------------------------------------------
 static float3 SafeNormalize(float3 v)
@@ -94,6 +88,19 @@ static float3 SafeNormalize(float3 v)
         return float3(0.0f, 0.0f, 1.0f);
     }
     return v * rsqrt(len2);
+}
+
+static float EvaluateSpecular(float3 N, float3 L, float3 V, float shininess, int specularMode)
+{
+    float power = max(shininess, 1.0f);
+    if (specularMode == 0)
+    {
+        float3 R = reflect(-L, N);
+        return pow(saturate(dot(R, V)), power);
+    }
+
+    float3 H = SafeNormalize(L + V);
+    return pow(saturate(dot(N, H)), power);
 }
 
 // ------------------------------------------------------------
@@ -135,16 +142,7 @@ PixelShaderOutput main(VertexShaderOutput input)
             dirLightColor *
             halfLambertD;
 
-        // Specular
-        float specPowD = 0.0f;
-#if USE_BLINN_PHONG
-        float3 Hd = SafeNormalize(Ld + V);
-        float NdotHd = saturate(dot(N, Hd));
-        specPowD = pow(NdotHd, gMaterial.shininess);
-#else
-        float3 Rd = reflect(-Ld, N);
-        specPowD = pow(saturate(dot(Rd, V)), gMaterial.shininess);
-#endif
+        float specPowD = EvaluateSpecular(N, Ld, V, gMaterial.shininess, gMaterial.specularMode);
 
         float3 specularD =
             dirLightColor *
@@ -180,17 +178,7 @@ PixelShaderOutput main(VertexShaderOutput input)
     pointLightColor *
     halfLambertP;
 
-// Specular
-        float specPowP = 0.0f;
-
-#if USE_BLINN_PHONG
-        float3 Hp = SafeNormalize(Lp + V);
-        float NdotHp = saturate(dot(N, Hp));
-        specPowP = pow(NdotHp, max(gMaterial.shininess, 1.0f));
-#else
-float3 Rp = reflect(-Lp, N);
-specPowP = pow(saturate(dot(Rp, V)), max(gMaterial.shininess, 1.0f));
-#endif
+        float specPowP = EvaluateSpecular(N, Lp, V, gMaterial.shininess, gMaterial.specularMode);
 
         float3 specularP =
     pointLightColor *
@@ -230,8 +218,7 @@ specPowP = pow(saturate(dot(Rp, V)), max(gMaterial.shininess, 1.0f));
         float3 diffuseS = baseRgb * spotColor * halfLambertS;
 
 // Specular（Blinn）
-        float3 Hs = SafeNormalize(Ls + V);
-        float specPowS = pow(saturate(dot(N, Hs)), max(gMaterial.shininess, 1.0f));
+        float specPowS = EvaluateSpecular(N, Ls, V, gMaterial.shininess, gMaterial.specularMode);
         float3 specularS = spotColor * specPowS;
 
 

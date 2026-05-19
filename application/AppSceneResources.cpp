@@ -836,6 +836,7 @@ bool AppSceneResources::Initialize(
     materialData->enableLighting = true;
     materialData->shininess = 3.0f;
     materialData->environmentCoefficient = 0.3f;
+    materialData->specularMode = 1;
     materialData->uvTransform = MakeIdentity4x4();
 
     materialResourceSprite = CreateBufferResource(device, sizeof(Material));
@@ -847,6 +848,7 @@ bool AppSceneResources::Initialize(
     materialDataSprite->enableLighting = false;
     materialDataSprite->shininess = 1.0f;
     materialDataSprite->environmentCoefficient = 0.0f;
+    materialDataSprite->specularMode = 1;
     materialDataSprite->uvTransform = MakeIdentity4x4();
 
     // =========================================================
@@ -1734,6 +1736,7 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
     }
 
     if (materialData != nullptr) {
+        runtimeState.materialData.specularMode = std::clamp(runtimeState.materialData.specularMode, 0, 1);
         *materialData = runtimeState.materialData;
     }
 }
