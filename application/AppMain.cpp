@@ -474,7 +474,7 @@ int AppMain::Run() {
 
 	auto& heaps = engineContext.GetHeaps();
 	ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap = heaps.srv.GetHeap();
-	heaps.srv.Reserve(32);
+	heaps.srv.Reserve(160);
 
 
 

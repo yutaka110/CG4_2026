@@ -6,6 +6,7 @@
 #include <cstring>
 #include <filesystem>
 #include <numbers>
+#include <utility>
 #include <vector>
 
 #include "AppRenderResources.h"
@@ -1022,6 +1023,106 @@ bool AppSceneResources::Initialize(
         animatedCubeTextureResource.Get(),
         &animatedCubeSrvDesc,
         animatedCubeTextureSrvHandleCPU);
+
+    vfxTextureLibrary.clear();
+    auto registerExistingVfxTexture = [this](
+        std::string name,
+        std::string path,
+        ComPtr<ID3D12Resource> resource,
+        D3D12_CPU_DESCRIPTOR_HANDLE cpu,
+        D3D12_GPU_DESCRIPTOR_HANDLE gpu,
+        const DirectX::TexMetadata& textureMetadata) {
+        if (resource == nullptr || gpu.ptr == 0) {
+            return;
+        }
+        vfxTextureLibrary.push_back({
+            std::move(name),
+            std::move(path),
+            resource,
+            cpu,
+            gpu,
+            static_cast<uint32_t>(textureMetadata.width),
+            static_cast<uint32_t>(textureMetadata.height)
+        });
+    };
+
+    registerExistingVfxTexture(
+        "default",
+        "Resources/monsterBall.png",
+        textureResource,
+        textureSrvHandleCPU,
+        textureSrvHandleGPU,
+        metadata);
+    registerExistingVfxTexture(
+        "monsterBall",
+        "Resources/monsterBall.png",
+        textureResource2,
+        textureSrvHandleCPU2,
+        textureSrvHandleGPU2,
+        metadata2);
+    registerExistingVfxTexture(
+        "circle2",
+        circle2TexturePath,
+        circle2TextureResource,
+        circle2TextureSrvHandleCPU,
+        circle2TextureSrvHandleGPU,
+        circle2Metadata);
+    registerExistingVfxTexture(
+        "gradationLine",
+        gradationLineTexturePath,
+        gradationLineTextureResource,
+        gradationLineTextureSrvHandleCPU,
+        gradationLineTextureSrvHandleGPU,
+        gradationLineMetadata);
+
+    struct VfxTextureLoadSpec {
+        const char* name;
+        const char* path;
+    };
+    constexpr uint32_t kVfxTextureDescriptorBaseIndex = 128;
+    const VfxTextureLoadSpec vfxTextureLoadSpecs[] = {
+        {"streakNoise", "Resources/streakNoise.png"},
+        {"circle", "Resources/circle.png"},
+        {"beamRamp_lightning", "Resources/beamRamp_lightning.png"},
+        {"uvChecker", "Resources/uvChecker.png"},
+        {"fence", "Resources/fence/fence.png"},
+    };
+
+    for (uint32_t index = 0; index < _countof(vfxTextureLoadSpecs); ++index) {
+        const VfxTextureLoadSpec& spec = vfxTextureLoadSpecs[index];
+        if (!std::filesystem::exists(spec.path)) {
+            continue;
+        }
+
+        DirectX::ScratchImage vfxTextureImages = AppRenderResources::LoadTexture(spec.path);
+        const DirectX::TexMetadata& vfxTextureMetadata = vfxTextureImages.GetMetadata();
+        ComPtr<ID3D12Resource> vfxTextureResource =
+            AppRenderResources::CreateTextureResource(device, vfxTextureMetadata);
+        AppRenderResources::UploadTextureData(vfxTextureResource, vfxTextureImages);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC vfxTextureSrvDesc{};
+        vfxTextureSrvDesc.Format = vfxTextureMetadata.format;
+        vfxTextureSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        vfxTextureSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        vfxTextureSrvDesc.Texture2D.MipLevels = UINT(vfxTextureMetadata.mipLevels);
+
+        const uint32_t descriptorIndex = kVfxTextureDescriptorBaseIndex + index;
+        D3D12_CPU_DESCRIPTOR_HANDLE cpu =
+            AppRenderResources::GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, descriptorIndex);
+        D3D12_GPU_DESCRIPTOR_HANDLE gpu =
+            AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, descriptorIndex);
+        device->CreateShaderResourceView(vfxTextureResource.Get(), &vfxTextureSrvDesc, cpu);
+
+        vfxTextureLibrary.push_back({
+            spec.name,
+            spec.path,
+            vfxTextureResource,
+            cpu,
+            gpu,
+            static_cast<uint32_t>(vfxTextureMetadata.width),
+            static_cast<uint32_t>(vfxTextureMetadata.height)
+        });
+    }
 
     // =========================================================
     // Sphere mesh

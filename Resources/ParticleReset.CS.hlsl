@@ -28,6 +28,7 @@ cbuffer ResetConstants : register(b0)
     float4 gEffectParams;
     float4 gParticleShapeParams;
     float4 gEmitterParams;
+    float4 gUvRect;
 };
 
 RWStructuredBuffer<ParticleState> gParticleState : register(u1);

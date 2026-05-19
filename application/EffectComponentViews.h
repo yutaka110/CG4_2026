@@ -857,6 +857,7 @@ struct EffectComponentAssetBuilder {
         common.duration = asset.lifetime;
         common.color = asset.color;
         common.size = asset.size;
+        common.uvRect = asset.uvRect;
         return common;
     }
 

@@ -11,6 +11,7 @@ struct ParticleForGpuLayout {
     Matrix4x4 WVP;
     Matrix4x4 World;
     Vector4 color;
+    Vector4 uvRect;
 };
 
 struct TrailHistoryPointLayout {
@@ -896,6 +897,7 @@ bool AppGpuParticleSystem::Initialize(
             0.0f,
             1.0f,
             1.0f,
+            {0.0f, 0.0f, 1.0f, 1.0f},
             {0.25f, 0.55f, 1.0f, 1.0f})) {
         if (EnsureInitialStateUpload()) {
             UploadInitialParticleState(
@@ -953,6 +955,7 @@ bool AppGpuParticleSystem::ResetParticlePool(
     float randomRotation,
     float scaleYMin,
     float scaleYMax,
+    Vector4 uvRect,
     Vector4 tint,
     uint32_t sliceOffset,
     uint32_t sliceCount) {
@@ -1004,6 +1007,7 @@ bool AppGpuParticleSystem::ResetParticlePool(
         Vector4 effectParams;
         Vector4 particleShapeParams;
         Vector4 emitterParams;
+        Vector4 uvRect;
     } constants{};
     constants.viewProjection = MakeIdentity4x4();
     constants.deltaTime = 0.0f;
@@ -1018,6 +1022,7 @@ bool AppGpuParticleSystem::ResetParticlePool(
     constants.effectParams = {1.0f, spawnRadius, 0.0f, 0.0f};
     constants.particleShapeParams = {spawnCount, randomRotation, scaleYMin, scaleYMax};
     constants.emitterParams = {emitterPosition.x, emitterPosition.y, emitterPosition.z, particleLifetime};
+    constants.uvRect = uvRect;
 
     TransitionIfNeeded(
         commandList,
@@ -1033,7 +1038,7 @@ bool AppGpuParticleSystem::ResetParticlePool(
         return false;
     }
 
-    commandList->SetComputeRoot32BitConstants(0, 44, &constants, 0);
+    commandList->SetComputeRoot32BitConstants(0, 48, &constants, 0);
     commandList->SetComputeRootDescriptorTable(2, stateUav);
     const uint32_t dispatchGroupCount = (constants.sliceCount + 255) / 256;
     commandList->Dispatch(dispatchGroupCount, 1, 1);
@@ -1087,12 +1092,14 @@ bool AppGpuParticleSystem::ResetGpuManagedParticlePool(
         Vector4 effectParams;
         Vector4 particleShapeParams;
         Vector4 emitterParams;
+        Vector4 uvRect;
     } constants{};
     constants.viewProjection = MakeIdentity4x4();
     constants.maxParticles = maxParticles_;
     constants.sliceCount = maxParticles_;
     constants.tint = {1.0f, 1.0f, 1.0f, 1.0f};
     constants.scaleAndParams = {1.0f, 1.0f, 1.0f, 0.0f};
+    constants.uvRect = {0.0f, 0.0f, 1.0f, 1.0f};
 
     TransitionIfNeeded(commandList, particleOutput_.Get(), particleOutputState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     TransitionIfNeeded(commandList, particleState_.Get(), particleStateState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -1120,7 +1127,7 @@ bool AppGpuParticleSystem::ResetGpuManagedParticlePool(
     commandList->SetDescriptorHeaps(1, descriptorHeaps);
     commandList->SetComputeRootSignature(rootSignature);
     commandList->SetPipelineState(pipelineState);
-    commandList->SetComputeRoot32BitConstants(0, 44, &constants, 0);
+    commandList->SetComputeRoot32BitConstants(0, 48, &constants, 0);
     commandList->SetComputeRootDescriptorTable(1, particleUav_.gpu);
     commandList->SetComputeRootDescriptorTable(2, stateUav_.gpu);
     commandList->SetComputeRootDescriptorTable(3, particleAliveListUav_.gpu);
@@ -1165,6 +1172,7 @@ AppGpuParticleSystem::GpuManagedParticleConstants AppGpuParticleSystem::MakeGpuM
     float randomRotation,
     float scaleYMin,
     float scaleYMax,
+    const Vector4& uvRect,
     Vector3 emitterPosition,
     uint32_t sliceOffset,
     uint32_t emitterKey,
@@ -1185,6 +1193,7 @@ AppGpuParticleSystem::GpuManagedParticleConstants AppGpuParticleSystem::MakeGpuM
     constants.effectParams = {pulseSpeed, spawnRadius, uvScrollSpeed, spawnFrequency};
     constants.particleShapeParams = {spawnCount, randomRotation, scaleYMin, scaleYMax};
     constants.emitterParams = {emitterPosition.x, emitterPosition.y, emitterPosition.z, particleLifetime};
+    constants.uvRect = uvRect;
     return constants;
 }
 
@@ -1225,7 +1234,7 @@ void AppGpuParticleSystem::BindGpuManagedParticleRoot(
     ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap};
     commandList->SetDescriptorHeaps(1, descriptorHeaps);
     commandList->SetComputeRootSignature(rootSignature);
-    commandList->SetComputeRoot32BitConstants(0, 44, &constants, 0);
+    commandList->SetComputeRoot32BitConstants(0, 48, &constants, 0);
     commandList->SetComputeRootDescriptorTable(1, particleUav_.gpu);
     commandList->SetComputeRootDescriptorTable(2, stateUav_.gpu);
     commandList->SetComputeRootDescriptorTable(3, particleAliveListUav_.gpu);
@@ -1375,6 +1384,7 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
     float randomRotation,
     float scaleYMin,
     float scaleYMax,
+    const Vector4& uvRect,
     Vector3 emitterPosition,
     bool updateExistingParticles,
     uint32_t emitterIndex,
@@ -1429,6 +1439,7 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
         randomRotation,
         scaleYMin,
         scaleYMax,
+        uvRect,
         emitterPosition,
         resolvedEmitterSlot,
         requestedEmitterKey,
@@ -1464,7 +1475,8 @@ void AppGpuParticleSystem::FinishGpuManagedParticleFrame(
     float turbulence,
     float pulseSpeed,
     float spawnRadius,
-    float uvScrollSpeed) {
+    float uvScrollSpeed,
+    const Vector4& uvRect) {
     if (!initialized_ ||
         !particlePoolInitialized_ ||
         commandList == nullptr ||
@@ -1510,6 +1522,7 @@ void AppGpuParticleSystem::FinishGpuManagedParticleFrame(
         0.0f,
         1.0f,
         1.0f,
+        uvRect,
         {},
         0,
         0,
@@ -2150,6 +2163,7 @@ void AppGpuParticleSystem::Simulate(
         float randomRotation,
         float scaleYMin,
         float scaleYMax,
+        Vector4 uvRect,
         Vector3 emitterPosition,
         uint32_t sliceOffset,
         uint32_t sliceCount) {
@@ -2214,6 +2228,7 @@ void AppGpuParticleSystem::Simulate(
         Vector4 effectParams;
         Vector4 particleShapeParams;
         Vector4 emitterParams;
+        Vector4 uvRect;
     } constants{};
     constants.viewProjection = viewProjection;
     constants.deltaTime = deltaTime;
@@ -2228,6 +2243,7 @@ void AppGpuParticleSystem::Simulate(
     constants.effectParams = {pulseSpeed, spawnRadius, uvScrollSpeed, 0.0f};
     constants.particleShapeParams = {spawnCount, randomRotation, scaleYMin, scaleYMax};
     constants.emitterParams = {emitterPosition.x, emitterPosition.y, emitterPosition.z, particleLifetime};
+    constants.uvRect = uvRect;
 
     if (*outputState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
         D3D12_RESOURCE_BARRIER outputReady =
@@ -2248,7 +2264,7 @@ void AppGpuParticleSystem::Simulate(
         return;
     }
 
-    commandList->SetComputeRoot32BitConstants(0, 44, &constants, 0);
+    commandList->SetComputeRoot32BitConstants(0, 48, &constants, 0);
     commandList->SetComputeRootDescriptorTable(1, outputUav);
     commandList->SetComputeRootDescriptorTable(2, stateUav);
     const uint32_t dispatchGroupCount = (constants.sliceCount + 255) / 256;

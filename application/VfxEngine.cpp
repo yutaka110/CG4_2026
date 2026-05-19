@@ -395,6 +395,24 @@ void VfxEngine::RegisterDefaultTextures(const AppSceneResources& scene) {
     effectResourceCache_.RegisterTexture({"streakNoise", scene.textureSrvHandleCPU, scene.textureSrvHandleGPU, 1, 1});
     effectResourceCache_.RegisterTexture({"circle2", scene.circle2TextureSrvHandleCPU, scene.circle2TextureSrvHandleGPU, 1, 1});
     effectResourceCache_.RegisterTexture({"gradationLine", scene.gradationLineTextureSrvHandleCPU, scene.gradationLineTextureSrvHandleGPU, 1, 1});
+    for (const AppManagedTextureResource& texture : scene.vfxTextureLibrary) {
+        effectResourceCache_.RegisterTexture({
+            texture.name,
+            texture.cpu,
+            texture.gpu,
+            texture.width,
+            texture.height
+        });
+        if (!texture.path.empty()) {
+            effectResourceCache_.RegisterTexture({
+                texture.path,
+                texture.cpu,
+                texture.gpu,
+                texture.width,
+                texture.height
+            });
+        }
+    }
 }
 
 void VfxEngine::RegisterRenderPasses(

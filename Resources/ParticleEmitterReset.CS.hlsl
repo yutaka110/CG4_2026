@@ -3,6 +3,7 @@ struct ParticleForGPU
     float4x4 WVP;
     float4x4 World;
     float4 color;
+    float4 uvRect;
 };
 
 struct ParticleState
@@ -35,6 +36,7 @@ cbuffer PoolConstants : register(b0)
     float4 gEffectParams;
     float4 gParticleShapeParams;
     float4 gEmitterParams;
+    float4 gUvRect;
 };
 
 RWStructuredBuffer<ParticleForGPU> gParticleOutput : register(u0);
@@ -58,6 +60,7 @@ void StoreInactive(uint index)
     output.World = MakeWorld(float3(0.0f, 0.0f, 0.0f), float3(0.0f, 0.0f, 0.0f), 0.0f);
     output.WVP = output.World;
     output.color = 0.0f;
+    output.uvRect = gUvRect;
     gParticleOutput[index] = output;
 }
 

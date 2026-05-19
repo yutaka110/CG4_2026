@@ -121,6 +121,16 @@ struct CameraForGPU {
     float padding;
 };
 
+struct AppManagedTextureResource {
+    std::string name;
+    std::string path;
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
+
 class AppSceneResources {
 public:
     bool Initialize(
@@ -194,6 +204,7 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE gradationLineTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE animatedCubeTextureSrvHandleCPU{};
+    std::vector<AppManagedTextureResource> vfxTextureLibrary;
 
     // Sphere
     SphereMeshData sphere{};

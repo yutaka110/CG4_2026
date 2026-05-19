@@ -183,6 +183,7 @@ void DistortionRenderer::Simulate(
     float pulseSpeed = 4.0f;
     float spawnRadius = 3.0f;
     float uvScrollSpeed = 0.0f;
+    Vector4 uvRect = {0.0f, 0.0f, 1.0f, 1.0f};
 
     if (input.primary.instance != nullptr &&
         input.primary.componentCommon != nullptr &&
@@ -202,6 +203,7 @@ void DistortionRenderer::Simulate(
         pulseSpeed = 4.0f + settings.strength * 2.0f;
         spawnRadius = 3.0f + settings.strength;
         uvScrollSpeed = settings.uvScrollSpeed;
+        uvRect = component.uvRect;
     }
 
     const char* renderBufferResource =
@@ -227,7 +229,13 @@ void DistortionRenderer::Simulate(
         spawnRadius,
         uvScrollSpeed,
         renderBufferResource,
-        stateBufferResource);
+        stateBufferResource,
+        0.0f,
+        0.0f,
+        0.0f,
+        1.0f,
+        1.0f,
+        uvRect);
 }
 
 void DistortionRenderer::Draw(

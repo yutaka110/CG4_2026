@@ -12,7 +12,7 @@ VSOutput main(VSInput input, uint instanceId : SV_InstanceID)
     local.xy *= pulse;
 
     output.position = mul(local, particle.WVP);
-    output.texcoord = input.texcoord;
+    output.texcoord = particle.uvRect.xy + input.texcoord * particle.uvRect.zw;
     output.color = particle.color;
     return output;
 }
