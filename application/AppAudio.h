@@ -1,19 +1,19 @@
 #pragma once
-#include "audio/AudioWave.h"
+#include "audio/AudioSystem.h"
 
-#include <xaudio2.h>
-#include <wrl.h>
+#include <string>
 
 class AppAudio {
 public:
     bool Initialize();
     void Finalize();
+    void Update();
 
-    audio::SoundData LoadWave(const char* filename);
-    void Unload(audio::SoundData* soundData);
-    void PlayWave(const audio::SoundData& soundData);
+    audio::SoundHandle LoadSound(const std::string& path);
+    audio::SoundHandle LoadWave(const std::string& path);
+    bool Play(audio::SoundHandle handle, float volume = 1.0f, bool loop = false);
+    void Unload(audio::SoundHandle handle);
 
 private:
-    Microsoft::WRL::ComPtr<IXAudio2> xAudio2_;
-    IXAudio2MasteringVoice* masterVoice_ = nullptr;
+    audio::AudioSystem audioSystem_;
 };

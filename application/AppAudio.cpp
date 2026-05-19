@@ -1,35 +1,29 @@
 #include "AppAudio.h"
 
 bool AppAudio::Initialize() {
-    HRESULT hr = XAudio2Create(&xAudio2_, 0, XAUDIO2_DEFAULT_PROCESSOR);
-    if (FAILED(hr)) return false;
-
-    hr = xAudio2_->CreateMasteringVoice(&masterVoice_);
-    if (FAILED(hr)) return false;
-
-    return true;
+    return audioSystem_.Initialize();
 }
 
 void AppAudio::Finalize() {
-    if (masterVoice_) {
-        masterVoice_->DestroyVoice();
-        masterVoice_ = nullptr;
-    }
-    xAudio2_.Reset();
+    audioSystem_.Shutdown();
 }
 
-audio::SoundData AppAudio::LoadWave(const char* filename) {
-    return audio::SoundLoadWave(filename);
+void AppAudio::Update() {
+    audioSystem_.Update();
 }
 
-void AppAudio::Unload(audio::SoundData* soundData) {
-    audio::SoundUnload(soundData);
+audio::SoundHandle AppAudio::LoadSound(const std::string& path) {
+    return audioSystem_.LoadSound(path);
 }
 
-void AppAudio::PlayWave(const audio::SoundData& soundData) {
-    if (!xAudio2_) {
-        return;
-    }
+audio::SoundHandle AppAudio::LoadWave(const std::string& path) {
+    return audioSystem_.LoadWave(path);
+}
 
-    audio::SoundPlayWave(xAudio2_.Get(), soundData);
+bool AppAudio::Play(audio::SoundHandle handle, float volume, bool loop) {
+    return audioSystem_.Play(handle, volume, loop);
+}
+
+void AppAudio::Unload(audio::SoundHandle handle) {
+    audioSystem_.UnloadSound(handle);
 }
