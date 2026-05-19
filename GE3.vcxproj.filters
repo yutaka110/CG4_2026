@@ -240,6 +240,9 @@
     <ClCompile Include="application\AppBootstrap.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\AppCommandLineRunner.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
     <ClCompile Include="application\AppFrameGraphBuilder.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -612,6 +615,9 @@
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\AppBootstrap.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\AppCommandLineRunner.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\AppFrameGraphBuilder.h">
