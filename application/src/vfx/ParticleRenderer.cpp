@@ -315,6 +315,7 @@ void ParticleRenderer::Simulate(
     float gpuManagedFramePulseSpeed = 5.0f;
     float gpuManagedFrameSpawnRadius = 4.0f;
     float gpuManagedFrameUvScrollSpeed = 0.0f;
+    Vector4 gpuManagedFrameUvRect = {0.0f, 0.0f, 1.0f, 1.0f};
 
     auto simulateSlice = [&](const ParticleRenderInput& input, uint32_t sliceOffset, uint32_t sliceCapacity) -> uint32_t {
         Vector4 tint = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -329,6 +330,7 @@ void ParticleRenderer::Simulate(
         float randomRotation = 0.0f;
         float scaleYMin = 1.0f;
         float scaleYMax = 1.0f;
+        Vector4 uvRect = {0.0f, 0.0f, 1.0f, 1.0f};
         Vector3 emitterPosition = {0.0f, 0.0f, 0.0f};
 
         if (input.primary.instance != nullptr &&
@@ -355,6 +357,7 @@ void ParticleRenderer::Simulate(
             randomRotation = settings.randomRotation;
             scaleYMin = settings.scaleYMin;
             scaleYMax = settings.scaleYMax;
+            uvRect = component.uvRect;
         } else if (input.fallbackCommon != nullptr && input.fallbackSettings != nullptr) {
             tint = input.fallbackCommon->color;
             scale = input.fallbackCommon->size;
@@ -368,6 +371,7 @@ void ParticleRenderer::Simulate(
             randomRotation = input.fallbackSettings->randomRotation;
             scaleYMin = input.fallbackSettings->scaleYMin;
             scaleYMax = input.fallbackSettings->scaleYMax;
+            uvRect = input.fallbackCommon->uvRect;
         }
 
         const uint32_t requestedCount = spawnCount > 0.0f
@@ -399,6 +403,7 @@ void ParticleRenderer::Simulate(
             randomRotation,
             scaleYMin,
             scaleYMax,
+            uvRect,
             emitterPosition,
             sliceOffset,
             sliceCount);
@@ -419,6 +424,7 @@ void ParticleRenderer::Simulate(
         float randomRotation = 0.0f;
         float scaleYMin = 1.0f;
         float scaleYMax = 1.0f;
+        Vector4 uvRect = {0.0f, 0.0f, 1.0f, 1.0f};
         Vector3 emitterPosition = {0.0f, 0.0f, 0.0f};
 
         if (input.primary.instance != nullptr &&
@@ -446,6 +452,7 @@ void ParticleRenderer::Simulate(
             randomRotation = settings.randomRotation;
             scaleYMin = settings.scaleYMin;
             scaleYMax = settings.scaleYMax;
+            uvRect = component.uvRect;
         } else if (input.fallbackCommon != nullptr && input.fallbackSettings != nullptr) {
             tint = input.fallbackCommon->color;
             scale = input.fallbackCommon->size;
@@ -460,6 +467,7 @@ void ParticleRenderer::Simulate(
             randomRotation = input.fallbackSettings->randomRotation;
             scaleYMin = input.fallbackSettings->scaleYMin;
             scaleYMax = input.fallbackSettings->scaleYMax;
+            uvRect = input.fallbackCommon->uvRect;
         }
 
         const uint32_t requestedCount = spawnCount > 0.0f
@@ -477,6 +485,7 @@ void ParticleRenderer::Simulate(
             gpuManagedFramePulseSpeed = pulseSpeed;
             gpuManagedFrameSpawnRadius = spawnRadius;
             gpuManagedFrameUvScrollSpeed = uvScrollSpeed;
+            gpuManagedFrameUvRect = uvRect;
         }
         context.gpuParticleSystem->SimulateGpuManagedParticles(
             commandList,
@@ -502,6 +511,7 @@ void ParticleRenderer::Simulate(
             randomRotation,
             scaleYMin,
             scaleYMax,
+            uvRect,
             emitterPosition,
             updateExistingParticles,
             fallbackEmitterIndex,
@@ -559,7 +569,8 @@ void ParticleRenderer::Simulate(
             gpuManagedFrameTurbulence,
             gpuManagedFramePulseSpeed,
             gpuManagedFrameSpawnRadius,
-            gpuManagedFrameUvScrollSpeed);
+            gpuManagedFrameUvScrollSpeed,
+            gpuManagedFrameUvRect);
         instanceCount = maxParticles;
     } else if (!queue.empty()) {
         const uint32_t emitterCount = static_cast<uint32_t>(queue.size());

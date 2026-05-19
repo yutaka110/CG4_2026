@@ -797,7 +797,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     gpuParticleParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     gpuParticleParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     gpuParticleParams[0].Constants.ShaderRegister = 0;
-    gpuParticleParams[0].Constants.Num32BitValues = 44;
+    gpuParticleParams[0].Constants.Num32BitValues = 48;
 
     gpuParticleParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     gpuParticleParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;

@@ -701,7 +701,8 @@ bool DrawEffectComponentNode(
         ImGui::Text("blend=%s cull=%d",
             BlendModeLabel(component.common.passState.blend),
             static_cast<int>(component.common.passState.cullMode));
-        changed = DrawEffectTypeControls(component.settings);
+        changed |= ImGui::DragFloat4("UV Rect", &component.common.uvRect.x, 0.001f, 0.0f, 1.0f, "%.3f");
+        changed |= DrawEffectTypeControls(component.settings);
         ImGui::TreePop();
     }
     ImGui::PopID();
@@ -1099,6 +1100,7 @@ void DrawEffectAssetEditorPanel(
                 asset.techniqueDescription.empty() ? "none" : asset.techniqueDescription.c_str());
 
             if (ImGui::TreeNode("Asset Defaults")) {
+                ImGui::DragFloat4("Default UV Rect", &asset.uvRect.x, 0.001f, 0.0f, 1.0f, "%.3f");
                 ImGui::SliderFloat("Default Particle Emissive", &asset.defaultParticle.emissive, 0.0f, 12.0f, "%.2f");
                 int defaultParticleSpawnCount = static_cast<int>(asset.defaultParticle.spawnCount);
                 if (ImGui::SliderInt("Default Particle Spawn Count", &defaultParticleSpawnCount, 0, 256)) {

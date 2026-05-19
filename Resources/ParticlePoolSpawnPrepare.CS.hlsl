@@ -8,6 +8,7 @@ struct EmitterSpawnRequest
     float4 effectParams;
     float4 particleShapeParams;
     float4 emitterParams;
+    float4 uvRect;
 };
 
 struct DispatchArgs
@@ -33,6 +34,7 @@ cbuffer PoolConstants : register(b0)
     float4 gEffectParams;
     float4 gParticleShapeParams;
     float4 gEmitterParams;
+    float4 gUvRect;
 };
 
 RWByteAddressBuffer gCounters : register(u4);

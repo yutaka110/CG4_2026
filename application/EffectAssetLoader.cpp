@@ -63,6 +63,13 @@ Vector4 ToVector4(const std::string& value, const Vector4& fallback) {
     return result;
 }
 
+Vector4 ToUvRect(const std::string& value, const Vector4& fallback) {
+    Vector4 rect = ToVector4(value, fallback);
+    rect.z = (std::max)(0.0f, rect.z);
+    rect.w = (std::max)(0.0f, rect.w);
+    return rect;
+}
+
 uint32_t ToUint(const std::string& value, uint32_t fallback) {
     try {
         return static_cast<uint32_t>((std::max)(0, std::stoi(value)));
@@ -989,6 +996,8 @@ bool ApplyComponentKeyValue(
                 common.size = {x, x, x};
             }
         }
+    } else if (key == "uvRect" || key == "textureRect" || key == "sourceRect" || key == "spriteRect") {
+        common.uvRect = ToUvRect(value, common.uvRect);
     } else if (key == "color") {
         std::stringstream stream(value);
         char comma = ',';
@@ -1208,6 +1217,8 @@ bool EffectAssetLoader::ApplyKeyValue(
                 asset.size = {x, x, x};
             }
         }
+    } else if (key == "uvRect" || key == "textureRect" || key == "sourceRect" || key == "spriteRect") {
+        asset.uvRect = ToUvRect(value, asset.uvRect);
     } else if (key == "color") {
         std::stringstream stream(value);
         char comma = ',';

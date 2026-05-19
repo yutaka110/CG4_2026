@@ -94,6 +94,7 @@ struct EffectComponentCommon {
     float duration = 1.0f;
     Vector4 color = {1.0f, 1.0f, 1.0f, 1.0f};
     Vector3 size = {1.0f, 1.0f, 1.0f};
+    Vector4 uvRect = {0.0f, 0.0f, 1.0f, 1.0f};
 };
 
 struct EffectTechniqueDescriptor {
@@ -768,6 +769,7 @@ struct EffectAsset {
     EffectCylinderSettings defaultCylinder{};
     Vector4 color = {1.0f, 1.0f, 1.0f, 1.0f};
     Vector3 size = {1.0f, 1.0f, 1.0f};
+    Vector4 uvRect = {0.0f, 0.0f, 1.0f, 1.0f};
     const EffectAssetComponentStorage& Components() const { return components_; }
     // Mutable storage is restricted to asset construction/normalization and
     // typed replacement APIs. Runtime/render paths should use Components().

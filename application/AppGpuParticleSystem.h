@@ -26,6 +26,7 @@ public:
         Matrix4x4 WVP{};
         Matrix4x4 World{};
         Vector4 color{};
+        Vector4 uvRect{0.0f, 0.0f, 1.0f, 1.0f};
     };
 
     struct ParticleStateSample {
@@ -61,6 +62,7 @@ public:
         Vector4 effectParams{};
         Vector4 particleShapeParams{};
         Vector4 emitterParams{};
+        Vector4 uvRect{0.0f, 0.0f, 1.0f, 1.0f};
     };
 
     struct TrailMeshStreamControlPointSample {
@@ -167,6 +169,7 @@ public:
         float randomRotation = 0.0f,
         float scaleYMin = 1.0f,
         float scaleYMax = 1.0f,
+        Vector4 uvRect = {0.0f, 0.0f, 1.0f, 1.0f},
         Vector4 tint = {0.25f, 0.55f, 1.0f, 1.0f},
         uint32_t sliceOffset = 0,
         uint32_t sliceCount = 0);
@@ -192,6 +195,7 @@ public:
         float randomRotation = 0.0f,
         float scaleYMin = 1.0f,
         float scaleYMax = 1.0f,
+        Vector4 uvRect = {0.0f, 0.0f, 1.0f, 1.0f},
         Vector3 emitterPosition = {},
         uint32_t sliceOffset = 0,
         uint32_t sliceCount = 0);
@@ -226,6 +230,7 @@ public:
         float randomRotation,
         float scaleYMin,
         float scaleYMax,
+        const Vector4& uvRect,
         Vector3 emitterPosition,
         bool updateExistingParticles = true,
         uint32_t emitterIndex = 0,
@@ -250,7 +255,8 @@ public:
         float turbulence,
         float pulseSpeed,
         float spawnRadius,
-        float uvScrollSpeed);
+        float uvScrollSpeed,
+        const Vector4& uvRect);
 
     void DeclareGraphBuffers(ge3::graphics::RenderGraph& renderGraph) const;
     bool EnsureGraphBuffers(ID3D12Device* device, const ge3::graphics::RenderGraph& renderGraph);
@@ -336,6 +342,7 @@ private:
         Vector4 effectParams{};
         Vector4 particleShapeParams{};
         Vector4 emitterParams{};
+        Vector4 uvRect{0.0f, 0.0f, 1.0f, 1.0f};
     };
     GpuManagedParticleConstants MakeGpuManagedParticleConstants(
         const Matrix4x4& viewProjection,
@@ -354,6 +361,7 @@ private:
         float randomRotation,
         float scaleYMin,
         float scaleYMax,
+        const Vector4& uvRect,
         Vector3 emitterPosition,
         uint32_t sliceOffset,
         uint32_t emitterKey,

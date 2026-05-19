@@ -7,7 +7,7 @@ VSOutput main(VSInput input, uint instanceId : SV_InstanceID)
 
     float4x4 wvp = gParticle[particleIndex].WVP;
     output.position = mul(input.position, wvp);
-    output.texcoord = input.texcoord;
+    output.texcoord = gParticle[particleIndex].uvRect.xy + input.texcoord * gParticle[particleIndex].uvRect.zw;
     output.color = gParticle[particleIndex].color;
     return output;
 }
