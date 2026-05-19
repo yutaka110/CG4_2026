@@ -486,8 +486,6 @@ void ParticleRenderer::Simulate(
             context.appPipelines->GetGpuParticlePoolUpdateComputePSO(),
             context.appPipelines->GetGpuParticleEmitterUpdateComputePSO(),
             context.appPipelines->GetGpuParticleEmitterResetComputePSO(),
-            context.appPipelines->GetGpuParticlePoolSpawnComputePSO(),
-            context.appPipelines->GetGpuParticlePoolArgsComputePSO(),
             context.frameState->viewProjectionMatrix,
             deltaTime,
             context.beamTime,
