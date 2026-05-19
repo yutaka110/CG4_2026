@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "../../externals/DirectXTex/DirectXTex.h"
 #include <d3d12.h>
@@ -21,8 +22,11 @@ public:
         const DirectX::TexMetadata& metadata);
 
     static void UploadTextureData(
+        Microsoft::WRL::ComPtr<ID3D12Device> device,
+        ID3D12GraphicsCommandList* commandList,
         Microsoft::WRL::ComPtr<ID3D12Resource> texture,
-        const DirectX::ScratchImage& mipImages);
+        const DirectX::ScratchImage& mipImages,
+        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& retainedUploadResources);
 
     static D3D12_CPU_DESCRIPTOR_HANDLE GetCPUDescriptorHandle(
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptorHeap,

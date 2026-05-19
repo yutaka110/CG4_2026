@@ -2,6 +2,7 @@
 #include "utils/DebugTools.h"
 
 #include <cassert>
+#include <vector>
 
 #include "../../../externals/DirectXTex/DirectXTex.h"
 #include "../../../externals/DirectXTex/d3dx12.h"
@@ -44,14 +45,8 @@ CreateTextureResource(ComPtr<ID3D12Device> device,
 	resourceDesc.Dimension =
 		D3D12_RESOURCE_DIMENSION(metadata.dimension); // Textureの次元数。
 
-	// 2. 利用するHeapの設定
-	// 利用するHeapの設定。非常に特殊な運用。02_04exで一般的なケース版がある
 	D3D12_HEAP_PROPERTIES heapProperties{};
-	heapProperties.Type = D3D12_HEAP_TYPE_CUSTOM; // 細かい設定を行う
-	heapProperties.CPUPageProperty =
-		D3D12_CPU_PAGE_PROPERTY_WRITE_BACK; // WriteBackポリシーでCPUアクセス可能
-	heapProperties.MemoryPoolPreference =
-		D3D12_MEMORY_POOL_L0; // プロセッサの近くに配置
+	heapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
 
 	// 3. Resourceを生成する
 	// Resourceの生成
@@ -60,7 +55,7 @@ CreateTextureResource(ComPtr<ID3D12Device> device,
 		&heapProperties,      // Heapの設定
 		D3D12_HEAP_FLAG_NONE, // Heapの特殊な設定。特になし。
 		&resourceDesc,        // Resourceの設定
-		D3D12_RESOURCE_STATE_GENERIC_READ, // 初回のResourceState。Textureは基本読むだけ
+		D3D12_RESOURCE_STATE_COPY_DEST,
 		nullptr,                // Clear最適値。使わないのでnullptr
 		IID_PPV_ARGS(&resource) // 作成するResourceポインタへのポインタ
 	);
@@ -69,27 +64,83 @@ CreateTextureResource(ComPtr<ID3D12Device> device,
 	return resource;
 }
 
-void UploadTextureData(ComPtr<ID3D12Resource> texture,
-	const DirectX::ScratchImage& mipImages) {
-	// Meta情報を取得
+void UploadTextureData(
+	ComPtr<ID3D12Device> device,
+	ID3D12GraphicsCommandList* commandList,
+	ComPtr<ID3D12Resource> texture,
+	const DirectX::ScratchImage& mipImages,
+	std::vector<ComPtr<ID3D12Resource>>& retainedUploadResources) {
+	assert(device != nullptr);
+	assert(commandList != nullptr);
+	assert(texture != nullptr);
+
 	const DirectX::TexMetadata& metadata = mipImages.GetMetadata();
+	const UINT subresourceCount =
+		static_cast<UINT>(metadata.arraySize * metadata.mipLevels);
+	assert(subresourceCount > 0);
 
-	// 全MipMapについて
-	for (size_t mipLevel = 0; mipLevel < metadata.mipLevels; ++mipLevel) {
+	std::vector<D3D12_SUBRESOURCE_DATA> subresources;
+	subresources.reserve(subresourceCount);
 
-		// MipMapLevelを指定して各Imageを取得
-		const DirectX::Image* img = mipImages.GetImage(mipLevel, 0, 0);
+	for (size_t item = 0; item < metadata.arraySize; ++item) {
+		for (size_t mipLevel = 0; mipLevel < metadata.mipLevels; ++mipLevel) {
+			const DirectX::Image* img = mipImages.GetImage(mipLevel, item, 0);
+			assert(img != nullptr);
 
-		// Textureに転送
-		HRESULT hr = texture->WriteToSubresource(
-			UINT(mipLevel),      // 書き込むmipレベル
-			nullptr,             // 全領域へコピー
-			img->pixels,         // 元データの先頭
-			UINT(img->rowPitch), // 1ラインのバイト数
-			UINT(img->slicePitch) // 1スライスのサイズ（=画像全体のバイト数）
-		);
-		assert(SUCCEEDED(hr));
+			D3D12_SUBRESOURCE_DATA subresource{};
+			subresource.pData = img->pixels;
+			subresource.RowPitch = static_cast<LONG_PTR>(img->rowPitch);
+			subresource.SlicePitch = static_cast<LONG_PTR>(img->slicePitch);
+			subresources.push_back(subresource);
+		}
 	}
+
+	const UINT64 uploadBufferSize =
+		GetRequiredIntermediateSize(texture.Get(), 0, subresourceCount);
+
+	D3D12_HEAP_PROPERTIES uploadHeapProperties{};
+	uploadHeapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+	D3D12_RESOURCE_DESC uploadResourceDesc{};
+	uploadResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+	uploadResourceDesc.Width = uploadBufferSize;
+	uploadResourceDesc.Height = 1;
+	uploadResourceDesc.DepthOrArraySize = 1;
+	uploadResourceDesc.MipLevels = 1;
+	uploadResourceDesc.SampleDesc.Count = 1;
+	uploadResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+	ComPtr<ID3D12Resource> uploadResource = nullptr;
+	HRESULT hr = device->CreateCommittedResource(
+		&uploadHeapProperties,
+		D3D12_HEAP_FLAG_NONE,
+		&uploadResourceDesc,
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(&uploadResource));
+	assert(SUCCEEDED(hr));
+
+	UpdateSubresources(
+		commandList,
+		texture.Get(),
+		uploadResource.Get(),
+		0,
+		0,
+		subresourceCount,
+		subresources.data());
+
+	D3D12_RESOURCE_BARRIER barrier{};
+	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	barrier.Transition.pResource = texture.Get();
+	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+	barrier.Transition.StateAfter = static_cast<D3D12_RESOURCE_STATES>(
+		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+		D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+	commandList->ResourceBarrier(1, &barrier);
+
+	retainedUploadResources.push_back(uploadResource);
 }
 
 ComPtr<ID3D12Resource>

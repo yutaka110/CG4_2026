@@ -1,4 +1,4 @@
-#include "AppSceneResources.h"
+﻿#include "AppSceneResources.h"
 
 #include <cassert>
 #include <algorithm>
@@ -904,18 +904,28 @@ bool AppSceneResources::Initialize(
     mappedCamera->padding = 0.0f;
 
     // =========================================================
-    // Texture 2枚
-    // slot 1, 2 を使用（slot 0 は ImGui 用の前提）
+    // Texture 2譫・
+    // slot 1, 2 繧剃ｽｿ逕ｨ・・lot 0 縺ｯ ImGui 逕ｨ縺ｮ蜑肴署・・
     // =========================================================
     DirectX::ScratchImage mipImages = AppRenderResources::LoadTexture("resources/monsterBall.png");
     const DirectX::TexMetadata& metadata = mipImages.GetMetadata();
     textureResource = AppRenderResources::CreateTextureResource(device, metadata);
-    AppRenderResources::UploadTextureData(textureResource, mipImages);
+    AppRenderResources::UploadTextureData(
+        device,
+        uploadCommandList,
+        textureResource,
+        mipImages,
+        initialUploadResources_);
 
     DirectX::ScratchImage mipImages2 = AppRenderResources::LoadTexture("resources/monsterBall.png");
     const DirectX::TexMetadata& metadata2 = mipImages2.GetMetadata();
     textureResource2 = AppRenderResources::CreateTextureResource(device, metadata2);
-    AppRenderResources::UploadTextureData(textureResource2, mipImages2);
+    AppRenderResources::UploadTextureData(
+        device,
+        uploadCommandList,
+        textureResource2,
+        mipImages2,
+        initialUploadResources_);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
     srvDesc.Format = metadata.format;
@@ -942,7 +952,12 @@ bool AppSceneResources::Initialize(
     DirectX::ScratchImage circle2Images = AppRenderResources::LoadTexture(circle2TexturePath);
     const DirectX::TexMetadata& circle2Metadata = circle2Images.GetMetadata();
     circle2TextureResource = AppRenderResources::CreateTextureResource(device, circle2Metadata);
-    AppRenderResources::UploadTextureData(circle2TextureResource, circle2Images);
+    AppRenderResources::UploadTextureData(
+        device,
+        uploadCommandList,
+        circle2TextureResource,
+        circle2Images,
+        initialUploadResources_);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC circle2SrvDesc{};
     circle2SrvDesc.Format = circle2Metadata.format;
@@ -959,7 +974,12 @@ bool AppSceneResources::Initialize(
     DirectX::ScratchImage gradationLineImages = AppRenderResources::LoadTexture(gradationLineTexturePath);
     const DirectX::TexMetadata& gradationLineMetadata = gradationLineImages.GetMetadata();
     gradationLineTextureResource = AppRenderResources::CreateTextureResource(device, gradationLineMetadata);
-    AppRenderResources::UploadTextureData(gradationLineTextureResource, gradationLineImages);
+    AppRenderResources::UploadTextureData(
+        device,
+        uploadCommandList,
+        gradationLineTextureResource,
+        gradationLineImages,
+        initialUploadResources_);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC gradationLineSrvDesc{};
     gradationLineSrvDesc.Format = gradationLineMetadata.format;
@@ -980,7 +1000,12 @@ bool AppSceneResources::Initialize(
         const DirectX::TexMetadata& skyboxMetadata = skyboxImages.GetMetadata();
         if (skyboxMetadata.IsCubemap()) {
             skyboxTextureResource = AppRenderResources::CreateTextureResource(device, skyboxMetadata);
-            AppRenderResources::UploadTextureData(skyboxTextureResource, skyboxImages);
+            AppRenderResources::UploadTextureData(
+                device,
+                uploadCommandList,
+                skyboxTextureResource,
+                skyboxImages,
+                initialUploadResources_);
 
             D3D12_SHADER_RESOURCE_VIEW_DESC skyboxSrvDesc{};
             skyboxSrvDesc.Format = skyboxMetadata.format;
@@ -1009,7 +1034,12 @@ bool AppSceneResources::Initialize(
     const DirectX::TexMetadata& animatedCubeMetadata = animatedCubeImages.GetMetadata();
     animatedCubeTextureResource =
         AppRenderResources::CreateTextureResource(device, animatedCubeMetadata);
-    AppRenderResources::UploadTextureData(animatedCubeTextureResource, animatedCubeImages);
+    AppRenderResources::UploadTextureData(
+        device,
+        uploadCommandList,
+        animatedCubeTextureResource,
+        animatedCubeImages,
+        initialUploadResources_);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC animatedCubeSrvDesc{};
     animatedCubeSrvDesc.Format = animatedCubeMetadata.format;
@@ -1106,7 +1136,12 @@ bool AppSceneResources::Initialize(
         const DirectX::TexMetadata& vfxTextureMetadata = vfxTextureImages.GetMetadata();
         ComPtr<ID3D12Resource> vfxTextureResource =
             AppRenderResources::CreateTextureResource(device, vfxTextureMetadata);
-        AppRenderResources::UploadTextureData(vfxTextureResource, vfxTextureImages);
+        AppRenderResources::UploadTextureData(
+            device,
+            uploadCommandList,
+            vfxTextureResource,
+            vfxTextureImages,
+            initialUploadResources_);
 
         D3D12_SHADER_RESOURCE_VIEW_DESC vfxTextureSrvDesc{};
         vfxTextureSrvDesc.Format = vfxTextureMetadata.format;

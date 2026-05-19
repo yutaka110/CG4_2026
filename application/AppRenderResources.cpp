@@ -5,9 +5,12 @@
 #include "utils/dx12/BufferHelper.h"
 #include "utils/math/Vector.h"
 
+#include "../../externals/DirectXTex/d3dx12.h"
+
 #include <algorithm>
 #include <cwctype>
 #include <filesystem>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 
@@ -93,16 +96,14 @@ ComPtr<ID3D12Resource> AppRenderResources::CreateTextureResource(
     resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION(metadata.dimension);
 
     D3D12_HEAP_PROPERTIES heapProperties{};
-    heapProperties.Type = D3D12_HEAP_TYPE_CUSTOM;
-    heapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
-    heapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+    heapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
 
     ComPtr<ID3D12Resource> resource = nullptr;
     HRESULT hr = device->CreateCommittedResource(
         &heapProperties,
         D3D12_HEAP_FLAG_NONE,
         &resourceDesc,
-        D3D12_RESOURCE_STATE_GENERIC_READ,
+        D3D12_RESOURCE_STATE_COPY_DEST,
         nullptr,
         IID_PPV_ARGS(&resource));
 
@@ -111,25 +112,82 @@ ComPtr<ID3D12Resource> AppRenderResources::CreateTextureResource(
 }
 
 void AppRenderResources::UploadTextureData(
+    ComPtr<ID3D12Device> device,
+    ID3D12GraphicsCommandList* commandList,
     ComPtr<ID3D12Resource> texture,
-    const DirectX::ScratchImage& mipImages) {
+    const DirectX::ScratchImage& mipImages,
+    std::vector<ComPtr<ID3D12Resource>>& retainedUploadResources) {
+    assert(device != nullptr);
+    assert(commandList != nullptr);
+    assert(texture != nullptr);
+
     const DirectX::TexMetadata& metadata = mipImages.GetMetadata();
+    const UINT subresourceCount =
+        static_cast<UINT>(metadata.arraySize * metadata.mipLevels);
+    assert(subresourceCount > 0);
+
+    std::vector<D3D12_SUBRESOURCE_DATA> subresources;
+    subresources.reserve(subresourceCount);
 
     for (size_t item = 0; item < metadata.arraySize; ++item) {
         for (size_t mipLevel = 0; mipLevel < metadata.mipLevels; ++mipLevel) {
             const DirectX::Image* img = mipImages.GetImage(mipLevel, item, 0);
             assert(img != nullptr);
 
-            const UINT subresource = UINT(mipLevel + item * metadata.mipLevels);
-            HRESULT hr = texture->WriteToSubresource(
-                subresource,
-                nullptr,
-                img->pixels,
-                UINT(img->rowPitch),
-                UINT(img->slicePitch));
-            assert(SUCCEEDED(hr));
+            D3D12_SUBRESOURCE_DATA subresource{};
+            subresource.pData = img->pixels;
+            subresource.RowPitch = static_cast<LONG_PTR>(img->rowPitch);
+            subresource.SlicePitch = static_cast<LONG_PTR>(img->slicePitch);
+            subresources.push_back(subresource);
         }
     }
+
+    const UINT64 uploadBufferSize =
+        GetRequiredIntermediateSize(texture.Get(), 0, subresourceCount);
+
+    D3D12_HEAP_PROPERTIES uploadHeapProperties{};
+    uploadHeapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC uploadResourceDesc{};
+    uploadResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    uploadResourceDesc.Width = uploadBufferSize;
+    uploadResourceDesc.Height = 1;
+    uploadResourceDesc.DepthOrArraySize = 1;
+    uploadResourceDesc.MipLevels = 1;
+    uploadResourceDesc.SampleDesc.Count = 1;
+    uploadResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ComPtr<ID3D12Resource> uploadResource = nullptr;
+    HRESULT hr = device->CreateCommittedResource(
+        &uploadHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &uploadResourceDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&uploadResource));
+    assert(SUCCEEDED(hr));
+
+    UpdateSubresources(
+        commandList,
+        texture.Get(),
+        uploadResource.Get(),
+        0,
+        0,
+        subresourceCount,
+        subresources.data());
+
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+    barrier.Transition.pResource = texture.Get();
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = static_cast<D3D12_RESOURCE_STATES>(
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    commandList->ResourceBarrier(1, &barrier);
+
+    retainedUploadResources.push_back(uploadResource);
 }
 
 D3D12_CPU_DESCRIPTOR_HANDLE AppRenderResources::GetCPUDescriptorHandle(

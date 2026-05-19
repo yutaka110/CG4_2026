@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "wrl.h"
 #include <d3d12.h>
@@ -15,7 +16,12 @@ DirectX::ScratchImage LoadTexture(const std::string& filePath);
 
 ComPtr<ID3D12Resource> CreateTextureResource(ComPtr<ID3D12Device> device, const DirectX::TexMetadata& metadata);
 ComPtr<ID3D12Resource> CreateBufferResource(ComPtr<ID3D12Device> device, size_t sizeInBytes);
-void UploadTextureData(ComPtr<ID3D12Resource> texture, const DirectX::ScratchImage& mipImages);
+void UploadTextureData(
+	ComPtr<ID3D12Device> device,
+	ID3D12GraphicsCommandList* commandList,
+	ComPtr<ID3D12Resource> texture,
+	const DirectX::ScratchImage& mipImages,
+	std::vector<ComPtr<ID3D12Resource>>& retainedUploadResources);
 
 ComPtr<ID3D12Resource> CreateDepthStencilTextureResource(ComPtr<ID3D12Device> device, int32_t width, int32_t height);
 
