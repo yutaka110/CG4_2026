@@ -131,6 +131,25 @@ struct AppManagedTextureResource {
     uint32_t height = 0;
 };
 
+struct AppManagedModelResource {
+    std::string name;
+    std::string directory;
+    std::string filename;
+    ModelData model;
+    GpuMeshResource mesh;
+    D3D12_GPU_DESCRIPTOR_HANDLE textureGpu{};
+    bool loaded = false;
+};
+
+struct AppModelObjectInstance {
+    std::string name;
+    uint32_t modelIndex = 0;
+    Transform transform{};
+    Microsoft::WRL::ComPtr<ID3D12Resource> transformResource;
+    TransformationMatrix* transformData = nullptr;
+    bool visible = true;
+};
+
 class AppSceneResources {
 public:
     bool Initialize(
@@ -151,6 +170,9 @@ public:
     void SyncRuntimeState(AppRuntimeState& runtimeState, float deltaTime);
     SkinnedModelInstance* GetActiveSkinnedModel();
     const SkinnedModelInstance* GetActiveSkinnedModel() const;
+    const AppManagedModelResource* FindManagedModel(uint32_t modelIndex) const;
+    const std::vector<AppManagedModelResource>& ManagedModelLibrary() const { return vfxModelLibrary; }
+    const std::vector<AppModelObjectInstance>& ModelObjectInstances() const { return vfxModelObjects; }
 
 public:
     // Sprite
@@ -205,6 +227,8 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE animatedCubeTextureSrvHandleCPU{};
     std::vector<AppManagedTextureResource> vfxTextureLibrary;
+    std::vector<AppManagedModelResource> vfxModelLibrary;
+    std::vector<AppModelObjectInstance> vfxModelObjects;
 
     // Sphere
     SphereMeshData sphere{};

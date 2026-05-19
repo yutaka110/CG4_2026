@@ -217,6 +217,60 @@ void DrawMaterialSettingsControlsPanel(
         -100.0f,
         100.0f);
 
+    ImGui::SeparatorText("VFX Model Objects");
+    ImGui::Checkbox("Show VFX Model Objects", &runtimeState.showVfxModelObjects);
+    const char* modelObjectLabels[] = {
+        "Object 0",
+        "Object 1",
+        "Object 2",
+    };
+    int selectedModelObject = static_cast<int>(runtimeState.selectedVfxModelObjectIndex);
+    if (ImGui::Combo(
+            "VFX Model Object",
+            &selectedModelObject,
+            modelObjectLabels,
+            IM_ARRAYSIZE(modelObjectLabels))) {
+        runtimeState.selectedVfxModelObjectIndex =
+            static_cast<uint32_t>((std::max)(0, selectedModelObject));
+    }
+    runtimeState.selectedVfxModelObjectIndex = (std::min)(
+        runtimeState.selectedVfxModelObjectIndex,
+        static_cast<uint32_t>(runtimeState.vfxModelObjects.size() - 1));
+    RuntimeVfxModelObjectState& selectedObject =
+        runtimeState.vfxModelObjects[runtimeState.selectedVfxModelObjectIndex];
+    ImGui::Checkbox("Object Visible", &selectedObject.visible);
+    const char* vfxModelLabels[] = {
+        "ball",
+        "animated_cube",
+    };
+    int selectedModelIndex = static_cast<int>(selectedObject.modelIndex);
+    if (ImGui::Combo(
+            "Object Model",
+            &selectedModelIndex,
+            vfxModelLabels,
+            IM_ARRAYSIZE(vfxModelLabels))) {
+        selectedObject.modelIndex =
+            static_cast<uint32_t>((std::max)(0, selectedModelIndex));
+    }
+    ImGui::DragFloat3(
+        "Object Scale",
+        reinterpret_cast<float*>(&selectedObject.transform.scale),
+        0.01f,
+        0.01f,
+        10.0f);
+    ImGui::DragFloat3(
+        "Object Rotate",
+        reinterpret_cast<float*>(&selectedObject.transform.rotate),
+        0.01f,
+        -3.14f,
+        3.14f);
+    ImGui::DragFloat3(
+        "Object Translate",
+        reinterpret_cast<float*>(&selectedObject.transform.translate),
+        0.01f,
+        -100.0f,
+        100.0f);
+
     ImGui::DragFloat2("UVTranslate", &runtimeState.uvTransformSprite.translate.x, 0.01f,
         -10.0f, 10.0f);
     ImGui::DragFloat2("UVScale", &runtimeState.uvTransformSprite.scale.x, 0.01f, -10.0f,

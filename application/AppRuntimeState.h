@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <d3d12.h>
 
@@ -38,6 +39,14 @@ struct RuntimeSkinningTimingStats {
     RuntimeSkinningTimingPathStats computeSurfaceOnly{};
 };
 
+inline constexpr uint32_t kRuntimeVfxModelObjectCount = 3;
+
+struct RuntimeVfxModelObjectState {
+    Transform transform{};
+    uint32_t modelIndex = 0;
+    bool visible = true;
+};
+
 struct AppRuntimeState {
     Transform transform{};
     Transform animatedCubeTransform{};
@@ -63,6 +72,9 @@ struct AppRuntimeState {
     bool showSkinnedModel = false;
     bool showSkeletonDebug = false;
     uint32_t selectedSkinnedModelIndex = 0;
+    bool showVfxModelObjects = true;
+    uint32_t selectedVfxModelObjectIndex = 0;
+    std::array<RuntimeVfxModelObjectState, kRuntimeVfxModelObjectCount> vfxModelObjects{};
     bool playAnimatedCube = true;
     bool loopAnimatedCube = true;
     float animatedCubeTime = 0.0f;

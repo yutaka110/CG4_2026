@@ -731,6 +731,21 @@ runtimeState.skinnedModelTransform.scale = { 0.45f, 0.45f, 0.45f };
 runtimeState.skinnedModelTransform.rotate = { 0.0f, 0.0f, 0.0f };
 runtimeState.skinnedModelTransform.translate = { 0.0f, -0.4f, -6.3f };
 
+runtimeState.vfxModelObjects[0].modelIndex = 0;
+runtimeState.vfxModelObjects[0].transform.scale = { 1.25f, 1.25f, 1.25f };
+runtimeState.vfxModelObjects[0].transform.rotate = { 0.0f, 0.0f, 0.0f };
+runtimeState.vfxModelObjects[0].transform.translate = { -2.4f, -0.35f, -5.8f };
+
+runtimeState.vfxModelObjects[1].modelIndex = 1;
+runtimeState.vfxModelObjects[1].transform.scale = { 0.45f, 0.45f, 0.45f };
+runtimeState.vfxModelObjects[1].transform.rotate = { 0.0f, 0.0f, 0.0f };
+runtimeState.vfxModelObjects[1].transform.translate = { 0.0f, -0.2f, -5.8f };
+
+runtimeState.vfxModelObjects[2].modelIndex = 0;
+runtimeState.vfxModelObjects[2].transform.scale = { 0.85f, 0.85f, 0.85f };
+runtimeState.vfxModelObjects[2].transform.rotate = { 0.0f, 0.6f, 0.0f };
+runtimeState.vfxModelObjects[2].transform.translate = { 2.0f, -0.35f, -5.8f };
+
 runtimeState.transformSprite.scale = { 256.0f, 256.0f, 1.0f };
 runtimeState.transformSprite.rotate = { 0.0f, 0.0f, 0.0f };
 runtimeState.transformSprite.translate = { 640.0f, 360.0f, 0.0f };

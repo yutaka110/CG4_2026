@@ -1268,6 +1268,52 @@ bool AppSceneResources::Initialize(
     }
 
     // =========================================================
+    // Managed VFX model library and object instances
+    // =========================================================
+    vfxModelLibrary.clear();
+    if (modelMesh.indexCount > 0) {
+        vfxModelLibrary.push_back({
+            "ball",
+            "Resources/ball",
+            "ball.obj",
+            modelData,
+            modelMesh,
+            textureSrvHandleGPU2,
+            true,
+        });
+    }
+    if (animatedCubeMesh.indexCount > 0) {
+        vfxModelLibrary.push_back({
+            "animated_cube",
+            "Resources/AnimatedCube",
+            "AnimatedCube.gltf",
+            animatedCubeData,
+            animatedCubeMesh,
+            animatedCubeTextureSrvHandleGPU,
+            animatedCubeTextureSrvHandleGPU.ptr != 0,
+        });
+    }
+
+    vfxModelObjects.clear();
+    vfxModelObjects.resize(kRuntimeVfxModelObjectCount);
+    for (size_t index = 0; index < vfxModelObjects.size(); ++index) {
+        AppModelObjectInstance& object = vfxModelObjects[index];
+        object.name = "vfx_model_object_" + std::to_string(index);
+        object.modelIndex = vfxModelLibrary.empty()
+            ? 0
+            : static_cast<uint32_t>(index % vfxModelLibrary.size());
+        object.visible = true;
+        object.transformResource = CreateBufferResource(device, sizeof(TransformationMatrix));
+        object.transformResource->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&object.transformData));
+        object.transformData->WVP = MakeIdentity4x4();
+        object.transformData->World = MakeIdentity4x4();
+        object.transformData->WorldInverseTranspose = MakeIdentity4x4();
+    }
+
+    // =========================================================
     // Skinned model instances
     // =========================================================
     const Transform skinnedDefaultTransform{
@@ -1378,6 +1424,14 @@ const SkinnedModelInstance* AppSceneResources::GetActiveSkinnedModel() const {
     return instance.loaded ? &instance : nullptr;
 }
 
+const AppManagedModelResource* AppSceneResources::FindManagedModel(uint32_t modelIndex) const {
+    if (modelIndex >= vfxModelLibrary.size()) {
+        return nullptr;
+    }
+    const AppManagedModelResource& model = vfxModelLibrary[modelIndex];
+    return model.loaded ? &model : nullptr;
+}
+
 void AppSceneResources::UpdateTransforms(
     const AppRuntimeState& runtimeState,
     Matrix4x4* wvpData,
@@ -1453,6 +1507,41 @@ void AppSceneResources::UpdateTransforms(
         animatedCubeTransformData->WVP = Multiply(worldMatrix, Multiply(viewMatrix, projMatrix));
         animatedCubeTransformData->WorldInverseTranspose = Transpose(Inverse(worldMatrix));
 
+    }
+
+    for (size_t index = 0;
+         index < vfxModelObjects.size() && index < runtimeState.vfxModelObjects.size();
+         ++index) {
+        AppModelObjectInstance& object = vfxModelObjects[index];
+        const RuntimeVfxModelObjectState& objectState = runtimeState.vfxModelObjects[index];
+        uint32_t modelIndex = objectState.modelIndex;
+        if (!vfxModelLibrary.empty()) {
+            modelIndex = (std::min)(
+                modelIndex,
+                static_cast<uint32_t>(vfxModelLibrary.size() - 1));
+        }
+
+        const AppManagedModelResource* managedModel = FindManagedModel(modelIndex);
+        object.modelIndex = modelIndex;
+        object.transform = objectState.transform;
+        object.visible =
+            runtimeState.showVfxModelObjects &&
+            objectState.visible &&
+            managedModel != nullptr &&
+            object.transformData != nullptr;
+
+        if (!object.visible) {
+            continue;
+        }
+
+        Matrix4x4 worldMatrix = MakeAffineMatrix(
+            object.transform.scale,
+            object.transform.rotate,
+            object.transform.translate);
+        worldMatrix = Multiply(managedModel->model.rootNode.localMatrix, worldMatrix);
+        object.transformData->World = worldMatrix;
+        object.transformData->WVP = Multiply(worldMatrix, Multiply(viewMatrix, projMatrix));
+        object.transformData->WorldInverseTranspose = Transpose(Inverse(worldMatrix));
     }
 
     SkinnedModelInstance* activeSkinnedModel = GetActiveSkinnedModel();
@@ -1577,6 +1666,15 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
         runtimeState.selectedSkinnedModelIndex,
         uint32_t(skinnedModels.size() - 1));
     runtimeState.selectedSkinnedModelIndex = activeSkinnedModelIndex;
+    runtimeState.selectedVfxModelObjectIndex = (std::min)(
+        runtimeState.selectedVfxModelObjectIndex,
+        uint32_t(runtimeState.vfxModelObjects.size() - 1));
+    if (!vfxModelLibrary.empty()) {
+        const uint32_t maxModelIndex = static_cast<uint32_t>(vfxModelLibrary.size() - 1);
+        for (RuntimeVfxModelObjectState& objectState : runtimeState.vfxModelObjects) {
+            objectState.modelIndex = (std::min)(objectState.modelIndex, maxModelIndex);
+        }
+    }
 
     SkinnedModelInstance* activeSkinnedModel = GetActiveSkinnedModel();
     const bool updateActiveSkinned =
