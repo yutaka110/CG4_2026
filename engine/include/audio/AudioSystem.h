@@ -43,9 +43,6 @@ public:
     AudioSystem() = default;
     ~AudioSystem();
 
-    AudioSystem(const AudioSystem&) = delete;
-    AudioSystem& operator=(const AudioSystem&) = delete;
-
     bool Initialize();
     void Shutdown();
     void Update();
