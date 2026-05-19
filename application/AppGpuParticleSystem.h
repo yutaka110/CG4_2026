@@ -210,8 +210,6 @@ public:
         ID3D12PipelineState* updatePipelineState,
         ID3D12PipelineState* emitterUpdatePipelineState,
         ID3D12PipelineState* emitterResetPipelineState,
-        ID3D12PipelineState* spawnPipelineState,
-        ID3D12PipelineState* argsPipelineState,
         const Matrix4x4& viewProjection,
         float deltaTime,
         float time,
@@ -323,6 +321,73 @@ private:
     void ResetGpuManagedEmitterAllocator();
     uint32_t ResolveGpuManagedEmitterSlot(uint32_t emitterKey, uint32_t fallbackSlot, bool beginFrame);
     uint32_t CountGpuManagedActiveEmitterSlots() const;
+    struct GpuManagedParticleConstants {
+        Matrix4x4 viewProjection;
+        float deltaTime = 0.0f;
+        float time = 0.0f;
+        uint32_t maxParticles = 0;
+        uint32_t sliceOffset = 0;
+        uint32_t sliceCount = 0;
+        uint32_t emitterKey = 0;
+        uint32_t emitterResetToken = 0;
+        float timelineAge = 0.0f;
+        Vector4 tint{};
+        Vector4 scaleAndParams{};
+        Vector4 effectParams{};
+        Vector4 particleShapeParams{};
+        Vector4 emitterParams{};
+    };
+    GpuManagedParticleConstants MakeGpuManagedParticleConstants(
+        const Matrix4x4& viewProjection,
+        float deltaTime,
+        float time,
+        const Vector4& tint,
+        const Vector3& scale,
+        float emissive,
+        float turbulence,
+        float pulseSpeed,
+        float spawnRadius,
+        float uvScrollSpeed,
+        float particleLifetime,
+        float spawnCount,
+        float spawnFrequency,
+        float randomRotation,
+        float scaleYMin,
+        float scaleYMax,
+        Vector3 emitterPosition,
+        uint32_t sliceOffset,
+        uint32_t emitterKey,
+        uint32_t emitterResetToken,
+        float emitterTimelineAge) const;
+    void TransitionGpuManagedParticleResources(
+        ID3D12GraphicsCommandList* commandList,
+        bool includeIndirectArgs);
+    void BindGpuManagedParticleRoot(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12DescriptorHeap* srvDescriptorHeap,
+        ID3D12RootSignature* rootSignature,
+        const GpuManagedParticleConstants& constants);
+    void DispatchGpuManagedFrameBegin(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12PipelineState* beginPipelineState);
+    void DispatchGpuManagedEmitterUpdateAndReset(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12PipelineState* emitterUpdatePipelineState,
+        ID3D12PipelineState* emitterResetPipelineState,
+        uint32_t dispatchGroupCount);
+    void DispatchGpuManagedParticleUpdate(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12PipelineState* updatePipelineState,
+        uint32_t dispatchGroupCount);
+    void DispatchGpuManagedSpawnPrepare(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12PipelineState* spawnPreparePipelineState);
+    void DispatchGpuManagedSpawn(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12PipelineState* spawnPipelineState);
+    void DispatchGpuManagedDrawArgs(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12PipelineState* argsPipelineState);
 
     Microsoft::WRL::ComPtr<ID3D12Resource> particleOutput_;
     Microsoft::WRL::ComPtr<ID3D12Resource> dedicatedParticleOutput_;

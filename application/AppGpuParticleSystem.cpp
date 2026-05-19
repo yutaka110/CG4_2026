@@ -1148,6 +1148,209 @@ bool AppGpuParticleSystem::ResetGpuManagedParticlePool(
     return true;
 }
 
+AppGpuParticleSystem::GpuManagedParticleConstants AppGpuParticleSystem::MakeGpuManagedParticleConstants(
+    const Matrix4x4& viewProjection,
+    float deltaTime,
+    float time,
+    const Vector4& tint,
+    const Vector3& scale,
+    float emissive,
+    float turbulence,
+    float pulseSpeed,
+    float spawnRadius,
+    float uvScrollSpeed,
+    float particleLifetime,
+    float spawnCount,
+    float spawnFrequency,
+    float randomRotation,
+    float scaleYMin,
+    float scaleYMax,
+    Vector3 emitterPosition,
+    uint32_t sliceOffset,
+    uint32_t emitterKey,
+    uint32_t emitterResetToken,
+    float emitterTimelineAge) const {
+    GpuManagedParticleConstants constants{};
+    constants.viewProjection = viewProjection;
+    constants.deltaTime = deltaTime;
+    constants.time = time;
+    constants.maxParticles = maxParticles_;
+    constants.sliceOffset = sliceOffset;
+    constants.sliceCount = maxParticles_;
+    constants.emitterKey = emitterKey;
+    constants.emitterResetToken = emitterResetToken;
+    constants.timelineAge = (std::max)(0.0f, emitterTimelineAge);
+    constants.tint = tint;
+    constants.scaleAndParams = {scale.x, scale.y, emissive, turbulence};
+    constants.effectParams = {pulseSpeed, spawnRadius, uvScrollSpeed, spawnFrequency};
+    constants.particleShapeParams = {spawnCount, randomRotation, scaleYMin, scaleYMax};
+    constants.emitterParams = {emitterPosition.x, emitterPosition.y, emitterPosition.z, particleLifetime};
+    return constants;
+}
+
+void AppGpuParticleSystem::TransitionGpuManagedParticleResources(
+    ID3D12GraphicsCommandList* commandList,
+    bool includeIndirectArgs) {
+    TransitionIfNeeded(commandList, particleOutput_.Get(), particleOutputState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleState_.Get(), particleStateState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleAliveList_.Get(), particleAliveListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleDeadList_.Get(), particleDeadListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleCounters_.Get(), particleCountersState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(commandList, particleEmitterStates_.Get(), particleEmitterStatesState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(
+        commandList,
+        particleEmitterSpawnRequests_.Get(),
+        particleEmitterSpawnRequestsState_,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(
+        commandList,
+        particleEmitterSpawnOffsets_.Get(),
+        particleEmitterSpawnOffsetsState_,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionIfNeeded(
+        commandList,
+        particleSpawnDispatchArgs_.Get(),
+        particleSpawnDispatchArgsState_,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (includeIndirectArgs) {
+        TransitionIfNeeded(commandList, indirectArgs_.Get(), indirectArgsState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+}
+
+void AppGpuParticleSystem::BindGpuManagedParticleRoot(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12DescriptorHeap* srvDescriptorHeap,
+    ID3D12RootSignature* rootSignature,
+    const GpuManagedParticleConstants& constants) {
+    ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap};
+    commandList->SetDescriptorHeaps(1, descriptorHeaps);
+    commandList->SetComputeRootSignature(rootSignature);
+    commandList->SetComputeRoot32BitConstants(0, 44, &constants, 0);
+    commandList->SetComputeRootDescriptorTable(1, particleUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(2, stateUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(3, particleAliveListUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(4, particleDeadListUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(5, particleCountersUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(6, particleIndirectArgsUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(7, particleEmitterStatesUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(8, particleEmitterSpawnRequestsUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(9, particleEmitterSpawnOffsetsUav_.gpu);
+    commandList->SetComputeRootDescriptorTable(10, particleSpawnDispatchArgsUav_.gpu);
+}
+
+void AppGpuParticleSystem::DispatchGpuManagedFrameBegin(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12PipelineState* beginPipelineState) {
+    commandList->SetPipelineState(beginPipelineState);
+    commandList->Dispatch((kMaxGpuParticleEmitters + 255) / 256, 1, 1);
+    D3D12_RESOURCE_BARRIER beginBarriers[] = {
+        MakeUavBarrier(particleCounters_.Get()),
+        MakeUavBarrier(particleEmitterSpawnRequests_.Get()),
+        MakeUavBarrier(particleEmitterSpawnOffsets_.Get()),
+        MakeUavBarrier(particleSpawnDispatchArgs_.Get()),
+    };
+    commandList->ResourceBarrier(_countof(beginBarriers), beginBarriers);
+}
+
+void AppGpuParticleSystem::DispatchGpuManagedEmitterUpdateAndReset(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12PipelineState* emitterUpdatePipelineState,
+    ID3D12PipelineState* emitterResetPipelineState,
+    uint32_t dispatchGroupCount) {
+    D3D12_RESOURCE_BARRIER emitterUpdateBarriers[] = {
+        MakeUavBarrier(particleCounters_.Get()),
+        MakeUavBarrier(particleEmitterStates_.Get()),
+        MakeUavBarrier(particleEmitterSpawnRequests_.Get()),
+        MakeUavBarrier(particleEmitterSpawnOffsets_.Get()),
+        MakeUavBarrier(particleSpawnDispatchArgs_.Get()),
+    };
+    commandList->SetPipelineState(emitterUpdatePipelineState);
+    commandList->Dispatch(1, 1, 1);
+    commandList->ResourceBarrier(_countof(emitterUpdateBarriers), emitterUpdateBarriers);
+
+    D3D12_RESOURCE_BARRIER emitterResetBarriers[] = {
+        MakeUavBarrier(particleOutput_.Get()),
+        MakeUavBarrier(particleState_.Get()),
+        MakeUavBarrier(particleCounters_.Get()),
+    };
+    commandList->SetPipelineState(emitterResetPipelineState);
+    commandList->Dispatch(dispatchGroupCount, 1, 1);
+    commandList->ResourceBarrier(_countof(emitterResetBarriers), emitterResetBarriers);
+}
+
+void AppGpuParticleSystem::DispatchGpuManagedParticleUpdate(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12PipelineState* updatePipelineState,
+    uint32_t dispatchGroupCount) {
+    D3D12_RESOURCE_BARRIER updateBarriers[] = {
+        MakeUavBarrier(particleOutput_.Get()),
+        MakeUavBarrier(particleState_.Get()),
+        MakeUavBarrier(particleAliveList_.Get()),
+        MakeUavBarrier(particleDeadList_.Get()),
+        MakeUavBarrier(particleCounters_.Get()),
+    };
+    commandList->SetPipelineState(updatePipelineState);
+    commandList->Dispatch(dispatchGroupCount, 1, 1);
+    commandList->ResourceBarrier(_countof(updateBarriers), updateBarriers);
+}
+
+void AppGpuParticleSystem::DispatchGpuManagedSpawnPrepare(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12PipelineState* spawnPreparePipelineState) {
+    commandList->SetPipelineState(spawnPreparePipelineState);
+    commandList->Dispatch(1, 1, 1);
+    D3D12_RESOURCE_BARRIER spawnPrepareBarriers[] = {
+        MakeUavBarrier(particleCounters_.Get()),
+        MakeUavBarrier(particleEmitterSpawnRequests_.Get()),
+        MakeUavBarrier(particleEmitterSpawnOffsets_.Get()),
+        MakeUavBarrier(particleSpawnDispatchArgs_.Get()),
+    };
+    commandList->ResourceBarrier(_countof(spawnPrepareBarriers), spawnPrepareBarriers);
+}
+
+void AppGpuParticleSystem::DispatchGpuManagedSpawn(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12PipelineState* spawnPipelineState) {
+    TransitionIfNeeded(
+        commandList,
+        particleSpawnDispatchArgs_.Get(),
+        particleSpawnDispatchArgsState_,
+        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+
+    commandList->SetPipelineState(spawnPipelineState);
+    commandList->ExecuteIndirect(
+        dispatchCommandSignature_.Get(),
+        1,
+        particleSpawnDispatchArgs_.Get(),
+        0,
+        nullptr,
+        0);
+    D3D12_RESOURCE_BARRIER spawnBarriers[] = {
+        MakeUavBarrier(particleOutput_.Get()),
+        MakeUavBarrier(particleState_.Get()),
+        MakeUavBarrier(particleAliveList_.Get()),
+        MakeUavBarrier(particleDeadList_.Get()),
+        MakeUavBarrier(particleCounters_.Get()),
+        MakeUavBarrier(particleEmitterSpawnOffsets_.Get()),
+        MakeUavBarrier(particleEmitterSpawnRequests_.Get()),
+    };
+    commandList->ResourceBarrier(_countof(spawnBarriers), spawnBarriers);
+}
+
+void AppGpuParticleSystem::DispatchGpuManagedDrawArgs(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12PipelineState* argsPipelineState) {
+    TransitionIfNeeded(
+        commandList,
+        particleSpawnDispatchArgs_.Get(),
+        particleSpawnDispatchArgsState_,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    commandList->SetPipelineState(argsPipelineState);
+    commandList->Dispatch(1, 1, 1);
+    D3D12_RESOURCE_BARRIER argsBarrier = MakeUavBarrier(indirectArgs_.Get());
+    commandList->ResourceBarrier(1, &argsBarrier);
+}
+
 void AppGpuParticleSystem::SimulateGpuManagedParticles(
     ID3D12GraphicsCommandList* commandList,
     ID3D12DescriptorHeap* srvDescriptorHeap,
@@ -1156,8 +1359,6 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
     ID3D12PipelineState* updatePipelineState,
     ID3D12PipelineState* emitterUpdatePipelineState,
     ID3D12PipelineState* emitterResetPipelineState,
-    ID3D12PipelineState* spawnPipelineState,
-    ID3D12PipelineState* argsPipelineState,
     const Matrix4x4& viewProjection,
     float deltaTime,
     float time,
@@ -1189,8 +1390,6 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
         updatePipelineState == nullptr ||
         emitterUpdatePipelineState == nullptr ||
         emitterResetPipelineState == nullptr ||
-        spawnPipelineState == nullptr ||
-        argsPipelineState == nullptr ||
         particleOutput_ == nullptr ||
         particleState_ == nullptr ||
         particleAliveList_ == nullptr ||
@@ -1209,110 +1408,43 @@ void AppGpuParticleSystem::SimulateGpuManagedParticles(
         return;
     }
 
-    struct Constants {
-        Matrix4x4 viewProjection;
-        float deltaTime;
-        float time;
-        uint32_t maxParticles;
-        uint32_t sliceOffset;
-        uint32_t sliceCount;
-        uint32_t emitterKey;
-        uint32_t emitterResetToken;
-        float timelineAge;
-        Vector4 tint;
-        Vector4 scaleAndParams;
-        Vector4 effectParams;
-        Vector4 particleShapeParams;
-        Vector4 emitterParams;
-    } constants{};
     const uint32_t requestedEmitterKey = emitterKey != 0 ? emitterKey : emitterIndex + 1;
     const uint32_t resolvedEmitterSlot =
         ResolveGpuManagedEmitterSlot(requestedEmitterKey, emitterIndex, updateExistingParticles);
-    constants.viewProjection = viewProjection;
-    constants.deltaTime = deltaTime;
-    constants.time = time;
-    constants.maxParticles = maxParticles_;
-    constants.sliceOffset = resolvedEmitterSlot;
-    constants.sliceCount = maxParticles_;
-    constants.emitterKey = requestedEmitterKey;
-    constants.emitterResetToken = emitterResetToken;
-    constants.timelineAge = (std::max)(0.0f, emitterTimelineAge);
-    constants.tint = tint;
-    constants.scaleAndParams = {scale.x, scale.y, emissive, turbulence};
-    constants.effectParams = {pulseSpeed, spawnRadius, uvScrollSpeed, spawnFrequency};
-    constants.particleShapeParams = {spawnCount, randomRotation, scaleYMin, scaleYMax};
-    constants.emitterParams = {emitterPosition.x, emitterPosition.y, emitterPosition.z, particleLifetime};
 
-    TransitionIfNeeded(commandList, particleOutput_.Get(), particleOutputState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(commandList, particleState_.Get(), particleStateState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(commandList, particleAliveList_.Get(), particleAliveListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(commandList, particleDeadList_.Get(), particleDeadListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(commandList, particleCounters_.Get(), particleCountersState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(commandList, particleEmitterStates_.Get(), particleEmitterStatesState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(
-        commandList,
-        particleEmitterSpawnRequests_.Get(),
-        particleEmitterSpawnRequestsState_,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(
-        commandList,
-        particleEmitterSpawnOffsets_.Get(),
-        particleEmitterSpawnOffsetsState_,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(
-        commandList,
-        particleSpawnDispatchArgs_.Get(),
-        particleSpawnDispatchArgsState_,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(commandList, indirectArgs_.Get(), indirectArgsState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-    ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap};
-    commandList->SetDescriptorHeaps(1, descriptorHeaps);
-    commandList->SetComputeRootSignature(rootSignature);
-    commandList->SetComputeRoot32BitConstants(0, 44, &constants, 0);
-    commandList->SetComputeRootDescriptorTable(1, particleUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(2, stateUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(3, particleAliveListUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(4, particleDeadListUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(5, particleCountersUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(6, particleIndirectArgsUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(7, particleEmitterStatesUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(8, particleEmitterSpawnRequestsUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(9, particleEmitterSpawnOffsetsUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(10, particleSpawnDispatchArgsUav_.gpu);
-
+    const GpuManagedParticleConstants constants = MakeGpuManagedParticleConstants(
+        viewProjection,
+        deltaTime,
+        time,
+        tint,
+        scale,
+        emissive,
+        turbulence,
+        pulseSpeed,
+        spawnRadius,
+        uvScrollSpeed,
+        particleLifetime,
+        spawnCount,
+        spawnFrequency,
+        randomRotation,
+        scaleYMin,
+        scaleYMax,
+        emitterPosition,
+        resolvedEmitterSlot,
+        requestedEmitterKey,
+        emitterResetToken,
+        emitterTimelineAge);
     const uint32_t dispatchGroupCount = (maxParticles_ + 255) / 256;
+    TransitionGpuManagedParticleResources(commandList, true);
+    BindGpuManagedParticleRoot(commandList, srvDescriptorHeap, rootSignature, constants);
     if (updateExistingParticles) {
-        commandList->SetPipelineState(beginPipelineState);
-        commandList->Dispatch((kMaxGpuParticleEmitters + 255) / 256, 1, 1);
-        D3D12_RESOURCE_BARRIER beginBarriers[] = {
-            MakeUavBarrier(particleCounters_.Get()),
-            MakeUavBarrier(particleEmitterSpawnRequests_.Get()),
-            MakeUavBarrier(particleEmitterSpawnOffsets_.Get()),
-            MakeUavBarrier(particleSpawnDispatchArgs_.Get()),
-        };
-        commandList->ResourceBarrier(_countof(beginBarriers), beginBarriers);
+        DispatchGpuManagedFrameBegin(commandList, beginPipelineState);
     }
-
-    D3D12_RESOURCE_BARRIER emitterUpdateBarriers[] = {
-        MakeUavBarrier(particleCounters_.Get()),
-        MakeUavBarrier(particleEmitterStates_.Get()),
-        MakeUavBarrier(particleEmitterSpawnRequests_.Get()),
-        MakeUavBarrier(particleEmitterSpawnOffsets_.Get()),
-        MakeUavBarrier(particleSpawnDispatchArgs_.Get()),
-    };
-    commandList->SetPipelineState(emitterUpdatePipelineState);
-    commandList->Dispatch(1, 1, 1);
-    commandList->ResourceBarrier(_countof(emitterUpdateBarriers), emitterUpdateBarriers);
-
-    D3D12_RESOURCE_BARRIER emitterResetBarriers[] = {
-        MakeUavBarrier(particleOutput_.Get()),
-        MakeUavBarrier(particleState_.Get()),
-        MakeUavBarrier(particleCounters_.Get()),
-    };
-    commandList->SetPipelineState(emitterResetPipelineState);
-    commandList->Dispatch(dispatchGroupCount, 1, 1);
-    commandList->ResourceBarrier(_countof(emitterResetBarriers), emitterResetBarriers);
+    DispatchGpuManagedEmitterUpdateAndReset(
+        commandList,
+        emitterUpdatePipelineState,
+        emitterResetPipelineState,
+        dispatchGroupCount);
 }
 
 void AppGpuParticleSystem::FinishGpuManagedParticleFrame(
@@ -1361,130 +1493,35 @@ void AppGpuParticleSystem::FinishGpuManagedParticleFrame(
         return;
     }
 
-    struct Constants {
-        Matrix4x4 viewProjection;
-        float deltaTime;
-        float time;
-        uint32_t maxParticles;
-        uint32_t sliceOffset;
-        uint32_t sliceCount;
-        uint32_t emitterKey;
-        uint32_t emitterResetToken;
-        float timelineAge;
-        Vector4 tint;
-        Vector4 scaleAndParams;
-        Vector4 effectParams;
-        Vector4 particleShapeParams;
-        Vector4 emitterParams;
-    } constants{};
-    constants.viewProjection = viewProjection;
-    constants.deltaTime = deltaTime;
-    constants.time = time;
-    constants.maxParticles = maxParticles_;
-    constants.sliceOffset = 0;
-    constants.sliceCount = maxParticles_;
-    constants.emitterKey = 0;
-    constants.emitterResetToken = 0;
-    constants.timelineAge = 0.0f;
-    constants.tint = tint;
-    constants.scaleAndParams = {scale.x, scale.y, emissive, turbulence};
-    constants.effectParams = {pulseSpeed, spawnRadius, uvScrollSpeed, 0.0f};
-    constants.particleShapeParams = {0.0f, 0.0f, 1.0f, 1.0f};
-    constants.emitterParams = {0.0f, 0.0f, 0.0f, 0.0f};
-
-    TransitionIfNeeded(commandList, particleOutput_.Get(), particleOutputState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(commandList, particleState_.Get(), particleStateState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(commandList, particleAliveList_.Get(), particleAliveListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(commandList, particleDeadList_.Get(), particleDeadListState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(commandList, particleCounters_.Get(), particleCountersState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(commandList, particleEmitterStates_.Get(), particleEmitterStatesState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(
-        commandList,
-        particleEmitterSpawnRequests_.Get(),
-        particleEmitterSpawnRequestsState_,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(
-        commandList,
-        particleEmitterSpawnOffsets_.Get(),
-        particleEmitterSpawnOffsetsState_,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(commandList, indirectArgs_.Get(), indirectArgsState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    TransitionIfNeeded(
-        commandList,
-        particleSpawnDispatchArgs_.Get(),
-        particleSpawnDispatchArgsState_,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-    ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap};
-    commandList->SetDescriptorHeaps(1, descriptorHeaps);
-    commandList->SetComputeRootSignature(rootSignature);
-    commandList->SetComputeRoot32BitConstants(0, 44, &constants, 0);
-    commandList->SetComputeRootDescriptorTable(1, particleUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(2, stateUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(3, particleAliveListUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(4, particleDeadListUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(5, particleCountersUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(6, particleIndirectArgsUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(7, particleEmitterStatesUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(8, particleEmitterSpawnRequestsUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(9, particleEmitterSpawnOffsetsUav_.gpu);
-    commandList->SetComputeRootDescriptorTable(10, particleSpawnDispatchArgsUav_.gpu);
-
-    const uint32_t dispatchGroupCount = (maxParticles_ + 255) / 256;
-    D3D12_RESOURCE_BARRIER updateBarriers[] = {
-        MakeUavBarrier(particleOutput_.Get()),
-        MakeUavBarrier(particleState_.Get()),
-        MakeUavBarrier(particleAliveList_.Get()),
-        MakeUavBarrier(particleDeadList_.Get()),
-        MakeUavBarrier(particleCounters_.Get()),
-    };
-    commandList->SetPipelineState(updatePipelineState);
-    commandList->Dispatch(dispatchGroupCount, 1, 1);
-    commandList->ResourceBarrier(_countof(updateBarriers), updateBarriers);
-
-    commandList->SetPipelineState(spawnPreparePipelineState);
-    commandList->Dispatch(1, 1, 1);
-    D3D12_RESOURCE_BARRIER spawnPrepareBarriers[] = {
-        MakeUavBarrier(particleCounters_.Get()),
-        MakeUavBarrier(particleEmitterSpawnRequests_.Get()),
-        MakeUavBarrier(particleEmitterSpawnOffsets_.Get()),
-        MakeUavBarrier(particleSpawnDispatchArgs_.Get()),
-    };
-    commandList->ResourceBarrier(_countof(spawnPrepareBarriers), spawnPrepareBarriers);
-    TransitionIfNeeded(
-        commandList,
-        particleSpawnDispatchArgs_.Get(),
-        particleSpawnDispatchArgsState_,
-        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-
-    commandList->SetPipelineState(spawnPipelineState);
-    commandList->ExecuteIndirect(
-        dispatchCommandSignature_.Get(),
-        1,
-        particleSpawnDispatchArgs_.Get(),
+    const GpuManagedParticleConstants constants = MakeGpuManagedParticleConstants(
+        viewProjection,
+        deltaTime,
+        time,
+        tint,
+        scale,
+        emissive,
+        turbulence,
+        pulseSpeed,
+        spawnRadius,
+        uvScrollSpeed,
+        0.0f,
+        0.0f,
+        0.0f,
+        0.0f,
+        1.0f,
+        1.0f,
+        {},
         0,
-        nullptr,
-        0);
-    D3D12_RESOURCE_BARRIER spawnBarriers[] = {
-        MakeUavBarrier(particleOutput_.Get()),
-        MakeUavBarrier(particleState_.Get()),
-        MakeUavBarrier(particleAliveList_.Get()),
-        MakeUavBarrier(particleDeadList_.Get()),
-        MakeUavBarrier(particleCounters_.Get()),
-        MakeUavBarrier(particleEmitterSpawnOffsets_.Get()),
-        MakeUavBarrier(particleEmitterSpawnRequests_.Get()),
-    };
-    commandList->ResourceBarrier(_countof(spawnBarriers), spawnBarriers);
-
-    TransitionIfNeeded(
-        commandList,
-        particleSpawnDispatchArgs_.Get(),
-        particleSpawnDispatchArgsState_,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    commandList->SetPipelineState(argsPipelineState);
-    commandList->Dispatch(1, 1, 1);
-    D3D12_RESOURCE_BARRIER argsBarrier = MakeUavBarrier(indirectArgs_.Get());
-    commandList->ResourceBarrier(1, &argsBarrier);
+        0,
+        0,
+        0.0f);
+    const uint32_t dispatchGroupCount = (maxParticles_ + 255) / 256;
+    TransitionGpuManagedParticleResources(commandList, true);
+    BindGpuManagedParticleRoot(commandList, srvDescriptorHeap, rootSignature, constants);
+    DispatchGpuManagedParticleUpdate(commandList, updatePipelineState, dispatchGroupCount);
+    DispatchGpuManagedSpawnPrepare(commandList, spawnPreparePipelineState);
+    DispatchGpuManagedSpawn(commandList, spawnPipelineState);
+    DispatchGpuManagedDrawArgs(commandList, argsPipelineState);
 
     particleSimulationTelemetry_.valid = true;
     particleSimulationTelemetry_.usedDedicatedResources = false;

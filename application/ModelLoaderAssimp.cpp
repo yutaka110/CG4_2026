@@ -57,7 +57,7 @@ ModelData LoadObjFile_Assimp(
     Assimp::Importer importer;
     const unsigned flags =
         aiProcess_Triangulate |
-        aiProcess_FlipUVs |
+        aiProcess_ConvertToLeftHanded |
         aiProcess_GenSmoothNormals;
 
     const aiScene* scene = importer.ReadFile(filePath.c_str(), flags);
