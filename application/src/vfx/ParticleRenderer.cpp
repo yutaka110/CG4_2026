@@ -362,7 +362,11 @@ void ParticleRenderer::Simulate(
                 instance.color.z * component.color.z,
                 instance.color.w * component.color.w,
             };
-            scale = instance.transform.scale;
+            scale = {
+                instance.transform.scale.x * component.size.x,
+                instance.transform.scale.y * component.size.y,
+                instance.transform.scale.z * component.size.z,
+            };
             emitterPosition = instance.transform.translate;
             particleLifetime = component.duration;
             emissive = settings.emissive;
@@ -458,7 +462,11 @@ void ParticleRenderer::Simulate(
                 instance.color.z * component.color.z,
                 instance.color.w * component.color.w,
             };
-            scale = instance.transform.scale;
+            scale = {
+                instance.transform.scale.x * component.size.x,
+                instance.transform.scale.y * component.size.y,
+                instance.transform.scale.z * component.size.z,
+            };
             emitterPosition = instance.transform.translate;
             particleLifetime = component.duration;
             emissive = settings.emissive;

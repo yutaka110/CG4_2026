@@ -357,6 +357,9 @@
     <ClCompile Include="application\src\vfx\DistortionRenderer.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\src\vfx\OrbitRibbonRenderer.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
     <ClCompile Include="application\src\vfx\BeamRenderer.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -367,6 +370,9 @@
       <Filter>ソース ファイル</Filter>
     </ClCompile>
     <ClCompile Include="application\src\vfx\RingRenderer.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
+    <ClCompile Include="application\src\vfx\SpearRenderer.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
     <ClCompile Include="application\src\vfx\TrailRenderer.cpp">
@@ -383,6 +389,8 @@
     <FxCompile Include="Object3D.VS.hlsl" />
     <FxCompile Include="Object3D.PS.hlsl" />
     <FxCompile Include="Resources\Particle.PS.hlsl" />
+    <FxCompile Include="Resources\OrbitRibbon.PS.hlsl" />
+    <FxCompile Include="Resources\OrbitRibbon.VS.hlsl" />
     <FxCompile Include="Resources\Particle.VS.hlsl" />
     <FxCompile Include="Resources\Sprite.PS.hlsl" />
     <FxCompile Include="Resources\Sprite.VS.hlsl" />
@@ -752,10 +760,16 @@
     <ClInclude Include="application\include\vfx\DistortionRenderer.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
+    <ClInclude Include="application\include\vfx\OrbitRibbonRenderer.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
     <ClInclude Include="application\include\vfx\ParticleRenderer.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\include\vfx\RingRenderer.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\include\vfx\SpearRenderer.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\include\vfx\TrailRenderer.h">
@@ -784,8 +798,13 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\Particle.hlsli" />
+    <None Include="Resources\Spear.PS.hlsl" />
+    <None Include="Resources\Spear.VS.hlsl" />
     <None Include="Resources\Skybox.hlsli" />
     <None Include="Resources\effects\AuthoringMetadataDemo.effect" />
+    <None Include="Resources\effects\IceImpact.effect" />
+    <None Include="Resources\effects\IceProjectile.effect" />
     <None Include="Resources\effects\WarpCore.effect" />
+    <None Include="Resources\iceShard.png" />
   </ItemGroup>
 </Project>

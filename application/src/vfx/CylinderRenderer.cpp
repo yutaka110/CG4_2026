@@ -109,6 +109,12 @@ void CylinderRenderer::Draw(
 
         const EffectInstance& instance = *item.common.instance;
         const EffectComponentCommon& component = *item.common.componentCommon;
+        if (component.rendererId == "SpearRenderer" ||
+            component.techniqueId == "SpearMesh" ||
+            component.rendererId == "OrbitRibbonRenderer" ||
+            component.techniqueId == "OrbitRibbon") {
+            continue;
+        }
         const EffectCylinderSettings& settings = *item.settings;
 
         const Vector3 scale = {

@@ -879,6 +879,7 @@ AppFrameRenderer frameRenderer;
 		engineContext,
 		heaps,
 		dev,
+		hwnd,
 		srvDescriptorHeap,
 		wvpData,
 		windowWidth,

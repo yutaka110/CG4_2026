@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <string>
 
+#include "utils/math/MathUtils.h"
+
 struct ParticleDedicatedOperationalHealthSummary {
     bool probeEnabled = false;
     bool graphReady = false;
@@ -120,6 +122,8 @@ struct AppVfxRuntimeState {
     float autoPlayVfxRadius = 2.5f;
     float autoPlayVfxTimer = 0.0f;
     float autoPlayVfxAngle = 0.0f;
+    bool showcaseMode = false;
+    bool iceProjectileClickToFire = true;
 
     bool holdHitPlaneBurst = false;
     bool holdHitRing = false;
@@ -129,4 +133,11 @@ struct AppVfxRuntimeState {
     uint32_t holdHitRingInstanceId = 0;
     uint32_t holdHitCylinderInstanceId = 0;
     uint32_t holdHitCylinderComboInstanceId = 0;
+
+    bool iceProjectilePreviewActive = false;
+    bool iceProjectileImpactSpawned = false;
+    uint32_t iceProjectileInstanceId = 0;
+    float iceProjectileTimer = 0.0f;
+    Vector3 iceProjectileStart = {0.0f, -1.55f, -3.05f};
+    Vector3 iceProjectileTarget = {2.5f, 0.7f, 0.42f};
 };

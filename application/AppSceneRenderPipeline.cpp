@@ -582,6 +582,9 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         },
         "",
         [ctx](ge3::graphics::RenderPassContext& passContext) {
+            if (!ctx.runtimeState->showSkybox) {
+                return;
+            }
             const bool skyboxReady = ctx.frameRenderer->PrepareMainPass(
                 passContext.commandList,
                 ctx.runtimeState->viewport,

@@ -3,8 +3,10 @@
 class BeamRenderer;
 class CylinderRenderer;
 class DistortionRenderer;
+class OrbitRibbonRenderer;
 class ParticleRenderer;
 class RingRenderer;
+class SpearRenderer;
 class TrailRenderer;
 
 struct AppVfxRendererSet {
@@ -13,6 +15,8 @@ struct AppVfxRendererSet {
     BeamRenderer* beam = nullptr;
     DistortionRenderer* distortion = nullptr;
     RingRenderer* ring = nullptr;
+    SpearRenderer* spear = nullptr;
+    OrbitRibbonRenderer* orbitRibbon = nullptr;
     CylinderRenderer* cylinder = nullptr;
 
     bool IsValid() const {
@@ -21,6 +25,8 @@ struct AppVfxRendererSet {
             beam != nullptr &&
             distortion != nullptr &&
             ring != nullptr &&
+            spear != nullptr &&
+            orbitRibbon != nullptr &&
             cylinder != nullptr;
     }
 };

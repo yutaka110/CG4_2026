@@ -20,6 +20,10 @@ struct PSIn
 
 float ComputeSoftParticleFade(float4 position)
 {
+    if (gDepthFadeSoftness <= 0.0f)
+    {
+        return 1.0f;
+    }
     uint depthWidth = 0;
     uint depthHeight = 0;
     gSceneDepth.GetDimensions(depthWidth, depthHeight);
@@ -33,11 +37,16 @@ float ComputeSoftParticleFade(float4 position)
 
 float ComputeEdgeFade(float2 uv)
 {
-    float centered = abs(uv.x - 0.5f) * 2.0f;
     float softness = saturate(gParticleEdgeSoftness);
-    float inner = saturate(1.0f - centered);
-    float exponent = lerp(4.0f, 0.75f, softness);
-    return pow(inner, exponent);
+    if (softness <= 0.0001f)
+    {
+        return 1.0f;
+    }
+
+    float2 centered = uv * 2.0f - 1.0f;
+    float radial = length(centered);
+    float fadeStart = lerp(0.92f, 0.35f, softness);
+    return 1.0f - smoothstep(fadeStart, 1.0f, radial);
 }
 
 float4 main(PSIn input) : SV_TARGET

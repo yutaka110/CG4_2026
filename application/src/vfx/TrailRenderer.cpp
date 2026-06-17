@@ -526,7 +526,7 @@ void TrailRenderer::Draw(
     const vfx::ComponentDrawParams drawParams =
         vfx::ResolveTrailDrawParams(
             input.settings,
-            {0.02f, 1.0f, 0.5f, 1.35f});
+            {0.02f, context.beamTime, 0.5f, 1.35f});
     const vfx::VfxRendererResourceSet* rendererResources =
         trailResources != nullptr ? &trailResources->indirectSprite : nullptr;
     vfx::DrawIndirectSpriteComponents(
@@ -736,7 +736,7 @@ bool TrailRenderer::DrawMeshStream(
     const vfx::ComponentDrawParams drawParams =
         vfx::ResolveTrailDrawParams(
             plan.input->settings,
-            {0.02f, 1.0f, 0.5f, 1.35f});
+            {0.02f, context.beamTime, 0.5f, 1.35f});
 
     ID3D12DescriptorHeap* descriptorHeaps[] = { context.srvDescriptorHeap };
     commandList->SetDescriptorHeaps(1, descriptorHeaps);

@@ -87,10 +87,10 @@ float Hash01(uint id, float seed, float salt)
 
 float3 HashSpawn(uint id, float seed, float radius)
 {
-    float x = Hash01(id, seed, 1.0f);
-    float y = Hash01(id, seed, 7.0f);
-    float z = Hash01(id, seed, 13.0f);
-    return float3((x - 0.5f) * radius * 2.0f, (y - 0.5f) * radius * 2.0f, (z - 0.5f) * radius * 2.0f);
+    float angle = Hash01(id, seed, 1.0f) * 6.2831853f;
+    float radial = sqrt(Hash01(id, seed, 7.0f)) * radius;
+    float z = (Hash01(id, seed, 13.0f) - 0.5f) * radius * 0.35f;
+    return float3(cos(angle) * radial, sin(angle) * radial, z);
 }
 
 float4x4 MakeWorld(float3 position, float3 scale, float rotationZ)
@@ -186,10 +186,22 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     float authoredScale = lerp(scaleMin, scaleMax, scaleRand);
     authoredScale = authoredScale > 0.0f ? authoredScale : 1.0f;
 
+    float3 spawnOffset = HashSpawn(particleIndex + spawnIndex, gTime, max(request.effectParams.y, 0.0f));
+    float3 outward = spawnOffset;
+    outward.z *= 0.45f;
+    float outwardLength = length(outward);
+    if (outwardLength <= 0.0001f)
+    {
+        float angle = seed * 6.2831853f;
+        outward = float3(cos(angle), sin(angle), 0.0f);
+        outwardLength = 1.0f;
+    }
+    outward /= outwardLength;
+
     ParticleState state;
-    state.position = request.emitterParams.xyz + HashSpawn(particleIndex + spawnIndex, gTime, max(request.effectParams.y, 0.0f));
+    state.position = request.emitterParams.xyz + spawnOffset;
     state.age = 0.0f;
-    state.velocity = float3(seed * 0.6f - 0.3f, 0.4f + seed * 0.8f, seed * 0.4f - 0.2f);
+    state.velocity = outward * (0.42f + seed * 0.55f);
     state.lifetime = max(lifetime, 0.001f);
     state.color = request.tint;
     state.scale = float3(0.08f + seed * 0.08f, 0.08f + seed * 0.08f, 1.0f);

@@ -80,6 +80,7 @@ struct AppRuntimeState {
     bool showAnimatedCube = true;
     bool showSkinnedModel = false;
     bool showSkeletonDebug = false;
+    bool showSkybox = true;
     uint32_t selectedSkinnedModelIndex = 0;
     bool showVfxModelObjects = true;
     uint32_t selectedVfxModelObjectIndex = 0;

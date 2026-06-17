@@ -96,6 +96,32 @@ void DisableHeldHitEffects(AppRuntimeState& runtimeState, EffectRuntime& effectR
         {},
         {});
 }
+
+void ApplyVfxShowcaseMode(AppRuntimeState& runtimeState) {
+    runtimeState.clearColor[0] = 0.015f;
+    runtimeState.clearColor[1] = 0.018f;
+    runtimeState.clearColor[2] = 0.028f;
+    runtimeState.clearColor[3] = 1.0f;
+
+    runtimeState.useMonsterBall = false;
+    runtimeState.showAnimatedCube = false;
+    runtimeState.showSkinnedModel = false;
+    runtimeState.showSkeletonDebug = false;
+    runtimeState.showSkybox = false;
+    runtimeState.showVfxModelObjects = false;
+    runtimeState.vfx.enableTrailMeshStream = true;
+    runtimeState.vfx.enableTrailMeshStreamAutoFallback = false;
+    runtimeState.vfx.trailMeshStreamFallbackActive = false;
+
+    runtimeState.directionalLightData.color = {0.55f, 0.7f, 1.0f, 1.0f};
+    runtimeState.directionalLightData.direction = {0.25f, -1.0f, 0.2f};
+    runtimeState.directionalLightData.intensity = 0.12f;
+
+    runtimeState.pointLightData.color = {0.35f, 0.65f, 1.0f, 1.0f};
+    runtimeState.pointLightData.intensity = 0.0f;
+    runtimeState.pointLightData.radius = 6.0f;
+    runtimeState.pointLightData.decay = 2.0f;
+}
 } // namespace
 
 void DrawSceneLightingControlsPanel(
@@ -168,6 +194,8 @@ void DrawMaterialSettingsControlsPanel(
     ImGui::Checkbox("Show Skinned", &runtimeState.showSkinnedModel);
     ImGui::SameLine();
     ImGui::Checkbox("Show Skeleton", &runtimeState.showSkeletonDebug);
+    ImGui::SameLine();
+    ImGui::Checkbox("Show Skybox", &runtimeState.showSkybox);
     ImGui::SameLine();
     ImGui::Checkbox("Play Animation", &runtimeState.playAnimatedCube);
     ImGui::SameLine();
@@ -349,6 +377,11 @@ void DrawVfxRuntimeControlsPanel(
         effectRuntime.SetSpeedMultiplier(runtimeSpeed);
     }
     ImGui::Checkbox("Auto Play VFX Demo", &runtimeState.vfx.autoPlayVfxDemo);
+    ImGui::Checkbox("VFX Showcase Mode", &runtimeState.vfx.showcaseMode);
+    if (runtimeState.vfx.showcaseMode) {
+        ApplyVfxShowcaseMode(runtimeState);
+    }
+    ImGui::Checkbox("Click Viewport To Fire Ice", &runtimeState.vfx.iceProjectileClickToFire);
     ImGui::SeparatorText("VFX Visibility");
     ImGui::Checkbox("Particles", &runtimeState.vfx.enableParticles);
     ImGui::SameLine();
@@ -422,6 +455,26 @@ void DrawVfxRuntimeControlsPanel(
             runtimeState.emitter.transform.translate,
             {1.0f, 0.75f, 0.35f, 1.0f},
             {1.0f, 1.0f, 1.0f});
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Play ice_projectile")) {
+        DisableHeldHitEffects(runtimeState, effectRuntime);
+        runtimeState.vfx.autoPlayVfxDemo = false;
+        runtimeState.vfx.enableParticles = true;
+        runtimeState.vfx.enableTrails = true;
+        runtimeState.vfx.enableRings = true;
+        runtimeState.vfx.enableCylinders = true;
+        runtimeState.vfx.enableBeams = false;
+        runtimeState.vfx.enableDistortions = false;
+        runtimeState.vfx.showcaseMode = true;
+        ApplyVfxShowcaseMode(runtimeState);
+        runtimeState.vfx.iceProjectileStart = {0.0f, -1.55f, -3.05f};
+        runtimeState.vfx.iceProjectileTarget = {2.5f, 0.7f, 0.42f};
+        runtimeState.vfx.iceProjectilePreviewActive = true;
+        runtimeState.vfx.iceProjectileImpactSpawned = false;
+        runtimeState.vfx.iceProjectileInstanceId = 0;
+        runtimeState.vfx.iceProjectileTimer = 0.0f;
+        effectRuntime.ClearInstances();
     }
     if (ImGui::Button("Play hit_plane_burst")) {
         runtimeState.vfx.enableParticles = true;
@@ -543,6 +596,10 @@ void DrawVfxRuntimeControlsPanel(
     }
     if (ImGui::Button("Clear Effects")) {
         DisableHeldHitEffects(runtimeState, effectRuntime);
+        runtimeState.vfx.iceProjectilePreviewActive = false;
+        runtimeState.vfx.iceProjectileImpactSpawned = false;
+        runtimeState.vfx.iceProjectileInstanceId = 0;
+        runtimeState.vfx.iceProjectileTimer = 0.0f;
         effectRuntime.ClearInstances();
     }
 }

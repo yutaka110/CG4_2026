@@ -39,6 +39,18 @@ namespace {
         Vector3 normal;
     };
 
+    struct SpearVertex {
+        Vector4 position;
+        Vector2 texcoord;
+        Vector3 normal;
+    };
+
+    struct OrbitRibbonVertex {
+        Vector4 position;
+        Vector2 texcoord;
+        Vector3 normal;
+    };
+
     constexpr uint32_t kSkinningDescriptorBaseIndex = 20;
     constexpr uint32_t kSkinningDescriptorStride = 4;
 
@@ -195,6 +207,106 @@ namespace {
             vertices.push_back(top1);
             vertices.push_back(bottom1);
         }
+        return vertices;
+    }
+
+    std::vector<SpearVertex> BuildSpearVertices() {
+        auto makeVertex = [](float x, float y, float u, float edge) {
+            SpearVertex vertex{};
+            vertex.position = {x, y, 0.0f, 1.0f};
+            vertex.texcoord = {u, edge};
+            vertex.normal = {0.0f, 0.0f, -1.0f};
+            return vertex;
+        };
+
+        auto smoothStep = [](float edge0, float edge1, float x) {
+            const float t = std::clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+            return t * t * (3.0f - 2.0f * t);
+        };
+
+        auto radiusAt = [smoothStep](float t) {
+            constexpr float kMaxRadius = 0.56f;
+            constexpr float kBulbCenter = 0.72f;
+            if (t <= kBulbCenter) {
+                const float tailGrow = smoothStep(0.0f, 0.28f, t);
+                const float shoulder = 0.72f + 0.28f * smoothStep(0.24f, kBulbCenter, t);
+                return kMaxRadius * tailGrow * shoulder;
+            }
+
+            const float capT = (t - kBulbCenter) / (1.0f - kBulbCenter);
+            return kMaxRadius * std::sqrt((std::max)(0.0f, 1.0f - capT * capT));
+        };
+
+        constexpr int kLengthSegments = 32;
+        constexpr int kWidthSegments = 10;
+        constexpr float kMinX = -0.96f;
+        constexpr float kMaxX = 0.62f;
+
+        std::vector<SpearVertex> vertices;
+        vertices.reserve(static_cast<size_t>(kLengthSegments) * kWidthSegments * 6);
+
+        auto makeGridVertex = [&](int xIndex, int yIndex) {
+            const float u = static_cast<float>(xIndex) / static_cast<float>(kLengthSegments);
+            const float v = -1.0f + 2.0f * static_cast<float>(yIndex) / static_cast<float>(kWidthSegments);
+            const float radius = radiusAt(u);
+            const float x = kMinX + (kMaxX - kMinX) * u;
+            const float y = radius * v;
+            return makeVertex(x, y, u, std::abs(v));
+        };
+
+        for (int x = 0; x < kLengthSegments; ++x) {
+            for (int y = 0; y < kWidthSegments; ++y) {
+                const SpearVertex a = makeGridVertex(x, y);
+                const SpearVertex b = makeGridVertex(x + 1, y);
+                const SpearVertex c = makeGridVertex(x, y + 1);
+                const SpearVertex d = makeGridVertex(x + 1, y + 1);
+
+                vertices.push_back(a);
+                vertices.push_back(c);
+                vertices.push_back(b);
+                vertices.push_back(b);
+                vertices.push_back(c);
+                vertices.push_back(d);
+            }
+        }
+
+        return vertices;
+    }
+
+    std::vector<OrbitRibbonVertex> BuildOrbitRibbonVertices() {
+        auto makeVertex = [](float t, float side, float ribbonIndex) {
+            OrbitRibbonVertex vertex{};
+            vertex.position = {t, side, ribbonIndex, 1.0f};
+            vertex.texcoord = {t, side * 0.5f + 0.5f};
+            vertex.normal = {0.0f, 0.0f, 1.0f};
+            return vertex;
+        };
+
+        constexpr int kRibbonCount = 4;
+        constexpr int kSegments = 44;
+        std::vector<OrbitRibbonVertex> vertices;
+        vertices.reserve(static_cast<size_t>(kRibbonCount) * kSegments * 6);
+
+        for (int ribbon = 0; ribbon < kRibbonCount; ++ribbon) {
+            const float ribbonIndex = static_cast<float>(ribbon);
+            for (int segment = 0; segment < kSegments; ++segment) {
+                const float t0 = static_cast<float>(segment) / static_cast<float>(kSegments);
+                const float t1 = static_cast<float>(segment + 1) / static_cast<float>(kSegments);
+
+                const OrbitRibbonVertex a = makeVertex(t0, -1.0f, ribbonIndex);
+                const OrbitRibbonVertex b = makeVertex(t1, -1.0f, ribbonIndex);
+                const OrbitRibbonVertex c = makeVertex(t0, 1.0f, ribbonIndex);
+                const OrbitRibbonVertex d = makeVertex(t1, 1.0f, ribbonIndex);
+
+                vertices.push_back(a);
+                vertices.push_back(c);
+                vertices.push_back(b);
+                vertices.push_back(b);
+                vertices.push_back(c);
+                vertices.push_back(d);
+            }
+        }
+
         return vertices;
     }
 
@@ -1124,6 +1236,7 @@ bool AppSceneResources::Initialize(
         {"beamRamp_lightning", "Resources/beamRamp_lightning.png"},
         {"uvChecker", "Resources/uvChecker.png"},
         {"fence", "Resources/fence/fence.png"},
+        {"iceShard", "Resources/iceShard.png"},
     };
 
     for (uint32_t index = 0; index < _countof(vfxTextureLoadSpecs); ++index) {
@@ -1272,6 +1385,48 @@ bool AppSceneResources::Initialize(
         cylinder.vbv.BufferLocation = cylinder.vertexResource->GetGPUVirtualAddress();
         cylinder.vbv.SizeInBytes = UINT(sizeof(CylinderVertex) * cylinder.vertexCount);
         cylinder.vbv.StrideInBytes = sizeof(CylinderVertex);
+    }
+
+    // =========================================================
+    // VFX Spear mesh
+    // =========================================================
+    {
+        const std::vector<SpearVertex> spearVerts = BuildSpearVertices();
+        spear.vertexCount = UINT(spearVerts.size());
+        spear.vertexResource =
+            CreateBufferResource(device, sizeof(SpearVertex) * spear.vertexCount);
+
+        SpearVertex* mappedVB = nullptr;
+        spear.vertexResource->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&mappedVB));
+        memcpy(mappedVB, spearVerts.data(), sizeof(SpearVertex) * spear.vertexCount);
+
+        spear.vbv.BufferLocation = spear.vertexResource->GetGPUVirtualAddress();
+        spear.vbv.SizeInBytes = UINT(sizeof(SpearVertex) * spear.vertexCount);
+        spear.vbv.StrideInBytes = sizeof(SpearVertex);
+    }
+
+    // =========================================================
+    // VFX Orbit ribbon mesh
+    // =========================================================
+    {
+        const std::vector<OrbitRibbonVertex> orbitRibbonVerts = BuildOrbitRibbonVertices();
+        orbitRibbon.vertexCount = UINT(orbitRibbonVerts.size());
+        orbitRibbon.vertexResource =
+            CreateBufferResource(device, sizeof(OrbitRibbonVertex) * orbitRibbon.vertexCount);
+
+        OrbitRibbonVertex* mappedVB = nullptr;
+        orbitRibbon.vertexResource->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&mappedVB));
+        memcpy(mappedVB, orbitRibbonVerts.data(), sizeof(OrbitRibbonVertex) * orbitRibbon.vertexCount);
+
+        orbitRibbon.vbv.BufferLocation = orbitRibbon.vertexResource->GetGPUVirtualAddress();
+        orbitRibbon.vbv.SizeInBytes = UINT(sizeof(OrbitRibbonVertex) * orbitRibbon.vertexCount);
+        orbitRibbon.vbv.StrideInBytes = sizeof(OrbitRibbonVertex);
     }
 
     // =========================================================

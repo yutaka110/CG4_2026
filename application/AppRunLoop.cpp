@@ -1,6 +1,8 @@
 #include "AppRunLoop.h"
 
 #include <DirectXMath.h>
+#include <algorithm>
+#include <cmath>
 #include <memory>
 
 #include "AppFrameRenderer.h"
@@ -11,6 +13,7 @@
 #include "AppRuntimeState.h"
 #include "AppSceneResources.h"
 #include "EngineContext.h"
+#include "../externals/imgui/imgui.h"
 
 using namespace DirectX;
 using namespace Microsoft::WRL;
@@ -35,6 +38,61 @@ void TransitionSceneDepthIfNeeded(
     currentState = nextState;
 }
 
+Vector3 TransformCoord(const Vector3& point, const Matrix4x4& matrix) {
+    const float x =
+        point.x * matrix.m[0][0] + point.y * matrix.m[1][0] + point.z * matrix.m[2][0] + matrix.m[3][0];
+    const float y =
+        point.x * matrix.m[0][1] + point.y * matrix.m[1][1] + point.z * matrix.m[2][1] + matrix.m[3][1];
+    const float z =
+        point.x * matrix.m[0][2] + point.y * matrix.m[1][2] + point.z * matrix.m[2][2] + matrix.m[3][2];
+    const float w =
+        point.x * matrix.m[0][3] + point.y * matrix.m[1][3] + point.z * matrix.m[2][3] + matrix.m[3][3];
+    if (std::abs(w) <= 0.00001f) {
+        return {x, y, z};
+    }
+    return {x / w, y / w, z / w};
+}
+
+bool IntersectScreenPointWithZPlane(
+    POINT clientPoint,
+    uint32_t windowWidth,
+    uint32_t windowHeight,
+    const Matrix4x4& viewProjection,
+    float planeZ,
+    Vector3& outPosition) {
+    if (windowWidth == 0 || windowHeight == 0) {
+        return false;
+    }
+
+    const float x = (static_cast<float>(clientPoint.x) / static_cast<float>(windowWidth)) * 2.0f - 1.0f;
+    const float y = 1.0f - (static_cast<float>(clientPoint.y) / static_cast<float>(windowHeight)) * 2.0f;
+
+    Matrix4x4 viewProjectionCopy = viewProjection;
+    const Matrix4x4 inverseViewProjection = Inverse(viewProjectionCopy);
+    const Vector3 nearPoint = TransformCoord({x, y, 0.0f}, inverseViewProjection);
+    const Vector3 farPoint = TransformCoord({x, y, 1.0f}, inverseViewProjection);
+    const Vector3 direction = {
+        farPoint.x - nearPoint.x,
+        farPoint.y - nearPoint.y,
+        farPoint.z - nearPoint.z,
+    };
+    if (std::abs(direction.z) <= 0.00001f) {
+        return false;
+    }
+
+    const float t = (planeZ - nearPoint.z) / direction.z;
+    if (t < 0.0f) {
+        return false;
+    }
+
+    outPosition = {
+        nearPoint.x + direction.x * t,
+        nearPoint.y + direction.y * t,
+        planeZ,
+    };
+    return true;
+}
+
 } // namespace
 
 AppRunLoop::AppRunLoop(
@@ -51,6 +109,7 @@ AppRunLoop::AppRunLoop(
     EngineContext& engineContext,
     ge3::core::DescriptorHeapSet& heaps,
     core::Device& dev,
+    HWND hwnd,
     ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap,
     Matrix4x4* wvpData,
     uint32_t windowWidth,
@@ -72,6 +131,7 @@ AppRunLoop::AppRunLoop(
       engineContext_(engineContext),
       heaps_(heaps),
       dev_(dev),
+      hwnd_(hwnd),
       srvDescriptorHeap_(srvDescriptorHeap),
       wvpData_(wvpData),
       windowWidth_(windowWidth),
@@ -171,6 +231,61 @@ void AppRunLoop::RenderFrame() {
     sceneStateManager_.Render(*this);
 }
 
+void AppRunLoop::ProcessIceProjectileMouseLaunch() {
+    if (!runtimeState_.vfx.iceProjectileClickToFire || hwnd_ == nullptr) {
+        previousLeftMouseDown_ = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        return;
+    }
+
+    const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    const bool clicked = leftMouseDown && !previousLeftMouseDown_;
+    previousLeftMouseDown_ = leftMouseDown;
+    if (!clicked || ImGui::GetIO().WantCaptureMouse) {
+        return;
+    }
+
+    POINT cursor{};
+    if (!GetCursorPos(&cursor) || !ScreenToClient(hwnd_, &cursor)) {
+        return;
+    }
+    if (cursor.x < 0 ||
+        cursor.y < 0 ||
+        cursor.x >= static_cast<LONG>(windowWidth_) ||
+        cursor.y >= static_cast<LONG>(windowHeight_)) {
+        return;
+    }
+
+    Vector3 target{};
+    if (!IntersectScreenPointWithZPlane(
+            cursor,
+            windowWidth_,
+            windowHeight_,
+            frameState_.viewProjectionMatrix,
+            0.0f,
+            target)) {
+        return;
+    }
+
+    runtimeState_.vfx.showcaseMode = true;
+    runtimeState_.vfx.autoPlayVfxDemo = false;
+    runtimeState_.vfx.enableParticles = true;
+    runtimeState_.vfx.enableTrails = true;
+    runtimeState_.vfx.enableRings = true;
+    runtimeState_.vfx.enableCylinders = true;
+    runtimeState_.vfx.enableBeams = false;
+    runtimeState_.vfx.enableDistortions = false;
+    runtimeState_.vfx.enableTrailMeshStream = true;
+    runtimeState_.vfx.enableTrailMeshStreamAutoFallback = false;
+    runtimeState_.vfx.trailMeshStreamFallbackActive = false;
+    runtimeState_.vfx.iceProjectileStart = {0.0f, -1.55f, -3.05f};
+    runtimeState_.vfx.iceProjectileTarget = {target.x, target.y, 0.42f};
+    runtimeState_.vfx.iceProjectilePreviewActive = true;
+    runtimeState_.vfx.iceProjectileImpactSpawned = false;
+    runtimeState_.vfx.iceProjectileInstanceId = 0;
+    runtimeState_.vfx.iceProjectileTimer = 0.0f;
+    vfxEngine_.Runtime().ClearInstances();
+}
+
 void AppRunLoop::RenderVfxPreviewFrame() {
     BeginFrameSystems();
 
@@ -236,6 +351,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 particleSystem_.Emit(emitterState);
             }});
     imguiLayer_.EndFrame();
+
+    ProcessIceProjectileMouseLaunch();
 
     scene_.SyncRuntimeState(runtimeState_, frameState_.deltaTime);
     particleSystem_.SetAccelerationField({

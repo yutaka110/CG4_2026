@@ -43,6 +43,18 @@ struct CylinderMeshData {
     UINT vertexCount = 0;
 };
 
+struct SpearMeshData {
+    Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource;
+    D3D12_VERTEX_BUFFER_VIEW vbv{};
+    UINT vertexCount = 0;
+};
+
+struct OrbitRibbonMeshData {
+    Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource;
+    D3D12_VERTEX_BUFFER_VIEW vbv{};
+    UINT vertexCount = 0;
+};
+
 struct GpuMeshResource {
     Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> indexResource;
@@ -240,6 +252,8 @@ public:
     // VFX primitives
     RingMeshData ring{};
     CylinderMeshData cylinder{};
+    SpearMeshData spear{};
+    OrbitRibbonMeshData orbitRibbon{};
 
     // Model
     ModelData modelData{};

@@ -91,6 +91,119 @@ void ApplyLiveTuningToComponent(
     destination.depthFadeSoftness = source.settings->depthFadeSoftness;
 }
 
+Vector3 LerpVector3(const Vector3& a, const Vector3& b, float t) {
+    return {
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+        a.z + (b.z - a.z) * t,
+    };
+}
+
+float SmoothStep(float t) {
+    t = (std::clamp)(t, 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+std::filesystem::path NormalizeEffectPath(const std::filesystem::path& path) {
+    std::error_code error;
+    std::filesystem::path normalized = std::filesystem::weakly_canonical(path, error);
+    if (error) {
+        normalized = std::filesystem::absolute(path, error);
+        if (error) {
+            normalized = path;
+        }
+    }
+    return normalized.lexically_normal();
+}
+
+bool IsLoadedEffectPath(
+    const std::vector<LoadedEffectAsset>& loadedAssets,
+    const std::filesystem::path& path) {
+    const std::filesystem::path normalizedPath = NormalizeEffectPath(path);
+    for (const LoadedEffectAsset& loaded : loadedAssets) {
+        if (NormalizeEffectPath(loaded.path) == normalizedPath) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void UpdateIceProjectilePreview(
+    EffectRuntime& effectRuntime,
+    AppVfxRuntimeState& runtimeState,
+    float deltaTime) {
+    if (!runtimeState.iceProjectilePreviewActive) {
+        return;
+    }
+
+    runtimeState.enableParticles = true;
+    runtimeState.enableRings = true;
+    runtimeState.enableCylinders = true;
+    runtimeState.enableTrails = true;
+
+    constexpr float kTravelDuration = 1.08f;
+    constexpr float kCleanupDelay = 2.08f;
+    Vector3 start = runtimeState.iceProjectileStart;
+    Vector3 end = runtimeState.iceProjectileTarget;
+    if (std::abs(start.z - end.z) < 0.05f || start.z > -1.4f) {
+        start.z = -3.05f;
+        end.z = 0.42f;
+    }
+
+    EffectInstance* projectile = effectRuntime.FindInstance(runtimeState.iceProjectileInstanceId);
+    if (projectile == nullptr && runtimeState.iceProjectileTimer <= 0.0f) {
+        runtimeState.iceProjectileInstanceId = effectRuntime.PlayEffectWithParams(
+            "ice_projectile",
+            start,
+            {0.82f, 0.95f, 1.0f, 1.0f},
+            {1.0f, 1.0f, 1.0f});
+        projectile = effectRuntime.FindInstance(runtimeState.iceProjectileInstanceId);
+    }
+
+    runtimeState.iceProjectileTimer += (std::max)(0.0f, deltaTime);
+    const float travelT = (std::clamp)(runtimeState.iceProjectileTimer / kTravelDuration, 0.0f, 1.0f);
+    const float easedT = travelT * travelT * (2.15f - 1.15f * travelT);
+    Vector3 position = LerpVector3(start, end, easedT);
+    position.y += std::sin(travelT * 3.14159265f) * 0.05f;
+
+    if (projectile != nullptr) {
+        projectile->transform.translate = position;
+        projectile->transform.rotate.z = std::atan2(end.y - start.y, end.x - start.x);
+        projectile->transform.rotate.y = -0.34f;
+        const float depthScale = 2.05f + (0.58f - 2.05f) * easedT;
+        const Vector3 assetScale = projectile->asset != nullptr
+            ? projectile->asset->size
+            : Vector3{1.0f, 1.0f, 1.0f};
+        projectile->transform.scale = {
+            assetScale.x * depthScale,
+            assetScale.y * depthScale,
+            assetScale.z * depthScale,
+        };
+    }
+
+    if (travelT >= 1.0f && !runtimeState.iceProjectileImpactSpawned) {
+        Vector3 impactPosition = end;
+        impactPosition.z -= 0.28f;
+        effectRuntime.PlayEffectWithParams(
+            "ice_impact",
+            impactPosition,
+            {0.72f, 0.92f, 1.0f, 1.0f},
+            {1.0f, 1.0f, 1.0f});
+        if (runtimeState.iceProjectileInstanceId != 0) {
+            effectRuntime.StopEffect(runtimeState.iceProjectileInstanceId);
+            runtimeState.iceProjectileInstanceId = 0;
+        }
+        runtimeState.iceProjectileImpactSpawned = true;
+    }
+
+    if (runtimeState.iceProjectileTimer >= kCleanupDelay) {
+        runtimeState.iceProjectilePreviewActive = false;
+        runtimeState.iceProjectileInstanceId = 0;
+        runtimeState.iceProjectileTimer = 0.0f;
+        runtimeState.iceProjectileImpactSpawned = false;
+    }
+}
+
 void PreserveParticleLiveTuning(
     const EffectAsset& currentAsset,
     EffectAsset& reloadedAsset) {
@@ -357,6 +470,8 @@ void VfxEngine::Update(AppVfxRuntimeState& runtimeState, float deltaTime) {
         }
     }
 
+    UpdateIceProjectilePreview(effectRuntime_, runtimeState, deltaTime);
+
     beamTime_ += deltaTime;
     beam_.SetTime(beamTime_);
     effectRuntime_.Update(deltaTime);
@@ -380,11 +495,40 @@ void VfxEngine::ReloadChangedEffectAssets() {
                 loaded.path,
                 reloaded,
                 effectAuthoringRegistry_)) {
-            if (const EffectAsset* currentAsset = effectSystem_.FindAsset(reloaded.asset.name)) {
-                PreserveLiveTuning(*currentAsset, reloaded.asset);
+            const bool shouldPreserveLiveTuning =
+                reloaded.asset.name != "ice_projectile" &&
+                reloaded.asset.name != "ice_impact";
+            if (shouldPreserveLiveTuning) {
+                if (const EffectAsset* currentAsset = effectSystem_.FindAsset(reloaded.asset.name)) {
+                    PreserveLiveTuning(*currentAsset, reloaded.asset);
+                }
             }
             effectSystem_.RegisterAsset(reloaded.asset, effectAuthoringRegistry_);
             loaded = std::move(reloaded);
+        }
+    }
+
+    const std::filesystem::path effectDirectory{"Resources/effects"};
+    if (!std::filesystem::exists(effectDirectory)) {
+        return;
+    }
+
+    for (const std::filesystem::directory_entry& entry :
+         std::filesystem::directory_iterator(effectDirectory)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".effect") {
+            continue;
+        }
+        if (IsLoadedEffectPath(loadedEffectAssets_, entry.path())) {
+            continue;
+        }
+
+        LoadedEffectAsset loaded{};
+        if (effectAssetLoader_.LoadFile(
+                entry.path(),
+                loaded,
+                effectAuthoringRegistry_)) {
+            effectSystem_.RegisterAsset(loaded.asset, effectAuthoringRegistry_);
+            loadedEffectAssets_.push_back(std::move(loaded));
         }
     }
 }

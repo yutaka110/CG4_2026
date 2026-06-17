@@ -129,6 +129,30 @@ TechniqueRegistry BuildDefaultTechniqueRegistry() {
             "None",
             EffectLayer::AdditiveFx,
             190));
+    registry.Register(
+        MakeTechniqueDescriptor(
+            "SpearMesh",
+            "Spear Mesh",
+            "Primitive",
+            "Additive low-poly spear primitive for sharp projectile heads and directional VFX accents.",
+            EffectTechnique::CylinderMesh,
+            EffectComponentType::Cylinder,
+            "SpearRenderer",
+            "None",
+            EffectLayer::AdditiveFx,
+            195));
+    registry.Register(
+        MakeTechniqueDescriptor(
+            "OrbitRibbon",
+            "Orbit Ribbon",
+            "Primitive",
+            "Procedural short helical ribbons for Hadoken-like rotating projectile energy.",
+            EffectTechnique::CylinderMesh,
+            EffectComponentType::Cylinder,
+            "OrbitRibbonRenderer",
+            "None",
+            EffectLayer::AdditiveFx,
+            196));
     return registry;
 }
 } // namespace

@@ -124,7 +124,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     float turbulence = gScaleAndParams.w;
     float curl = sin(gTime * (2.0f + gEffectParams.z) + (float)id * 0.03125f) * (0.25f + turbulence);
     state.velocity.x += curl * gDeltaTime;
-    state.velocity.y += (0.15f - normalizedAge * 0.2f) * gDeltaTime;
+    state.velocity.y += curl * 0.18f * gDeltaTime;
+    state.velocity *= max(0.0f, 1.0f - gDeltaTime * 0.7f);
     state.position += state.velocity * gDeltaTime;
     gParticleState[id] = state;
 

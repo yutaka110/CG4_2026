@@ -11,8 +11,10 @@
 #include "vfx/BeamRenderer.h"
 #include "vfx/CylinderRenderer.h"
 #include "vfx/DistortionRenderer.h"
+#include "vfx/OrbitRibbonRenderer.h"
 #include "vfx/ParticleRenderer.h"
 #include "vfx/RingRenderer.h"
+#include "vfx/SpearRenderer.h"
 #include "vfx/TrailRenderer.h"
 #include "vfx/VfxResourceResolver.h"
 #include "vfx/VfxResources.h"
@@ -30,13 +32,6 @@ void AppVfxRenderPipeline::RegisterPasses(
     ctx.gpuParticleSystem->DeclareGraphBuffers(*ctx.renderGraph);
 
     const AppVfxRuntimeState& runtimeState = ctx.runtimeState->vfx;
-    if (runtimeState.enableParticles) {
-        ctx.vfxRenderers->particle->RegisterPasses(ctx, vfxResources);
-    }
-    if (runtimeState.enableTrails) {
-        ctx.vfxRenderers->trail->RegisterPasses(ctx, vfxResources);
-    }
-
     ctx.renderGraph->AddPass({
         "VFX.BeginAccumulation",
         ge3::graphics::RenderPassLayer::Vfx,
@@ -48,6 +43,12 @@ void AppVfxRenderPipeline::RegisterPasses(
         [ctx](ge3::graphics::RenderPassContext& passContext) {
             ctx.vfxRenderTargets->BeginVfx(passContext.commandList, ctx.dsv);
         }});
+    if (runtimeState.enableParticles) {
+        ctx.vfxRenderers->particle->RegisterPasses(ctx, vfxResources);
+    }
+    if (runtimeState.enableTrails) {
+        ctx.vfxRenderers->trail->RegisterPasses(ctx, vfxResources);
+    }
     if (runtimeState.enableBeams) {
         if (vfxResources.beam.simulation.usesCompute) {
             ctx.vfxRenderers->beam->RegisterDedicatedPasses(ctx, vfxResources);
@@ -59,6 +60,8 @@ void AppVfxRenderPipeline::RegisterPasses(
         ctx.vfxRenderers->ring->RegisterPasses(ctx, vfxResources);
     }
     if (runtimeState.enableCylinders) {
+        ctx.vfxRenderers->spear->RegisterPasses(ctx, vfxResources);
+        ctx.vfxRenderers->orbitRibbon->RegisterPasses(ctx, vfxResources);
         ctx.vfxRenderers->cylinder->RegisterPasses(ctx, vfxResources);
     }
     if (runtimeState.enableDistortions) {

@@ -78,6 +78,8 @@ public:
     ID3D12PipelineState* GetTrailMeshStreamPSO() const { return trailMeshStreamPso_.Get(); }
     ID3D12PipelineState* GetDistortionSpritePSO() const { return distortionSpritePso_.Get(); }
     ID3D12PipelineState* GetRingPSO() const { return ringPso_.Get(); }
+    ID3D12PipelineState* GetSpearPSO() const { return spearPso_.Get(); }
+    ID3D12PipelineState* GetOrbitRibbonPSO() const { return orbitRibbonPso_.Get(); }
     ID3D12PipelineState* GetCylinderPSO() const { return cylinderPso_.Get(); }
     ID3D12PipelineState* GetSkeletonDebugPSO() const { return skeletonDebugPso_.Get(); }
 
@@ -146,6 +148,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> trailMeshStreamPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> distortionSpritePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> ringPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> spearPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> orbitRibbonPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> cylinderPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> skeletonDebugPso_;
 
@@ -169,6 +173,10 @@ private:
     Microsoft::WRL::ComPtr<IDxcBlob> distortionSpritePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> ringVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> ringPs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> spearVs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> spearPs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> orbitRibbonVs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> orbitRibbonPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> cylinderVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> cylinderPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> skeletonDebugVs_;
