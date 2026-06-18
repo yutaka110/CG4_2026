@@ -28,6 +28,7 @@ VSOutput main(VSInput input)
     float peak = max(max(gColor.r, gColor.g), max(gColor.b, 0.001f));
     float3 hue = gColor.rgb / peak;
     float warmMode = step(0.72f, hue.r) * step(0.42f, hue.g) * step(hue.b, 0.46f);
+    float kiBlueMode = step(0.56f, hue.g) * step(0.56f, hue.b) * step(hue.r, 0.92f);
     float tailMask = (1.0f - smoothstep(0.22f, 0.82f, u)) * smoothstep(0.015f, 0.24f, u);
     float sideSign = input.position.y >= 0.0f ? 1.0f : -1.0f;
     float time = gSpearParams.y;
@@ -35,9 +36,11 @@ VSOutput main(VSInput input)
     float waveB = sin(u * 31.0f - time * 7.4f + sideSign * 1.7f);
     float lick = sin((center + u * 0.35f) * 22.0f + time * 11.2f);
     float tailThin = lerp(1.0f, 0.42f, tailMask * warmMode);
-    float widthPulse = 1.0f + (sin(u * 21.0f - time * 8.9f + sideSign * 0.9f) * 0.18f) * tailMask * warmMode;
-    float bend = (waveA * 0.055f + waveB * 0.03f + lick * 0.02f) * tailMask * warmMode;
-    float stretch = (-0.16f + sin(u * 25.0f + time * 8.7f) * 0.024f) * tailMask * warmMode;
+    tailThin *= lerp(1.0f, 0.32f, tailMask * kiBlueMode);
+    float energyTailMode = saturate(warmMode + kiBlueMode);
+    float widthPulse = 1.0f + (sin(u * 21.0f - time * 8.9f + sideSign * 0.9f) * 0.18f) * tailMask * energyTailMode;
+    float bend = (waveA * 0.055f + waveB * 0.03f + lick * 0.02f) * tailMask * energyTailMode;
+    float stretch = (-0.16f + sin(u * 25.0f + time * 8.7f) * 0.024f) * tailMask * energyTailMode;
     float4 localPosition = input.position;
     localPosition.y *= tailThin;
     localPosition.y *= widthPulse;

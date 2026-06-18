@@ -72,7 +72,8 @@ float4 main(PSInput input) : SV_TARGET
     float kiBlueMode = step(0.56f, gColor.g) * step(0.56f, gColor.b) * step(gColor.r, 0.92f);
     float spearCore = smoothstep(0.46f, 1.0f, x);
     float orbCore = smoothstep(0.24f, 0.44f, x) * (1.0f - smoothstep(0.58f, 0.86f, x) * 0.9f);
-    float coreMask = pow(saturate(center), 4.6f) * lerp(spearCore, orbCore, kiBlueMode);
+    float orbCoreBlend = saturate(kiBlueMode + warmMode);
+    float coreMask = pow(saturate(center), 4.6f) * lerp(spearCore, orbCore, orbCoreBlend);
 
     float flow = Fbm2(float2(x * 4.8f - t * 2.6f, edge * 3.6f + t * 0.72f));
     float lick = Fbm2(float2(x * 9.5f - t * 4.1f, edge * 7.2f - t * 0.44f));
@@ -103,12 +104,18 @@ float4 main(PSInput input) : SV_TARGET
     alpha *= lerp(1.0f, flameCut, rearFlame * warmMode);
     alpha *= lerp(1.0f, 0.16f + warmStrands * 0.58f, rearFlame * warmMode);
     alpha *= lerp(1.0f, outerNoseTrim, kiBlueMode);
+    float kiRearStrands = saturate(warmStrands * 0.48f + flameBands * 0.2f + flow * 0.18f);
+    alpha *= lerp(1.0f, 0.28f + kiRearStrands * 0.32f, rearFlame * kiBlueMode);
+    float kiOrbDistance = length(float2((x - 0.46f) * 1.42f, edge * 1.06f));
+    float kiOrbEnvelope = 1.0f - smoothstep(0.52f, 0.9f, kiOrbDistance);
+    alpha *= lerp(1.0f, saturate(0.16f + kiOrbEnvelope * 0.86f + coreMask * 0.28f), kiBlueMode);
     float3 outerFlame = lerp(float3(1.0f, 0.34f, 0.045f), float3(0.05f, 0.78f, 1.0f), kiBlueMode);
     float3 emberDark = lerp(float3(0.38f, 0.085f, 0.018f), float3(0.005f, 0.08f, 0.18f), kiBlueMode);
     float3 blueHeat = lerp(float3(0.045f, 0.46f, 1.0f), float3(0.18f, 0.94f, 1.0f), kiBlueMode);
     float3 whiteCore = lerp(float3(1.0f, 0.92f, 0.58f), float3(0.86f, 1.0f, 1.0f), kiBlueMode);
 
     float blueZone = saturate(front * (0.78f + center * 0.8f));
+    blueZone *= lerp(1.0f, saturate(0.26f + kiOrbEnvelope * 0.98f), kiBlueMode);
     float orangeZone = saturate(tail * (0.45f + wisps));
     float3 color = lerp(emberDark, outerFlame, orangeZone);
     color = lerp(color, float3(1.0f, 0.78f, 0.18f), flameBands * rearFlame * (1.0f - kiBlueMode) * 0.42f);
