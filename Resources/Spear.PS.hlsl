@@ -66,7 +66,13 @@ float4 main(PSInput input) : SV_TARGET
     float tail = 1.0f - smoothstep(0.08f, 0.85f, x);
     float edgeFade = 1.0f - smoothstep(0.76f, 1.0f, edge);
     float bodyMask = (1.0f - smoothstep(0.58f, 1.0f, edge)) * edgeFade;
-    float coreMask = pow(saturate(center), 4.6f) * smoothstep(0.46f, 1.0f, x);
+    float colorPeak = max(max(input.color.r, input.color.g), max(input.color.b, 0.001f));
+    float3 colorHue = input.color.rgb / colorPeak;
+    float warmMode = step(0.72f, colorHue.r) * step(0.42f, colorHue.g) * step(colorHue.b, 0.46f);
+    float kiBlueMode = step(0.56f, gColor.g) * step(0.56f, gColor.b) * step(gColor.r, 0.92f);
+    float spearCore = smoothstep(0.46f, 1.0f, x);
+    float orbCore = smoothstep(0.24f, 0.44f, x) * (1.0f - smoothstep(0.58f, 0.86f, x) * 0.9f);
+    float coreMask = pow(saturate(center), 4.6f) * lerp(spearCore, orbCore, kiBlueMode);
 
     float flow = Fbm2(float2(x * 4.8f - t * 2.6f, edge * 3.6f + t * 0.72f));
     float lick = Fbm2(float2(x * 9.5f - t * 4.1f, edge * 7.2f - t * 0.44f));
@@ -88,18 +94,14 @@ float4 main(PSInput input) : SV_TARGET
     float hotBody = bodyMask * (0.56f + flow * 0.34f) * (0.58f + front * 0.62f);
     hotBody *= lerp(1.0f, 0.34f + flameBands * 1.55f, rearFlame);
 
-    float colorPeak = max(max(input.color.r, input.color.g), max(input.color.b, 0.001f));
-    float3 colorHue = input.color.rgb / colorPeak;
-    float warmMode = step(0.72f, colorHue.r) * step(0.42f, colorHue.g) * step(colorHue.b, 0.46f);
-    wisps *= lerp(1.0f, 0.48f + warmStrands * 1.38f, rearFlame * warmMode);
-    hotBody *= lerp(1.0f, 0.2f + warmStrands * 1.45f, rearFlame * warmMode);
-    float kiBlueMode = step(0.56f, gColor.g) * step(0.56f, gColor.b) * step(gColor.r, 0.92f);
+    wisps *= lerp(1.0f, 0.22f + warmStrands * 0.78f, rearFlame * warmMode);
+    hotBody *= lerp(1.0f, 0.08f + warmStrands * 0.76f, rearFlame * warmMode);
     float outerNoseTrim = 1.0f - smoothstep(0.88f, 0.985f, x) * smoothstep(0.18f, 0.82f, center);
     float alpha = saturate((hotBody + wisps * 0.72f + coreMask * 0.9f) * input.color.a);
     alpha *= lerp(1.0f, 0.58f + flameBands * 0.7f, rearFlame * (1.0f - kiBlueMode));
     float flameCut = lerp(0.62f, 1.18f, saturate(flameBands * 0.72f + flow * 0.32f + lick * 0.22f));
     alpha *= lerp(1.0f, flameCut, rearFlame * warmMode);
-    alpha *= lerp(1.0f, 0.42f + warmStrands * 0.98f, rearFlame * warmMode);
+    alpha *= lerp(1.0f, 0.16f + warmStrands * 0.58f, rearFlame * warmMode);
     alpha *= lerp(1.0f, outerNoseTrim, kiBlueMode);
     float3 outerFlame = lerp(float3(1.0f, 0.34f, 0.045f), float3(0.05f, 0.78f, 1.0f), kiBlueMode);
     float3 emberDark = lerp(float3(0.38f, 0.085f, 0.018f), float3(0.005f, 0.08f, 0.18f), kiBlueMode);
@@ -110,7 +112,7 @@ float4 main(PSInput input) : SV_TARGET
     float orangeZone = saturate(tail * (0.45f + wisps));
     float3 color = lerp(emberDark, outerFlame, orangeZone);
     color = lerp(color, float3(1.0f, 0.78f, 0.18f), flameBands * rearFlame * (1.0f - kiBlueMode) * 0.42f);
-    color = lerp(color, float3(1.0f, 0.64f, 0.08f), warmStrands * rearFlame * warmMode * 0.58f);
+    color = lerp(color, float3(1.0f, 0.52f, 0.06f), warmStrands * rearFlame * warmMode * 0.28f);
     color = lerp(color, blueHeat, blueZone);
     color = lerp(color, whiteCore, coreMask);
     color += outerFlame * wisps * lerp(0.75f, 0.38f, kiBlueMode);

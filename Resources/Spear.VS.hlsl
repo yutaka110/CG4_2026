@@ -34,10 +34,10 @@ VSOutput main(VSInput input)
     float waveA = sin(u * 17.0f + time * 9.6f);
     float waveB = sin(u * 31.0f - time * 7.4f + sideSign * 1.7f);
     float lick = sin((center + u * 0.35f) * 22.0f + time * 11.2f);
-    float tailThin = lerp(1.0f, 0.62f, tailMask * warmMode);
+    float tailThin = lerp(1.0f, 0.42f, tailMask * warmMode);
     float widthPulse = 1.0f + (sin(u * 21.0f - time * 8.9f + sideSign * 0.9f) * 0.18f) * tailMask * warmMode;
-    float bend = (waveA * 0.105f + waveB * 0.055f + lick * 0.04f) * tailMask * warmMode;
-    float stretch = sin(u * 25.0f + time * 8.7f) * 0.07f * tailMask * warmMode;
+    float bend = (waveA * 0.055f + waveB * 0.03f + lick * 0.02f) * tailMask * warmMode;
+    float stretch = (-0.16f + sin(u * 25.0f + time * 8.7f) * 0.024f) * tailMask * warmMode;
     float4 localPosition = input.position;
     localPosition.y *= tailThin;
     localPosition.y *= widthPulse;

@@ -25,20 +25,21 @@ VSOutput main(VSInput input)
     const float t = saturate(input.texcoord.x);
     const float edge = input.position.y;
     const float ribbonIndex = input.position.z;
-    const float phaseOffset = ribbonIndex * 2.0943951f;
-    const float flow = gRibbonParams0.w + phaseOffset + t * gRibbonParams1.y;
-    const float flutter = sin(t * 18.0f + gRibbonParams0.w * 1.7f + phaseOffset) * gRibbonParams1.z;
-    const float rear = smoothstep(0.05f, 0.72f, t);
-    const float head = 1.0f - smoothstep(0.08f, 0.32f, t);
-    const float radius = gRibbonParams0.x * (0.86f + head * 0.34f - rear * 0.18f);
-    const float width = gRibbonParams0.y * (0.72f + head * 0.58f) * (1.0f - smoothstep(0.86f, 1.0f, t) * 0.75f);
+    const float phaseOffset = ribbonIndex * 1.5707963f;
+    const float arcSpan = 1.42f + ribbonIndex * 0.18f;
+    const float flow = gRibbonParams0.w + phaseOffset + (t - 0.5f) * arcSpan;
+    const float flutter = sin(t * 14.0f + gRibbonParams0.w * 1.45f + phaseOffset) * gRibbonParams1.z;
+    const float arcCenter = 1.0f - abs(t * 2.0f - 1.0f);
+    const float radius = gRibbonParams0.x * (0.72f + arcCenter * 0.14f);
+    const float width = gRibbonParams0.y * (0.7f + arcCenter * 0.85f);
 
     const float angle = flow + flutter;
     const float s = sin(angle);
     const float c = cos(angle);
-    const float x = lerp(0.34f, -gRibbonParams0.z, t);
-    const float y = c * radius + edge * width * (0.58f + 0.42f * abs(s));
-    const float z = s * radius * 0.58f + edge * width * 0.28f * sign(s);
+    const float tilt = (ribbonIndex - 1.5f) * 0.22f;
+    const float x = lerp(0.06f, -gRibbonParams0.z * 0.18f, t) + sin(flow * 0.7f + ribbonIndex) * 0.018f + c * radius * tilt;
+    const float y = c * radius * (0.82f - abs(tilt) * 0.36f) + s * radius * tilt + edge * width * (0.58f + 0.42f * abs(s));
+    const float z = s * radius * (0.78f + abs(tilt) * 0.25f) - c * radius * tilt * 0.5f + edge * width * 0.28f * sign(s);
 
     VSOutput output;
     output.position = mul(float4(x, y, z, 1.0f), gWorldViewProjection);
