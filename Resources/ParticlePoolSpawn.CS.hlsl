@@ -198,13 +198,19 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
     outward /= outwardLength;
 
+    const float spriteBaseScale = 0.08f + seed * 0.08f;
+    const float emissive = max(request.scaleAndParams.z, 0.01f);
+
     ParticleState state;
     state.position = request.emitterParams.xyz + spawnOffset;
     state.age = 0.0f;
     state.velocity = outward * (0.42f + seed * 0.55f);
     state.lifetime = max(lifetime, 0.001f);
-    state.color = request.tint;
-    state.scale = float3(0.08f + seed * 0.08f, 0.08f + seed * 0.08f, 1.0f);
+    state.color = float4(request.tint.rgb * emissive, request.tint.a);
+    state.scale = float3(
+        spriteBaseScale * max(request.scaleAndParams.x, 0.001f),
+        spriteBaseScale * max(request.scaleAndParams.y, 0.001f),
+        1.0f);
     state.seed = seed;
     state.shape = float4(request.particleShapeParams.y > 0.5f ? seed * 6.2831853f : 0.0f, 0.0f, authoredScale, 1.0f);
     state.emitterKey = request.emitterKey;

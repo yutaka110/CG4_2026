@@ -26,9 +26,9 @@ float4 main(PSInput input) : SV_TARGET
     const float ribbonIndex = input.texcoord.w;
 
     const float edgeFade = 1.0f - smoothstep(0.34f, 1.0f, edge);
-    const float endFade = smoothstep(0.0f, 0.16f, t) * (1.0f - smoothstep(0.82f, 1.0f, t));
+    const float endFade = smoothstep(0.0f, 0.22f, t) * (1.0f - smoothstep(0.72f, 1.0f, t));
     const float arcCore = pow(saturate(1.0f - abs(t * 2.0f - 1.0f)), 0.72f);
-    const float broken = lerp(0.5f, 1.0f, Hash(float2(floor(t * 12.0f), ribbonIndex + floor(gRibbonParams0.w * 2.0f))));
+    const float broken = lerp(0.6f, 1.0f, Hash(float2(floor(t * 9.0f), ribbonIndex + floor(gRibbonParams0.w * 2.0f))));
     const float frontBoost = lerp(0.42f, 1.0f, front);
     float alpha = input.color.a * edgeFade * endFade * arcCore * broken * frontBoost;
 
