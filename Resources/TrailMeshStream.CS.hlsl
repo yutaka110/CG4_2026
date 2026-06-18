@@ -60,9 +60,10 @@ float3 EnergyWobble(float t)
     float3 lift = NormalizeOr(cross(forward, side), float3(0.0f, 0.0f, 1.0f));
     float phaseA = t * 19.0f + gTime * 8.6f;
     float phaseB = t * 31.0f - gTime * 5.4f;
-    float amp = max(gWidth * 2.15f, 0.038f) * rearMask * projectile;
-    float longitudinal = sin(t * 23.0f - gTime * 7.2f) * amp * 0.22f;
-    return side * sin(phaseA) * amp + lift * sin(phaseB) * amp * 0.38f + forward * longitudinal;
+    float amp = max(gWidth * 2.65f, 0.052f) * rearMask * projectile;
+    float longitudinal = sin(t * 23.0f - gTime * 7.2f) * amp * 0.3f;
+    float twist = sin(t * 47.0f + gTime * 11.0f) * amp * 0.28f;
+    return side * (sin(phaseA) * amp + twist) + lift * sin(phaseB) * amp * 0.5f + forward * longitudinal;
 }
 
 [numthreads(256, 1, 1)]

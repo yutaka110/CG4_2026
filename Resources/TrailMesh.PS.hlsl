@@ -42,8 +42,8 @@ float4 main(PSIn input) : SV_TARGET
     float center = 1.0f - abs(input.texcoord.x - 0.5f) * 2.0f;
     float tail = pow(saturate(1.0f - input.texcoord.y), max(gTrailTailFade, 0.1f));
     float rear = saturate(input.texcoord.y);
-    float wobble = sin(input.texcoord.y * 43.0f + time * 7.5f) * 0.019f;
-    float wobble2 = sin(input.texcoord.y * 27.0f - time * 5.2f + 1.7f) * 0.014f;
+    float wobble = sin(input.texcoord.y * 43.0f + time * 7.5f) * 0.026f;
+    float wobble2 = sin(input.texcoord.y * 27.0f - time * 5.2f + 1.7f) * 0.021f;
     float streaks =
         StreakBand(input.texcoord.x, 0.5f + wobble, 0.009f) * 0.28f +
         StreakBand(input.texcoord.x, 0.42f - wobble * 0.8f, 0.008f) * 0.26f +

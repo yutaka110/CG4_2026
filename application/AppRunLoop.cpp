@@ -297,10 +297,20 @@ void AppRunLoop::ProcessIceProjectileMouseLaunch() {
         }
     }
 
+    const Vector3 shotStart = {0.0f, -1.55f, -3.05f};
+    const Vector3 shotTarget = {target.x, target.y, 0.42f};
+    const Vector3 launchNdc = TransformCoord(shotStart, frameState_.viewProjectionMatrix);
+    const float cursorNdcX =
+        (static_cast<float>(cursor.x) / static_cast<float>(windowWidth_)) * 2.0f - 1.0f;
+    const float cursorNdcY =
+        1.0f - (static_cast<float>(cursor.y) / static_cast<float>(windowHeight_)) * 2.0f;
+
     *slot = {};
     slot->active = true;
-    slot->start = {0.0f, -1.55f, -3.05f};
-    slot->target = {target.x, target.y, 0.42f};
+    slot->hasExplicitRotationZ = true;
+    slot->rotationZ = std::atan2(cursorNdcY - launchNdc.y, cursorNdcX - launchNdc.x);
+    slot->start = shotStart;
+    slot->target = shotTarget;
 }
 
 void AppRunLoop::RenderVfxPreviewFrame() {

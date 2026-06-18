@@ -229,7 +229,9 @@ void UpdateIceProjectilePreview(
 
         if (projectile != nullptr) {
             projectile->transform.translate = position;
-            projectile->transform.rotate.z = std::atan2(end.y - start.y, end.x - start.x);
+            projectile->transform.rotate.z = shot.hasExplicitRotationZ
+                ? shot.rotationZ
+                : std::atan2(end.y - start.y, end.x - start.x);
             projectile->transform.rotate.y = -0.34f;
             const float depthScale = 2.05f + (0.58f - 2.05f) * easedT;
             const Vector3 assetScale = projectile->asset != nullptr

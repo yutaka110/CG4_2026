@@ -147,6 +147,8 @@ struct AppVfxRuntimeState {
         bool impactSpawned = false;
         uint32_t instanceId = 0;
         float timer = 0.0f;
+        bool hasExplicitRotationZ = false;
+        float rotationZ = 0.0f;
         Vector3 start = {0.0f, -1.55f, -3.05f};
         Vector3 target = {2.5f, 0.7f, 0.42f};
     };
