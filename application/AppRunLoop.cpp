@@ -277,13 +277,30 @@ void AppRunLoop::ProcessIceProjectileMouseLaunch() {
     runtimeState_.vfx.enableTrailMeshStream = true;
     runtimeState_.vfx.enableTrailMeshStreamAutoFallback = false;
     runtimeState_.vfx.trailMeshStreamFallbackActive = false;
-    runtimeState_.vfx.iceProjectileStart = {0.0f, -1.55f, -3.05f};
-    runtimeState_.vfx.iceProjectileTarget = {target.x, target.y, 0.42f};
-    runtimeState_.vfx.iceProjectilePreviewActive = true;
-    runtimeState_.vfx.iceProjectileImpactSpawned = false;
-    runtimeState_.vfx.iceProjectileInstanceId = 0;
-    runtimeState_.vfx.iceProjectileTimer = 0.0f;
-    vfxEngine_.Runtime().ClearInstances();
+
+    AppVfxRuntimeState::IceProjectileShotState* slot = nullptr;
+    for (AppVfxRuntimeState::IceProjectileShotState& shot : runtimeState_.vfx.iceProjectileShots) {
+        if (!shot.active) {
+            slot = &shot;
+            break;
+        }
+    }
+    if (slot == nullptr) {
+        slot = &runtimeState_.vfx.iceProjectileShots.front();
+        for (AppVfxRuntimeState::IceProjectileShotState& shot : runtimeState_.vfx.iceProjectileShots) {
+            if (shot.timer > slot->timer) {
+                slot = &shot;
+            }
+        }
+        if (slot->instanceId != 0) {
+            vfxEngine_.Runtime().StopEffect(slot->instanceId);
+        }
+    }
+
+    *slot = {};
+    slot->active = true;
+    slot->start = {0.0f, -1.55f, -3.05f};
+    slot->target = {target.x, target.y, 0.42f};
 }
 
 void AppRunLoop::RenderVfxPreviewFrame() {

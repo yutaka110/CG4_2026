@@ -128,11 +128,54 @@ bool IsLoadedEffectPath(
     return false;
 }
 
+AppVfxRuntimeState::IceProjectileShotState* FindReusableIceProjectileShot(
+    EffectRuntime& effectRuntime,
+    AppVfxRuntimeState& runtimeState) {
+    for (AppVfxRuntimeState::IceProjectileShotState& shot : runtimeState.iceProjectileShots) {
+        if (!shot.active) {
+            return &shot;
+        }
+    }
+
+    AppVfxRuntimeState::IceProjectileShotState* oldest = &runtimeState.iceProjectileShots.front();
+    for (AppVfxRuntimeState::IceProjectileShotState& shot : runtimeState.iceProjectileShots) {
+        if (shot.timer > oldest->timer) {
+            oldest = &shot;
+        }
+    }
+    if (oldest->instanceId != 0) {
+        effectRuntime.StopEffect(oldest->instanceId);
+    }
+    *oldest = {};
+    return oldest;
+}
+
+void EnqueueIceProjectileShot(
+    EffectRuntime& effectRuntime,
+    AppVfxRuntimeState& runtimeState,
+    const Vector3& start,
+    const Vector3& target) {
+    AppVfxRuntimeState::IceProjectileShotState* shot =
+        FindReusableIceProjectileShot(effectRuntime, runtimeState);
+    if (shot == nullptr) {
+        return;
+    }
+
+    *shot = {};
+    shot->active = true;
+    shot->start = start;
+    shot->target = target;
+}
+
 void UpdateIceProjectilePreview(
     EffectRuntime& effectRuntime,
     AppVfxRuntimeState& runtimeState,
     float deltaTime) {
-    if (!runtimeState.iceProjectilePreviewActive) {
+    bool hasActiveShot = runtimeState.iceProjectilePreviewActive;
+    for (const AppVfxRuntimeState::IceProjectileShotState& shot : runtimeState.iceProjectileShots) {
+        hasActiveShot = hasActiveShot || shot.active;
+    }
+    if (!hasActiveShot) {
         return;
     }
 
@@ -143,64 +186,83 @@ void UpdateIceProjectilePreview(
 
     constexpr float kTravelDuration = 1.08f;
     constexpr float kCleanupDelay = 2.08f;
-    Vector3 start = runtimeState.iceProjectileStart;
-    Vector3 end = runtimeState.iceProjectileTarget;
-    if (std::abs(start.z - end.z) < 0.05f || start.z > -1.4f) {
-        start.z = -3.05f;
-        end.z = 0.42f;
-    }
 
-    EffectInstance* projectile = effectRuntime.FindInstance(runtimeState.iceProjectileInstanceId);
-    if (projectile == nullptr && runtimeState.iceProjectileTimer <= 0.0f) {
-        runtimeState.iceProjectileInstanceId = effectRuntime.PlayEffectWithParams(
-            "ice_projectile",
-            start,
-            {0.82f, 0.95f, 1.0f, 1.0f},
-            {1.0f, 1.0f, 1.0f});
-        projectile = effectRuntime.FindInstance(runtimeState.iceProjectileInstanceId);
-    }
-
-    runtimeState.iceProjectileTimer += (std::max)(0.0f, deltaTime);
-    const float travelT = (std::clamp)(runtimeState.iceProjectileTimer / kTravelDuration, 0.0f, 1.0f);
-    const float easedT = travelT * travelT * (2.15f - 1.15f * travelT);
-    Vector3 position = LerpVector3(start, end, easedT);
-    position.y += std::sin(travelT * 3.14159265f) * 0.05f;
-
-    if (projectile != nullptr) {
-        projectile->transform.translate = position;
-        projectile->transform.rotate.z = std::atan2(end.y - start.y, end.x - start.x);
-        projectile->transform.rotate.y = -0.34f;
-        const float depthScale = 2.05f + (0.58f - 2.05f) * easedT;
-        const Vector3 assetScale = projectile->asset != nullptr
-            ? projectile->asset->size
-            : Vector3{1.0f, 1.0f, 1.0f};
-        projectile->transform.scale = {
-            assetScale.x * depthScale,
-            assetScale.y * depthScale,
-            assetScale.z * depthScale,
-        };
-    }
-
-    if (travelT >= 1.0f && !runtimeState.iceProjectileImpactSpawned) {
-        Vector3 impactPosition = end;
-        impactPosition.z -= 0.28f;
-        effectRuntime.PlayEffectWithParams(
-            "ice_impact",
-            impactPosition,
-            {0.72f, 0.92f, 1.0f, 1.0f},
-            {1.0f, 1.0f, 1.0f});
-        if (runtimeState.iceProjectileInstanceId != 0) {
-            effectRuntime.StopEffect(runtimeState.iceProjectileInstanceId);
-            runtimeState.iceProjectileInstanceId = 0;
-        }
-        runtimeState.iceProjectileImpactSpawned = true;
-    }
-
-    if (runtimeState.iceProjectileTimer >= kCleanupDelay) {
+    if (runtimeState.iceProjectilePreviewActive) {
+        EnqueueIceProjectileShot(
+            effectRuntime,
+            runtimeState,
+            runtimeState.iceProjectileStart,
+            runtimeState.iceProjectileTarget);
         runtimeState.iceProjectilePreviewActive = false;
         runtimeState.iceProjectileInstanceId = 0;
         runtimeState.iceProjectileTimer = 0.0f;
         runtimeState.iceProjectileImpactSpawned = false;
+    }
+
+    for (AppVfxRuntimeState::IceProjectileShotState& shot : runtimeState.iceProjectileShots) {
+        if (!shot.active) {
+            continue;
+        }
+
+        Vector3 start = shot.start;
+        Vector3 end = shot.target;
+        if (std::abs(start.z - end.z) < 0.05f || start.z > -1.4f) {
+            start.z = -3.05f;
+            end.z = 0.42f;
+        }
+
+        EffectInstance* projectile = effectRuntime.FindInstance(shot.instanceId);
+        if (projectile == nullptr && shot.timer <= 0.0f) {
+            shot.instanceId = effectRuntime.PlayEffectWithParams(
+                "ice_projectile",
+                start,
+                {0.82f, 0.95f, 1.0f, 1.0f},
+                {1.0f, 1.0f, 1.0f});
+            projectile = effectRuntime.FindInstance(shot.instanceId);
+        }
+
+        shot.timer += (std::max)(0.0f, deltaTime);
+        const float travelT = (std::clamp)(shot.timer / kTravelDuration, 0.0f, 1.0f);
+        const float easedT = travelT * travelT * (2.15f - 1.15f * travelT);
+        Vector3 position = LerpVector3(start, end, easedT);
+        position.y += std::sin(travelT * 3.14159265f) * 0.05f;
+
+        if (projectile != nullptr) {
+            projectile->transform.translate = position;
+            projectile->transform.rotate.z = std::atan2(end.y - start.y, end.x - start.x);
+            projectile->transform.rotate.y = -0.34f;
+            const float depthScale = 2.05f + (0.58f - 2.05f) * easedT;
+            const Vector3 assetScale = projectile->asset != nullptr
+                ? projectile->asset->size
+                : Vector3{1.0f, 1.0f, 1.0f};
+            projectile->transform.scale = {
+                assetScale.x * depthScale,
+                assetScale.y * depthScale,
+                assetScale.z * depthScale,
+            };
+        }
+
+        if (travelT >= 1.0f && !shot.impactSpawned) {
+            Vector3 impactPosition = end;
+            impactPosition.z -= 0.28f;
+            effectRuntime.PlayEffectWithParams(
+                "ice_impact",
+                impactPosition,
+                {0.72f, 0.92f, 1.0f, 1.0f},
+                {1.0f, 1.0f, 1.0f});
+            if (shot.instanceId != 0) {
+                effectRuntime.StopEffect(shot.instanceId);
+                shot.instanceId = 0;
+            }
+            shot.impactSpawned = true;
+        }
+
+        if (shot.timer >= kCleanupDelay) {
+            if (shot.instanceId != 0) {
+                effectRuntime.StopEffect(shot.instanceId);
+            }
+            shot = {};
+        }
     }
 }
 

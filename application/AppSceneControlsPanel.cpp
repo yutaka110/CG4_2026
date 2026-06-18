@@ -122,6 +122,16 @@ void ApplyVfxShowcaseMode(AppRuntimeState& runtimeState) {
     runtimeState.pointLightData.radius = 6.0f;
     runtimeState.pointLightData.decay = 2.0f;
 }
+
+void ResetIceProjectileShots(AppVfxRuntimeState& vfxState) {
+    vfxState.iceProjectilePreviewActive = false;
+    vfxState.iceProjectileImpactSpawned = false;
+    vfxState.iceProjectileInstanceId = 0;
+    vfxState.iceProjectileTimer = 0.0f;
+    for (AppVfxRuntimeState::IceProjectileShotState& shot : vfxState.iceProjectileShots) {
+        shot = {};
+    }
+}
 } // namespace
 
 void DrawSceneLightingControlsPanel(
@@ -475,6 +485,9 @@ void DrawVfxRuntimeControlsPanel(
         runtimeState.vfx.iceProjectileInstanceId = 0;
         runtimeState.vfx.iceProjectileTimer = 0.0f;
         effectRuntime.ClearInstances();
+        for (AppVfxRuntimeState::IceProjectileShotState& shot : runtimeState.vfx.iceProjectileShots) {
+            shot = {};
+        }
     }
     if (ImGui::Button("Play hit_plane_burst")) {
         runtimeState.vfx.enableParticles = true;
@@ -513,6 +526,7 @@ void DrawVfxRuntimeControlsPanel(
         runtimeState.vfx.enableDistortions = false;
         runtimeState.emitter.transform.translate = FrontHitEffectPosition(runtimeState);
         effectRuntime.ClearInstances();
+        ResetIceProjectileShots(runtimeState.vfx);
         effectRuntime.PlayEffectWithParams(
             "hit_ring_plane_combo",
             runtimeState.emitter.transform.translate,
@@ -531,6 +545,7 @@ void DrawVfxRuntimeControlsPanel(
         runtimeState.vfx.enableDistortions = false;
         runtimeState.emitter.transform.translate = FrontHitEffectPosition(runtimeState);
         effectRuntime.ClearInstances();
+        ResetIceProjectileShots(runtimeState.vfx);
         effectRuntime.PlayEffectWithParams(
             "hit_cylinder",
             runtimeState.emitter.transform.translate,
@@ -549,6 +564,7 @@ void DrawVfxRuntimeControlsPanel(
         runtimeState.vfx.enableDistortions = false;
         runtimeState.emitter.transform.translate = FrontHitEffectPosition(runtimeState);
         effectRuntime.ClearInstances();
+        ResetIceProjectileShots(runtimeState.vfx);
         effectRuntime.PlayEffectWithParams(
             "hit_cylinder_combo",
             runtimeState.emitter.transform.translate,
@@ -567,6 +583,7 @@ void DrawVfxRuntimeControlsPanel(
         runtimeState.vfx.enableCylinders = false;
         runtimeState.emitter.transform.translate = FrontHitEffectPosition(runtimeState);
         effectRuntime.ClearInstances();
+        ResetIceProjectileShots(runtimeState.vfx);
         effectRuntime.PlayEffectWithParams(
             "hit_plane_burst",
             runtimeState.emitter.transform.translate,
@@ -596,10 +613,7 @@ void DrawVfxRuntimeControlsPanel(
     }
     if (ImGui::Button("Clear Effects")) {
         DisableHeldHitEffects(runtimeState, effectRuntime);
-        runtimeState.vfx.iceProjectilePreviewActive = false;
-        runtimeState.vfx.iceProjectileImpactSpawned = false;
-        runtimeState.vfx.iceProjectileInstanceId = 0;
-        runtimeState.vfx.iceProjectileTimer = 0.0f;
+        ResetIceProjectileShots(runtimeState.vfx);
         effectRuntime.ClearInstances();
     }
 }
