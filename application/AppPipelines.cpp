@@ -1012,7 +1012,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     compositeParams[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     compositeParams[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     compositeParams[3].Constants.ShaderRegister = 0;
-    compositeParams[3].Constants.Num32BitValues = 8;
+    compositeParams[3].Constants.Num32BitValues = 16;
 
     D3D12_ROOT_SIGNATURE_DESC compositeRootDesc{};
     compositeRootDesc.NumParameters = _countof(compositeParams);

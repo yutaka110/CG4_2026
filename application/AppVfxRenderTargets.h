@@ -64,7 +64,7 @@ public:
         ID3D12RootSignature* rootSignature,
         ID3D12PipelineState* pipelineState,
         std::string_view postColorResourceName,
-        const float compositeParams[8]);
+        const float compositeParams[16]);
     void ExecutePostProcessPass(
         ID3D12GraphicsCommandList* commandList,
         std::string_view outputResourceName,
@@ -73,7 +73,7 @@ public:
         std::string_view inputResourceName,
         std::string_view secondaryResourceName,
         std::string_view tertiaryResourceName,
-        const float passParams[8]);
+        const float passParams[16]);
     void ExecuteDebugPreviewPass(
         ID3D12GraphicsCommandList* commandList,
         std::string_view outputResourceName,
@@ -82,7 +82,7 @@ public:
         D3D12_GPU_DESCRIPTOR_HANDLE inputHandle,
         D3D12_GPU_DESCRIPTOR_HANDLE secondaryHandle,
         D3D12_GPU_DESCRIPTOR_HANDLE tertiaryHandle,
-        const float passParams[8]);
+        const float passParams[16]);
     D3D12_GPU_DESCRIPTOR_HANDLE GetSrvHandle(std::string_view name) const;
     bool GetTargetSize(std::string_view name, uint32_t& width, uint32_t& height) const;
 

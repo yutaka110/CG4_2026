@@ -13,6 +13,14 @@ cbuffer AccretionParams : register(b0)
     float gTurbulence;
     float gChromaticAberration;
     float gCoreSize;
+    float gCenterX;
+    float gCenterY;
+    float gFlowSpeed;
+    float gRoadDepthFade;
+    float gCoreDarkness;
+    float gGuideOpacity;
+    float gLensStrength;
+    float gGuideWidth;
 };
 
 struct PSInput
@@ -26,9 +34,9 @@ float3 Tonemap(float3 color)
     return tanh(max(color, 0.0f));
 }
 
-float3 AccretionField(float2 uv, float time, float aspect, float turbulence)
+float3 AccretionField(float2 uv, float2 center, float time, float aspect, float turbulence)
 {
-    float2 p = uv - 0.5f;
+    float2 p = uv - center;
     p.x *= max(aspect, 0.1f);
 
     float z = 0.0f;
@@ -79,7 +87,9 @@ float3 SampleSceneChromatic(float2 uv, float2 offset, float split)
 float4 main(PSInput input) : SV_TARGET
 {
     float2 uv = saturate(input.uv);
-    float2 centered = uv - 0.5f;
+    float2 center = saturate(float2(gCenterX, gCenterY));
+    float time = gTime * max(gFlowSpeed, 0.0f);
+    float2 centered = uv - center;
     centered.x *= max(gAspect, 0.1f);
 
     float radius = max(gRadius, 0.05f);
@@ -90,29 +100,32 @@ float4 main(PSInput input) : SV_TARGET
     float2 lensDir = centered / max(length(centered), 0.001f);
     float lensMask = smoothstep(2.1f, 0.32f, radial);
     float bend = lensMask * (0.022f / max(radial * radial + 0.06f, 0.001f));
-    float2 lensUv = uv - lensDir * bend * gIntensity;
+    float2 lensUv = uv - lensDir * bend * gIntensity * max(gLensStrength, 0.0f);
     float3 base = SampleSceneChromatic(uv, lensUv - uv, gChromaticAberration * 0.5f);
 
-    float3 raymarch = AccretionField(uv, gTime, gAspect, max(gTurbulence, 0.0f));
+    float3 raymarch = AccretionField(uv, center, time, gAspect, max(gTurbulence, 0.0f));
 
-    float diskY = abs(centered.y) / max(radius * 0.18f, 0.001f);
+    float guideWidth = max(gGuideWidth, 0.01f);
+    float diskY = abs(centered.y) / max(radius * guideWidth, 0.001f);
     float diskX = abs(centered.x) / max(radius * diskStretch, 0.001f);
     float diskMask = exp(-diskY * diskY * 1.8f) * smoothstep(1.45f, 0.05f, diskX);
     float ring = exp(-abs(radial - 1.0f) * 12.0f);
     float innerRing = exp(-abs(radial - 0.72f) * 22.0f);
-    float outerGlow = exp(-max(radial - 1.0f, 0.0f) * 2.0f) * smoothstep(2.1f, 0.6f, radial);
+    float roadFade = lerp(1.0f, smoothstep(2.25f, 0.35f, radial), saturate(gRoadDepthFade));
+    float outerGlow = exp(-max(radial - 1.0f, 0.0f) * 2.0f) * smoothstep(2.1f, 0.6f, radial) * roadFade;
 
-    float swirl = sin(atan2(centered.y, centered.x) * 5.0f + gTime * 1.7f + radial * 8.0f);
-    float streamer = saturate(diskMask * (0.55f + raymarch.r * 1.4f + swirl * 0.18f));
+    float swirl = sin(atan2(centered.y, centered.x) * 5.0f + time * 1.7f + radial * 8.0f);
+    float streamer = saturate(diskMask * roadFade * (0.55f + raymarch.r * 1.4f + swirl * 0.18f));
     float3 diskColor = lerp(float3(0.15f, 0.45f, 1.0f), float3(1.0f, 0.42f, 0.08f), saturate(uv.x + raymarch.g * 0.25f));
     diskColor = lerp(diskColor, float3(1.0f, 0.92f, 0.72f), saturate(ring * 0.7f + streamer * 0.55f));
 
-    float3 glow = diskColor * (streamer * 1.7f + ring * 2.7f + innerRing * 0.85f);
+    float guideOpacity = max(gGuideOpacity, 0.0f);
+    float3 glow = diskColor * (streamer * 1.7f * guideOpacity + ring * 2.7f + innerRing * 0.85f);
     glow += float3(0.35f, 0.8f, 1.0f) * outerGlow * raymarch.b * 1.5f;
 
     float core = smoothstep(coreSize * 1.18f, coreSize * 0.78f, length(centered));
     float photonRim = exp(-abs(radial - coreSize / radius * 1.45f) * 28.0f);
-    float3 color = base * (1.0f - core * 0.96f);
+    float3 color = base * (1.0f - core * saturate(gCoreDarkness));
     color += glow * gIntensity;
     color += float3(0.9f, 0.96f, 1.0f) * photonRim * gIntensity * 0.65f;
     color += gVfxAccumulation.Sample(gSampler, uv).rgb * 0.2f;

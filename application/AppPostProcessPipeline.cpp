@@ -63,15 +63,13 @@ ID3D12PipelineState* ResolvePostProcessPso(const AppPipelines& pipelines, const 
     return nullptr;
 }
 
-void BuildPassParams(const PostProcessPass& postPass, float passParams[8]) {
+constexpr uint32_t kPostProcessParamCount = 16;
+
+void BuildPassParams(const PostProcessPass& postPass, float passParams[kPostProcessParamCount]) {
+    for (uint32_t i = 0; i < kPostProcessParamCount; ++i) {
+        passParams[i] = 0.0f;
+    }
     passParams[0] = postPass.intensity;
-    passParams[1] = 0.0f;
-    passParams[2] = 0.0f;
-    passParams[3] = 0.0f;
-    passParams[4] = 0.0f;
-    passParams[5] = 0.0f;
-    passParams[6] = 0.0f;
-    passParams[7] = 0.0f;
 
     if (postPass.pipeline == "BloomExtract") {
         passParams[1] = postPass.parameters.bloomThresholdMin;
@@ -110,6 +108,14 @@ void BuildPassParams(const PostProcessPass& postPass, float passParams[8]) {
         passParams[5] = postPass.parameters.accretionTurbulence;
         passParams[6] = postPass.parameters.accretionChromaticAberration;
         passParams[7] = postPass.parameters.accretionCoreSize;
+        passParams[8] = postPass.parameters.accretionCenterX;
+        passParams[9] = postPass.parameters.accretionCenterY;
+        passParams[10] = postPass.parameters.accretionFlowSpeed;
+        passParams[11] = postPass.parameters.accretionRoadDepthFade;
+        passParams[12] = postPass.parameters.accretionCoreDarkness;
+        passParams[13] = postPass.parameters.accretionGuideOpacity;
+        passParams[14] = postPass.parameters.accretionLensStrength;
+        passParams[15] = postPass.parameters.accretionGuideWidth;
         return;
     }
     if (postPass.pipeline == "ToneMapping") {
@@ -182,7 +188,7 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 if (pipelineState == nullptr) {
                     return;
                 }
-                float passParams[8] = {};
+                float passParams[kPostProcessParamCount] = {};
                 BuildPassParams(postPass, passParams);
                 if (postPass.pipeline == "AccretionComposite") {
                     passParams[2] = ctx.beamTime;
@@ -231,7 +237,7 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         [ctx, finalOutputResource](ge3::graphics::RenderPassContext& passContext) {
             ID3D12DescriptorHeap* descriptorHeaps[] = { ctx.srvDescriptorHeap };
             passContext.commandList->SetDescriptorHeaps(1, descriptorHeaps);
-            const float compositeParams[8] = {
+            const float compositeParams[kPostProcessParamCount] = {
                 0.0f,
                 0.0f,
                 0.0f,

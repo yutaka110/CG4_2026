@@ -177,6 +177,14 @@ void PostProcessStack::ResetToVfxDefaults() {
     accretionComposite.parameters.accretionTurbulence = 0.85f;
     accretionComposite.parameters.accretionChromaticAberration = 0.95f;
     accretionComposite.parameters.accretionCoreSize = 0.18f;
+    accretionComposite.parameters.accretionCenterX = 0.5f;
+    accretionComposite.parameters.accretionCenterY = 0.5f;
+    accretionComposite.parameters.accretionFlowSpeed = 1.0f;
+    accretionComposite.parameters.accretionRoadDepthFade = 0.35f;
+    accretionComposite.parameters.accretionCoreDarkness = 0.96f;
+    accretionComposite.parameters.accretionGuideOpacity = 1.0f;
+    accretionComposite.parameters.accretionLensStrength = 1.0f;
+    accretionComposite.parameters.accretionGuideWidth = 0.18f;
     passes_.push_back(accretionComposite);
 
     PostProcessPass toneMapping{};

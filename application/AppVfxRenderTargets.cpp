@@ -452,7 +452,7 @@ void AppVfxRenderTargets::CompositeToBackBuffer(
     ID3D12RootSignature* rootSignature,
     ID3D12PipelineState* pipelineState,
     std::string_view postColorResourceName,
-    const float compositeParams[8]) {
+    const float compositeParams[16]) {
     if (!initialized_ || commandList == nullptr || backBuffer == nullptr ||
         rootSignature == nullptr || pipelineState == nullptr) {
         return;
@@ -476,7 +476,7 @@ void AppVfxRenderTargets::CompositeToBackBuffer(
     commandList->SetGraphicsRootDescriptorTable(0, sceneColor->srv.gpu);
     commandList->SetGraphicsRootDescriptorTable(1, vfxAccumulation->srv.gpu);
     commandList->SetGraphicsRootDescriptorTable(2, postColor->srv.gpu);
-    commandList->SetGraphicsRoot32BitConstants(3, 8, compositeParams, 0);
+    commandList->SetGraphicsRoot32BitConstants(3, 16, compositeParams, 0);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->DrawInstanced(3, 1, 0, 0);
 }
@@ -489,7 +489,7 @@ void AppVfxRenderTargets::ExecutePostProcessPass(
     std::string_view inputResourceName,
     std::string_view secondaryResourceName,
     std::string_view tertiaryResourceName,
-    const float passParams[8]) {
+    const float passParams[16]) {
     if (!initialized_ || commandList == nullptr || rootSignature == nullptr || pipelineState == nullptr) {
         return;
     }
@@ -508,7 +508,7 @@ void AppVfxRenderTargets::ExecutePostProcessPass(
     commandList->SetGraphicsRootDescriptorTable(0, input->srv.gpu);
     commandList->SetGraphicsRootDescriptorTable(1, secondary->srv.gpu);
     commandList->SetGraphicsRootDescriptorTable(2, tertiary->srv.gpu);
-    commandList->SetGraphicsRoot32BitConstants(3, 8, passParams, 0);
+    commandList->SetGraphicsRoot32BitConstants(3, 16, passParams, 0);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->DrawInstanced(3, 1, 0, 0);
 }
@@ -521,7 +521,7 @@ void AppVfxRenderTargets::ExecuteDebugPreviewPass(
     D3D12_GPU_DESCRIPTOR_HANDLE inputHandle,
     D3D12_GPU_DESCRIPTOR_HANDLE secondaryHandle,
     D3D12_GPU_DESCRIPTOR_HANDLE tertiaryHandle,
-    const float passParams[8]) {
+    const float passParams[16]) {
     if (!initialized_ || commandList == nullptr || rootSignature == nullptr ||
         pipelineState == nullptr || inputHandle.ptr == 0 ||
         secondaryHandle.ptr == 0 || tertiaryHandle.ptr == 0) {
@@ -538,7 +538,7 @@ void AppVfxRenderTargets::ExecuteDebugPreviewPass(
     commandList->SetGraphicsRootDescriptorTable(0, inputHandle);
     commandList->SetGraphicsRootDescriptorTable(1, secondaryHandle);
     commandList->SetGraphicsRootDescriptorTable(2, tertiaryHandle);
-    commandList->SetGraphicsRoot32BitConstants(3, 8, passParams, 0);
+    commandList->SetGraphicsRoot32BitConstants(3, 16, passParams, 0);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->DrawInstanced(3, 1, 0, 0);
 }
