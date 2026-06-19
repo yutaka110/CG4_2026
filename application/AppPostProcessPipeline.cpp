@@ -42,6 +42,9 @@ ID3D12PipelineState* ResolvePostProcessPso(const AppPipelines& pipelines, const 
     if (name == "DistortionComposite") {
         return pipelines.GetDistortionCompositePSO();
     }
+    if (name == "AccretionComposite") {
+        return pipelines.GetAccretionCompositePSO();
+    }
     if (name == "ToneMapping") {
         return pipelines.GetToneMappingPSO();
     }
@@ -99,6 +102,14 @@ void BuildPassParams(const PostProcessPass& postPass, float passParams[8]) {
     }
     if (postPass.pipeline == "DistortionComposite") {
         passParams[1] = postPass.parameters.distortionScale;
+        return;
+    }
+    if (postPass.pipeline == "AccretionComposite") {
+        passParams[1] = postPass.parameters.accretionRadius;
+        passParams[4] = postPass.parameters.accretionDiskStretch;
+        passParams[5] = postPass.parameters.accretionTurbulence;
+        passParams[6] = postPass.parameters.accretionChromaticAberration;
+        passParams[7] = postPass.parameters.accretionCoreSize;
         return;
     }
     if (postPass.pipeline == "ToneMapping") {
@@ -173,6 +184,16 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 }
                 float passParams[8] = {};
                 BuildPassParams(postPass, passParams);
+                if (postPass.pipeline == "AccretionComposite") {
+                    passParams[2] = ctx.beamTime;
+                    uint32_t targetWidth = 0;
+                    uint32_t targetHeight = 0;
+                    if (ctx.vfxRenderTargets->GetTargetSize(postPass.outputResource, targetWidth, targetHeight)) {
+                        passParams[3] = static_cast<float>(targetWidth) / static_cast<float>(targetHeight);
+                    } else {
+                        passParams[3] = 16.0f / 9.0f;
+                    }
+                }
                 if (postPass.pipeline == "PrewittOutline") {
                     ctx.vfxRenderTargets->ExecuteDebugPreviewPass(
                         passContext.commandList,

@@ -161,6 +161,7 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
         L"resources/GaussianBlurHorizontal.PS.hlsl",
         L"resources/GaussianBlurVertical.PS.hlsl",
         L"resources/DistortionComposite.PS.hlsl",
+        L"resources/Accretion.PS.hlsl",
         L"resources/ToneMapping.PS.hlsl",
         L"resources/GlowComposite.PS.hlsl",
         L"resources/PrewittOutline.PS.hlsl",
@@ -1094,6 +1095,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     gaussianBlurHorizontalPs_ = Compile_(L"resources/GaussianBlurHorizontal.PS.hlsl", L"ps_6_0");
     gaussianBlurVerticalPs_ = Compile_(L"resources/GaussianBlurVertical.PS.hlsl", L"ps_6_0");
     distortionCompositePs_ = Compile_(L"resources/DistortionComposite.PS.hlsl", L"ps_6_0");
+    accretionCompositePs_ = Compile_(L"resources/Accretion.PS.hlsl", L"ps_6_0");
     toneMappingPs_ = Compile_(L"resources/ToneMapping.PS.hlsl", L"ps_6_0");
     glowCompositePs_ = Compile_(L"resources/GlowComposite.PS.hlsl", L"ps_6_0");
     prewittOutlinePs_ = Compile_(L"resources/PrewittOutline.PS.hlsl", L"ps_6_0");
@@ -1112,7 +1114,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         !trailMeshStreamCs_ || !trailMeshBuildCs_ || !compositeVs_ || !compositePs_ || !bloomExtractPs_ ||
         !bloomDownsamplePs_ || !bloomUpsamplePs_ || !blurHorizontalPs_ || !blurVerticalPs_ ||
         !boxBlurHorizontalPs_ || !boxBlurVerticalPs_ || !gaussianBlurHorizontalPs_ || !gaussianBlurVerticalPs_ ||
-        !distortionCompositePs_ ||
+        !distortionCompositePs_ || !accretionCompositePs_ ||
         !toneMappingPs_ || !glowCompositePs_ || !prewittOutlinePs_ || !grayscalePs_ || !vignettePs_ ||
         !debugDepthPreviewPs_ || !debugEmissivePreviewPs_) {
         OutputDebugStringA("[AppPipelines] Shader compilation failed.\n");
@@ -1481,6 +1483,13 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         d.PS = { distortionCompositePs_->GetBufferPointer(), distortionCompositePs_->GetBufferSize() };
         hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&distortionCompositePso_));
         if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(DistortionComposite)", hr);
+    }
+
+    {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = compositeDesc;
+        d.PS = { accretionCompositePs_->GetBufferPointer(), accretionCompositePs_->GetBufferSize() };
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&accretionCompositePso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(AccretionComposite)", hr);
     }
 
     {
@@ -1919,6 +1928,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         L"resources/GaussianBlurHorizontal.PS.hlsl",
         L"resources/GaussianBlurVertical.PS.hlsl",
         L"resources/DistortionComposite.PS.hlsl",
+        L"resources/Accretion.PS.hlsl",
         L"resources/ToneMapping.PS.hlsl",
         L"resources/GlowComposite.PS.hlsl",
         L"resources/PrewittOutline.PS.hlsl",

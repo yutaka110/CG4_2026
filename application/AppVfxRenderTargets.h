@@ -84,6 +84,7 @@ public:
         D3D12_GPU_DESCRIPTOR_HANDLE tertiaryHandle,
         const float passParams[8]);
     D3D12_GPU_DESCRIPTOR_HANDLE GetSrvHandle(std::string_view name) const;
+    bool GetTargetSize(std::string_view name, uint32_t& width, uint32_t& height) const;
 
     bool IsInitialized() const { return initialized_; }
 

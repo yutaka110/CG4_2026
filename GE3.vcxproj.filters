@@ -412,6 +412,7 @@
     <FxCompile Include="Resources\FullscreenComposite.VS.hlsl" />
     <FxCompile Include="Resources\FullscreenComposite.PS.hlsl" />
     <FxCompile Include="Resources\Grayscale.PS.hlsl" />
+    <FxCompile Include="Resources\Accretion.PS.hlsl" />
     <FxCompile Include="Resources\Vignette.PS.hlsl" />
     <FxCompile Include="Resources\BoxBlurHorizontal.PS.hlsl" />
     <FxCompile Include="Resources\BoxBlurVertical.PS.hlsl" />

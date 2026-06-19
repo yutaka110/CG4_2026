@@ -550,3 +550,15 @@ D3D12_GPU_DESCRIPTOR_HANDLE AppVfxRenderTargets::GetSrvHandle(std::string_view n
     }
     return target->srv.gpu;
 }
+
+bool AppVfxRenderTargets::GetTargetSize(std::string_view name, uint32_t& width, uint32_t& height) const {
+    const Target* target = FindTarget(name);
+    if (target == nullptr) {
+        width = 0;
+        height = 0;
+        return false;
+    }
+    width = target->width;
+    height = target->height;
+    return width != 0 && height != 0;
+}
