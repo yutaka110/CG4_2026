@@ -392,6 +392,12 @@ void DrawVfxRuntimeControlsPanel(
         ApplyVfxShowcaseMode(runtimeState);
     }
     ImGui::Checkbox("Click Viewport To Fire Ice", &runtimeState.vfx.iceProjectileClickToFire);
+    ImGui::Checkbox("Loop Electric Orb Strike", &runtimeState.vfx.electricOrbStrikeLoop);
+    ImGui::Text(
+        "Electric Orb Strike: active=%s timer=%.2f duration=%.2f",
+        runtimeState.vfx.electricOrbStrikeActive ? "true" : "false",
+        runtimeState.vfx.electricOrbStrikeTimer,
+        runtimeState.vfx.electricOrbStrikeDuration);
     ImGui::SeparatorText("VFX Visibility");
     ImGui::Checkbox("Particles", &runtimeState.vfx.enableParticles);
     ImGui::SameLine();
@@ -404,6 +410,8 @@ void DrawVfxRuntimeControlsPanel(
     ImGui::Checkbox("Rings", &runtimeState.vfx.enableRings);
     ImGui::SameLine();
     ImGui::Checkbox("Cylinders", &runtimeState.vfx.enableCylinders);
+    ImGui::SameLine();
+    ImGui::Checkbox("Electric Orb", &runtimeState.vfx.enableElectricOrbStrike);
     ImGui::Checkbox("Skinned Surface VFX", &runtimeState.vfx.enableSkinnedSurfaceVfx);
     ImGui::Checkbox("Trail Mesh Stream", &runtimeState.vfx.enableTrailMeshStream);
     ImGui::Checkbox("Trail Mesh Stream Safety Fallback", &runtimeState.vfx.enableTrailMeshStreamAutoFallback);
@@ -488,6 +496,27 @@ void DrawVfxRuntimeControlsPanel(
         for (AppVfxRuntimeState::IceProjectileShotState& shot : runtimeState.vfx.iceProjectileShots) {
             shot = {};
         }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Play Electric Orb Strike")) {
+        DisableHeldHitEffects(runtimeState, effectRuntime);
+        ResetIceProjectileShots(runtimeState.vfx);
+        runtimeState.vfx.autoPlayVfxDemo = false;
+        runtimeState.vfx.showcaseMode = true;
+        runtimeState.vfx.enableParticles = false;
+        runtimeState.vfx.enableTrails = false;
+        runtimeState.vfx.enableBeams = false;
+        runtimeState.vfx.enableDistortions = false;
+        runtimeState.vfx.enableRings = false;
+        runtimeState.vfx.enableCylinders = false;
+        runtimeState.vfx.enableElectricOrbStrike = true;
+        runtimeState.vfx.electricOrbStrikeActive = true;
+        runtimeState.vfx.electricOrbStrikeTimer = 0.0f;
+        runtimeState.vfx.electricOrbStrikeDuration = 5.25f;
+        runtimeState.showAnimatedCube = false;
+        runtimeState.showSkinnedModel = false;
+        runtimeState.showVfxModelObjects = false;
+        effectRuntime.ClearInstances();
     }
     if (ImGui::Button("Play hit_plane_burst")) {
         runtimeState.vfx.enableParticles = true;
@@ -614,6 +643,8 @@ void DrawVfxRuntimeControlsPanel(
     if (ImGui::Button("Clear Effects")) {
         DisableHeldHitEffects(runtimeState, effectRuntime);
         ResetIceProjectileShots(runtimeState.vfx);
+        runtimeState.vfx.electricOrbStrikeActive = false;
+        runtimeState.vfx.electricOrbStrikeTimer = 0.0f;
         effectRuntime.ClearInstances();
     }
 }

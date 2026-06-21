@@ -15,6 +15,8 @@
 #include <utility>
 
 namespace {
+constexpr float kElectricOrbStrikeMinimumDuration = 4.55f;
+
 bool IsSameAuthoredComponent(
     const EffectComponentCommon* source,
     const EffectComponentCommon* destination) {
@@ -488,6 +490,7 @@ void VfxEngine::InitializeBeam(
         secondaryTextureSrvHandle,
         rtvFormat,
         dsvFormat);
+    electricOrbStrikeRenderer_.Initialize(device, rtvFormat, dsvFormat);
 }
 
 void VfxEngine::InitializeGpuParticles(
@@ -505,6 +508,7 @@ void VfxEngine::InitializeGpuParticles(
 }
 
 void VfxEngine::Shutdown() {
+    electricOrbStrikeRenderer_.Shutdown();
     beam_.Shutdown();
 }
 
@@ -535,6 +539,20 @@ void VfxEngine::Update(AppVfxRuntimeState& runtimeState, float deltaTime) {
     }
 
     UpdateIceProjectilePreview(effectRuntime_, runtimeState, deltaTime);
+    if (runtimeState.electricOrbStrikeActive) {
+        runtimeState.electricOrbStrikeTimer += (std::max)(0.0f, deltaTime);
+        const float duration = (std::max)(
+            kElectricOrbStrikeMinimumDuration,
+            runtimeState.electricOrbStrikeDuration);
+        if (runtimeState.electricOrbStrikeTimer >= duration) {
+            if (runtimeState.electricOrbStrikeLoop) {
+                runtimeState.electricOrbStrikeTimer = std::fmod(runtimeState.electricOrbStrikeTimer, duration);
+            } else {
+                runtimeState.electricOrbStrikeActive = false;
+                runtimeState.electricOrbStrikeTimer = duration;
+            }
+        }
+    }
 
     beamTime_ += deltaTime;
     beam_.SetTime(beamTime_);

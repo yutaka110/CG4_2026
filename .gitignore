@@ -361,3 +361,9 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Project-local capture and Codex working files
+capture/
+.codex/
+.codex_tmp/
+.agents/

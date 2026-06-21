@@ -11,6 +11,7 @@
 #include "vfx/BeamRenderer.h"
 #include "vfx/CylinderRenderer.h"
 #include "vfx/DistortionRenderer.h"
+#include "vfx/ElectricOrbStrikeRenderer.h"
 #include "vfx/OrbitRibbonRenderer.h"
 #include "vfx/ParticleRenderer.h"
 #include "vfx/RingRenderer.h"
@@ -63,6 +64,9 @@ void AppVfxRenderPipeline::RegisterPasses(
         ctx.vfxRenderers->spear->RegisterPasses(ctx, vfxResources);
         ctx.vfxRenderers->orbitRibbon->RegisterPasses(ctx, vfxResources);
         ctx.vfxRenderers->cylinder->RegisterPasses(ctx, vfxResources);
+    }
+    if (runtimeState.enableElectricOrbStrike) {
+        ctx.vfxRenderers->electricOrbStrike->RegisterPasses(ctx, vfxResources);
     }
     if (runtimeState.enableDistortions) {
         ctx.vfxRenderers->distortion->RegisterPasses(ctx, vfxResources);

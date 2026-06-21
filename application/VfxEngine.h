@@ -19,6 +19,7 @@
 #include "vfx/BeamRenderer.h"
 #include "vfx/CylinderRenderer.h"
 #include "vfx/DistortionRenderer.h"
+#include "vfx/ElectricOrbStrikeRenderer.h"
 #include "vfx/OrbitRibbonRenderer.h"
 #include "vfx/ParticleRenderer.h"
 #include "vfx/RingRenderer.h"
@@ -118,7 +119,8 @@ private:
     SpearRenderer spearRenderer_;
     OrbitRibbonRenderer orbitRibbonRenderer_;
     CylinderRenderer cylinderRenderer_;
-    AppVfxRendererSet vfxRenderers_{&particleRenderer_, &trailRenderer_, &beam_, &distortionRenderer_, &ringRenderer_, &spearRenderer_, &orbitRibbonRenderer_, &cylinderRenderer_};
+    ElectricOrbStrikeRenderer electricOrbStrikeRenderer_;
+    AppVfxRendererSet vfxRenderers_{&particleRenderer_, &trailRenderer_, &beam_, &distortionRenderer_, &ringRenderer_, &spearRenderer_, &orbitRibbonRenderer_, &cylinderRenderer_, &electricOrbStrikeRenderer_};
     EffectAuthoringRegistry effectAuthoringRegistry_;
     EffectSystem effectSystem_;
     EffectRuntime effectRuntime_;

@@ -83,6 +83,7 @@ struct AppVfxRuntimeState {
     bool enableDistortions = true;
     bool enableRings = true;
     bool enableCylinders = true;
+    bool enableElectricOrbStrike = true;
     bool enableSkinnedSurfaceVfx = false;
     bool enableParticleDedicatedResourceProbe = false;
     bool enableParticleDedicatedProbeTelemetry = false;
@@ -125,6 +126,10 @@ struct AppVfxRuntimeState {
     float autoPlayVfxAngle = 0.0f;
     bool showcaseMode = false;
     bool iceProjectileClickToFire = true;
+    bool electricOrbStrikeActive = false;
+    bool electricOrbStrikeLoop = false;
+    float electricOrbStrikeTimer = 0.0f;
+    float electricOrbStrikeDuration = 5.25f;
 
     bool holdHitPlaneBurst = false;
     bool holdHitRing = false;

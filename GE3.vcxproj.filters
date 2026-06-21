@@ -357,6 +357,9 @@
     <ClCompile Include="application\src\vfx\DistortionRenderer.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\src\vfx\ElectricOrbStrikeRenderer.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
     <ClCompile Include="application\src\vfx\OrbitRibbonRenderer.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -396,6 +399,8 @@
     <FxCompile Include="Resources\Sprite.VS.hlsl" />
     <FxCompile Include="Resources\Beam3D.VS.hlsl" />
     <FxCompile Include="Resources\Beam3D.PS.hlsl" />
+    <FxCompile Include="Resources\ElectricOrbStrike.PS.hlsl" />
+    <FxCompile Include="Resources\ElectricOrbStrike.VS.hlsl" />
     <FxCompile Include="Resources\ParticleSim.CS.hlsl" />
     <FxCompile Include="Resources\ParticleReset.CS.hlsl" />
     <FxCompile Include="Resources\ParticlePoolBegin.CS.hlsl" />
