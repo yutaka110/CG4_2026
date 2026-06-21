@@ -15,6 +15,12 @@
 #include <utility>
 
 namespace {
+constexpr float kElectricOrbStrikeMinimumDuration = 4.10f;
+
+size_t ShowcaseIndex(AppVfxRuntimeState::ShowcaseEffect effect) {
+    return static_cast<size_t>(effect);
+}
+
 bool IsSameAuthoredComponent(
     const EffectComponentCommon* source,
     const EffectComponentCommon* destination) {
@@ -89,6 +95,183 @@ void ApplyLiveTuningToComponent(
     destination.alphaReference = source.settings->alphaReference;
     destination.fadeOut = source.settings->fadeOut;
     destination.depthFadeSoftness = source.settings->depthFadeSoftness;
+}
+
+Vector3 LerpVector3(const Vector3& a, const Vector3& b, float t) {
+    return {
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+        a.z + (b.z - a.z) * t,
+    };
+}
+
+float SmoothStep(float t) {
+    t = (std::clamp)(t, 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+std::filesystem::path NormalizeEffectPath(const std::filesystem::path& path) {
+    std::error_code error;
+    std::filesystem::path normalized = std::filesystem::weakly_canonical(path, error);
+    if (error) {
+        normalized = std::filesystem::absolute(path, error);
+        if (error) {
+            normalized = path;
+        }
+    }
+    return normalized.lexically_normal();
+}
+
+bool IsLoadedEffectPath(
+    const std::vector<LoadedEffectAsset>& loadedAssets,
+    const std::filesystem::path& path) {
+    const std::filesystem::path normalizedPath = NormalizeEffectPath(path);
+    for (const LoadedEffectAsset& loaded : loadedAssets) {
+        if (NormalizeEffectPath(loaded.path) == normalizedPath) {
+            return true;
+        }
+    }
+    return false;
+}
+
+AppVfxRuntimeState::IceProjectileShotState* FindReusableIceProjectileShot(
+    EffectRuntime& effectRuntime,
+    AppVfxRuntimeState& runtimeState) {
+    for (AppVfxRuntimeState::IceProjectileShotState& shot : runtimeState.iceProjectileShots) {
+        if (!shot.active) {
+            return &shot;
+        }
+    }
+
+    AppVfxRuntimeState::IceProjectileShotState* oldest = &runtimeState.iceProjectileShots.front();
+    for (AppVfxRuntimeState::IceProjectileShotState& shot : runtimeState.iceProjectileShots) {
+        if (shot.timer > oldest->timer) {
+            oldest = &shot;
+        }
+    }
+    if (oldest->instanceId != 0) {
+        effectRuntime.StopEffect(oldest->instanceId);
+    }
+    *oldest = {};
+    return oldest;
+}
+
+void EnqueueIceProjectileShot(
+    EffectRuntime& effectRuntime,
+    AppVfxRuntimeState& runtimeState,
+    const Vector3& start,
+    const Vector3& target) {
+    AppVfxRuntimeState::IceProjectileShotState* shot =
+        FindReusableIceProjectileShot(effectRuntime, runtimeState);
+    if (shot == nullptr) {
+        return;
+    }
+
+    *shot = {};
+    shot->active = true;
+    shot->start = start;
+    shot->target = target;
+}
+
+void UpdateIceProjectilePreview(
+    EffectRuntime& effectRuntime,
+    AppVfxRuntimeState& runtimeState,
+    float deltaTime) {
+    bool hasActiveShot = runtimeState.iceProjectilePreviewActive;
+    for (const AppVfxRuntimeState::IceProjectileShotState& shot : runtimeState.iceProjectileShots) {
+        hasActiveShot = hasActiveShot || shot.active;
+    }
+    if (!hasActiveShot) {
+        return;
+    }
+
+    runtimeState.enableParticles = true;
+    runtimeState.enableRings = true;
+    runtimeState.enableCylinders = true;
+    runtimeState.enableTrails = true;
+
+    constexpr float kTravelDuration = 1.08f;
+    constexpr float kCleanupDelay = 2.08f;
+
+    if (runtimeState.iceProjectilePreviewActive) {
+        EnqueueIceProjectileShot(
+            effectRuntime,
+            runtimeState,
+            runtimeState.iceProjectileStart,
+            runtimeState.iceProjectileTarget);
+        runtimeState.iceProjectilePreviewActive = false;
+        runtimeState.iceProjectileInstanceId = 0;
+        runtimeState.iceProjectileTimer = 0.0f;
+        runtimeState.iceProjectileImpactSpawned = false;
+    }
+
+    for (AppVfxRuntimeState::IceProjectileShotState& shot : runtimeState.iceProjectileShots) {
+        if (!shot.active) {
+            continue;
+        }
+
+        Vector3 start = shot.start;
+        Vector3 end = shot.target;
+        if (std::abs(start.z - end.z) < 0.05f || start.z > -1.4f) {
+            start.z = -3.05f;
+            end.z = 0.42f;
+        }
+
+        EffectInstance* projectile = effectRuntime.FindInstance(shot.instanceId);
+        if (projectile == nullptr && shot.timer <= 0.0f) {
+            shot.instanceId = effectRuntime.PlayEffectWithParams(
+                "ice_projectile",
+                start,
+                {0.82f, 0.95f, 1.0f, 1.0f},
+                {1.0f, 1.0f, 1.0f});
+            projectile = effectRuntime.FindInstance(shot.instanceId);
+        }
+
+        shot.timer += (std::max)(0.0f, deltaTime);
+        const float travelT = (std::clamp)(shot.timer / kTravelDuration, 0.0f, 1.0f);
+        const float easedT = travelT * travelT * (2.15f - 1.15f * travelT);
+        Vector3 position = LerpVector3(start, end, easedT);
+        position.y += std::sin(travelT * 3.14159265f) * 0.05f;
+
+        if (projectile != nullptr) {
+            projectile->transform.translate = position;
+            projectile->transform.rotate.z = shot.hasExplicitRotationZ
+                ? shot.rotationZ
+                : std::atan2(end.y - start.y, end.x - start.x);
+            projectile->transform.rotate.y = -0.34f;
+            const float depthScale = 2.05f + (0.58f - 2.05f) * easedT;
+            const Vector3 assetScale = projectile->asset != nullptr
+                ? projectile->asset->size
+                : Vector3{1.0f, 1.0f, 1.0f};
+            projectile->transform.scale = {
+                assetScale.x * depthScale,
+                assetScale.y * depthScale,
+                assetScale.z * depthScale,
+            };
+        }
+
+        if (travelT >= 1.0f && !shot.impactSpawned) {
+            Vector3 impactPosition = end;
+            impactPosition.z -= 0.28f;
+            effectRuntime.PlayEffectWithParams(
+                "ice_impact",
+                impactPosition,
+                {0.72f, 0.92f, 1.0f, 1.0f},
+                {1.0f, 1.0f, 1.0f});
+            if (shot.instanceId != 0) {
+                effectRuntime.StopEffect(shot.instanceId);
+                shot.instanceId = 0;
+            }
+            shot.impactSpawned = true;
+        }
+
+        if (shot.timer >= kCleanupDelay) {
+            if (shot.instanceId != 0) {
+                effectRuntime.StopEffect(shot.instanceId);
+            }
+            shot = {};
+        }
+    }
 }
 
 void PreserveParticleLiveTuning(
@@ -311,6 +494,7 @@ void VfxEngine::InitializeBeam(
         secondaryTextureSrvHandle,
         rtvFormat,
         dsvFormat);
+    electricOrbStrikeRenderer_.Initialize(device, rtvFormat, dsvFormat);
 }
 
 void VfxEngine::InitializeGpuParticles(
@@ -328,6 +512,7 @@ void VfxEngine::InitializeGpuParticles(
 }
 
 void VfxEngine::Shutdown() {
+    electricOrbStrikeRenderer_.Shutdown();
     beam_.Shutdown();
 }
 
@@ -357,6 +542,31 @@ void VfxEngine::Update(AppVfxRuntimeState& runtimeState, float deltaTime) {
         }
     }
 
+    UpdateIceProjectilePreview(effectRuntime_, runtimeState, deltaTime);
+    if (runtimeState.electricOrbStrikeActive) {
+        const bool showcaseElectric =
+            runtimeState.showcaseMode &&
+            runtimeState.showcaseEffect == AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike;
+        const float electricSpeed = showcaseElectric
+            ? (std::max)(
+                0.25f,
+                runtimeState.showcaseTuning[
+                    ShowcaseIndex(AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike)].param2)
+            : 1.0f;
+        runtimeState.electricOrbStrikeTimer += (std::max)(0.0f, deltaTime) * electricSpeed;
+        const float duration = (std::max)(
+            kElectricOrbStrikeMinimumDuration,
+            runtimeState.electricOrbStrikeDuration);
+        if (runtimeState.electricOrbStrikeTimer >= duration) {
+            if (runtimeState.electricOrbStrikeLoop) {
+                runtimeState.electricOrbStrikeTimer = std::fmod(runtimeState.electricOrbStrikeTimer, duration);
+            } else {
+                runtimeState.electricOrbStrikeActive = false;
+                runtimeState.electricOrbStrikeTimer = duration;
+            }
+        }
+    }
+
     beamTime_ += deltaTime;
     beam_.SetTime(beamTime_);
     effectRuntime_.Update(deltaTime);
@@ -380,11 +590,40 @@ void VfxEngine::ReloadChangedEffectAssets() {
                 loaded.path,
                 reloaded,
                 effectAuthoringRegistry_)) {
-            if (const EffectAsset* currentAsset = effectSystem_.FindAsset(reloaded.asset.name)) {
-                PreserveLiveTuning(*currentAsset, reloaded.asset);
+            const bool shouldPreserveLiveTuning =
+                reloaded.asset.name != "ice_projectile" &&
+                reloaded.asset.name != "ice_impact";
+            if (shouldPreserveLiveTuning) {
+                if (const EffectAsset* currentAsset = effectSystem_.FindAsset(reloaded.asset.name)) {
+                    PreserveLiveTuning(*currentAsset, reloaded.asset);
+                }
             }
             effectSystem_.RegisterAsset(reloaded.asset, effectAuthoringRegistry_);
             loaded = std::move(reloaded);
+        }
+    }
+
+    const std::filesystem::path effectDirectory{"Resources/effects"};
+    if (!std::filesystem::exists(effectDirectory)) {
+        return;
+    }
+
+    for (const std::filesystem::directory_entry& entry :
+         std::filesystem::directory_iterator(effectDirectory)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".effect") {
+            continue;
+        }
+        if (IsLoadedEffectPath(loadedEffectAssets_, entry.path())) {
+            continue;
+        }
+
+        LoadedEffectAsset loaded{};
+        if (effectAssetLoader_.LoadFile(
+                entry.path(),
+                loaded,
+                effectAuthoringRegistry_)) {
+            effectSystem_.RegisterAsset(loaded.asset, effectAuthoringRegistry_);
+            loadedEffectAssets_.push_back(std::move(loaded));
         }
     }
 }

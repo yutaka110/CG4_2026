@@ -129,6 +129,10 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
         L"resources/DistortionSprite.PS.hlsl",
         L"resources/Ring.VS.hlsl",
         L"resources/Ring.PS.hlsl",
+        L"resources/Spear.VS.hlsl",
+        L"resources/Spear.PS.hlsl",
+        L"resources/OrbitRibbon.VS.hlsl",
+        L"resources/OrbitRibbon.PS.hlsl",
         L"resources/Cylinder.VS.hlsl",
         L"resources/Cylinder.PS.hlsl",
         L"resources/SkeletonDebug.VS.hlsl",
@@ -157,6 +161,7 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
         L"resources/GaussianBlurHorizontal.PS.hlsl",
         L"resources/GaussianBlurVertical.PS.hlsl",
         L"resources/DistortionComposite.PS.hlsl",
+        L"resources/Accretion.PS.hlsl",
         L"resources/ToneMapping.PS.hlsl",
         L"resources/GlowComposite.PS.hlsl",
         L"resources/PrewittOutline.PS.hlsl",
@@ -1007,7 +1012,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     compositeParams[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     compositeParams[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     compositeParams[3].Constants.ShaderRegister = 0;
-    compositeParams[3].Constants.Num32BitValues = 8;
+    compositeParams[3].Constants.Num32BitValues = 16;
 
     D3D12_ROOT_SIGNATURE_DESC compositeRootDesc{};
     compositeRootDesc.NumParameters = _countof(compositeParams);
@@ -1058,6 +1063,10 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     distortionSpritePs_ = Compile_(L"resources/DistortionSprite.PS.hlsl", L"ps_6_0");
     ringVs_ = Compile_(L"resources/Ring.VS.hlsl", L"vs_6_0");
     ringPs_ = Compile_(L"resources/Ring.PS.hlsl", L"ps_6_0");
+    spearVs_ = Compile_(L"resources/Spear.VS.hlsl", L"vs_6_0");
+    spearPs_ = Compile_(L"resources/Spear.PS.hlsl", L"ps_6_0");
+    orbitRibbonVs_ = Compile_(L"resources/OrbitRibbon.VS.hlsl", L"vs_6_0");
+    orbitRibbonPs_ = Compile_(L"resources/OrbitRibbon.PS.hlsl", L"ps_6_0");
     cylinderVs_ = Compile_(L"resources/Cylinder.VS.hlsl", L"vs_6_0");
     cylinderPs_ = Compile_(L"resources/Cylinder.PS.hlsl", L"ps_6_0");
     skeletonDebugVs_ = Compile_(L"resources/SkeletonDebug.VS.hlsl", L"vs_6_0");
@@ -1086,6 +1095,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     gaussianBlurHorizontalPs_ = Compile_(L"resources/GaussianBlurHorizontal.PS.hlsl", L"ps_6_0");
     gaussianBlurVerticalPs_ = Compile_(L"resources/GaussianBlurVertical.PS.hlsl", L"ps_6_0");
     distortionCompositePs_ = Compile_(L"resources/DistortionComposite.PS.hlsl", L"ps_6_0");
+    accretionCompositePs_ = Compile_(L"resources/Accretion.PS.hlsl", L"ps_6_0");
     toneMappingPs_ = Compile_(L"resources/ToneMapping.PS.hlsl", L"ps_6_0");
     glowCompositePs_ = Compile_(L"resources/GlowComposite.PS.hlsl", L"ps_6_0");
     prewittOutlinePs_ = Compile_(L"resources/PrewittOutline.PS.hlsl", L"ps_6_0");
@@ -1096,7 +1106,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
     if (!vs_ || !skinnedVs_ || !skinningCs_ || !ps_ || !spriteVs_ || !spritePs_ || !skyboxVs_ || !skyboxPs_ || !cs_ || !particleVs_ || !particlePs_ ||
         !trailMeshVs_ || !trailMeshStreamVs_ || !trailMeshPs_ || !distortionSpriteVs_ || !distortionSpritePs_ ||
-        !ringVs_ || !ringPs_ || !cylinderVs_ || !cylinderPs_ || !skeletonDebugVs_ || !skeletonDebugPs_ ||
+        !ringVs_ || !ringPs_ || !spearVs_ || !spearPs_ || !orbitRibbonVs_ || !orbitRibbonPs_ || !cylinderVs_ || !cylinderPs_ || !skeletonDebugVs_ || !skeletonDebugPs_ ||
         !gpuParticleCs_ || !gpuParticleResetCs_ || !gpuParticlePoolResetCs_ || !gpuParticlePoolBeginCs_ ||
         !gpuParticlePoolUpdateCs_ || !gpuParticleEmitterUpdateCs_ || !gpuParticleEmitterResetCs_ ||
         !gpuParticlePoolSpawnPrepareCs_ ||
@@ -1104,7 +1114,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         !trailMeshStreamCs_ || !trailMeshBuildCs_ || !compositeVs_ || !compositePs_ || !bloomExtractPs_ ||
         !bloomDownsamplePs_ || !bloomUpsamplePs_ || !blurHorizontalPs_ || !blurVerticalPs_ ||
         !boxBlurHorizontalPs_ || !boxBlurVerticalPs_ || !gaussianBlurHorizontalPs_ || !gaussianBlurVerticalPs_ ||
-        !distortionCompositePs_ ||
+        !distortionCompositePs_ || !accretionCompositePs_ ||
         !toneMappingPs_ || !glowCompositePs_ || !prewittOutlinePs_ || !grayscalePs_ || !vignettePs_ ||
         !debugDepthPreviewPs_ || !debugEmissivePreviewPs_) {
         OutputDebugStringA("[AppPipelines] Shader compilation failed.\n");
@@ -1477,6 +1487,13 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
     {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d = compositeDesc;
+        d.PS = { accretionCompositePs_->GetBufferPointer(), accretionCompositePs_->GetBufferSize() };
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&accretionCompositePso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(AccretionComposite)", hr);
+    }
+
+    {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = compositeDesc;
         d.PS = { toneMappingPs_->GetBufferPointer(), toneMappingPs_->GetBufferSize() };
         hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&toneMappingPso_));
         if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(ToneMapping)", hr);
@@ -1731,6 +1748,56 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     }
 
     {
+        D3D12_BLEND_DESC spearBlend{};
+        spearBlend.AlphaToCoverageEnable = FALSE;
+        spearBlend.IndependentBlendEnable = FALSE;
+        auto& rt = spearBlend.RenderTarget[0];
+        rt.BlendEnable = TRUE;
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        rt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        rt.DestBlend = D3D12_BLEND_ONE;
+        rt.BlendOp = D3D12_BLEND_OP_ADD;
+        rt.SrcBlendAlpha = D3D12_BLEND_ONE;
+        rt.DestBlendAlpha = D3D12_BLEND_ONE;
+        rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = particleDesc;
+        d.pRootSignature = ringRootSignature_.Get();
+        d.VS = { spearVs_->GetBufferPointer(), spearVs_->GetBufferSize() };
+        d.PS = { spearPs_->GetBufferPointer(), spearPs_->GetBufferSize() };
+        d.BlendState = spearBlend;
+        d.RasterizerState = particleRaster;
+        d.DepthStencilState = particleDepth;
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&spearPso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Spear)", hr);
+    }
+
+    {
+        D3D12_BLEND_DESC orbitRibbonBlend{};
+        orbitRibbonBlend.AlphaToCoverageEnable = FALSE;
+        orbitRibbonBlend.IndependentBlendEnable = FALSE;
+        auto& rt = orbitRibbonBlend.RenderTarget[0];
+        rt.BlendEnable = TRUE;
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        rt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        rt.DestBlend = D3D12_BLEND_ONE;
+        rt.BlendOp = D3D12_BLEND_OP_ADD;
+        rt.SrcBlendAlpha = D3D12_BLEND_ONE;
+        rt.DestBlendAlpha = D3D12_BLEND_ONE;
+        rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = particleDesc;
+        d.pRootSignature = cylinderRootSignature_.Get();
+        d.VS = { orbitRibbonVs_->GetBufferPointer(), orbitRibbonVs_->GetBufferSize() };
+        d.PS = { orbitRibbonPs_->GetBufferPointer(), orbitRibbonPs_->GetBufferSize() };
+        d.BlendState = orbitRibbonBlend;
+        d.RasterizerState = particleRaster;
+        d.DepthStencilState = particleDepth;
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&orbitRibbonPso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(OrbitRibbon)", hr);
+    }
+
+    {
         D3D12_INPUT_ELEMENT_DESC skeletonLineElements[2] = {};
         skeletonLineElements[0].SemanticName = "POSITION";
         skeletonLineElements[0].SemanticIndex = 0;
@@ -1829,6 +1896,10 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         L"resources/DistortionSprite.PS.hlsl",
         L"resources/Ring.VS.hlsl",
         L"resources/Ring.PS.hlsl",
+        L"resources/Spear.VS.hlsl",
+        L"resources/Spear.PS.hlsl",
+        L"resources/OrbitRibbon.VS.hlsl",
+        L"resources/OrbitRibbon.PS.hlsl",
         L"resources/Cylinder.VS.hlsl",
         L"resources/Cylinder.PS.hlsl",
         L"resources/SkeletonDebug.VS.hlsl",
@@ -1857,6 +1928,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         L"resources/GaussianBlurHorizontal.PS.hlsl",
         L"resources/GaussianBlurVertical.PS.hlsl",
         L"resources/DistortionComposite.PS.hlsl",
+        L"resources/Accretion.PS.hlsl",
         L"resources/ToneMapping.PS.hlsl",
         L"resources/GlowComposite.PS.hlsl",
         L"resources/PrewittOutline.PS.hlsl",

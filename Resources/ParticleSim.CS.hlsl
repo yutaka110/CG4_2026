@@ -49,10 +49,10 @@ RWStructuredBuffer<ParticleState> gParticleState : register(u1);
 
 float3 HashSpawn(uint id, float seed, float radius)
 {
-    float x = frac(sin((float)id * 12.9898 + seed * 78.233) * 43758.5453);
-    float y = frac(sin((float)id * 39.3467 + seed * 11.135) * 24634.6345);
-    float z = frac(sin((float)id * 73.1569 + seed * 91.753) * 16431.5172);
-    return float3((x - 0.5f) * radius * 2.0f, (y - 0.5f) * radius * 2.0f, (z - 0.5f) * radius * 2.0f);
+    float angle = frac(sin((float)id * 12.9898 + seed * 78.233) * 43758.5453) * 6.2831853f;
+    float radial = sqrt(frac(sin((float)id * 39.3467 + seed * 11.135) * 24634.6345)) * radius;
+    float z = (frac(sin((float)id * 73.1569 + seed * 91.753) * 16431.5172) - 0.5f) * radius * 0.35f;
+    return float3(cos(angle) * radial, sin(angle) * radial, z);
 }
 
 float Hash01(uint id, float seed, float salt)
@@ -109,8 +109,19 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     {
         state.age = 0.0f;
         state.lifetime = max(authoredLifetime, 0.001f);
-        state.position = gEmitterParams.xyz + HashSpawn(id, state.seed + gTime, max(gEffectParams.y, 0.0f));
-        state.velocity = float3(state.seed * 0.8f - 0.4f, 0.6f + state.seed, state.seed * 0.5f - 0.25f);
+        float3 spawnOffset = HashSpawn(id, state.seed + gTime, max(gEffectParams.y, 0.0f));
+        float3 outward = spawnOffset;
+        outward.z *= 0.45f;
+        float outwardLength = length(outward);
+        if (outwardLength <= 0.0001f)
+        {
+            float fallbackAngle = state.seed * 6.2831853f;
+            outward = float3(cos(fallbackAngle), sin(fallbackAngle), 0.0f);
+            outwardLength = 1.0f;
+        }
+        outward /= outwardLength;
+        state.position = gEmitterParams.xyz + spawnOffset;
+        state.velocity = outward * (0.42f + state.seed * 0.55f);
         float scaleMin = min(gParticleShapeParams.z, gParticleShapeParams.w);
         float scaleMax = max(gParticleShapeParams.z, gParticleShapeParams.w);
         float scaleRand = Hash01(id, state.seed + gTime, 9.17f);
@@ -127,7 +138,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     float turbulence = gScaleAndParams.w;
     float curl = sin(gTime * (2.0f + gEffectParams.z) + (float)id * 0.03125f) * (0.25f + turbulence);
     state.velocity.x += curl * gDeltaTime;
-    state.velocity.y += (0.15f - normalizedAge * 0.2f) * gDeltaTime;
+    state.velocity.y += curl * 0.18f * gDeltaTime;
+    state.velocity *= max(0.0f, 1.0f - gDeltaTime * 0.7f);
     state.position += state.velocity * gDeltaTime;
     gParticleState[particleIndex] = state;
 

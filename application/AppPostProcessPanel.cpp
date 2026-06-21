@@ -114,6 +114,20 @@ void DrawPostProcessPanel(
             ImGui::SliderFloat("Blur Radius", &pass.parameters.blurRadius, 1.0f, 8.0f);
         } else if (pass.pipeline == "DistortionComposite") {
             ImGui::SliderFloat("Distortion Scale", &pass.parameters.distortionScale, 0.0f, 0.1f);
+        } else if (pass.pipeline == "AccretionComposite") {
+            ImGui::SliderFloat("Center X", &pass.parameters.accretionCenterX, 0.0f, 1.0f);
+            ImGui::SliderFloat("Center Y", &pass.parameters.accretionCenterY, 0.0f, 1.0f);
+            ImGui::SliderFloat("Radius", &pass.parameters.accretionRadius, 0.12f, 0.9f);
+            ImGui::SliderFloat("Disk Stretch", &pass.parameters.accretionDiskStretch, 0.6f, 4.0f);
+            ImGui::SliderFloat("Turbulence", &pass.parameters.accretionTurbulence, 0.0f, 1.5f);
+            ImGui::SliderFloat("Chromatic", &pass.parameters.accretionChromaticAberration, 0.0f, 2.0f);
+            ImGui::SliderFloat("Core Size", &pass.parameters.accretionCoreSize, 0.04f, 0.36f);
+            ImGui::SliderFloat("Flow Speed", &pass.parameters.accretionFlowSpeed, 0.0f, 4.0f);
+            ImGui::SliderFloat("Road Fade", &pass.parameters.accretionRoadDepthFade, 0.0f, 2.0f);
+            ImGui::SliderFloat("Core Darkness", &pass.parameters.accretionCoreDarkness, 0.0f, 1.0f);
+            ImGui::SliderFloat("Guide Opacity", &pass.parameters.accretionGuideOpacity, 0.0f, 2.0f);
+            ImGui::SliderFloat("Lens Strength", &pass.parameters.accretionLensStrength, 0.0f, 2.0f);
+            ImGui::SliderFloat("Guide Width", &pass.parameters.accretionGuideWidth, 0.04f, 0.5f);
         } else if (pass.pipeline == "ToneMapping") {
             ImGui::SliderFloat("Exposure", &pass.parameters.toneExposure, 0.1f, 4.0f);
         } else if (pass.pipeline == "GlowComposite") {

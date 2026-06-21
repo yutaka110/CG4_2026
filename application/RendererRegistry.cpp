@@ -41,6 +41,16 @@ RendererRegistry BuildDefaultRendererRegistry() {
             "CylinderRenderer",
             EffectRendererType::CylinderRenderer,
             EffectComponentType::Cylinder});
+    registry.Register(
+        EffectRendererDescriptor{
+            "SpearRenderer",
+            EffectRendererType::CylinderRenderer,
+            EffectComponentType::Cylinder});
+    registry.Register(
+        EffectRendererDescriptor{
+            "OrbitRibbonRenderer",
+            EffectRendererType::CylinderRenderer,
+            EffectComponentType::Cylinder});
     return registry;
 }
 } // namespace

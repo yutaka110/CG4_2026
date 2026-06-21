@@ -124,7 +124,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     float turbulence = gScaleAndParams.w;
     float curl = sin(gTime * (2.0f + gEffectParams.z) + (float)id * 0.03125f) * (0.25f + turbulence);
     state.velocity.x += curl * gDeltaTime;
-    state.velocity.y += (0.15f - normalizedAge * 0.2f) * gDeltaTime;
+    state.velocity.y += curl * 0.18f * gDeltaTime;
+    state.velocity *= max(0.0f, 1.0f - gDeltaTime * 0.7f);
     state.position += state.velocity * gDeltaTime;
     gParticleState[id] = state;
 
@@ -138,13 +139,13 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     float alpha = 1.0f - normalizedAge;
     float pulse = 0.65f + 0.35f * sin(gTime * max(gEffectParams.x, 0.01f) + state.seed * 6.28318f);
     float yScaleRandom = max(state.shape.z, 0.001f);
-    float3 scale = state.scale * float3(gScaleAndParams.x, gScaleAndParams.y * yScaleRandom, 1.0f) * (0.7f + normalizedAge * 1.7f);
+    float3 scale = state.scale * float3(1.0f, yScaleRandom, 1.0f) * (0.7f + normalizedAge * 1.7f);
     float4x4 world = MakeWorld(state.position, scale, state.shape.x + state.shape.y * state.age);
 
     ParticleForGPU output;
     output.World = world;
     output.WVP = mul(world, gViewProjection);
-    output.color = float4(state.color.rgb * gTint.rgb * pulse * max(gScaleAndParams.z, 0.01f), alpha * gTint.a);
+    output.color = float4(state.color.rgb * pulse, alpha * state.color.a);
     output.uvRect = gUvRect;
     output.textureIndex = state.textureIndex;
     output.pad = 0;

@@ -1,0 +1,23 @@
+name = solar_plasma_overlay
+lifetime = 1.2
+blend = additive
+layer = additive
+renderQueue = 3500
+color = 1.0,0.72,0.26,1.0
+size = 1.0,1.0,1.0
+
+component = distortion
+name = solar_plasma_heat_haze
+technique = DistortionSprite
+texture = streakNoise
+layer = distortion
+blend = distortion
+duration = 1.2
+renderQueue = 3570
+color = 0.58,0.52,0.5,0.10
+size = 1.45,1.45,1.0
+distortion.strength = 0.08
+distortion.noiseStrength = 0.16
+distortion.uvScrollSpeed = 0.65
+distortion.depthFadeSoftness = 0.0
+distortion.depthAttenuation = 1.0

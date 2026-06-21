@@ -33,6 +33,19 @@ struct PostProcessPass {
         float outlineColorG = 0.0f;
         float outlineColorB = 0.0f;
         float outlineDepthWeight = 8.0f;
+        float accretionRadius = 0.42f;
+        float accretionDiskStretch = 2.35f;
+        float accretionTurbulence = 0.85f;
+        float accretionChromaticAberration = 0.95f;
+        float accretionCoreSize = 0.18f;
+        float accretionCenterX = 0.5f;
+        float accretionCenterY = 0.5f;
+        float accretionFlowSpeed = 1.0f;
+        float accretionRoadDepthFade = 0.35f;
+        float accretionCoreDarkness = 0.96f;
+        float accretionGuideOpacity = 1.0f;
+        float accretionLensStrength = 1.0f;
+        float accretionGuideWidth = 0.18f;
     };
 
     std::string name;

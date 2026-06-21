@@ -1,7 +1,11 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
+
+#include "utils/math/MathUtils.h"
 
 struct ParticleDedicatedOperationalHealthSummary {
     bool probeEnabled = false;
@@ -74,12 +78,27 @@ struct BeamDedicatedOperationalHealthSummary {
 };
 
 struct AppVfxRuntimeState {
+    enum class ShowcaseEffect : uint32_t {
+        ElectricOrbStrike = 0,
+        IceProjectile = 1,
+        BlackHole = 2,
+        Count = 3,
+    };
+
+    struct ShowcaseTuning {
+        float param1 = 1.0f;
+        float param2 = 1.0f;
+        float param3 = 1.0f;
+        float param4 = 1.0f;
+    };
+
     bool enableParticles = false;
     bool enableTrails = true;
     bool enableBeams = true;
     bool enableDistortions = true;
     bool enableRings = true;
     bool enableCylinders = true;
+    bool enableElectricOrbStrike = true;
     bool enableSkinnedSurfaceVfx = false;
     bool enableParticleDedicatedResourceProbe = false;
     bool enableParticleDedicatedProbeTelemetry = false;
@@ -120,6 +139,18 @@ struct AppVfxRuntimeState {
     float autoPlayVfxRadius = 2.5f;
     float autoPlayVfxTimer = 0.0f;
     float autoPlayVfxAngle = 0.0f;
+    bool showcaseMode = false;
+    bool showcaseAutoRotate = true;
+    bool showcaseHudVisible = true;
+    bool showcaseTuningVisible = true;
+    float showcaseAutoTimer = 0.0f;
+    ShowcaseEffect showcaseEffect = ShowcaseEffect::ElectricOrbStrike;
+    std::array<ShowcaseTuning, static_cast<size_t>(ShowcaseEffect::Count)> showcaseTuning{};
+    bool iceProjectileClickToFire = true;
+    bool electricOrbStrikeActive = false;
+    bool electricOrbStrikeLoop = false;
+    float electricOrbStrikeTimer = 0.0f;
+    float electricOrbStrikeDuration = 4.25f;
 
     bool holdHitPlaneBurst = false;
     bool holdHitRing = false;
@@ -129,4 +160,24 @@ struct AppVfxRuntimeState {
     uint32_t holdHitRingInstanceId = 0;
     uint32_t holdHitCylinderInstanceId = 0;
     uint32_t holdHitCylinderComboInstanceId = 0;
+
+    bool iceProjectilePreviewActive = false;
+    bool iceProjectileImpactSpawned = false;
+    uint32_t iceProjectileInstanceId = 0;
+    float iceProjectileTimer = 0.0f;
+    Vector3 iceProjectileStart = {0.0f, -1.55f, -3.05f};
+    Vector3 iceProjectileTarget = {2.5f, 0.7f, 0.42f};
+
+    struct IceProjectileShotState {
+        bool active = false;
+        bool impactSpawned = false;
+        uint32_t instanceId = 0;
+        float timer = 0.0f;
+        bool hasExplicitRotationZ = false;
+        float rotationZ = 0.0f;
+        Vector3 start = {0.0f, -1.55f, -3.05f};
+        Vector3 target = {2.5f, 0.7f, 0.42f};
+    };
+    static constexpr uint32_t kMaxIceProjectileShots = 16;
+    std::array<IceProjectileShotState, kMaxIceProjectileShots> iceProjectileShots{};
 };

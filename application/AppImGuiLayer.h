@@ -64,6 +64,9 @@ public:
 private:
     bool initialized_ = false;
     bool viewportFocusMode_ = false;
+    bool showcasePresentationInitialized_ = false;
+    bool showDeveloperTools_ = false;
+    bool showcaseLoopCurrent_ = false;
     uint32_t selectedEffectInstanceId_ = 0;
     uint32_t trailMeshStreamProbeHealthyFrames_ = 0;
     uint32_t trailMeshStreamActiveHealthyFrames_ = 0;

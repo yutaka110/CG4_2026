@@ -3,8 +3,11 @@
 class BeamRenderer;
 class CylinderRenderer;
 class DistortionRenderer;
+class ElectricOrbStrikeRenderer;
+class OrbitRibbonRenderer;
 class ParticleRenderer;
 class RingRenderer;
+class SpearRenderer;
 class TrailRenderer;
 
 struct AppVfxRendererSet {
@@ -13,7 +16,10 @@ struct AppVfxRendererSet {
     BeamRenderer* beam = nullptr;
     DistortionRenderer* distortion = nullptr;
     RingRenderer* ring = nullptr;
+    SpearRenderer* spear = nullptr;
+    OrbitRibbonRenderer* orbitRibbon = nullptr;
     CylinderRenderer* cylinder = nullptr;
+    ElectricOrbStrikeRenderer* electricOrbStrike = nullptr;
 
     bool IsValid() const {
         return particle != nullptr &&
@@ -21,6 +27,9 @@ struct AppVfxRendererSet {
             beam != nullptr &&
             distortion != nullptr &&
             ring != nullptr &&
-            cylinder != nullptr;
+            spear != nullptr &&
+            orbitRibbon != nullptr &&
+            cylinder != nullptr &&
+            electricOrbStrike != nullptr;
     }
 };

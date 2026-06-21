@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.h>
+#include <array>
 #include <cstdint>
 #include <string>
 #include <d3d12.h>
@@ -12,6 +13,7 @@
 #include "core/Device.h"
 #include "AppFrameState.h"
 #include "AppFrameGraphBuilder.h"
+#include "AppVfxRuntimeState.h"
 #include "graphics/RenderGraph.h"
 #include "graphics/SwapChain.h"
 #include "resources/ResourceRegistry.h"
@@ -45,6 +47,7 @@ public:
         EngineContext& engineContext,
         ge3::core::DescriptorHeapSet& heaps,
         core::Device& dev,
+        HWND hwnd,
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap,
         Matrix4x4* wvpData,
         uint32_t windowWidth,
@@ -68,6 +71,14 @@ private:
     void RenderVfxPreviewFrame() override;
     void BeginFrameSystems();
     void SignalAndWaitGpu();
+    void ProcessIceProjectileMouseLaunch();
+    void ProcessReleaseShowcaseControls(float deltaTime);
+    void PlayShowcaseEffect(AppVfxRuntimeState::ShowcaseEffect effect, bool resetAutoTimer);
+    void ClearShowcaseEffects();
+    void FireShowcaseIceProjectile();
+    void ConfigureShowcasePostProcess();
+    void UpdateShowcaseWindowTitle();
+    bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
     AppRuntimeState& runtimeState_;
@@ -82,6 +93,7 @@ private:
     EngineContext& engineContext_;
     ge3::core::DescriptorHeapSet& heaps_;
     core::Device& dev_;
+    HWND hwnd_ = nullptr;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap_;
     Matrix4x4* wvpData_;
     uint32_t windowWidth_;
@@ -104,4 +116,8 @@ private:
     uint32_t lastTransientBufferCount_ = 0;
     uint32_t lastTransientBufferStorageCount_ = 0;
     D3D12_RESOURCE_STATES sceneDepthState_ = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    bool previousLeftMouseDown_ = false;
+    bool releaseShowcaseInitialized_ = false;
+    bool releaseShowcaseTitleDirty_ = true;
+    std::array<bool, 256> previousKeyDown_{};
 };

@@ -63,6 +63,7 @@ public:
     ID3D12PipelineState* GetGaussianBlurHorizontalPSO() const { return gaussianBlurHorizontalPso_.Get(); }
     ID3D12PipelineState* GetGaussianBlurVerticalPSO() const { return gaussianBlurVerticalPso_.Get(); }
     ID3D12PipelineState* GetDistortionCompositePSO() const { return distortionCompositePso_.Get(); }
+    ID3D12PipelineState* GetAccretionCompositePSO() const { return accretionCompositePso_.Get(); }
     ID3D12PipelineState* GetToneMappingPSO() const { return toneMappingPso_.Get(); }
     ID3D12PipelineState* GetGlowCompositePSO() const { return glowCompositePso_.Get(); }
     ID3D12PipelineState* GetPrewittOutlinePSO() const { return prewittOutlinePso_.Get(); }
@@ -78,6 +79,8 @@ public:
     ID3D12PipelineState* GetTrailMeshStreamPSO() const { return trailMeshStreamPso_.Get(); }
     ID3D12PipelineState* GetDistortionSpritePSO() const { return distortionSpritePso_.Get(); }
     ID3D12PipelineState* GetRingPSO() const { return ringPso_.Get(); }
+    ID3D12PipelineState* GetSpearPSO() const { return spearPso_.Get(); }
+    ID3D12PipelineState* GetOrbitRibbonPSO() const { return orbitRibbonPso_.Get(); }
     ID3D12PipelineState* GetCylinderPSO() const { return cylinderPso_.Get(); }
     ID3D12PipelineState* GetSkeletonDebugPSO() const { return skeletonDebugPso_.Get(); }
 
@@ -131,6 +134,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> gaussianBlurHorizontalPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> gaussianBlurVerticalPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> distortionCompositePso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> accretionCompositePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> toneMappingPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> glowCompositePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> prewittOutlinePso_;
@@ -146,6 +150,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> trailMeshStreamPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> distortionSpritePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> ringPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> spearPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> orbitRibbonPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> cylinderPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> skeletonDebugPso_;
 
@@ -169,6 +175,10 @@ private:
     Microsoft::WRL::ComPtr<IDxcBlob> distortionSpritePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> ringVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> ringPs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> spearVs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> spearPs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> orbitRibbonVs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> orbitRibbonPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> cylinderVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> cylinderPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> skeletonDebugVs_;
@@ -197,6 +207,7 @@ private:
     Microsoft::WRL::ComPtr<IDxcBlob> gaussianBlurHorizontalPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> gaussianBlurVerticalPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> distortionCompositePs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> accretionCompositePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> toneMappingPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> glowCompositePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> prewittOutlinePs_;

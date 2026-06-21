@@ -4,6 +4,10 @@
 
 #include "utils/dx12/BufferHelper.h"
 
+namespace {
+constexpr bool kEnableBackgroundParticles = false;
+}
+
 AppParticleSystem::AppParticleSystem()
     : randomEngine_(seedGenerator_()) {}
 
@@ -71,10 +75,16 @@ void AppParticleSystem::SetAccelerationField(const AccelerationField& accelerati
 }
 
 void AppParticleSystem::AddParticle(const Vector3& baseTranslate) {
+    if (!kEnableBackgroundParticles) {
+        return;
+    }
     particles_.push_back(MakeNewParticle(baseTranslate));
 }
 
 void AppParticleSystem::Emit(const Emitter& emitter) {
+    if (!kEnableBackgroundParticles) {
+        return;
+    }
     for (uint32_t i = 0; i < emitter.count; ++i) {
         Particle particle = MakeNewParticle();
         particle.transform.translate = emitter.transform.translate;
@@ -84,12 +94,21 @@ void AppParticleSystem::Emit(const Emitter& emitter) {
 
 Particle AppParticleSystem::MakeNewParticle() {
     std::uniform_real_distribution<float> distPos(-1.0f, 1.0f);
-    std::uniform_real_distribution<float> distVel(-1.0f, 1.0f);
-    std::uniform_real_distribution<float> distCol(0.0f, 1.0f);
-    std::uniform_real_distribution<float> distTime(1.0f, 3.0f);
+    std::uniform_real_distribution<float> distVel(-0.16f, 0.16f);
+    std::uniform_real_distribution<float> distPalette(0.0f, 1.0f);
+    std::uniform_real_distribution<float> distScale(0.1f, 0.28f);
+    std::uniform_real_distribution<float> distTime(6.5f, 10.0f);
 
     Particle particle{};
-    particle.transform.scale = {1.0f, 1.0f, 1.0f};
+    const float scale = distScale(randomEngine_);
+    const float palette = distPalette(randomEngine_);
+    const Vector4 coolColor = palette < 0.34f
+        ? Vector4{0.02f, 0.62f, 0.74f, 0.1f}
+        : (palette < 0.68f
+            ? Vector4{0.02f, 0.22f, 0.62f, 0.08f}
+            : Vector4{0.02f, 0.48f, 0.22f, 0.08f});
+
+    particle.transform.scale = {scale, scale, 1.0f};
     particle.transform.rotate = {0.0f, 0.0f, 0.0f};
     particle.transform.translate = {
         distPos(randomEngine_),
@@ -101,12 +120,7 @@ Particle AppParticleSystem::MakeNewParticle() {
         distVel(randomEngine_),
         distVel(randomEngine_),
     };
-    particle.color = {
-        distCol(randomEngine_),
-        distCol(randomEngine_),
-        distCol(randomEngine_),
-        1.0f,
-    };
+    particle.color = coolColor;
     particle.lifeTime = distTime(randomEngine_);
     particle.currentTime = 0.0f;
     return particle;
@@ -115,7 +129,7 @@ Particle AppParticleSystem::MakeNewParticle() {
 Particle AppParticleSystem::MakeNewParticle(const Vector3& baseTranslate) {
     Particle particle = MakeNewParticle();
     std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-    std::uniform_real_distribution<float> distScale(0.1f, 0.5f);
+    std::uniform_real_distribution<float> distScale(0.08f, 0.22f);
 
     float scale = distScale(randomEngine_);
     particle.transform.scale = {scale, scale, 1.0f};
@@ -131,6 +145,10 @@ Particle AppParticleSystem::MakeNewParticle(const Vector3& baseTranslate) {
 uint32_t AppParticleSystem::UpdateInstances(
     const Matrix4x4& viewProj,
     float deltaTime) {
+    if (!kEnableBackgroundParticles) {
+        particles_.clear();
+        return 0;
+    }
     if (instancingData_ == nullptr) {
         return 0;
     }
@@ -165,12 +183,14 @@ uint32_t AppParticleSystem::UpdateInstances(
         instancingData_[numInstances].World = world;
         instancingData_[numInstances].WVP = Multiply(world, viewProj);
 
-        float alpha = 1.0f - (it->currentTime / it->lifeTime);
+        const float normalizedAge = it->currentTime / it->lifeTime;
+        const float alpha = 1.0f - (normalizedAge * normalizedAge);
         Vector4 color = it->color;
-        color.x *= alpha;
-        color.y *= alpha;
-        color.z *= alpha;
-        color.w = alpha;
+        const float visibility = color.w * alpha;
+        color.x *= visibility;
+        color.y *= visibility;
+        color.z *= visibility;
+        color.w = visibility;
         instancingData_[numInstances].color = color;
         instancingData_[numInstances].uvRect = {0.0f, 0.0f, 1.0f, 1.0f};
         instancingData_[numInstances].textureIndex = 1;

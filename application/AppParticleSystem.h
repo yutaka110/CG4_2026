@@ -63,7 +63,7 @@ inline bool IsCollision(const AABB& aabb, const Vector3& p) {
 
 class AppParticleSystem {
 public:
-    static constexpr uint32_t kDefaultMaxInstances = 10;
+    static constexpr uint32_t kDefaultMaxInstances = 6;
 
     AppParticleSystem();
 
