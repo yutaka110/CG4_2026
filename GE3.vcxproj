@@ -244,9 +244,9 @@ copy "$(ProjectDir)MotionDetect.CS.hlsl" "$(TargetDir)MotionDetect.CS.hlsl"
     <ClCompile Include="application\src\vfx\TrailRenderer.cpp" />
     <ClCompile Include="application\src\vfx\VfxComponentDraw.cpp" />
     <ClCompile Include="application\src\vfx\VfxResourceResolver.cpp" />
-    <ClCompile Include="CameraCapture.cpp" />
-    <ClCompile Include="ColorConverter.cpp" />
-    <ClCompile Include="CustomByteStream.cpp" />
+    <ClCompile Include="application\streaming\CameraCapture.cpp" />
+    <ClCompile Include="application\streaming\ColorConverter.cpp" />
+    <ClCompile Include="application\streaming\CustomByteStream.cpp" />
     <ClCompile Include="engine\src\assets\ObjLoader.cpp" />
     <ClCompile Include="engine\src\audio\AudioSystem.cpp" />
     <ClCompile Include="engine\src\audio\AudioWave.cpp" />
@@ -295,7 +295,7 @@ copy "$(ProjectDir)MotionDetect.CS.hlsl" "$(TargetDir)MotionDetect.CS.hlsl"
     <ClCompile Include="externals\imgui\imgui_widgets.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
     </ClCompile>
-    <ClCompile Include="H264Encoder.cpp" />
+    <ClCompile Include="application\streaming\H264Encoder.cpp" />
     <ClCompile Include="KeyInput.cpp" />
     <ClCompile Include="lib\Receiver\startTcpReciverRgb32.cpp" />
     <ClCompile Include="main.cpp">
@@ -303,13 +303,13 @@ copy "$(ProjectDir)MotionDetect.CS.hlsl" "$(TargetDir)MotionDetect.CS.hlsl"
       <WholeProgramOptimization Condition="'$(Configuration)|$(Platform)'=='Development|x64'">true</WholeProgramOptimization>
     </ClCompile>
     <ClCompile Include="Matrix4x4.cpp" />
-    <ClCompile Include="MfH264Receiver.cpp" />
-    <ClCompile Include="MfH264Sender.cpp" />
-    <ClCompile Include="NalUtils.cpp" />
-    <ClCompile Include="NetworkManager.cpp" />
+    <ClCompile Include="application\streaming\MfH264Receiver.cpp" />
+    <ClCompile Include="application\streaming\MfH264Sender.cpp" />
+    <ClCompile Include="application\streaming\NalUtils.cpp" />
+    <ClCompile Include="application\streaming\NetworkManager.cpp" />
     <ClCompile Include="TextureHelper.cpp" />
     <ClCompile Include="TextureUploader.cpp" />
-    <ClCompile Include="UdpByteStream.cpp" />
+    <ClCompile Include="application\streaming\UdpByteStream.cpp" />
     <ClCompile Include="WinApp.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -697,9 +697,9 @@ copy "$(ProjectDir)MotionDetect.CS.hlsl" "$(TargetDir)MotionDetect.CS.hlsl"
     <ClInclude Include="application\include\vfx\VfxResourceResolver.h" />
     <ClInclude Include="application\src\vfx\VfxComponentDraw.h" />
     <ClInclude Include="application\ModelLoaderAssimp.h" />
-    <ClInclude Include="CameraCapture.h" />
-    <ClInclude Include="ColorConverter.h" />
-    <ClInclude Include="CustomByteStream.h" />
+    <ClInclude Include="application\streaming\CameraCapture.h" />
+    <ClInclude Include="application\streaming\ColorConverter.h" />
+    <ClInclude Include="application\streaming\CustomByteStream.h" />
     <ClInclude Include="engine\include\assets\ObjLoader.h" />
     <ClInclude Include="engine\include\audio\AudioSystem.h" />
     <ClInclude Include="engine\include\audio\AudioWave.h" />
@@ -741,18 +741,18 @@ copy "$(ProjectDir)MotionDetect.CS.hlsl" "$(TargetDir)MotionDetect.CS.hlsl"
     <ClInclude Include="externals\imgui\imstb_rectpack.h" />
     <ClInclude Include="externals\imgui\imstb_textedit.h" />
     <ClInclude Include="externals\imgui\imstb_truetype.h" />
-    <ClInclude Include="H264Encoder.h" />
+    <ClInclude Include="application\streaming\H264Encoder.h" />
     <ClInclude Include="KeyInput.h" />
     <ClInclude Include="lib\Receiver\FrameProto.h" />
     <ClInclude Include="lib\Receiver\startTcpReceiverRgb32.h" />
     <ClInclude Include="Matrix4x4.h" />
-    <ClInclude Include="MfH264Receiver.h" />
-    <ClInclude Include="MfH264Sender.h" />
-    <ClInclude Include="NalUtils.h" />
-    <ClInclude Include="NetworkManager.h" />
+    <ClInclude Include="application\streaming\MfH264Receiver.h" />
+    <ClInclude Include="application\streaming\MfH264Sender.h" />
+    <ClInclude Include="application\streaming\NalUtils.h" />
+    <ClInclude Include="application\streaming\NetworkManager.h" />
     <ClInclude Include="TextureHelper.h" />
     <ClInclude Include="TextureUploader.h" />
-    <ClInclude Include="UdpByteStream.h" />
+    <ClInclude Include="application\streaming\UdpByteStream.h" />
     <ClInclude Include="Vertex.h" />
     <ClInclude Include="WinApp.h" />
   </ItemGroup>
