@@ -22,6 +22,12 @@
     <Filter Include="ヘッダー ファイル\Reciever">
       <UniqueIdentifier>{65d749a4-a102-45b9-ba54-b302db2078e7}</UniqueIdentifier>
     </Filter>
+    <Filter Include="ソース ファイル\Streaming">
+      <UniqueIdentifier>{e1b70be1-fec0-450d-b64a-0f2b6f9e5bb2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ヘッダー ファイル\Streaming">
+      <UniqueIdentifier>{5e7774f1-fb25-42a2-b1c7-09b04c5a5742}</UniqueIdentifier>
+    </Filter>
     <Filter Include="ソース ファイル\engine">
       <UniqueIdentifier>{24dc3997-b7b0-40ea-b5c8-44a4c4aa2b2e}</UniqueIdentifier>
     </Filter>
@@ -99,8 +105,8 @@
     <ClCompile Include="WinApp.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
-    <ClCompile Include="NetworkManager.cpp">
-      <Filter>ソース ファイル</Filter>
+    <ClCompile Include="application\streaming\NetworkManager.cpp">
+      <Filter>ソース ファイル\Streaming</Filter>
     </ClCompile>
     <ClCompile Include="TextureUploader.cpp">
       <Filter>ソース ファイル</Filter>
@@ -108,29 +114,29 @@
     <ClCompile Include="TextureHelper.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
-    <ClCompile Include="MfH264Receiver.cpp">
-      <Filter>ソース ファイル</Filter>
+    <ClCompile Include="application\streaming\MfH264Receiver.cpp">
+      <Filter>ソース ファイル\Streaming</Filter>
     </ClCompile>
-    <ClCompile Include="CustomByteStream.cpp">
-      <Filter>ソース ファイル</Filter>
+    <ClCompile Include="application\streaming\CustomByteStream.cpp">
+      <Filter>ソース ファイル\Streaming</Filter>
     </ClCompile>
-    <ClCompile Include="UdpByteStream.cpp">
-      <Filter>ソース ファイル</Filter>
+    <ClCompile Include="application\streaming\UdpByteStream.cpp">
+      <Filter>ソース ファイル\Streaming</Filter>
     </ClCompile>
-    <ClCompile Include="MfH264Sender.cpp">
-      <Filter>ソース ファイル</Filter>
+    <ClCompile Include="application\streaming\MfH264Sender.cpp">
+      <Filter>ソース ファイル\Streaming</Filter>
     </ClCompile>
-    <ClCompile Include="H264Encoder.cpp">
-      <Filter>ソース ファイル</Filter>
+    <ClCompile Include="application\streaming\H264Encoder.cpp">
+      <Filter>ソース ファイル\Streaming</Filter>
     </ClCompile>
-    <ClCompile Include="ColorConverter.cpp">
-      <Filter>ソース ファイル</Filter>
+    <ClCompile Include="application\streaming\ColorConverter.cpp">
+      <Filter>ソース ファイル\Streaming</Filter>
     </ClCompile>
-    <ClCompile Include="CameraCapture.cpp">
-      <Filter>ソース ファイル</Filter>
+    <ClCompile Include="application\streaming\CameraCapture.cpp">
+      <Filter>ソース ファイル\Streaming</Filter>
     </ClCompile>
-    <ClCompile Include="NalUtils.cpp">
-      <Filter>ソース ファイル</Filter>
+    <ClCompile Include="application\streaming\NalUtils.cpp">
+      <Filter>ソース ファイル\Streaming</Filter>
     </ClCompile>
     <ClCompile Include="lib\Receiver\startTcpReciverRgb32.cpp">
       <Filter>ソース ファイル\Receiver</Filter>
@@ -466,8 +472,8 @@
     <ClInclude Include="WinApp.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
-    <ClInclude Include="NetworkManager.h">
-      <Filter>ヘッダー ファイル</Filter>
+    <ClInclude Include="application\streaming\NetworkManager.h">
+      <Filter>ヘッダー ファイル\Streaming</Filter>
     </ClInclude>
     <ClInclude Include="TextureUploader.h">
       <Filter>ヘッダー ファイル</Filter>
@@ -475,29 +481,29 @@
     <ClInclude Include="TextureHelper.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
-    <ClInclude Include="MfH264Receiver.h">
-      <Filter>ヘッダー ファイル</Filter>
+    <ClInclude Include="application\streaming\MfH264Receiver.h">
+      <Filter>ヘッダー ファイル\Streaming</Filter>
     </ClInclude>
-    <ClInclude Include="CustomByteStream.h">
-      <Filter>ヘッダー ファイル</Filter>
+    <ClInclude Include="application\streaming\CustomByteStream.h">
+      <Filter>ヘッダー ファイル\Streaming</Filter>
     </ClInclude>
-    <ClInclude Include="UdpByteStream.h">
-      <Filter>ヘッダー ファイル</Filter>
+    <ClInclude Include="application\streaming\UdpByteStream.h">
+      <Filter>ヘッダー ファイル\Streaming</Filter>
     </ClInclude>
-    <ClInclude Include="MfH264Sender.h">
-      <Filter>ヘッダー ファイル</Filter>
+    <ClInclude Include="application\streaming\MfH264Sender.h">
+      <Filter>ヘッダー ファイル\Streaming</Filter>
     </ClInclude>
-    <ClInclude Include="H264Encoder.h">
-      <Filter>ヘッダー ファイル</Filter>
+    <ClInclude Include="application\streaming\H264Encoder.h">
+      <Filter>ヘッダー ファイル\Streaming</Filter>
     </ClInclude>
-    <ClInclude Include="ColorConverter.h">
-      <Filter>ヘッダー ファイル</Filter>
+    <ClInclude Include="application\streaming\ColorConverter.h">
+      <Filter>ヘッダー ファイル\Streaming</Filter>
     </ClInclude>
-    <ClInclude Include="CameraCapture.h">
-      <Filter>ヘッダー ファイル</Filter>
+    <ClInclude Include="application\streaming\CameraCapture.h">
+      <Filter>ヘッダー ファイル\Streaming</Filter>
     </ClInclude>
-    <ClInclude Include="NalUtils.h">
-      <Filter>ヘッダー ファイル</Filter>
+    <ClInclude Include="application\streaming\NalUtils.h">
+      <Filter>ヘッダー ファイル\Streaming</Filter>
     </ClInclude>
     <ClInclude Include="application\AppRunLoop.h">
       <Filter>ヘッダー ファイル</Filter>
