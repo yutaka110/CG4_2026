@@ -94,6 +94,8 @@
     <PostBuildEvent>
       <Command>copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxcompiler.dll" "$(TargetDir)dxcompiler.dll"
 copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dxil.dll"
+xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
+copy "$(ProjectDir)MotionDetect.CS.hlsl" "$(TargetDir)MotionDetect.CS.hlsl"
 
 </Command>
     </PostBuildEvent>
@@ -123,6 +125,8 @@ copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dx
     <PostBuildEvent>
       <Command>copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxcompiler.dll" "$(TargetDir)dxcompiler.dll"
 copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dxil.dll"
+xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
+copy "$(ProjectDir)MotionDetect.CS.hlsl" "$(TargetDir)MotionDetect.CS.hlsl"
 </Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -154,6 +158,8 @@ copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dx
     <PostBuildEvent>
       <Command>copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxcompiler.dll" "$(TargetDir)dxcompiler.dll"
 copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dxil.dll"
+xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
+copy "$(ProjectDir)MotionDetect.CS.hlsl" "$(TargetDir)MotionDetect.CS.hlsl"
 
 </Command>
     </PostBuildEvent>

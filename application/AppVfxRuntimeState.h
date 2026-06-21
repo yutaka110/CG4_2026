@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -77,6 +78,20 @@ struct BeamDedicatedOperationalHealthSummary {
 };
 
 struct AppVfxRuntimeState {
+    enum class ShowcaseEffect : uint32_t {
+        ElectricOrbStrike = 0,
+        IceProjectile = 1,
+        BlackHole = 2,
+        Count = 3,
+    };
+
+    struct ShowcaseTuning {
+        float param1 = 1.0f;
+        float param2 = 1.0f;
+        float param3 = 1.0f;
+        float param4 = 1.0f;
+    };
+
     bool enableParticles = false;
     bool enableTrails = true;
     bool enableBeams = true;
@@ -125,11 +140,17 @@ struct AppVfxRuntimeState {
     float autoPlayVfxTimer = 0.0f;
     float autoPlayVfxAngle = 0.0f;
     bool showcaseMode = false;
+    bool showcaseAutoRotate = true;
+    bool showcaseHudVisible = true;
+    bool showcaseTuningVisible = true;
+    float showcaseAutoTimer = 0.0f;
+    ShowcaseEffect showcaseEffect = ShowcaseEffect::ElectricOrbStrike;
+    std::array<ShowcaseTuning, static_cast<size_t>(ShowcaseEffect::Count)> showcaseTuning{};
     bool iceProjectileClickToFire = true;
     bool electricOrbStrikeActive = false;
     bool electricOrbStrikeLoop = false;
     float electricOrbStrikeTimer = 0.0f;
-    float electricOrbStrikeDuration = 5.25f;
+    float electricOrbStrikeDuration = 4.25f;
 
     bool holdHitPlaneBurst = false;
     bool holdHitRing = false;

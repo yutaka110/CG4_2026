@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <stdexcept>
 
@@ -350,6 +351,14 @@ void ElectricOrbStrikeRenderer::Draw(
     const float time = Clamp01((std::max)(0.0f, state.electricOrbStrikeTimer) / kLifetime) * kLifetime;
     const Vector3 orb = OrbPosition(time);
     float orbCharge = 0.58f + 0.16f * std::sin(time * 10.0f);
+    const bool showcaseElectric =
+        state.showcaseMode &&
+        state.showcaseEffect == AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike;
+    const AppVfxRuntimeState::ShowcaseTuning& tuning =
+        state.showcaseTuning[static_cast<size_t>(AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike)];
+    const float showcaseIntensity = showcaseElectric ? (0.45f + tuning.param1 * 0.55f) : 1.0f;
+    const float showcaseSmoke = showcaseElectric ? (0.50f + tuning.param3 * 0.50f) : 1.0f;
+    const float showcaseSpark = showcaseElectric ? (0.38f + tuning.param4 * 0.62f) : 1.0f;
 
     for (const StrikeEvent& strike : kStrikes) {
         const float local = time - strike.start;
@@ -383,13 +392,13 @@ void ElectricOrbStrikeRenderer::Draw(
                 boltStart,
                 strike.target,
                 width,
-                boltIntensity * strike.layers.boltStrength * (strike.secondary ? 1.75f : 2.55f),
+                boltIntensity * strike.layers.boltStrength * (strike.secondary ? 1.75f : 2.55f) * showcaseIntensity,
                 time,
                 strike.seed,
                 boltColor,
                 strike.layers.plasmaStrength,
-                strike.layers.hotCoreStrength,
-                strike.layers.sparkStrength,
+                strike.layers.hotCoreStrength * showcaseIntensity,
+                strike.layers.sparkStrength * showcaseSpark,
                 strike.layers.floorHeatStrength);
             if (hasBoltStartBlend && strike.layers.plasmaStrength > 1.0f) {
                 const float guidedLayer = Clamp01(strike.layers.boltStartBlend / 0.06f);
@@ -405,7 +414,7 @@ void ElectricOrbStrikeRenderer::Draw(
                     {length * 1.08f, width * 29.0f, 1.0f},
                     std::atan2(dy, dx),
                     {0.98f, 0.030f, 0.48f, 0.58f},
-                    {1.0f, boltIntensity * strike.layers.plasmaStrength * (0.52f + guidedLayer * 0.18f), time, strike.seed + 88.0f},
+                    {1.0f, boltIntensity * strike.layers.plasmaStrength * showcaseIntensity * (0.52f + guidedLayer * 0.18f), time, strike.seed + 88.0f},
                     {width * (17.0f + guidedLayer * 4.0f), 0.34f, -2.0f, 0.46f + guidedLayer * 0.08f});
 
                 const Vector3 frontEnd = Lerp(boltStart, strike.target, 0.34f);
@@ -419,7 +428,7 @@ void ElectricOrbStrikeRenderer::Draw(
                     {frontLength * 1.12f, width * 35.0f, 1.0f},
                     std::atan2(frontDy, frontDx),
                     {0.92f, 0.018f, 0.38f, 0.50f},
-                    {1.0f, plasmaSustain * strike.layers.plasmaStrength * (0.78f + guidedLayer * 0.30f), time, strike.seed + 118.0f},
+                    {1.0f, plasmaSustain * strike.layers.plasmaStrength * showcaseIntensity * (0.78f + guidedLayer * 0.30f), time, strike.seed + 118.0f},
                     {width * (19.0f + guidedLayer * 6.0f), 0.30f, -2.0f, 0.38f + guidedLayer * 0.08f});
             }
         }
@@ -429,12 +438,12 @@ void ElectricOrbStrikeRenderer::Draw(
                 context,
                 strike.target,
                 local,
-                (std::max)(intensity, residue * 0.45f) * strike.layers.boltStrength,
+                (std::max)(intensity, residue * 0.45f) * strike.layers.boltStrength * showcaseIntensity,
                 strike.seed,
                 strike.layers.floorHeatStrength,
-                strike.layers.smokeStrength,
-                strike.layers.hotCoreStrength,
-                strike.layers.sparkStrength);
+                strike.layers.smokeStrength * showcaseSmoke,
+                strike.layers.hotCoreStrength * showcaseIntensity,
+                strike.layers.sparkStrength * showcaseSpark);
             if (hasBoltStartBlend && strike.layers.floorHeatStrength > 1.0f) {
                 const float earlyFloor = Pulse(local - 0.02f, 0.10f, strike.duration * 0.92f);
                 if (earlyFloor > 0.001f) {
@@ -445,7 +454,7 @@ void ElectricOrbStrikeRenderer::Draw(
                         {0.74f + earlyFloor * 0.46f, 0.30f + earlyFloor * 0.18f, 1.0f},
                         0.02f * strike.seed,
                         {1.0f, 0.050f, 0.42f, 0.42f},
-                        {2.0f, 1.62f * earlyFloor * strike.layers.floorHeatStrength, local, strike.seed + 55.0f},
+                        {2.0f, 1.62f * earlyFloor * strike.layers.floorHeatStrength * showcaseIntensity, local, strike.seed + 55.0f},
                         {0.56f, earlyFloor, 0.22f, earlyFloor * 0.44f});
                 }
             }
@@ -457,12 +466,12 @@ void ElectricOrbStrikeRenderer::Draw(
                     context,
                     Add(strike.target, {side * (0.22f + Hash01(strike.seed + 17.0f) * 0.20f), 0.012f, -0.018f}),
                     local - 0.10f,
-                    sideBloom * strike.layers.sideBloomStrength,
+                    sideBloom * strike.layers.sideBloomStrength * showcaseIntensity,
                     strike.seed + 71.0f,
                     strike.layers.floorHeatStrength * 0.80f,
-                    strike.layers.smokeStrength,
-                    strike.layers.hotCoreStrength * 0.76f,
-                    strike.layers.sparkStrength * 0.72f);
+                    strike.layers.smokeStrength * showcaseSmoke,
+                    strike.layers.hotCoreStrength * 0.76f * showcaseIntensity,
+                    strike.layers.sparkStrength * 0.72f * showcaseSpark);
             }
         }
         orbCharge += intensity * 0.18f;
@@ -480,7 +489,7 @@ void ElectricOrbStrikeRenderer::Draw(
             context,
             {-1.58f, -0.68f, -1.34f},
             leftSmokeLocal,
-            leftSmoke * 0.64f,
+            leftSmoke * 0.64f * showcaseSmoke,
             86.0f);
     }
 

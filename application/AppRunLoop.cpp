@@ -3,6 +3,7 @@
 #include <DirectXMath.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 
 #include "AppFrameRenderer.h"
@@ -13,7 +14,10 @@
 #include "AppRuntimeState.h"
 #include "AppSceneResources.h"
 #include "EngineContext.h"
+
+#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
 #include "../externals/imgui/imgui.h"
+#endif
 
 using namespace DirectX;
 using namespace Microsoft::WRL;
@@ -91,6 +95,23 @@ bool IntersectScreenPointWithZPlane(
         planeZ,
     };
     return true;
+}
+
+size_t ShowcaseIndex(AppVfxRuntimeState::ShowcaseEffect effect) {
+    return static_cast<size_t>(effect);
+}
+
+const char* ShowcaseEffectName(AppVfxRuntimeState::ShowcaseEffect effect) {
+    switch (effect) {
+    case AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike:
+        return "Electric Orb Strike";
+    case AppVfxRuntimeState::ShowcaseEffect::IceProjectile:
+        return "Ice Projectile";
+    case AppVfxRuntimeState::ShowcaseEffect::BlackHole:
+        return "Black Hole";
+    default:
+        return "Showcase";
+    }
 }
 
 } // namespace
@@ -195,13 +216,15 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
     frameState_.viewMatrix = debugCamera_.GetViewMatrix();
     frameState_.projMatrix = debugCamera_.GetProjectionMatrix();
 
-    vfxEngine_.Update(runtimeState_.vfx, 0.016f);
+    constexpr float kFixedPreviewDeltaTime = 0.016f;
+    ProcessReleaseShowcaseControls(kFixedPreviewDeltaTime);
+    vfxEngine_.Update(runtimeState_.vfx, kFixedPreviewDeltaTime);
 
     BYTE key[256] = {};
     (void)key;
 
     frameState_.viewProjectionMatrix = debugCamera_.GetViewProjectionMatrix();
-    frameState_.deltaTime = 0.016f;
+    frameState_.deltaTime = kFixedPreviewDeltaTime;
     frameState_.drawCount = particleSystem_.UpdateInstances(
         frameState_.viewProjectionMatrix,
         frameState_.deltaTime);
@@ -231,6 +254,200 @@ void AppRunLoop::RenderFrame() {
     sceneStateManager_.Render(*this);
 }
 
+bool AppRunLoop::WasKeyPressed(int virtualKey) {
+    if (virtualKey < 0 || virtualKey >= static_cast<int>(previousKeyDown_.size())) {
+        return false;
+    }
+    const bool down = (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+    const bool pressed = down && !previousKeyDown_[static_cast<size_t>(virtualKey)];
+    previousKeyDown_[static_cast<size_t>(virtualKey)] = down;
+    return pressed;
+}
+
+void AppRunLoop::ClearShowcaseEffects() {
+    runtimeState_.vfx.electricOrbStrikeActive = false;
+    runtimeState_.vfx.electricOrbStrikeLoop = false;
+    runtimeState_.vfx.electricOrbStrikeTimer = 0.0f;
+    runtimeState_.vfx.iceProjectilePreviewActive = false;
+    runtimeState_.vfx.iceProjectileImpactSpawned = false;
+    runtimeState_.vfx.iceProjectileInstanceId = 0;
+    runtimeState_.vfx.iceProjectileTimer = 0.0f;
+    for (AppVfxRuntimeState::IceProjectileShotState& shot : runtimeState_.vfx.iceProjectileShots) {
+        shot = {};
+    }
+    vfxEngine_.Runtime().ClearInstances();
+}
+
+void AppRunLoop::ConfigureShowcasePostProcess() {
+    const bool blackHole =
+        runtimeState_.vfx.showcaseEffect == AppVfxRuntimeState::ShowcaseEffect::BlackHole;
+    AppVfxRuntimeState::ShowcaseTuning& tuning =
+        runtimeState_.vfx.showcaseTuning[ShowcaseIndex(runtimeState_.vfx.showcaseEffect)];
+
+    vfxEngine_.PostProcess().SetEnabled("AccretionComposite", blackHole);
+    vfxEngine_.PostProcess().SetIntensity("AccretionComposite", blackHole ? tuning.param4 : 1.0f);
+    vfxEngine_.PostProcess().SetIntensity("GlowComposite", blackHole ? (0.92f + tuning.param4 * 0.42f) : 1.0f);
+    vfxEngine_.PostProcess().SetIntensity("DistortionComposite", blackHole ? (0.85f + tuning.param3 * 0.58f) : 1.0f);
+
+    for (PostProcessPass& pass : vfxEngine_.PostProcess().MutablePasses()) {
+        if (pass.name == "AccretionComposite") {
+            pass.parameters.accretionRadius = 0.30f + tuning.param2 * 0.14f;
+            pass.parameters.accretionDiskStretch = 1.65f + tuning.param2 * 0.92f;
+            pass.parameters.accretionTurbulence = 0.48f + tuning.param1 * 0.52f;
+            pass.parameters.accretionChromaticAberration = 0.42f + tuning.param3 * 0.62f;
+            pass.parameters.accretionCoreSize = 0.10f + tuning.param1 * 0.075f;
+            pass.parameters.accretionCoreDarkness = 0.78f + tuning.param1 * 0.15f;
+            pass.parameters.accretionLensStrength = 0.44f + tuning.param3 * 0.82f;
+            pass.parameters.accretionGuideOpacity = 0.42f + tuning.param4 * 0.62f;
+            pass.parameters.accretionGuideWidth = 0.08f + tuning.param2 * 0.08f;
+        } else if (pass.name == "DistortionComposite") {
+            pass.parameters.distortionScale = blackHole ? (0.010f + tuning.param3 * 0.026f) : 0.020f;
+        }
+    }
+}
+
+void AppRunLoop::FireShowcaseIceProjectile() {
+    runtimeState_.vfx.iceProjectileStart = {-2.15f, -1.28f, -3.05f};
+    runtimeState_.vfx.iceProjectileTarget = {2.20f, 0.58f, 0.42f};
+    runtimeState_.vfx.iceProjectilePreviewActive = true;
+    runtimeState_.vfx.iceProjectileImpactSpawned = false;
+    runtimeState_.vfx.iceProjectileInstanceId = 0;
+    runtimeState_.vfx.iceProjectileTimer = 0.0f;
+}
+
+void AppRunLoop::PlayShowcaseEffect(AppVfxRuntimeState::ShowcaseEffect effect, bool resetAutoTimer) {
+    runtimeState_.vfx.showcaseMode = true;
+    runtimeState_.vfx.showcaseEffect = effect;
+    runtimeState_.vfx.autoPlayVfxDemo = false;
+    runtimeState_.vfx.iceProjectileClickToFire =
+        effect == AppVfxRuntimeState::ShowcaseEffect::IceProjectile;
+    runtimeState_.vfx.enableTrailMeshStream = true;
+    runtimeState_.vfx.enableTrailMeshStreamAutoFallback = false;
+    runtimeState_.vfx.trailMeshStreamFallbackActive = false;
+    runtimeState_.useMonsterBall = false;
+    runtimeState_.showAnimatedCube = false;
+    runtimeState_.showSkinnedModel = false;
+    runtimeState_.showSkeletonDebug = false;
+    runtimeState_.showSkybox = false;
+    runtimeState_.showVfxModelObjects = false;
+    runtimeState_.clearColor[0] = 0.015f;
+    runtimeState_.clearColor[1] = 0.018f;
+    runtimeState_.clearColor[2] = 0.028f;
+    runtimeState_.clearColor[3] = 1.0f;
+    runtimeState_.directionalLightData.color = {0.55f, 0.7f, 1.0f, 1.0f};
+    runtimeState_.directionalLightData.direction = {0.25f, -1.0f, 0.2f};
+    runtimeState_.directionalLightData.intensity = 0.12f;
+    runtimeState_.pointLightData.color = {0.35f, 0.65f, 1.0f, 1.0f};
+    runtimeState_.pointLightData.intensity = 0.0f;
+    runtimeState_.pointLightData.radius = 6.0f;
+    runtimeState_.pointLightData.decay = 2.0f;
+
+    ClearShowcaseEffects();
+
+    switch (effect) {
+    case AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike:
+        runtimeState_.vfx.enableParticles = false;
+        runtimeState_.vfx.enableTrails = false;
+        runtimeState_.vfx.enableBeams = false;
+        runtimeState_.vfx.enableDistortions = false;
+        runtimeState_.vfx.enableRings = false;
+        runtimeState_.vfx.enableCylinders = false;
+        runtimeState_.vfx.enableElectricOrbStrike = true;
+        runtimeState_.vfx.electricOrbStrikeActive = true;
+        runtimeState_.vfx.electricOrbStrikeDuration = 4.25f;
+        break;
+    case AppVfxRuntimeState::ShowcaseEffect::IceProjectile:
+        runtimeState_.vfx.enableParticles = true;
+        runtimeState_.vfx.enableTrails = true;
+        runtimeState_.vfx.enableBeams = false;
+        runtimeState_.vfx.enableDistortions = false;
+        runtimeState_.vfx.enableRings = true;
+        runtimeState_.vfx.enableCylinders = true;
+        runtimeState_.vfx.enableElectricOrbStrike = false;
+        break;
+    case AppVfxRuntimeState::ShowcaseEffect::BlackHole: {
+        runtimeState_.vfx.enableParticles = true;
+        runtimeState_.vfx.enableTrails = true;
+        runtimeState_.vfx.enableBeams = false;
+        runtimeState_.vfx.enableDistortions = true;
+        runtimeState_.vfx.enableRings = false;
+        runtimeState_.vfx.enableCylinders = false;
+        runtimeState_.vfx.enableElectricOrbStrike = false;
+        const AppVfxRuntimeState::ShowcaseTuning& tuning =
+            runtimeState_.vfx.showcaseTuning[ShowcaseIndex(effect)];
+        vfxEngine_.Runtime().PlayEffectWithParams(
+            "warp_core",
+            {0.0f, -0.08f, -1.15f},
+            {0.88f, 0.54f + tuning.param4 * 0.18f, 1.0f, 1.0f},
+            {1.0f + tuning.param2 * 0.25f, 1.0f + tuning.param2 * 0.25f, 1.0f});
+        break;
+    }
+    default:
+        break;
+    }
+
+    ConfigureShowcasePostProcess();
+    if (resetAutoTimer) {
+        runtimeState_.vfx.showcaseAutoTimer =
+            effect == AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike ? 4.75f :
+            effect == AppVfxRuntimeState::ShowcaseEffect::IceProjectile ? 8.00f :
+            5.20f;
+    }
+    releaseShowcaseTitleDirty_ = true;
+}
+
+void AppRunLoop::UpdateShowcaseWindowTitle() {
+    if (hwnd_ == nullptr || !releaseShowcaseTitleDirty_) {
+        return;
+    }
+    releaseShowcaseTitleDirty_ = false;
+
+    if (!runtimeState_.vfx.showcaseHudVisible) {
+        SetWindowTextA(hwnd_, "CG5 Showcase");
+        return;
+    }
+
+    const AppVfxRuntimeState::ShowcaseEffect effect = runtimeState_.vfx.showcaseEffect;
+    char title[512] = {};
+    std::snprintf(
+        title,
+        sizeof(title),
+        "CG5 Showcase - %s | 1 Electric Orb  2 Ice Projectile  3 Black Hole | Ice: Left Click",
+        ShowcaseEffectName(effect));
+    SetWindowTextA(hwnd_, title);
+}
+
+void AppRunLoop::ProcessReleaseShowcaseControls(float deltaTime) {
+#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
+    (void)deltaTime;
+    return;
+#else
+    (void)deltaTime;
+    if (!releaseShowcaseInitialized_) {
+        releaseShowcaseInitialized_ = true;
+        runtimeState_.vfx.showcaseHudVisible = true;
+        runtimeState_.vfx.showcaseTuningVisible = false;
+        runtimeState_.vfx.showcaseAutoRotate = false;
+        PlayShowcaseEffect(AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike, true);
+    }
+
+    if (WasKeyPressed(VK_ESCAPE)) {
+        PostQuitMessage(0);
+        return;
+    }
+    if (WasKeyPressed('1')) {
+        PlayShowcaseEffect(AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike, true);
+    }
+    if (WasKeyPressed('2')) {
+        PlayShowcaseEffect(AppVfxRuntimeState::ShowcaseEffect::IceProjectile, true);
+    }
+    if (WasKeyPressed('3')) {
+        PlayShowcaseEffect(AppVfxRuntimeState::ShowcaseEffect::BlackHole, true);
+    }
+    UpdateShowcaseWindowTitle();
+#endif
+}
+
 void AppRunLoop::ProcessIceProjectileMouseLaunch() {
     if (!runtimeState_.vfx.iceProjectileClickToFire || hwnd_ == nullptr) {
         previousLeftMouseDown_ = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
@@ -240,9 +457,14 @@ void AppRunLoop::ProcessIceProjectileMouseLaunch() {
     const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
     const bool clicked = leftMouseDown && !previousLeftMouseDown_;
     previousLeftMouseDown_ = leftMouseDown;
-    if (!clicked || ImGui::GetIO().WantCaptureMouse) {
+    if (!clicked) {
         return;
     }
+#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
+    if (ImGui::GetIO().WantCaptureMouse) {
+        return;
+    }
+#endif
 
     POINT cursor{};
     if (!GetCursorPos(&cursor) || !ScreenToClient(hwnd_, &cursor)) {
@@ -277,6 +499,27 @@ void AppRunLoop::ProcessIceProjectileMouseLaunch() {
     runtimeState_.vfx.enableTrailMeshStream = true;
     runtimeState_.vfx.enableTrailMeshStreamAutoFallback = false;
     runtimeState_.vfx.trailMeshStreamFallbackActive = false;
+    runtimeState_.vfx.showcaseEffect = AppVfxRuntimeState::ShowcaseEffect::IceProjectile;
+    runtimeState_.vfx.iceProjectileClickToFire = true;
+    runtimeState_.useMonsterBall = false;
+    runtimeState_.showAnimatedCube = false;
+    runtimeState_.showSkinnedModel = false;
+    runtimeState_.showSkeletonDebug = false;
+    runtimeState_.showSkybox = false;
+    runtimeState_.showVfxModelObjects = false;
+    runtimeState_.clearColor[0] = 0.015f;
+    runtimeState_.clearColor[1] = 0.018f;
+    runtimeState_.clearColor[2] = 0.028f;
+    runtimeState_.clearColor[3] = 1.0f;
+    runtimeState_.directionalLightData.color = {0.55f, 0.7f, 1.0f, 1.0f};
+    runtimeState_.directionalLightData.direction = {0.25f, -1.0f, 0.2f};
+    runtimeState_.directionalLightData.intensity = 0.12f;
+    runtimeState_.pointLightData.color = {0.35f, 0.65f, 1.0f, 1.0f};
+    runtimeState_.pointLightData.intensity = 0.0f;
+    runtimeState_.pointLightData.radius = 6.0f;
+    runtimeState_.pointLightData.decay = 2.0f;
+    runtimeState_.vfx.showcaseAutoTimer = 8.0f;
+    releaseShowcaseTitleDirty_ = true;
 
     AppVfxRuntimeState::IceProjectileShotState* slot = nullptr;
     for (AppVfxRuntimeState::IceProjectileShotState& shot : runtimeState_.vfx.iceProjectileShots) {

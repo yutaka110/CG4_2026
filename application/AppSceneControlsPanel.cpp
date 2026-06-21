@@ -512,7 +512,7 @@ void DrawVfxRuntimeControlsPanel(
         runtimeState.vfx.enableElectricOrbStrike = true;
         runtimeState.vfx.electricOrbStrikeActive = true;
         runtimeState.vfx.electricOrbStrikeTimer = 0.0f;
-        runtimeState.vfx.electricOrbStrikeDuration = 5.25f;
+        runtimeState.vfx.electricOrbStrikeDuration = 4.25f;
         runtimeState.showAnimatedCube = false;
         runtimeState.showSkinnedModel = false;
         runtimeState.showVfxModelObjects = false;

@@ -15,7 +15,11 @@
 #include <utility>
 
 namespace {
-constexpr float kElectricOrbStrikeMinimumDuration = 4.55f;
+constexpr float kElectricOrbStrikeMinimumDuration = 4.10f;
+
+size_t ShowcaseIndex(AppVfxRuntimeState::ShowcaseEffect effect) {
+    return static_cast<size_t>(effect);
+}
 
 bool IsSameAuthoredComponent(
     const EffectComponentCommon* source,
@@ -540,7 +544,16 @@ void VfxEngine::Update(AppVfxRuntimeState& runtimeState, float deltaTime) {
 
     UpdateIceProjectilePreview(effectRuntime_, runtimeState, deltaTime);
     if (runtimeState.electricOrbStrikeActive) {
-        runtimeState.electricOrbStrikeTimer += (std::max)(0.0f, deltaTime);
+        const bool showcaseElectric =
+            runtimeState.showcaseMode &&
+            runtimeState.showcaseEffect == AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike;
+        const float electricSpeed = showcaseElectric
+            ? (std::max)(
+                0.25f,
+                runtimeState.showcaseTuning[
+                    ShowcaseIndex(AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike)].param2)
+            : 1.0f;
+        runtimeState.electricOrbStrikeTimer += (std::max)(0.0f, deltaTime) * electricSpeed;
         const float duration = (std::max)(
             kElectricOrbStrikeMinimumDuration,
             runtimeState.electricOrbStrikeDuration);

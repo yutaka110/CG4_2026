@@ -367,3 +367,4 @@ capture/
 .codex/
 .codex_tmp/
 .agents/
+externals/generated/

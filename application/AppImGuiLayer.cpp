@@ -151,6 +151,328 @@ const RuntimeSkinningTimingPathStats* GetDisplayedSkinningTimingStats(const AppR
     return nullptr;
 }
 
+size_t ShowcaseIndex(AppVfxRuntimeState::ShowcaseEffect effect) {
+    return static_cast<size_t>(effect);
+}
+
+const char* ShowcaseEffectDisplayName(AppVfxRuntimeState::ShowcaseEffect effect) {
+    switch (effect) {
+    case AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike:
+        return "Lightning";
+    case AppVfxRuntimeState::ShowcaseEffect::IceProjectile:
+        return "Ice Bullet";
+    case AppVfxRuntimeState::ShowcaseEffect::BlackHole:
+        return "Black Hole";
+    default:
+        return "Showcase";
+    }
+}
+
+const char* ShowcaseEffectCaption(AppVfxRuntimeState::ShowcaseEffect effect) {
+    switch (effect) {
+    case AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike:
+        return "charge, strike, flash, afterglow";
+    case AppVfxRuntimeState::ShowcaseEffect::IceProjectile:
+        return "launch, trail, impact, frozen burst";
+    case AppVfxRuntimeState::ShowcaseEffect::BlackHole:
+        return "orbit, lensing, accretion, collapse";
+    default:
+        return "ready";
+    }
+}
+
+AppVfxRuntimeState::ShowcaseEffect NextShowcaseEffect(AppVfxRuntimeState::ShowcaseEffect effect) {
+    switch (effect) {
+    case AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike:
+        return AppVfxRuntimeState::ShowcaseEffect::IceProjectile;
+    case AppVfxRuntimeState::ShowcaseEffect::IceProjectile:
+        return AppVfxRuntimeState::ShowcaseEffect::BlackHole;
+    case AppVfxRuntimeState::ShowcaseEffect::BlackHole:
+    default:
+        return AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike;
+    }
+}
+
+float ShowcaseDuration(AppVfxRuntimeState::ShowcaseEffect effect) {
+    switch (effect) {
+    case AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike:
+        return 4.75f;
+    case AppVfxRuntimeState::ShowcaseEffect::IceProjectile:
+        return 8.00f;
+    case AppVfxRuntimeState::ShowcaseEffect::BlackHole:
+        return 5.20f;
+    default:
+        return 6.0f;
+    }
+}
+
+void ApplyShowcaseSceneDefaults(AppRuntimeState& runtimeState) {
+    runtimeState.clearColor[0] = 0.015f;
+    runtimeState.clearColor[1] = 0.018f;
+    runtimeState.clearColor[2] = 0.028f;
+    runtimeState.clearColor[3] = 1.0f;
+
+    runtimeState.useMonsterBall = false;
+    runtimeState.showAnimatedCube = false;
+    runtimeState.showSkinnedModel = false;
+    runtimeState.showSkeletonDebug = false;
+    runtimeState.showSkybox = false;
+    runtimeState.showVfxModelObjects = false;
+
+    runtimeState.directionalLightData.color = {0.55f, 0.7f, 1.0f, 1.0f};
+    runtimeState.directionalLightData.direction = {0.25f, -1.0f, 0.2f};
+    runtimeState.directionalLightData.intensity = 0.12f;
+
+    runtimeState.pointLightData.color = {0.35f, 0.65f, 1.0f, 1.0f};
+    runtimeState.pointLightData.intensity = 0.0f;
+    runtimeState.pointLightData.radius = 6.0f;
+    runtimeState.pointLightData.decay = 2.0f;
+
+    runtimeState.vfx.showcaseMode = true;
+    runtimeState.vfx.autoPlayVfxDemo = false;
+    runtimeState.vfx.enableTrailMeshStream = true;
+    runtimeState.vfx.enableTrailMeshStreamAutoFallback = false;
+    runtimeState.vfx.trailMeshStreamFallbackActive = false;
+}
+
+void ResetShowcaseIceProjectiles(AppVfxRuntimeState& vfxState) {
+    vfxState.iceProjectilePreviewActive = false;
+    vfxState.iceProjectileImpactSpawned = false;
+    vfxState.iceProjectileInstanceId = 0;
+    vfxState.iceProjectileTimer = 0.0f;
+    for (AppVfxRuntimeState::IceProjectileShotState& shot : vfxState.iceProjectileShots) {
+        shot = {};
+    }
+}
+
+void ClearShowcaseEffectState(AppRuntimeState& runtimeState, EffectRuntime& effectRuntime) {
+    runtimeState.vfx.electricOrbStrikeActive = false;
+    runtimeState.vfx.electricOrbStrikeLoop = false;
+    runtimeState.vfx.electricOrbStrikeTimer = 0.0f;
+    ResetShowcaseIceProjectiles(runtimeState.vfx);
+    effectRuntime.ClearInstances();
+}
+
+void ConfigureShowcasePostProcess(PostProcessStack& postProcessStack, AppVfxRuntimeState& vfxState) {
+    const bool blackHole = vfxState.showcaseEffect == AppVfxRuntimeState::ShowcaseEffect::BlackHole;
+    AppVfxRuntimeState::ShowcaseTuning& tuning =
+        vfxState.showcaseTuning[ShowcaseIndex(vfxState.showcaseEffect)];
+
+    postProcessStack.SetEnabled("AccretionComposite", blackHole);
+    postProcessStack.SetIntensity("AccretionComposite", blackHole ? tuning.param4 : 1.0f);
+    postProcessStack.SetIntensity("GlowComposite", blackHole ? (0.92f + tuning.param4 * 0.42f) : 1.0f);
+    postProcessStack.SetIntensity("DistortionComposite", blackHole ? (0.85f + tuning.param3 * 0.58f) : 1.0f);
+
+    for (PostProcessPass& pass : postProcessStack.MutablePasses()) {
+        if (pass.name == "AccretionComposite") {
+            pass.parameters.accretionRadius = 0.30f + tuning.param2 * 0.14f;
+            pass.parameters.accretionDiskStretch = 1.65f + tuning.param2 * 0.92f;
+            pass.parameters.accretionTurbulence = 0.48f + tuning.param1 * 0.52f;
+            pass.parameters.accretionChromaticAberration = 0.42f + tuning.param3 * 0.62f;
+            pass.parameters.accretionCoreSize = 0.10f + tuning.param1 * 0.075f;
+            pass.parameters.accretionCoreDarkness = 0.78f + tuning.param1 * 0.15f;
+            pass.parameters.accretionLensStrength = 0.44f + tuning.param3 * 0.82f;
+            pass.parameters.accretionGuideOpacity = 0.42f + tuning.param4 * 0.62f;
+            pass.parameters.accretionGuideWidth = 0.08f + tuning.param2 * 0.08f;
+        } else if (pass.name == "DistortionComposite") {
+            pass.parameters.distortionScale = blackHole ? (0.010f + tuning.param3 * 0.026f) : 0.020f;
+        }
+    }
+}
+
+void PlayShowcasePresentationEffect(
+    AppRuntimeState& runtimeState,
+    EffectRuntime& effectRuntime,
+    PostProcessStack& postProcessStack,
+    AppVfxRuntimeState::ShowcaseEffect effect) {
+    ApplyShowcaseSceneDefaults(runtimeState);
+    runtimeState.vfx.showcaseEffect = effect;
+    runtimeState.vfx.iceProjectileClickToFire =
+        effect == AppVfxRuntimeState::ShowcaseEffect::IceProjectile;
+
+    ClearShowcaseEffectState(runtimeState, effectRuntime);
+
+    switch (effect) {
+    case AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike:
+        runtimeState.vfx.enableParticles = false;
+        runtimeState.vfx.enableTrails = false;
+        runtimeState.vfx.enableBeams = false;
+        runtimeState.vfx.enableDistortions = false;
+        runtimeState.vfx.enableRings = false;
+        runtimeState.vfx.enableCylinders = false;
+        runtimeState.vfx.enableElectricOrbStrike = true;
+        runtimeState.vfx.electricOrbStrikeActive = true;
+        runtimeState.vfx.electricOrbStrikeDuration = 4.25f;
+        break;
+    case AppVfxRuntimeState::ShowcaseEffect::IceProjectile:
+        runtimeState.vfx.enableParticles = true;
+        runtimeState.vfx.enableTrails = true;
+        runtimeState.vfx.enableBeams = false;
+        runtimeState.vfx.enableDistortions = false;
+        runtimeState.vfx.enableRings = true;
+        runtimeState.vfx.enableCylinders = true;
+        runtimeState.vfx.enableElectricOrbStrike = false;
+        runtimeState.vfx.iceProjectileStart = {-2.15f, -1.28f, -3.05f};
+        runtimeState.vfx.iceProjectileTarget = {2.20f, 0.58f, 0.42f};
+        runtimeState.vfx.iceProjectilePreviewActive = true;
+        break;
+    case AppVfxRuntimeState::ShowcaseEffect::BlackHole: {
+        runtimeState.vfx.enableParticles = true;
+        runtimeState.vfx.enableTrails = true;
+        runtimeState.vfx.enableBeams = false;
+        runtimeState.vfx.enableDistortions = true;
+        runtimeState.vfx.enableRings = false;
+        runtimeState.vfx.enableCylinders = false;
+        runtimeState.vfx.enableElectricOrbStrike = false;
+        const AppVfxRuntimeState::ShowcaseTuning& tuning =
+            runtimeState.vfx.showcaseTuning[ShowcaseIndex(effect)];
+        effectRuntime.PlayEffectWithParams(
+            "warp_core",
+            {0.0f, -0.08f, -1.15f},
+            {0.88f, 0.54f + tuning.param4 * 0.18f, 1.0f, 1.0f},
+            {1.0f + tuning.param2 * 0.25f, 1.0f + tuning.param2 * 0.25f, 1.0f});
+        break;
+    }
+    default:
+        break;
+    }
+
+    ConfigureShowcasePostProcess(postProcessStack, runtimeState.vfx);
+    runtimeState.vfx.showcaseAutoTimer = ShowcaseDuration(effect);
+}
+
+bool ShowcaseEffectButton(
+    const char* label,
+    bool active,
+    const ImVec2& size) {
+    if (active) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.42f, 0.72f, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.52f, 0.86f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.34f, 0.62f, 1.0f));
+    }
+    const bool pressed = ImGui::Button(label, size);
+    if (active) {
+        ImGui::PopStyleColor(3);
+    }
+    return pressed;
+}
+
+void DrawShowcasePresentationPanel(
+    AppRuntimeState& runtimeState,
+    EffectRuntime& effectRuntime,
+    PostProcessStack& postProcessStack,
+    bool& showDeveloperTools,
+    bool& loopCurrentEffect) {
+    if (runtimeState.vfx.showcaseAutoRotate || loopCurrentEffect) {
+        runtimeState.vfx.showcaseAutoTimer -= ImGui::GetIO().DeltaTime;
+        if (runtimeState.vfx.showcaseAutoTimer <= 0.0f) {
+            PlayShowcasePresentationEffect(
+                runtimeState,
+                effectRuntime,
+                postProcessStack,
+                loopCurrentEffect
+                    ? runtimeState.vfx.showcaseEffect
+                    : NextShowcaseEffect(runtimeState.vfx.showcaseEffect));
+        }
+    }
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2 workPos = viewport ? viewport->WorkPos : ImVec2(0.0f, 0.0f);
+    const ImVec2 workSize = viewport ? viewport->WorkSize : ImGui::GetIO().DisplaySize;
+    const float panelWidth = ClampUiDimension(workSize.x * 0.34f, 430.0f, 560.0f);
+
+    ImGui::SetNextWindowPos(ImVec2(workPos.x + 16.0f, workPos.y + 16.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(panelWidth, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.86f);
+    constexpr ImGuiWindowFlags showcaseFlags =
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoResize;
+
+    if (ImGui::Begin("VFX Showcase", nullptr, showcaseFlags)) {
+        ImGui::TextUnformatted("VFX Showcase");
+        ImGui::SameLine();
+        ImGui::TextDisabled("development submission");
+        ImGui::Separator();
+
+        const AppVfxRuntimeState::ShowcaseEffect currentEffect = runtimeState.vfx.showcaseEffect;
+        ImGui::Text("%s", ShowcaseEffectDisplayName(currentEffect));
+        ImGui::TextDisabled("%s", ShowcaseEffectCaption(currentEffect));
+
+        const float gap = ImGui::GetStyle().ItemSpacing.x;
+        const float buttonWidth = (ImGui::GetContentRegionAvail().x - gap * 2.0f) / 3.0f;
+        const ImVec2 effectButtonSize(buttonWidth, 38.0f);
+        if (ShowcaseEffectButton(
+                "Lightning",
+                currentEffect == AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike,
+                effectButtonSize)) {
+            loopCurrentEffect = false;
+            PlayShowcasePresentationEffect(
+                runtimeState,
+                effectRuntime,
+                postProcessStack,
+                AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike);
+        }
+        ImGui::SameLine();
+        if (ShowcaseEffectButton(
+                "Ice Bullet",
+                currentEffect == AppVfxRuntimeState::ShowcaseEffect::IceProjectile,
+                effectButtonSize)) {
+            loopCurrentEffect = false;
+            PlayShowcasePresentationEffect(
+                runtimeState,
+                effectRuntime,
+                postProcessStack,
+                AppVfxRuntimeState::ShowcaseEffect::IceProjectile);
+        }
+        ImGui::SameLine();
+        if (ShowcaseEffectButton(
+                "Black Hole",
+                currentEffect == AppVfxRuntimeState::ShowcaseEffect::BlackHole,
+                effectButtonSize)) {
+            loopCurrentEffect = false;
+            PlayShowcasePresentationEffect(
+                runtimeState,
+                effectRuntime,
+                postProcessStack,
+                AppVfxRuntimeState::ShowcaseEffect::BlackHole);
+        }
+
+        if (ImGui::Button("Replay", ImVec2(92.0f, 30.0f))) {
+            PlayShowcasePresentationEffect(runtimeState, effectRuntime, postProcessStack, currentEffect);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Next", ImVec2(92.0f, 30.0f))) {
+            loopCurrentEffect = false;
+            PlayShowcasePresentationEffect(
+                runtimeState,
+                effectRuntime,
+                postProcessStack,
+                NextShowcaseEffect(currentEffect));
+        }
+        ImGui::SameLine();
+        if (ImGui::Checkbox("Auto Sequence", &runtimeState.vfx.showcaseAutoRotate) &&
+            runtimeState.vfx.showcaseAutoRotate) {
+            loopCurrentEffect = false;
+        }
+
+        if (ImGui::Checkbox("Loop Current", &loopCurrentEffect) && loopCurrentEffect) {
+            runtimeState.vfx.showcaseAutoRotate = false;
+            runtimeState.vfx.showcaseAutoTimer = ShowcaseDuration(currentEffect);
+        }
+
+        const float duration = ShowcaseDuration(currentEffect);
+        const float remaining = ClampUiDimension(runtimeState.vfx.showcaseAutoTimer, 0.0f, duration);
+        const float progress = duration > 0.0f ? 1.0f - (remaining / duration) : 1.0f;
+        ImGui::ProgressBar(progress, ImVec2(-1.0f, 8.0f), "");
+
+        ImGui::Separator();
+        ImGui::Checkbox("Click viewport to fire ice", &runtimeState.vfx.iceProjectileClickToFire);
+        ImGui::SameLine();
+        ImGui::Checkbox("Developer Tools", &showDeveloperTools);
+    }
+    ImGui::End();
+}
+
 void DrawSkinningTimingPanel(const AppRuntimeState& runtimeState) {
     ImGui::SeparatorText("Skinning GPU Timing");
     const char* activeLabel = "none";
@@ -287,9 +609,32 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &beamDedicatedStableFrames_,
         &beamDedicatedActiveStableFrames_};
 
+    if (!showcasePresentationInitialized_) {
+        showcasePresentationInitialized_ = true;
+        runtimeState.vfx.showcaseAutoRotate = true;
+        runtimeState.vfx.showcaseHudVisible = true;
+        runtimeState.vfx.showcaseTuningVisible = false;
+        PlayShowcasePresentationEffect(
+            runtimeState,
+            effectRuntime,
+            postProcessStack,
+            AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike);
+    }
+
     if (viewportFocusMode_) {
         UpdateVfxRuntimeStatusTelemetry(runtimeStatusInput);
         DrawViewportFocusStatusBar(viewportFocusMode_);
+        return;
+    }
+
+    DrawShowcasePresentationPanel(
+        runtimeState,
+        effectRuntime,
+        postProcessStack,
+        showDeveloperTools_,
+        showcaseLoopCurrent_);
+    if (!showDeveloperTools_) {
+        UpdateVfxRuntimeStatusTelemetry(runtimeStatusInput);
         return;
     }
 
