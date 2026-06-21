@@ -368,3 +368,13 @@ capture/
 .codex_tmp/
 .agents/
 externals/generated/
+vcpkg_installed/
+
+# Submission dependency libraries
+!externals/assimp/lib/
+!externals/assimp/lib/Debug/
+!externals/assimp/lib/Release/
+externals/assimp/lib/Debug/*
+externals/assimp/lib/Release/*
+!externals/assimp/lib/Debug/assimp-vc143-mtd.lib
+!externals/assimp/lib/Release/assimp-vc143-mt.lib
