@@ -8,6 +8,7 @@
 #include "AppPostProcessPanel.h"
 #include "AppRenderGraphDebugPanel.h"
 #include "AppRuntimeState.h"
+#include "AppSceneResources.h"
 #include "AppSceneControlsPanel.h"
 #include "AppVfxDebugDataBuilder.h"
 #include "AppVfxRuntimeQueuesPanel.h"
@@ -28,6 +29,7 @@
 #include "../../externals/imgui/imgui_impl_dx12.h"
 #include "../../externals/imgui/imgui_impl_win32.h"
 
+#include <array>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -733,7 +735,10 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         context.vfxAccumulationPreview,
                         context.postColorPreview,
                         context.depthPreview,
-                        context.emissivePreview});
+                        context.emissivePreview,
+                        context.scene != nullptr ? context.scene->cascadeShadowSrvGpuHandles : std::array<D3D12_GPU_DESCRIPTOR_HANDLE, 4>{},
+                        runtimeState.terrain.shadowDebugCascade,
+                        runtimeState.terrain.showShadowDebugView});
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();

@@ -141,7 +141,7 @@ void AppFrameRenderer::DrawSkinnedModel(
     material.textures.srv[5] = motionMaskTextureHandle;
     material.textures.srv[9] = environmentTextureHandle;
     ApplyMaterialInstance(commandList, material);
-    commandList->SetGraphicsRootDescriptorTable(10, matrixPaletteHandle);
+    commandList->SetGraphicsRootDescriptorTable(12, matrixPaletteHandle);
     commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
 }
 

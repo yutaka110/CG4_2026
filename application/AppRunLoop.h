@@ -17,6 +17,9 @@
 #include "graphics/RenderGraph.h"
 #include "graphics/SwapChain.h"
 #include "resources/ResourceRegistry.h"
+#include "terrain/RailPath.h"
+#include "terrain/TerrainChunkManager.h"
+#include "terrain/TerrainPresetStore.h"
 #include "utils/math/MathUtils.h"
 #include "AppSceneState.h"
 #include "AppSceneStateManager.h"
@@ -78,6 +81,8 @@ private:
     void FireShowcaseIceProjectile();
     void ConfigureShowcasePostProcess();
     void UpdateShowcaseWindowTitle();
+    void UpdateTerrainAuthoring(float deltaTime);
+    void RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList);
     bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
@@ -105,6 +110,9 @@ private:
     AppSceneStateManager sceneStateManager_;
     VfxEngine vfxEngine_;
     AppFrameGraphBuilder frameGraphBuilder_;
+    RailPath railPath_;
+    TerrainChunkManager terrainChunkManager_;
+    TerrainPresetStore terrainPresetStore_;
     ge3::graphics::RenderGraph renderGraph_;
     ge3::resources::ResourceRegistry resourceRegistry_;
     ge3::resources::FrameTransientAllocator frameTransientAllocator_;

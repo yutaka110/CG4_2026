@@ -112,9 +112,11 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
 
     const std::wstring shaders[] = {
         L"resources/Object3D.VS.hlsl",
+        L"resources/TerrainShadow.VS.hlsl",
         L"resources/SkinningObject3D.VS.hlsl",
         L"resources/Skinning.CS.hlsl",
         L"resources/Object3D.PS.hlsl",
+        L"resources/Terrain.PS.hlsl",
         L"resources/Sprite.VS.hlsl",
         L"resources/Sprite.PS.hlsl",
         L"resources/Skybox.VS.hlsl",
@@ -162,6 +164,8 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
         L"resources/GaussianBlurVertical.PS.hlsl",
         L"resources/DistortionComposite.PS.hlsl",
         L"resources/Accretion.PS.hlsl",
+        L"resources/DistanceFog.PS.hlsl",
+        L"resources/ContactAO.PS.hlsl",
         L"resources/ToneMapping.PS.hlsl",
         L"resources/GlowComposite.PS.hlsl",
         L"resources/PrewittOutline.PS.hlsl",
@@ -229,7 +233,13 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     motionMaskRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     motionMaskRange.OffsetInDescriptorsFromTableStart = 0;
 
-    D3D12_ROOT_PARAMETER rootParameters[10] = {};
+    D3D12_DESCRIPTOR_RANGE cascadeShadowRange = {};
+    cascadeShadowRange.BaseShaderRegister = 11;
+    cascadeShadowRange.NumDescriptors = 4;
+    cascadeShadowRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    cascadeShadowRange.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_ROOT_PARAMETER rootParameters[12] = {};
     rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     rootParameters[0].Descriptor.ShaderRegister = 0;
@@ -274,6 +284,15 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     rootParameters[9].DescriptorTable.NumDescriptorRanges = 1;
     rootParameters[9].DescriptorTable.pDescriptorRanges = &environmentRange;
 
+    rootParameters[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParameters[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParameters[10].Descriptor.ShaderRegister = 5;
+
+    rootParameters[11].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParameters[11].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParameters[11].DescriptorTable.NumDescriptorRanges = 1;
+    rootParameters[11].DescriptorTable.pDescriptorRanges = &cascadeShadowRange;
+
     descriptionRootSignature.pParameters = rootParameters;
     descriptionRootSignature.NumParameters = _countof(rootParameters);
 
@@ -298,14 +317,14 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     matrixPaletteRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     matrixPaletteRange.OffsetInDescriptorsFromTableStart = 0;
 
-    D3D12_ROOT_PARAMETER skinnedRootParameters[11] = {};
+    D3D12_ROOT_PARAMETER skinnedRootParameters[13] = {};
     for (uint32_t index = 0; index < _countof(rootParameters); ++index) {
         skinnedRootParameters[index] = rootParameters[index];
     }
-    skinnedRootParameters[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    skinnedRootParameters[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-    skinnedRootParameters[10].DescriptorTable.NumDescriptorRanges = 1;
-    skinnedRootParameters[10].DescriptorTable.pDescriptorRanges = &matrixPaletteRange;
+    skinnedRootParameters[12].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    skinnedRootParameters[12].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    skinnedRootParameters[12].DescriptorTable.NumDescriptorRanges = 1;
+    skinnedRootParameters[12].DescriptorTable.pDescriptorRanges = &matrixPaletteRange;
 
     D3D12_ROOT_SIGNATURE_DESC skinnedRootSignatureDesc = descriptionRootSignature;
     skinnedRootSignatureDesc.pParameters = skinnedRootParameters;
@@ -1046,9 +1065,11 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     // Compile shaders
     // ------------------------------
     vs_ = Compile_(L"resources/Object3D.VS.hlsl", L"vs_6_0");
+    terrainShadowVs_ = Compile_(L"resources/TerrainShadow.VS.hlsl", L"vs_6_0");
     skinnedVs_ = Compile_(L"resources/SkinningObject3D.VS.hlsl", L"vs_6_0");
     skinningCs_ = Compile_(L"resources/Skinning.CS.hlsl", L"cs_6_0");
     ps_ = Compile_(L"resources/Object3D.PS.hlsl", L"ps_6_0");
+    terrainPs_ = Compile_(L"resources/Terrain.PS.hlsl", L"ps_6_0");
     spriteVs_ = Compile_(L"resources/Sprite.VS.hlsl", L"vs_6_0");
     spritePs_ = Compile_(L"resources/Sprite.PS.hlsl", L"ps_6_0");
     skyboxVs_ = Compile_(L"resources/Skybox.VS.hlsl", L"vs_6_0");
@@ -1096,6 +1117,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     gaussianBlurVerticalPs_ = Compile_(L"resources/GaussianBlurVertical.PS.hlsl", L"ps_6_0");
     distortionCompositePs_ = Compile_(L"resources/DistortionComposite.PS.hlsl", L"ps_6_0");
     accretionCompositePs_ = Compile_(L"resources/Accretion.PS.hlsl", L"ps_6_0");
+    distanceFogPs_ = Compile_(L"resources/DistanceFog.PS.hlsl", L"ps_6_0");
+    contactAoPs_ = Compile_(L"resources/ContactAO.PS.hlsl", L"ps_6_0");
     toneMappingPs_ = Compile_(L"resources/ToneMapping.PS.hlsl", L"ps_6_0");
     glowCompositePs_ = Compile_(L"resources/GlowComposite.PS.hlsl", L"ps_6_0");
     prewittOutlinePs_ = Compile_(L"resources/PrewittOutline.PS.hlsl", L"ps_6_0");
@@ -1104,7 +1127,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     debugDepthPreviewPs_ = Compile_(L"resources/DebugDepthPreview.PS.hlsl", L"ps_6_0");
     debugEmissivePreviewPs_ = Compile_(L"resources/DebugEmissivePreview.PS.hlsl", L"ps_6_0");
 
-    if (!vs_ || !skinnedVs_ || !skinningCs_ || !ps_ || !spriteVs_ || !spritePs_ || !skyboxVs_ || !skyboxPs_ || !cs_ || !particleVs_ || !particlePs_ ||
+    if (!vs_ || !terrainShadowVs_ || !skinnedVs_ || !skinningCs_ || !ps_ || !terrainPs_ || !spriteVs_ || !spritePs_ || !skyboxVs_ || !skyboxPs_ || !cs_ || !particleVs_ || !particlePs_ ||
         !trailMeshVs_ || !trailMeshStreamVs_ || !trailMeshPs_ || !distortionSpriteVs_ || !distortionSpritePs_ ||
         !ringVs_ || !ringPs_ || !spearVs_ || !spearPs_ || !orbitRibbonVs_ || !orbitRibbonPs_ || !cylinderVs_ || !cylinderPs_ || !skeletonDebugVs_ || !skeletonDebugPs_ ||
         !gpuParticleCs_ || !gpuParticleResetCs_ || !gpuParticlePoolResetCs_ || !gpuParticlePoolBeginCs_ ||
@@ -1114,7 +1137,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         !trailMeshStreamCs_ || !trailMeshBuildCs_ || !compositeVs_ || !compositePs_ || !bloomExtractPs_ ||
         !bloomDownsamplePs_ || !bloomUpsamplePs_ || !blurHorizontalPs_ || !blurVerticalPs_ ||
         !boxBlurHorizontalPs_ || !boxBlurVerticalPs_ || !gaussianBlurHorizontalPs_ || !gaussianBlurVerticalPs_ ||
-        !distortionCompositePs_ || !accretionCompositePs_ ||
+        !distortionCompositePs_ || !accretionCompositePs_ || !distanceFogPs_ || !contactAoPs_ ||
         !toneMappingPs_ || !glowCompositePs_ || !prewittOutlinePs_ || !grayscalePs_ || !vignettePs_ ||
         !debugDepthPreviewPs_ || !debugEmissivePreviewPs_) {
         OutputDebugStringA("[AppPipelines] Shader compilation failed.\n");
@@ -1179,6 +1202,38 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
     hr = device->CreateGraphicsPipelineState(&graphicsPipelineStateDesc, IID_PPV_ARGS(&mainPso_));
     if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Main)", hr);
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC terrainPsoDesc = graphicsPipelineStateDesc;
+    terrainPsoDesc.PS = { terrainPs_->GetBufferPointer(), terrainPs_->GetBufferSize() };
+    terrainPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    terrainPsoDesc.RasterizerState.DepthClipEnable = TRUE;
+    hr = device->CreateGraphicsPipelineState(&terrainPsoDesc, IID_PPV_ARGS(&terrainPso_));
+    if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Terrain)", hr);
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC terrainWireframePsoDesc = terrainPsoDesc;
+    terrainWireframePsoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    terrainWireframePsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    hr = device->CreateGraphicsPipelineState(
+        &terrainWireframePsoDesc,
+        IID_PPV_ARGS(&terrainWireframePso_));
+    if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(TerrainWireframe)", hr);
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC terrainShadowPsoDesc = graphicsPipelineStateDesc;
+    terrainShadowPsoDesc.VS = { terrainShadowVs_->GetBufferPointer(), terrainShadowVs_->GetBufferSize() };
+    terrainShadowPsoDesc.PS = {};
+    terrainShadowPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    terrainShadowPsoDesc.RasterizerState.DepthBias = 1200;
+    terrainShadowPsoDesc.RasterizerState.SlopeScaledDepthBias = 1.4f;
+    terrainShadowPsoDesc.RasterizerState.DepthClipEnable = TRUE;
+    terrainShadowPsoDesc.NumRenderTargets = 0;
+    terrainShadowPsoDesc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
+    terrainShadowPsoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    terrainShadowPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    terrainShadowPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    hr = device->CreateGraphicsPipelineState(
+        &terrainShadowPsoDesc,
+        IID_PPV_ARGS(&terrainShadowPso_));
+    if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(TerrainShadow)", hr);
 
     D3D12_INPUT_ELEMENT_DESC skinnedInputElements[5] = {};
     skinnedInputElements[0] = inputElementDescs[0];
@@ -1490,6 +1545,20 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         d.PS = { accretionCompositePs_->GetBufferPointer(), accretionCompositePs_->GetBufferSize() };
         hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&accretionCompositePso_));
         if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(AccretionComposite)", hr);
+    }
+
+    {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = compositeDesc;
+        d.PS = { distanceFogPs_->GetBufferPointer(), distanceFogPs_->GetBufferSize() };
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&distanceFogPso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(DistanceFog)", hr);
+    }
+
+    {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = compositeDesc;
+        d.PS = { contactAoPs_->GetBufferPointer(), contactAoPs_->GetBufferSize() };
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&contactAoPso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(ContactAO)", hr);
     }
 
     {
@@ -1879,9 +1948,11 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
     const std::wstring shaders[] = {
         L"resources/Object3D.VS.hlsl",
+        L"resources/TerrainShadow.VS.hlsl",
         L"resources/SkinningObject3D.VS.hlsl",
         L"resources/Skinning.CS.hlsl",
         L"resources/Object3D.PS.hlsl",
+        L"resources/Terrain.PS.hlsl",
         L"resources/Sprite.VS.hlsl",
         L"resources/Sprite.PS.hlsl",
         L"resources/Skybox.VS.hlsl",
@@ -1929,6 +2000,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         L"resources/GaussianBlurVertical.PS.hlsl",
         L"resources/DistortionComposite.PS.hlsl",
         L"resources/Accretion.PS.hlsl",
+        L"resources/DistanceFog.PS.hlsl",
+        L"resources/ContactAO.PS.hlsl",
         L"resources/ToneMapping.PS.hlsl",
         L"resources/GlowComposite.PS.hlsl",
         L"resources/PrewittOutline.PS.hlsl",

@@ -9,12 +9,14 @@
 #include "AppRuntimeState.h"
 #include "AppSceneResources.h"
 #include "graphics/RenderGraph.h"
+#include "terrain/TerrainChunkManager.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <vector>
 #include <wrl/client.h>
 
 namespace {
@@ -748,6 +750,93 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         }});
 
     ctx.renderGraph->AddPass({
+        "Geometry.Terrain",
+        ge3::graphics::RenderPassLayer::Geometry,
+        {
+            {"SceneColor", ge3::graphics::RenderResourceAccessType::WriteRtv},
+            {"SceneDepth", ge3::graphics::RenderResourceAccessType::WriteDepth},
+        },
+        "SceneDepth",
+        [ctx](ge3::graphics::RenderPassContext& passContext) {
+            if (!ctx.runtimeState->terrain.enabled ||
+                ctx.terrainChunkManager == nullptr ||
+                ctx.scene->terrainMaterialResource == nullptr ||
+                ctx.scene->directionalLightResource == nullptr ||
+                ctx.scene->cameraResource == nullptr ||
+                ctx.scene->pointLightResource == nullptr ||
+                ctx.scene->spotLightResource == nullptr) {
+                return;
+            }
+
+            const std::vector<TerrainRenderChunk>& chunks =
+                ctx.terrainChunkManager->RenderChunks();
+            if (chunks.empty()) {
+                return;
+            }
+
+            ID3D12PipelineState* terrainPipeline = ctx.appPipelines->GetTerrainPSO() != nullptr
+                ? ctx.appPipelines->GetTerrainPSO()
+                : ctx.appPipelines->GetMainPSO();
+            if (ctx.runtimeState->terrain.displayMode == TerrainDisplayMode::Wireframe &&
+                ctx.appPipelines->GetTerrainWireframePSO() != nullptr) {
+                terrainPipeline = ctx.appPipelines->GetTerrainWireframePSO();
+            }
+
+            const bool ready = ctx.frameRenderer->PrepareMainPass(
+                passContext.commandList,
+                ctx.runtimeState->viewport,
+                ctx.runtimeState->scissorRect,
+                ctx.appPipelines->GetMainRootSignature(),
+                terrainPipeline);
+            if (!ready) {
+                return;
+            }
+
+            const D3D12_GPU_DESCRIPTOR_HANDLE terrainTexture =
+                ctx.scene->terrainAlbedoTextureSrvHandleGPU.ptr != 0
+                    ? ctx.scene->terrainAlbedoTextureSrvHandleGPU
+                    : ctx.scene->textureSrvHandleGPU;
+            const D3D12_GPU_DESCRIPTOR_HANDLE terrainDetailCache =
+                ctx.scene->terrainDetailCacheTextureSrvHandleGPU.ptr != 0
+                    ? ctx.scene->terrainDetailCacheTextureSrvHandleGPU
+                    : ctx.scene->textureSrvHandleGPU2;
+            const D3D12_GPU_DESCRIPTOR_HANDLE terrainDetailNormalMap =
+                ctx.scene->terrainDetailNormalMapTextureSrvHandleGPU.ptr != 0
+                    ? ctx.scene->terrainDetailNormalMapTextureSrvHandleGPU
+                    : ctx.scene->textureSrvHandleGPU2;
+            if (ctx.scene->cascadeShadowResource != nullptr) {
+                passContext.commandList->SetGraphicsRootConstantBufferView(
+                    10,
+                    ctx.scene->cascadeShadowResource->GetGPUVirtualAddress());
+            }
+            if (ctx.scene->cascadeShadowSrvTableGpu.ptr != 0) {
+                passContext.commandList->SetGraphicsRootDescriptorTable(
+                    11,
+                    ctx.scene->cascadeShadowSrvTableGpu);
+            }
+            for (const TerrainRenderChunk& chunk : chunks) {
+                if (chunk.indexCount == 0 || chunk.transformResource == nullptr) {
+                    continue;
+                }
+                ctx.frameRenderer->DrawMainModel(
+                    passContext.commandList,
+                    chunk.vbv,
+                    chunk.ibv,
+                    ctx.scene->terrainMaterialResource->GetGPUVirtualAddress(),
+                    chunk.transformResource->GetGPUVirtualAddress(),
+                    terrainTexture,
+                    terrainDetailCache,
+                    terrainDetailNormalMap,
+                    ctx.scene->skyboxTextureSrvHandleGPU,
+                    ctx.scene->directionalLightResource->GetGPUVirtualAddress(),
+                    ctx.scene->cameraResource->GetGPUVirtualAddress(),
+                    ctx.scene->pointLightResource->GetGPUVirtualAddress(),
+                    ctx.scene->spotLightResource->GetGPUVirtualAddress(),
+                    chunk.indexCount);
+            }
+        }});
+
+    ctx.renderGraph->AddPass({
         "Debug.Skeleton",
         ge3::graphics::RenderPassLayer::Geometry,
         {
@@ -777,5 +866,39 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 ctx.scene->skeletonDebugVBV,
                 ctx.scene->skeletonDebugTransformResource->GetGPUVirtualAddress(),
                 ctx.scene->skeletonDebugVertexCount);
+        }});
+
+    ctx.renderGraph->AddPass({
+        "Debug.Draw",
+        ge3::graphics::RenderPassLayer::Geometry,
+        {
+            {"SceneColor", ge3::graphics::RenderResourceAccessType::WriteRtv},
+            {"SceneDepth", ge3::graphics::RenderResourceAccessType::ReadDepth},
+        },
+        "SceneDepth",
+        [ctx](ge3::graphics::RenderPassContext& passContext) {
+            if (!(ctx.runtimeState->terrain.showDebugDraw ||
+                  ctx.runtimeState->terrain.showCascadeBounds ||
+                  ctx.runtimeState->terrain.displayMode == TerrainDisplayMode::Debug) ||
+                ctx.scene->debugDraw.VertexCount() == 0 ||
+                !ctx.scene->debugDraw.IsReady()) {
+                return;
+            }
+
+            const bool ready = ctx.frameRenderer->PrepareMainPass(
+                passContext.commandList,
+                ctx.runtimeState->viewport,
+                ctx.runtimeState->scissorRect,
+                ctx.appPipelines->GetSkeletonDebugRootSignature(),
+                ctx.appPipelines->GetSkeletonDebugPSO());
+            if (!ready) {
+                return;
+            }
+
+            ctx.frameRenderer->DrawSkeletonDebugLines(
+                passContext.commandList,
+                ctx.scene->debugDraw.VertexBufferView(),
+                ctx.scene->debugDraw.TransformBufferAddress(),
+                ctx.scene->debugDraw.VertexCount());
         }});
 }

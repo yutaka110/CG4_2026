@@ -7,6 +7,8 @@ class AppPipelines;
 class AppRenderResources;
 class AppSceneResources;
 class BeamRenderer;
+class TerrainChunkManager;
+struct AppRuntimeState;
 struct FrameLoopState;
 namespace ge3::resources {
 class EffectResourceCache;
@@ -29,4 +31,6 @@ struct VfxRenderContext {
     D3D12_GPU_DESCRIPTOR_HANDLE depthTextureHandle{};
     float beamTime = 0.0f;
     const vfx::VfxTypedResourceSet* typedResources = nullptr;
+    const AppRuntimeState* runtimeState = nullptr;
+    const TerrainChunkManager* terrainChunkManager = nullptr;
 };

@@ -283,6 +283,187 @@ void DrawMaterialSettingsControlsPanel(
     ImGui::DragFloat("Camera Near", &runtimeState.camera.nearZ, 0.01f, 0.001f, 100.0f);
     ImGui::DragFloat("Camera Far", &runtimeState.camera.farZ, 1.0f, 1.0f, 5000.0f);
 
+    ImGui::SeparatorText("Rail Terrain Authoring");
+    TerrainAuthoringState& terrain = runtimeState.terrain;
+    ImGui::Checkbox("Terrain Authoring", &terrain.enabled);
+    ImGui::SameLine();
+    ImGui::Checkbox("Debug Draw", &terrain.showDebugDraw);
+    const char* terrainDisplayModeLabels[] = {
+        "Lit",
+        "Unlit",
+        "Wireframe",
+        "Debug",
+        "Detail Normal",
+    };
+    int terrainDisplayMode = static_cast<int>(terrain.displayMode);
+    if (ImGui::Combo(
+            "Terrain Display Mode",
+            &terrainDisplayMode,
+            terrainDisplayModeLabels,
+            IM_ARRAYSIZE(terrainDisplayModeLabels))) {
+        terrainDisplayMode = std::clamp(terrainDisplayMode, 0, 4);
+        terrain.displayMode = static_cast<TerrainDisplayMode>(terrainDisplayMode);
+        if (terrain.displayMode == TerrainDisplayMode::Debug) {
+            terrain.showDebugDraw = true;
+        }
+    }
+    ImGui::SeparatorText("Terrain Material");
+    ImGui::ColorEdit3("Base Color", &terrain.materialBaseColor.x);
+    ImGui::SliderFloat("Brightness", &terrain.materialBrightness, 0.05f, 3.0f);
+    ImGui::SliderFloat("Rock Noise", &terrain.materialNoiseStrength, 0.0f, 2.0f);
+    ImGui::SliderFloat("Strata Lines", &terrain.materialStrataStrength, 0.0f, 2.0f);
+    ImGui::SliderFloat("Strata Breakup", &terrain.materialStrataBreakupStrength, 0.0f, 1.5f);
+    ImGui::SliderFloat("Specular", &terrain.materialSpecularStrength, 0.0f, 0.25f);
+    ImGui::SliderFloat("Rim Light", &terrain.materialRimLightStrength, 0.0f, 2.0f);
+    ImGui::SliderFloat("Detail Normal", &terrain.materialDetailNormalStrength, 0.0f, 2.0f);
+    ImGui::SliderFloat("Micro Detail", &terrain.materialMicroDetailStrength, 0.0f, 2.0f);
+    ImGui::Checkbox("Use Detail Cache", &terrain.useDetailTextureCache);
+    ImGui::SliderFloat("Detail Cache Scale", &terrain.materialDetailCacheScale, 0.25f, 4.0f);
+    ImGui::SliderFloat("Detail Tile Size", &terrain.materialDetailTileWorldSize, 32.0f, 240.0f, "%.1f");
+    ImGui::SliderFloat("Near Detail Scale", &terrain.materialDetailNearScale, 0.25f, 3.0f, "%.2f");
+    ImGui::SliderFloat("Far Detail Scale", &terrain.materialDetailFarScale, 0.15f, 1.5f, "%.2f");
+    ImGui::SliderFloat("Detail Distance Blend", &terrain.materialDetailDistanceBlend, 40.0f, 420.0f, "%.1f");
+    ImGui::Checkbox("Use Detail Normal Map", &terrain.useDetailNormalMap);
+    ImGui::SliderFloat("Detail Normal Map Strength", &terrain.materialDetailNormalMapStrength, 0.0f, 2.0f, "%.2f");
+    ImGui::SliderFloat("Cache / Normal Hybrid", &terrain.materialDetailHybridBlend, 0.0f, 1.0f, "%.2f");
+    ImGui::Checkbox("Invert Detail Normal Y", &terrain.invertDetailNormalY);
+    ImGui::SliderFloat("Cavity AO", &terrain.materialCavityAoStrength, 0.0f, 1.5f);
+    ImGui::SliderFloat("Sky Fill", &terrain.materialSkyFillStrength, 0.0f, 1.2f);
+    if (ImGui::Button("Reset Terrain Material")) {
+        terrain.materialBaseColor = {1.18f, 1.08f, 0.94f, 1.0f};
+        terrain.materialBrightness = 1.0f;
+        terrain.materialNoiseStrength = 1.0f;
+        terrain.materialStrataStrength = 1.0f;
+        terrain.materialStrataBreakupStrength = 0.68f;
+        terrain.materialSpecularStrength = 0.035f;
+        terrain.materialRimLightStrength = 0.45f;
+        terrain.materialDetailNormalStrength = 0.72f;
+        terrain.materialMicroDetailStrength = 0.62f;
+        terrain.useDetailTextureCache = true;
+        terrain.materialDetailCacheScale = 1.0f;
+        terrain.materialDetailTileWorldSize = 96.0f;
+        terrain.materialDetailNearScale = 1.35f;
+        terrain.materialDetailFarScale = 0.55f;
+        terrain.materialDetailDistanceBlend = 180.0f;
+        terrain.useDetailNormalMap = true;
+        terrain.materialDetailNormalMapStrength = 0.58f;
+        terrain.materialDetailHybridBlend = 0.52f;
+        terrain.invertDetailNormalY = false;
+        terrain.materialCavityAoStrength = 0.58f;
+        terrain.materialSkyFillStrength = 0.30f;
+    }
+    ImGui::SeparatorText("Cascaded Shadows");
+    ImGui::Checkbox("CSM Enabled", &terrain.cascadeShadowEnabled);
+    ImGui::SameLine();
+    ImGui::Checkbox("Cascade Bounds", &terrain.showCascadeBounds);
+    ImGui::SameLine();
+    ImGui::Checkbox("Shadow Debug View", &terrain.showShadowDebugView);
+    ImGui::SliderFloat("Shadow Bias", &terrain.cascadeShadowBias, 0.0001f, 0.0120f, "%.4f");
+    ImGui::SliderFloat("Shadow Strength", &terrain.cascadeShadowStrength, 0.0f, 1.0f, "%.2f");
+    ImGui::SliderFloat("Cascade 0 Split", &terrain.cascadeShadowSplit0, 20.0f, 240.0f, "%.1f");
+    terrain.cascadeShadowSplit1 = (std::max)(terrain.cascadeShadowSplit1, terrain.cascadeShadowSplit0 + 10.0f);
+    ImGui::SliderFloat("Cascade 1 Split", &terrain.cascadeShadowSplit1, terrain.cascadeShadowSplit0 + 10.0f, 520.0f, "%.1f");
+    terrain.cascadeShadowSplit2 = (std::max)(terrain.cascadeShadowSplit2, terrain.cascadeShadowSplit1 + 10.0f);
+    ImGui::SliderFloat("Cascade 2 Split", &terrain.cascadeShadowSplit2, terrain.cascadeShadowSplit1 + 10.0f, 1040.0f, "%.1f");
+    terrain.cascadeShadowSplit3 = (std::max)(terrain.cascadeShadowSplit3, terrain.cascadeShadowSplit2 + 10.0f);
+    ImGui::SliderFloat("Cascade 3 Split", &terrain.cascadeShadowSplit3, terrain.cascadeShadowSplit2 + 10.0f, 1800.0f, "%.1f");
+    ImGui::SliderInt("Shadow Preview Cascade", &terrain.shadowDebugCascade, 0, 3);
+    if (ImGui::Button("Reset CSM")) {
+        terrain.cascadeShadowEnabled = true;
+        terrain.cascadeShadowBias = 0.0018f;
+        terrain.cascadeShadowStrength = 0.68f;
+        terrain.cascadeShadowSplit0 = 120.0f;
+        terrain.cascadeShadowSplit1 = 260.0f;
+        terrain.cascadeShadowSplit2 = 520.0f;
+        terrain.cascadeShadowSplit3 = 960.0f;
+        terrain.shadowDebugCascade = 0;
+    }
+    ImGui::SeparatorText("Canyon Sun / Sky");
+    ImGui::Checkbox("Use Canyon Sun", &terrain.useCanyonSunLighting);
+    ImGui::ColorEdit3("Sun Color", &terrain.canyonSunColor.x);
+    ImGui::SliderFloat3("Sun Direction", &terrain.canyonSunDirection.x, -1.0f, 1.0f);
+    ImGui::SliderFloat("Sun Intensity", &terrain.canyonSunIntensity, 0.0f, 8.0f);
+    if (ImGui::Button("Apply Canyon Sun")) {
+        terrain.useCanyonSunLighting = true;
+        terrain.canyonSunColor = {1.0f, 0.74f, 0.46f, 1.0f};
+        terrain.canyonSunDirection = {-0.38f, -0.52f, 0.76f};
+        terrain.canyonSunIntensity = 2.4f;
+        terrain.materialSkyFillStrength = 0.30f;
+        terrain.materialRimLightStrength = 0.62f;
+    }
+    ImGui::SeparatorText("Terrain Generation");
+    ImGui::Checkbox("Auto Advance Rail Preview", &terrain.autoAdvancePreview);
+    ImGui::SameLine();
+    ImGui::Checkbox("Auto Reload Preset", &terrain.autoReloadPreset);
+    ImGui::Checkbox("Show Rail", &terrain.showRailPath);
+    ImGui::SameLine();
+    ImGui::Checkbox("Show Corridor", &terrain.showCorridor);
+    ImGui::SameLine();
+    ImGui::Checkbox("Show Chunks", &terrain.showChunks);
+    ImGui::SameLine();
+    ImGui::Checkbox("Show Spawns", &terrain.showSpawnCandidates);
+    ImGui::SameLine();
+    ImGui::Checkbox("Show Rock Scatter", &terrain.showRockScatter);
+    ImGui::Checkbox("Show Volume Slice", &terrain.showVolumeSlice);
+    ImGui::SameLine();
+    ImGui::Checkbox("Show SDF Samples", &terrain.showSdfSamples);
+    ImGui::SameLine();
+    ImGui::Checkbox("Show Cascade Bounds", &terrain.showCascadeBounds);
+    ImGui::DragFloat("Rail Preview Distance", &terrain.previewDistance, 1.0f, 0.0f, 10000.0f);
+    ImGui::DragFloat("Rail Preview Speed", &terrain.previewSpeed, 1.0f, 0.0f, 400.0f);
+    ImGui::InputScalar("Terrain Seed", ImGuiDataType_U32, &terrain.settings.seed);
+    ImGui::DragFloat("Chunk Length", &terrain.settings.chunkLength, 1.0f, 10.0f, 300.0f);
+    int visibleAheadChunks = static_cast<int>(terrain.settings.visibleAheadChunks);
+    if (ImGui::SliderInt("Visible Ahead Chunks", &visibleAheadChunks, 1, 32)) {
+        terrain.settings.visibleAheadChunks = static_cast<uint32_t>((std::max)(visibleAheadChunks, 1));
+    }
+    int visibleBehindChunks = static_cast<int>(terrain.settings.visibleBehindChunks);
+    if (ImGui::SliderInt("Visible Behind Chunks", &visibleBehindChunks, 0, 16)) {
+        terrain.settings.visibleBehindChunks = static_cast<uint32_t>((std::max)(visibleBehindChunks, 0));
+    }
+    ImGui::DragFloat("Corridor Radius", &terrain.settings.corridorRadius, 0.25f, 4.0f, 80.0f);
+    ImGui::DragFloat("Canyon Half Width", &terrain.settings.canyonHalfWidth, 0.5f, 8.0f, 160.0f);
+    ImGui::DragFloat("Wall Height", &terrain.settings.wallHeight, 0.5f, 4.0f, 180.0f);
+    ImGui::DragFloat("Noise Strength", &terrain.settings.noiseStrength, 0.25f, 0.0f, 80.0f);
+    ImGui::SliderFloat("Volume Roughness", &terrain.settings.volumeRoughness, 0.0f, 1.5f);
+    ImGui::SliderFloat("Volume Arch Scale", &terrain.settings.volumeArchScale, 0.0f, 2.0f);
+    ImGui::SliderFloat("SDF Carve Density", &terrain.settings.sdfCarveDensity, 0.0f, 1.0f);
+    ImGui::SliderFloat("SDF Carve Strength", &terrain.settings.sdfCarveStrength, 0.0f, 1.2f);
+    ImGui::SliderFloat("SDF Carve Scale", &terrain.settings.sdfCarveScale, 0.25f, 2.5f);
+    int surfaceLongitudinalSteps = static_cast<int>(terrain.settings.surfaceLongitudinalSteps);
+    if (ImGui::SliderInt("Surface Length Steps", &surfaceLongitudinalSteps, 12, 64)) {
+        terrain.settings.surfaceLongitudinalSteps = static_cast<uint32_t>(std::clamp(surfaceLongitudinalSteps, 12, 64));
+    }
+    int surfaceRadialSegments = static_cast<int>(terrain.settings.surfaceRadialSegments);
+    if (ImGui::SliderInt("Surface Radial Segments", &surfaceRadialSegments, 16, 96)) {
+        terrain.settings.surfaceRadialSegments = static_cast<uint32_t>(std::clamp(surfaceRadialSegments, 16, 96));
+    }
+    ImGui::SliderFloat("Rock Pillar Density", &terrain.settings.rockPillarDensity, 0.0f, 1.0f);
+    ImGui::SliderFloat("Rock Scatter Density", &terrain.settings.rockScatterDensity, 0.0f, 1.5f);
+    ImGui::SliderFloat("Rock Scatter Scale", &terrain.settings.rockScatterScale, 0.2f, 2.5f);
+    ImGui::SliderFloat("Rock Embed Strength", &terrain.settings.rockEmbedStrength, 0.0f, 1.5f);
+    ImGui::SliderFloat("Contact Pebbles", &terrain.settings.rockContactPebbleDensity, 0.0f, 1.5f);
+    ImGui::SliderFloat("Rock Cluster Strength", &terrain.settings.rockClusterStrength, 0.0f, 1.0f);
+    ImGui::SliderFloat("Rock Root Shadow", &terrain.settings.rockRootShadowStrength, 0.0f, 1.5f);
+    ImGui::SliderFloat("Rock Mother Blend", &terrain.settings.rockMotherBlendStrength, 0.0f, 1.5f);
+    ImGui::SliderFloat("Rock Material Variation", &terrain.settings.rockMaterialVariation, 0.0f, 1.0f);
+    ImGui::SliderFloat("Mother Rock Erosion", &terrain.settings.motherRockErosionStrength, 0.0f, 1.5f);
+    ImGui::SliderFloat("Large Scale Erosion", &terrain.settings.largeScaleErosionStrength, 0.0f, 1.5f);
+    ImGui::SliderFloat("Arch Density", &terrain.settings.archDensity, 0.0f, 1.0f);
+    ImGui::SliderFloat("Dust Zone Density", &terrain.settings.dustZoneDensity, 0.0f, 1.0f);
+    ImGui::Checkbox("Show VFX Zones", &terrain.showVfxZones);
+    if (ImGui::Button("Save Terrain Preset")) {
+        terrain.requestSavePreset = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load Terrain Preset")) {
+        terrain.requestLoadPreset = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reload Terrain Preset")) {
+        terrain.requestReloadPreset = true;
+    }
+
     ImGui::SeparatorText("VFX Model Objects");
     ImGui::Checkbox("Show VFX Model Objects", &runtimeState.showVfxModelObjects);
     const char* modelObjectLabels[] = {

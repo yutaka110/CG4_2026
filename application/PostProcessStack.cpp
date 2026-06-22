@@ -162,6 +162,43 @@ void PostProcessStack::ResetToVfxDefaults() {
     distortionComposite.parameters.distortionScale = 0.02f;
     passes_.push_back(distortionComposite);
 
+    PostProcessPass contactAo{};
+    contactAo.name = "ContactAO";
+    contactAo.inputResource = kPostProcessOutputResource;
+    contactAo.outputResource = kPostProcessSwapOutputResource;
+    contactAo.pipeline = "ContactAO";
+    contactAo.secondaryInputResource = kPostProcessOutputResource;
+    contactAo.tertiaryInputResource = kPostProcessOutputResource;
+    contactAo.enabled = true;
+    contactAo.intensity = 0.42f;
+    contactAo.resolutionScale = 1.0f;
+    contactAo.parameters.contactAoRadiusPixels = 3.0f;
+    contactAo.parameters.contactAoBias = 0.25f;
+    contactAo.parameters.contactAoFalloff = 9.0f;
+    contactAo.parameters.contactAoNearPlane = 0.1f;
+    contactAo.parameters.contactAoFarPlane = 5000.0f;
+    passes_.push_back(contactAo);
+
+    PostProcessPass distanceFog{};
+    distanceFog.name = "DistanceFog";
+    distanceFog.inputResource = kPostProcessOutputResource;
+    distanceFog.outputResource = kPostProcessSwapOutputResource;
+    distanceFog.pipeline = "DistanceFog";
+    distanceFog.secondaryInputResource = kPostProcessOutputResource;
+    distanceFog.tertiaryInputResource = kPostProcessOutputResource;
+    distanceFog.enabled = true;
+    distanceFog.intensity = 0.48f;
+    distanceFog.resolutionScale = 1.0f;
+    distanceFog.parameters.fogStart = 180.0f;
+    distanceFog.parameters.fogEnd = 1200.0f;
+    distanceFog.parameters.fogDensity = 0.32f;
+    distanceFog.parameters.fogColorR = 0.46f;
+    distanceFog.parameters.fogColorG = 0.40f;
+    distanceFog.parameters.fogColorB = 0.34f;
+    distanceFog.parameters.fogNearPlane = 0.1f;
+    distanceFog.parameters.fogFarPlane = 5000.0f;
+    passes_.push_back(distanceFog);
+
     PostProcessPass accretionComposite{};
     accretionComposite.name = "AccretionComposite";
     accretionComposite.inputResource = kPostProcessOutputResource;

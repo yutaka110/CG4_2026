@@ -70,6 +70,18 @@
     <Filter Include="ヘッダー ファイル\engine\platform">
       <UniqueIdentifier>{1d035f3e-0c1d-411e-9a47-8d303e97f76d}</UniqueIdentifier>
     </Filter>
+    <Filter Include="ソース ファイル\application\diagnostics">
+      <UniqueIdentifier>{4e9b8b91-18e6-4c62-82dc-9a4c5cdd0f5a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ソース ファイル\application\terrain">
+      <UniqueIdentifier>{5a2c8cf4-3a19-4b91-a4cc-4a1f7dbb7f5a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ヘッダー ファイル\application\diagnostics">
+      <UniqueIdentifier>{a35ef5d2-5188-4f91-9f73-3b332d19c465}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ヘッダー ファイル\application\terrain">
+      <UniqueIdentifier>{828f6d1a-8a7e-4975-8e9c-465f580e9f4c}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -219,6 +231,21 @@
     <ClCompile Include="engine\src\utils\DebugTools.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\diagnostics\DebugDrawSystem.cpp">
+      <Filter>ソース ファイル\application\diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="application\terrain\RailPath.cpp">
+      <Filter>ソース ファイル\application\terrain</Filter>
+    </ClCompile>
+    <ClCompile Include="application\terrain\TerrainChunkManager.cpp">
+      <Filter>ソース ファイル\application\terrain</Filter>
+    </ClCompile>
+    <ClCompile Include="application\terrain\TerrainPresetStore.cpp">
+      <Filter>ソース ファイル\application\terrain</Filter>
+    </ClCompile>
+    <ClCompile Include="application\terrain\TerrainVolumeField.cpp">
+      <Filter>ソース ファイル\application\terrain</Filter>
+    </ClCompile>
     <ClCompile Include="application\AnimationClip.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -295,6 +322,9 @@
       <Filter>ソース ファイル</Filter>
     </ClCompile>
     <ClCompile Include="application\AppPostProcessPanel.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
+    <ClCompile Include="application\PostProcessPresetStore.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
     <ClCompile Include="application\PostProcessStack.cpp">
@@ -424,6 +454,8 @@
     <FxCompile Include="Resources\FullscreenComposite.PS.hlsl" />
     <FxCompile Include="Resources\Grayscale.PS.hlsl" />
     <FxCompile Include="Resources\Accretion.PS.hlsl" />
+    <FxCompile Include="Resources\DistanceFog.PS.hlsl" />
+    <FxCompile Include="Resources\ContactAO.PS.hlsl" />
     <FxCompile Include="Resources\Vignette.PS.hlsl" />
     <FxCompile Include="Resources\BoxBlurHorizontal.PS.hlsl" />
     <FxCompile Include="Resources\BoxBlurVertical.PS.hlsl" />
@@ -697,6 +729,9 @@
     <ClInclude Include="application\AppPostProcessPanel.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
+    <ClInclude Include="application\PostProcessPresetStore.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
     <ClInclude Include="application\PostProcessStack.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
@@ -802,6 +837,24 @@
     <ClInclude Include="application\src\vfx\VfxComponentDraw.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
+    <ClInclude Include="application\diagnostics\DebugDrawSystem.h">
+      <Filter>ヘッダー ファイル\application\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="application\terrain\RailPath.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="application\terrain\TerrainChunkManager.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="application\terrain\TerrainGenerationSettings.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="application\terrain\TerrainPresetStore.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="application\terrain\TerrainVolumeField.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Text Include="externals\imgui\LICENSE.txt">
@@ -813,10 +866,14 @@
     <None Include="Resources\Spear.PS.hlsl" />
     <None Include="Resources\Spear.VS.hlsl" />
     <None Include="Resources\Skybox.hlsli" />
+    <None Include="Resources\Terrain.PS.hlsl" />
+    <None Include="Resources\TerrainShadow.VS.hlsl" />
     <None Include="Resources\effects\AuthoringMetadataDemo.effect" />
     <None Include="Resources\effects\IceImpact.effect" />
     <None Include="Resources\effects\IceProjectile.effect" />
     <None Include="Resources\effects\WarpCore.effect" />
     <None Include="Resources\iceShard.png" />
+    <None Include="Resources\postprocess\default.postpreset" />
+    <None Include="Resources\terrain\default.terrainpreset" />
   </ItemGroup>
 </Project>

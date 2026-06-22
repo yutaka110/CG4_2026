@@ -2,6 +2,7 @@
 
 #include <DirectXMath.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -23,6 +24,15 @@ using namespace DirectX;
 using namespace Microsoft::WRL;
 
 namespace {
+Vector3 NormalizeOr(const Vector3& value, const Vector3& fallback) {
+    const float len2 = value.x * value.x + value.y * value.y + value.z * value.z;
+    if (len2 <= 0.000001f) {
+        return fallback;
+    }
+    const float invLen = 1.0f / std::sqrt(len2);
+    return {value.x * invLen, value.y * invLen, value.z * invLen};
+}
+
 void TransitionSceneDepthIfNeeded(
     ID3D12GraphicsCommandList* commandList,
     ID3D12Resource* depthResource,
@@ -55,6 +65,33 @@ Vector3 TransformCoord(const Vector3& point, const Matrix4x4& matrix) {
         return {x, y, z};
     }
     return {x / w, y / w, z / w};
+}
+
+Matrix4x4 ToMatrix4x4(FXMMATRIX matrix) {
+    XMFLOAT4X4 stored{};
+    XMStoreFloat4x4(&stored, matrix);
+    Matrix4x4 result{};
+    for (uint32_t row = 0; row < 4; ++row) {
+        for (uint32_t column = 0; column < 4; ++column) {
+            result.m[row][column] = stored.m[row][column];
+        }
+    }
+    return result;
+}
+
+std::array<float, AppSceneResources::kCascadeShadowCount> GetCascadeShadowSplits(
+    const TerrainAuthoringState& terrain) {
+    std::array<float, AppSceneResources::kCascadeShadowCount> splits = {
+        terrain.cascadeShadowSplit0,
+        terrain.cascadeShadowSplit1,
+        terrain.cascadeShadowSplit2,
+        terrain.cascadeShadowSplit3,
+    };
+    splits[0] = (std::clamp)(splits[0], 20.0f, 240.0f);
+    for (uint32_t index = 1; index < splits.size(); ++index) {
+        splits[index] = (std::max)(splits[index], splits[index - 1] + 10.0f);
+    }
+    return splits;
 }
 
 bool IntersectScreenPointWithZPlane(
@@ -162,6 +199,10 @@ AppRunLoop::AppRunLoop(
       fence_(fence),
       fenceEvent_(fenceEvent) {
     sceneStateManager_.Initialize(std::make_unique<VfxPreviewSceneState>(), *this);
+    railPath_.BuildDefaultCanyonPath(runtimeState_.terrain.settings.corridorRadius);
+    std::string presetError;
+    terrainPresetStore_.Load(runtimeState_.terrain, &presetError);
+    railPath_.BuildDefaultCanyonPath(runtimeState_.terrain.settings.corridorRadius);
 }
 
 void AppRunLoop::InitializeBeam(
@@ -219,6 +260,7 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
     constexpr float kFixedPreviewDeltaTime = 0.016f;
     ProcessReleaseShowcaseControls(kFixedPreviewDeltaTime);
     vfxEngine_.Update(runtimeState_.vfx, kFixedPreviewDeltaTime);
+    UpdateTerrainAuthoring(kFixedPreviewDeltaTime);
 
     BYTE key[256] = {};
     (void)key;
@@ -252,6 +294,279 @@ void AppRunLoop::SignalAndWaitGpu() {
 void AppRunLoop::RenderFrame() {
     sceneStateManager_.Update(*this);
     sceneStateManager_.Render(*this);
+}
+
+void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
+    TerrainAuthoringState& terrain = runtimeState_.terrain;
+    if (!terrain.enabled) {
+        scene_.debugDraw.BeginFrame();
+        scene_.debugDraw.Upload(frameState_.viewProjectionMatrix);
+        return;
+    }
+
+    std::string presetError;
+    bool settingsChanged = false;
+    if (terrain.requestSavePreset) {
+        terrainPresetStore_.Save(terrain, &presetError);
+        terrain.requestSavePreset = false;
+    }
+    if (terrain.requestLoadPreset || terrain.requestReloadPreset) {
+        settingsChanged = terrainPresetStore_.Load(terrain, &presetError);
+        terrain.requestLoadPreset = false;
+        terrain.requestReloadPreset = false;
+    }
+    if (terrain.autoReloadPreset) {
+        settingsChanged =
+            terrainPresetStore_.ReloadIfChanged(terrain, &presetError) || settingsChanged;
+    }
+    if (settingsChanged) {
+        railPath_.BuildDefaultCanyonPath(terrain.settings.corridorRadius);
+    }
+
+    if (terrain.useCanyonSunLighting) {
+        terrain.canyonSunDirection = NormalizeOr(terrain.canyonSunDirection, {-0.38f, -0.52f, 0.76f});
+        runtimeState_.directionalLightData.color = terrain.canyonSunColor;
+        runtimeState_.directionalLightData.direction = terrain.canyonSunDirection;
+        runtimeState_.directionalLightData.intensity = terrain.canyonSunIntensity;
+        runtimeState_.pointLightData.intensity = 0.0f;
+    }
+
+    if (terrain.autoAdvancePreview) {
+        terrain.previewDistance += terrain.previewSpeed * deltaTime;
+        if (railPath_.Length() > 0.0f && terrain.previewDistance > railPath_.Length()) {
+            terrain.previewDistance = std::fmod(terrain.previewDistance, railPath_.Length());
+        }
+    }
+
+    terrainChunkManager_.Update(
+        dev_.GetDevice(),
+        railPath_,
+        terrain.settings,
+        terrain.previewDistance,
+        frameState_.viewProjectionMatrix);
+
+    scene_.debugDraw.BeginFrame();
+    const bool debugDrawEnabled =
+        terrain.showDebugDraw ||
+        terrain.displayMode == TerrainDisplayMode::Debug ||
+        terrain.showCascadeBounds;
+    if (debugDrawEnabled) {
+        if (terrain.showRailPath) {
+            const float start = (std::max)(0.0f, terrain.previewDistance - terrain.settings.chunkLength);
+            const float end = terrain.previewDistance +
+                terrain.settings.chunkLength * static_cast<float>(terrain.settings.visibleAheadChunks);
+            scene_.debugDraw.AddPolyline(
+                railPath_.SamplePolyline(start, end, 8.0f),
+                {0.15f, 0.75f, 1.0f, 1.0f},
+                false);
+
+            const RailPathSample preview = railPath_.Evaluate(terrain.previewDistance);
+            scene_.debugDraw.AddPoint(preview.position, 2.0f, {1.0f, 1.0f, 0.15f, 1.0f});
+            scene_.debugDraw.AddLine(
+                preview.position,
+                {
+                    preview.position.x + preview.tangent.x * 10.0f,
+                    preview.position.y + preview.tangent.y * 10.0f,
+                    preview.position.z + preview.tangent.z * 10.0f,
+                },
+                {0.2f, 1.0f, 0.2f, 1.0f});
+        }
+
+        terrainChunkManager_.AppendDebugDraw(scene_.debugDraw, railPath_, terrain);
+
+        if (terrain.showCascadeBounds) {
+            const std::array<float, AppSceneResources::kCascadeShadowCount> splits =
+                GetCascadeShadowSplits(terrain);
+            const Vector4 colors[AppSceneResources::kCascadeShadowCount] = {
+                {0.20f, 0.85f, 1.0f, 1.0f},
+                {0.30f, 1.0f, 0.40f, 1.0f},
+                {1.0f, 0.86f, 0.22f, 1.0f},
+                {1.0f, 0.32f, 0.20f, 1.0f},
+            };
+            Vector3 previous = railPath_.Evaluate(terrain.previewDistance).position;
+            for (uint32_t cascade = 0; cascade < AppSceneResources::kCascadeShadowCount; ++cascade) {
+                const RailPathSample sample =
+                    railPath_.Evaluate(terrain.previewDistance + splits[cascade]);
+                const float radius = (std::max)(
+                    sample.corridorRadius,
+                    terrain.settings.canyonHalfWidth * 0.55f);
+                scene_.debugDraw.AddCircle(
+                    sample.position,
+                    sample.right,
+                    sample.up,
+                    radius,
+                    colors[cascade],
+                    48);
+                scene_.debugDraw.AddPoint(sample.position, 1.4f, colors[cascade]);
+                scene_.debugDraw.AddLine(previous, sample.position, colors[cascade]);
+                previous = sample.position;
+            }
+        }
+    }
+    scene_.debugDraw.Upload(frameState_.viewProjectionMatrix);
+}
+
+void AppRunLoop::RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList) {
+    if (commandList == nullptr ||
+        !runtimeState_.terrain.enabled ||
+        appPipelines_.GetMainRootSignature() == nullptr ||
+        appPipelines_.GetTerrainShadowPSO() == nullptr ||
+        scene_.cascadeShadowResource == nullptr ||
+        scene_.mappedCascadeShadow == nullptr ||
+        scene_.cascadeShadowMaps[0] == nullptr) {
+        return;
+    }
+
+    TerrainAuthoringState& terrain = runtimeState_.terrain;
+    const std::vector<TerrainRenderChunk>& chunks = terrainChunkManager_.RenderChunks();
+    if (!terrain.cascadeShadowEnabled || chunks.empty()) {
+        scene_.mappedCascadeShadow->parameters.z = 0.0f;
+        return;
+    }
+
+    const std::array<float, AppSceneResources::kCascadeShadowCount> kSplits =
+        GetCascadeShadowSplits(terrain);
+    terrain.cascadeShadowSplit0 = kSplits[0];
+    terrain.cascadeShadowSplit1 = kSplits[1];
+    terrain.cascadeShadowSplit2 = kSplits[2];
+    terrain.cascadeShadowSplit3 = kSplits[3];
+    terrain.cascadeShadowBias = (std::clamp)(terrain.cascadeShadowBias, 0.0001f, 0.0120f);
+    terrain.cascadeShadowStrength = (std::clamp)(terrain.cascadeShadowStrength, 0.0f, 1.0f);
+    terrain.shadowDebugCascade = (std::clamp)(terrain.shadowDebugCascade, 0, 3);
+
+    scene_.mappedCascadeShadow->cascadeSplits = Vector4(kSplits[0], kSplits[1], kSplits[2], kSplits[3]);
+    scene_.mappedCascadeShadow->parameters = Vector4(
+        terrain.cascadeShadowBias,
+        terrain.cascadeShadowStrength,
+        1.0f,
+        1.0f / static_cast<float>(AppSceneResources::kCascadeShadowMapSize));
+
+    Vector3 lightDirection =
+        NormalizeOr(runtimeState_.directionalLightData.direction, {-0.38f, -0.52f, 0.76f});
+    XMVECTOR lightForward = XMVector3Normalize(XMVectorSet(
+        lightDirection.x,
+        lightDirection.y,
+        lightDirection.z,
+        0.0f));
+    XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+    const float upDot = std::abs(XMVectorGetX(XMVector3Dot(lightForward, up)));
+    if (upDot > 0.92f) {
+        up = XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+    }
+
+    for (uint32_t cascade = 0; cascade < AppSceneResources::kCascadeShadowCount; ++cascade) {
+        const float previousSplit = cascade == 0 ? 0.0f : kSplits[cascade - 1];
+        const float split = kSplits[cascade];
+        const float midpoint = (previousSplit + split) * 0.5f;
+        RailPathSample sample = railPath_.Evaluate(terrain.previewDistance + midpoint);
+        sample.position.y += sample.corridorRadius * 0.18f;
+
+        const float cascadeLength = split - previousSplit;
+        const float radius = (std::max)(
+            sample.corridorRadius * 3.0f,
+            cascadeLength * 0.72f + sample.corridorRadius * 2.0f);
+        const float depth = radius * 3.2f + sample.corridorRadius * 4.0f;
+
+        XMVECTOR center = XMVectorSet(sample.position.x, sample.position.y, sample.position.z, 1.0f);
+        XMVECTOR eye = center - lightForward * (depth * 0.5f);
+        XMMATRIX lightView = XMMatrixLookAtLH(eye, center, up);
+        XMMATRIX lightProjection = XMMatrixOrthographicLH(radius * 2.0f, radius * 2.0f, 0.0f, depth);
+        scene_.mappedCascadeShadow->lightViewProjection[cascade] =
+            ToMatrix4x4(lightView * lightProjection);
+    }
+
+    for (uint32_t cascade = 0; cascade < AppSceneResources::kCascadeShadowCount; ++cascade) {
+        if (scene_.mappedCascadeShadowDraw[cascade] == nullptr) {
+            continue;
+        }
+        *scene_.mappedCascadeShadowDraw[cascade] = *scene_.mappedCascadeShadow;
+        scene_.mappedCascadeShadowDraw[cascade]->parameters.w = static_cast<float>(cascade);
+    }
+
+    D3D12_RESOURCE_BARRIER toDepth[AppSceneResources::kCascadeShadowCount]{};
+    uint32_t transitionCount = 0;
+    for (uint32_t cascade = 0; cascade < AppSceneResources::kCascadeShadowCount; ++cascade) {
+        if (scene_.cascadeShadowStates[cascade] == D3D12_RESOURCE_STATE_DEPTH_WRITE) {
+            continue;
+        }
+        D3D12_RESOURCE_BARRIER& barrier = toDepth[transitionCount++];
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = scene_.cascadeShadowMaps[cascade].Get();
+        barrier.Transition.StateBefore = scene_.cascadeShadowStates[cascade];
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        scene_.cascadeShadowStates[cascade] = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    }
+    if (transitionCount > 0) {
+        commandList->ResourceBarrier(transitionCount, toDepth);
+    }
+
+    D3D12_VIEWPORT shadowViewport{};
+    shadowViewport.Width = static_cast<float>(AppSceneResources::kCascadeShadowMapSize);
+    shadowViewport.Height = static_cast<float>(AppSceneResources::kCascadeShadowMapSize);
+    shadowViewport.MinDepth = 0.0f;
+    shadowViewport.MaxDepth = 1.0f;
+
+    D3D12_RECT shadowScissor{};
+    shadowScissor.left = 0;
+    shadowScissor.top = 0;
+    shadowScissor.right = static_cast<LONG>(AppSceneResources::kCascadeShadowMapSize);
+    shadowScissor.bottom = static_cast<LONG>(AppSceneResources::kCascadeShadowMapSize);
+
+    commandList->SetGraphicsRootSignature(appPipelines_.GetMainRootSignature());
+    commandList->SetPipelineState(appPipelines_.GetTerrainShadowPSO());
+    commandList->RSSetViewports(1, &shadowViewport);
+    commandList->RSSetScissorRects(1, &shadowScissor);
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    for (uint32_t cascade = 0; cascade < AppSceneResources::kCascadeShadowCount; ++cascade) {
+        commandList->OMSetRenderTargets(0, nullptr, FALSE, &scene_.cascadeShadowDsvCpu[cascade]);
+        commandList->ClearDepthStencilView(
+            scene_.cascadeShadowDsvCpu[cascade],
+            D3D12_CLEAR_FLAG_DEPTH,
+            1.0f,
+            0,
+            0,
+            nullptr);
+
+        if (scene_.cascadeShadowDrawResources[cascade] != nullptr) {
+            commandList->SetGraphicsRootConstantBufferView(
+                10,
+                scene_.cascadeShadowDrawResources[cascade]->GetGPUVirtualAddress());
+        }
+
+        for (const TerrainRenderChunk& chunk : chunks) {
+            if (chunk.indexCount == 0 || chunk.transformResource == nullptr) {
+                continue;
+            }
+            commandList->SetGraphicsRootConstantBufferView(
+                1,
+                chunk.transformResource->GetGPUVirtualAddress());
+            commandList->IASetVertexBuffers(0, 1, &chunk.vbv);
+            commandList->IASetIndexBuffer(&chunk.ibv);
+            commandList->DrawIndexedInstanced(chunk.indexCount, 1, 0, 0, 0);
+        }
+    }
+
+    D3D12_RESOURCE_BARRIER toSample[AppSceneResources::kCascadeShadowCount]{};
+    transitionCount = 0;
+    for (uint32_t cascade = 0; cascade < AppSceneResources::kCascadeShadowCount; ++cascade) {
+        D3D12_RESOURCE_BARRIER& barrier = toSample[transitionCount++];
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = scene_.cascadeShadowMaps[cascade].Get();
+        barrier.Transition.StateBefore = scene_.cascadeShadowStates[cascade];
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        scene_.cascadeShadowStates[cascade] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    }
+    if (transitionCount > 0) {
+        commandList->ResourceBarrier(transitionCount, toSample);
+    }
+
+    if (srvDescriptorHeap_ != nullptr) {
+        ID3D12DescriptorHeap* descriptorHeaps[] = { srvDescriptorHeap_.Get() };
+        commandList->SetDescriptorHeaps(1, descriptorHeaps);
+    }
 }
 
 bool AppRunLoop::WasKeyPressed(int virtualKey) {
@@ -644,6 +959,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     graphContext.rtv = rtv;
     graphContext.dsv = dsvHandle;
     graphContext.depthTextureHandle = engineContext_.GetDepthSrvGpuHandle();
+    graphContext.terrainChunkManager = &terrainChunkManager_;
     vfxEngine_.RegisterRenderPasses(
         frameGraphBuilder_,
         graphContext,
@@ -711,6 +1027,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     lastTransientTargetStorageCount_ = vfxGraphResourceStats.transientTargetStorageCount;
     lastTransientBufferCount_ = vfxGraphResourceStats.transientBufferCount;
     lastTransientBufferStorageCount_ = vfxGraphResourceStats.transientBufferStorageCount;
+    RenderCascadeShadowMaps(commandList.Get());
     renderGraph_.Execute(commandList.Get());
     vfxEngine_.CaptureFrameTelemetry(commandList.Get());
     frameRenderer_.EndFrame(commandList.Get(), backBuffer);

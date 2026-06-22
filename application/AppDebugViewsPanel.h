@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <d3d12.h>
 
 struct AppRuntimeState;
@@ -10,6 +11,9 @@ struct RenderTargetPreviewPanelInput {
     D3D12_GPU_DESCRIPTOR_HANDLE postColorPreview{};
     D3D12_GPU_DESCRIPTOR_HANDLE depthPreview{};
     D3D12_GPU_DESCRIPTOR_HANDLE emissivePreview{};
+    std::array<D3D12_GPU_DESCRIPTOR_HANDLE, 4> cascadeShadowPreviews{};
+    int selectedCascadeShadow = 0;
+    bool showCascadeShadowPreview = true;
 };
 
 void DrawRenderTargetPreviewPanel(

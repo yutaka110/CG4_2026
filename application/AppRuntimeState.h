@@ -5,6 +5,7 @@
 #include <d3d12.h>
 
 #include "AppVfxRuntimeState.h"
+#include "terrain/TerrainGenerationSettings.h"
 #include "utils/math/MathUtils.h"
 
 struct RuntimeAabbState {
@@ -95,4 +96,5 @@ struct AppRuntimeState {
     float debugDepthPreviewFar = 25.0f;
     float debugDepthPreviewPower = 1.35f;
     float debugEmissivePreviewBoost = 2.0f;
+    TerrainAuthoringState terrain{};
 };

@@ -45,6 +45,12 @@ ID3D12PipelineState* ResolvePostProcessPso(const AppPipelines& pipelines, const 
     if (name == "AccretionComposite") {
         return pipelines.GetAccretionCompositePSO();
     }
+    if (name == "DistanceFog") {
+        return pipelines.GetDistanceFogPSO();
+    }
+    if (name == "ContactAO") {
+        return pipelines.GetContactAOPSO();
+    }
     if (name == "ToneMapping") {
         return pipelines.GetToneMappingPSO();
     }
@@ -118,6 +124,25 @@ void BuildPassParams(const PostProcessPass& postPass, float passParams[kPostProc
         passParams[15] = postPass.parameters.accretionGuideWidth;
         return;
     }
+    if (postPass.pipeline == "DistanceFog") {
+        passParams[1] = postPass.parameters.fogStart;
+        passParams[2] = postPass.parameters.fogEnd;
+        passParams[3] = postPass.parameters.fogDensity;
+        passParams[4] = postPass.parameters.fogColorR;
+        passParams[5] = postPass.parameters.fogColorG;
+        passParams[6] = postPass.parameters.fogColorB;
+        passParams[7] = postPass.parameters.fogNearPlane;
+        passParams[8] = postPass.parameters.fogFarPlane;
+        return;
+    }
+    if (postPass.pipeline == "ContactAO") {
+        passParams[1] = postPass.parameters.contactAoRadiusPixels;
+        passParams[2] = postPass.parameters.contactAoBias;
+        passParams[3] = postPass.parameters.contactAoFalloff;
+        passParams[4] = postPass.parameters.contactAoNearPlane;
+        passParams[5] = postPass.parameters.contactAoFarPlane;
+        return;
+    }
     if (postPass.pipeline == "ToneMapping") {
         passParams[1] = postPass.parameters.toneExposure;
         return;
@@ -168,7 +193,7 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
             {postPass.inputResource, ge3::graphics::RenderResourceAccessType::ReadSrv},
             {postPass.outputResource, ge3::graphics::RenderResourceAccessType::WriteRtv},
         };
-        if (postPass.pipeline == "PrewittOutline") {
+        if (postPass.pipeline == "PrewittOutline" || postPass.pipeline == "DistanceFog" || postPass.pipeline == "ContactAO") {
             accesses.push_back({"SceneDepth", ge3::graphics::RenderResourceAccessType::ReadDepth});
             accesses.push_back({postPass.tertiaryInputResource, ge3::graphics::RenderResourceAccessType::ReadSrv});
         } else {
@@ -200,7 +225,7 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                         passParams[3] = 16.0f / 9.0f;
                     }
                 }
-                if (postPass.pipeline == "PrewittOutline") {
+                if (postPass.pipeline == "PrewittOutline" || postPass.pipeline == "DistanceFog" || postPass.pipeline == "ContactAO") {
                     ctx.vfxRenderTargets->ExecuteDebugPreviewPass(
                         passContext.commandList,
                         postPass.outputResource,

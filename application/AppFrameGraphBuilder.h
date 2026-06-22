@@ -15,6 +15,7 @@ class AppSceneResources;
 class AppVfxRenderTargets;
 struct AppVfxRendererSet;
 class PostProcessStack;
+class TerrainChunkManager;
 struct AppRuntimeState;
 namespace ge3::resources {
 class EffectResourceCache;
@@ -49,6 +50,7 @@ struct AppFrameGraphBuildContext {
     const EffectRuntimeFrame* effectRuntime = nullptr;
     ParticleRenderFallback primaryParticleFx{};
     float beamTime = 0.0f;
+    TerrainChunkManager* terrainChunkManager = nullptr;
 };
 
 class AppFrameGraphBuilder {

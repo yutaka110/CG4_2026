@@ -28,6 +28,9 @@ public:
     ID3D12RootSignature* GetSkinningComputeRootSignature() const { return skinningComputeRootSignature_.Get(); }
 
     ID3D12PipelineState* GetMainPSO() const { return mainPso_.Get(); }
+    ID3D12PipelineState* GetTerrainPSO() const { return terrainPso_.Get(); }
+    ID3D12PipelineState* GetTerrainWireframePSO() const { return terrainWireframePso_.Get(); }
+    ID3D12PipelineState* GetTerrainShadowPSO() const { return terrainShadowPso_.Get(); }
     ID3D12PipelineState* GetSkinnedPSO() const { return skinnedPso_.Get(); }
     ID3D12PipelineState* GetMainOpaquePSO() const { return mainOpaquePso_.Get(); }
     ID3D12PipelineState* GetMainAlphaPSO() const { return mainAlphaPso_.Get(); }
@@ -64,6 +67,8 @@ public:
     ID3D12PipelineState* GetGaussianBlurVerticalPSO() const { return gaussianBlurVerticalPso_.Get(); }
     ID3D12PipelineState* GetDistortionCompositePSO() const { return distortionCompositePso_.Get(); }
     ID3D12PipelineState* GetAccretionCompositePSO() const { return accretionCompositePso_.Get(); }
+    ID3D12PipelineState* GetDistanceFogPSO() const { return distanceFogPso_.Get(); }
+    ID3D12PipelineState* GetContactAOPSO() const { return contactAoPso_.Get(); }
     ID3D12PipelineState* GetToneMappingPSO() const { return toneMappingPso_.Get(); }
     ID3D12PipelineState* GetGlowCompositePSO() const { return glowCompositePso_.Get(); }
     ID3D12PipelineState* GetPrewittOutlinePSO() const { return prewittOutlinePso_.Get(); }
@@ -103,6 +108,9 @@ private:
 
     // PSO
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainPso_;      // 元の graphicsPipelineState
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> terrainPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> terrainWireframePso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> terrainShadowPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> skinnedPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainOpaquePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainAlphaPso_;
@@ -135,6 +143,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> gaussianBlurVerticalPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> distortionCompositePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> accretionCompositePso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> distanceFogPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> contactAoPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> toneMappingPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> glowCompositePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> prewittOutlinePso_;
@@ -160,6 +170,8 @@ private:
     Microsoft::WRL::ComPtr<IDxcBlob> vs_;
     Microsoft::WRL::ComPtr<IDxcBlob> skinnedVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> ps_;
+    Microsoft::WRL::ComPtr<IDxcBlob> terrainPs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> terrainShadowVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> spriteVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> spritePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> skyboxVs_;
@@ -208,6 +220,8 @@ private:
     Microsoft::WRL::ComPtr<IDxcBlob> gaussianBlurVerticalPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> distortionCompositePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> accretionCompositePs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> distanceFogPs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> contactAoPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> toneMappingPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> glowCompositePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> prewittOutlinePs_;
