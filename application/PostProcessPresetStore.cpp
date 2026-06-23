@@ -108,6 +108,8 @@ void WritePass(std::ostream& output, const PostProcessPass& pass) {
     output << prefix << "fogColorB=" << pass.parameters.fogColorB << "\n";
     output << prefix << "fogNearPlane=" << pass.parameters.fogNearPlane << "\n";
     output << prefix << "fogFarPlane=" << pass.parameters.fogFarPlane << "\n";
+    output << prefix << "fogDepthBoost=" << pass.parameters.fogDepthBoost << "\n";
+    output << prefix << "fogDepthBoostStart=" << pass.parameters.fogDepthBoostStart << "\n";
     output << prefix << "contactAoRadiusPixels=" << pass.parameters.contactAoRadiusPixels << "\n";
     output << prefix << "contactAoBias=" << pass.parameters.contactAoBias << "\n";
     output << prefix << "contactAoFalloff=" << pass.parameters.contactAoFalloff << "\n";
@@ -165,6 +167,8 @@ void ApplyFloatField(PostProcessPass& pass, const std::string& field, float valu
     else if (field == "fogColorB") pass.parameters.fogColorB = value;
     else if (field == "fogNearPlane") pass.parameters.fogNearPlane = value;
     else if (field == "fogFarPlane") pass.parameters.fogFarPlane = value;
+    else if (field == "fogDepthBoost") pass.parameters.fogDepthBoost = value;
+    else if (field == "fogDepthBoostStart") pass.parameters.fogDepthBoostStart = value;
     else if (field == "contactAoRadiusPixels") pass.parameters.contactAoRadiusPixels = value;
     else if (field == "contactAoBias") pass.parameters.contactAoBias = value;
     else if (field == "contactAoFalloff") pass.parameters.contactAoFalloff = value;

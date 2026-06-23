@@ -2465,6 +2465,8 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
         terrain.materialStrataBreakupStrength = std::clamp(terrain.materialStrataBreakupStrength, 0.0f, 1.5f);
         terrain.materialSpecularStrength = std::clamp(terrain.materialSpecularStrength, 0.0f, 0.25f);
         terrain.materialRimLightStrength = std::clamp(terrain.materialRimLightStrength, 0.0f, 2.0f);
+        terrain.materialBacklightRimBoost = std::clamp(terrain.materialBacklightRimBoost, 0.0f, 2.0f);
+        terrain.materialFloorSandShadowStrength = std::clamp(terrain.materialFloorSandShadowStrength, 0.0f, 1.5f);
         terrain.materialDetailNormalStrength = std::clamp(terrain.materialDetailNormalStrength, 0.0f, 2.0f);
         terrain.materialMicroDetailStrength = std::clamp(terrain.materialMicroDetailStrength, 0.0f, 2.0f);
         terrain.materialDetailCacheScale = std::clamp(terrain.materialDetailCacheScale, 0.25f, 4.0f);
@@ -2505,8 +2507,8 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
         terrainMaterialData->padding2[12] =
             terrain.displayMode == TerrainDisplayMode::DetailNormal ? 1.0f : 0.0f;
         terrainMaterialData->padding2[13] = terrain.materialStrataBreakupStrength;
-        terrainMaterialData->padding2[14] = 0.0f;
-        terrainMaterialData->padding2[15] = 0.0f;
+        terrainMaterialData->padding2[14] = terrain.materialFloorSandShadowStrength;
+        terrainMaterialData->padding2[15] = terrain.materialBacklightRimBoost;
         terrainMaterialData->uvTransform = MakeIdentity4x4();
     }
 }

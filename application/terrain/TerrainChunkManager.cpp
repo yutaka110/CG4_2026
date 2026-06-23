@@ -1330,6 +1330,238 @@ void AppendArchBackMotherVolume(
     }
 }
 
+void AppendArchCrownMotherIntegration(
+    TerrainCpuMesh& mesh,
+    const Vector3& origin,
+    const Vector3& spanAxis,
+    const Vector3& upAxis,
+    const Vector3& depthAxis,
+    float floorY,
+    float span,
+    float pillarHeight,
+    float rise,
+    float archThickness,
+    float depth,
+    float motherBlendStrength,
+    float rootShadowStrength,
+    float embedStrength,
+    uint32_t seed) {
+    constexpr uint32_t kSegments = 18;
+    constexpr uint32_t kRows = 4;
+    const float blendStrength = (std::clamp)(motherBlendStrength, 0.0f, 1.5f);
+    if (blendStrength <= 0.001f) {
+        return;
+    }
+
+    uint32_t vertices[kRows][kSegments + 1u]{};
+    for (uint32_t row = 0; row < kRows; ++row) {
+        const float rowT = static_cast<float>(row) / static_cast<float>(kRows - 1u);
+        const float depthT = -0.78f + rowT * 1.56f;
+        for (uint32_t segment = 0; segment <= kSegments; ++segment) {
+            const float u = -0.94f + 1.88f * static_cast<float>(segment) / static_cast<float>(kSegments);
+            const float archCurve = (std::max)(0.0f, 1.0f - u * u);
+            const float crownWeight = (std::clamp)((archCurve - 0.10f) / 0.90f, 0.0f, 1.0f);
+            const float erosionNoise =
+                SignedNoise(seed + 7207u, static_cast<int32_t>(segment), static_cast<int32_t>(row));
+            const float lateral =
+                u * span * (0.99f + erosionNoise * 0.018f) +
+                SignedNoise(seed + 7211u, static_cast<int32_t>(row), static_cast<int32_t>(segment)) *
+                    archThickness * 0.22f;
+            const float vertical =
+                floorY +
+                pillarHeight +
+                rise * archCurve +
+                archThickness *
+                    (0.12f + embedStrength * 0.18f + crownWeight * 0.34f - rowT * 0.13f) +
+                erosionNoise * archThickness * (0.18f + crownWeight * 0.10f);
+            const float forward =
+                depthT * depth * (0.42f + crownWeight * 0.16f) +
+                SignedNoise(seed + 7229u, static_cast<int32_t>(segment), static_cast<int32_t>(row)) *
+                    depth * 0.10f;
+            const Vector3 position = Add(
+                origin,
+                Add(
+                    Scale(spanAxis, lateral),
+                    Add(Scale(upAxis, vertical), Scale(depthAxis, forward))));
+            const Vector3 normal = NormalizeOr(
+                Add(
+                    Scale(upAxis, -0.88f),
+                    Add(
+                        Scale(spanAxis, -u * 0.18f + erosionNoise * 0.08f),
+                        Scale(depthAxis, depthT * 0.14f))),
+                Scale(upAxis, -1.0f));
+            const float contactAo =
+                (std::min)(1.0f, 0.62f + rootShadowStrength * 0.18f + blendStrength * 0.12f + crownWeight * 0.12f);
+            const float motherVariation =
+                0.34f + Hash01(seed + segment * 181u + row * 79u + 31u) * 0.11f;
+            vertices[row][segment] = PushVertex(
+                mesh,
+                position,
+                normal,
+                {4.8f + static_cast<float>(segment) * 0.061f, rowT},
+                contactAo,
+                motherVariation);
+        }
+    }
+
+    for (uint32_t row = 0; row + 1u < kRows; ++row) {
+        for (uint32_t segment = 0; segment < kSegments; ++segment) {
+            PushTriangleTwoSided(
+                mesh.indices,
+                vertices[row][segment],
+                vertices[row][segment + 1u],
+                vertices[row + 1u][segment]);
+            PushTriangleTwoSided(
+                mesh.indices,
+                vertices[row][segment + 1u],
+                vertices[row + 1u][segment + 1u],
+                vertices[row + 1u][segment]);
+        }
+    }
+}
+
+void AppendArchCeilingOverhangMass(
+    TerrainCpuMesh& mesh,
+    const Vector3& origin,
+    const Vector3& spanAxis,
+    const Vector3& upAxis,
+    const Vector3& depthAxis,
+    float floorY,
+    float span,
+    float pillarHeight,
+    float rise,
+    float archThickness,
+    float depth,
+    float motherBlendStrength,
+    float rootShadowStrength,
+    float embedStrength,
+    uint32_t seed) {
+    constexpr uint32_t kSegments = 18;
+    constexpr uint32_t kDepthRows = 5;
+    constexpr uint32_t kSkirtRows = 4;
+    const float blendStrength = (std::clamp)(motherBlendStrength, 0.0f, 1.5f);
+    if (blendStrength <= 0.001f) {
+        return;
+    }
+
+    uint32_t underside[kDepthRows][kSegments + 1u]{};
+    Vector3 lowerPositions[kDepthRows][kSegments + 1u]{};
+    Vector3 upperPositions[kDepthRows][kSegments + 1u]{};
+    for (uint32_t row = 0; row < kDepthRows; ++row) {
+        const float rowT = static_cast<float>(row) / static_cast<float>(kDepthRows - 1u);
+        const float depthT = -1.0f + rowT * 2.0f;
+        const float edgeDroop = std::abs(depthT);
+        for (uint32_t segment = 0; segment <= kSegments; ++segment) {
+            const float u = -0.98f + 1.96f * static_cast<float>(segment) / static_cast<float>(kSegments);
+            const float archCurve = (std::max)(0.0f, 1.0f - u * u);
+            const float crownWeight = (std::clamp)((archCurve - 0.08f) / 0.92f, 0.0f, 1.0f);
+            const float carveNoise =
+                SignedNoise(seed + 8111u, static_cast<int32_t>(segment), static_cast<int32_t>(row));
+            const float lateral =
+                u * span * (0.99f + carveNoise * 0.016f) +
+                SignedNoise(seed + 8117u, static_cast<int32_t>(row), static_cast<int32_t>(segment)) *
+                    archThickness * 0.18f;
+            const float lower =
+                floorY +
+                pillarHeight +
+                rise * archCurve +
+                archThickness *
+                    (0.36f + embedStrength * 0.18f + crownWeight * 0.32f - edgeDroop * 0.12f) +
+                carveNoise * archThickness * 0.20f;
+            const float upper =
+                floorY +
+                pillarHeight +
+                rise * archCurve +
+                archThickness *
+                    (1.08f + embedStrength * 0.34f + crownWeight * 0.42f + edgeDroop * 0.08f) +
+                carveNoise * archThickness * 0.28f;
+            const float forward =
+                depthT * depth * (0.70f + crownWeight * 0.10f) +
+                SignedNoise(seed + 8123u, static_cast<int32_t>(segment), static_cast<int32_t>(row)) *
+                    depth * 0.08f;
+            const Vector3 lowerPosition = Add(
+                origin,
+                Add(
+                    Scale(spanAxis, lateral),
+                    Add(Scale(upAxis, lower), Scale(depthAxis, forward))));
+            const Vector3 upperPosition = Add(
+                origin,
+                Add(
+                    Scale(spanAxis, lateral + carveNoise * archThickness * 0.06f),
+                    Add(Scale(upAxis, upper), Scale(depthAxis, forward * 0.96f))));
+            lowerPositions[row][segment] = lowerPosition;
+            upperPositions[row][segment] = upperPosition;
+            const Vector3 normal = NormalizeOr(
+                Add(
+                    Scale(upAxis, -0.90f),
+                    Add(Scale(spanAxis, -u * 0.12f + carveNoise * 0.08f), Scale(depthAxis, depthT * 0.10f))),
+                Scale(upAxis, -1.0f));
+            underside[row][segment] = PushVertex(
+                mesh,
+                lowerPosition,
+                normal,
+                {5.9f + static_cast<float>(segment) * 0.065f, rowT},
+                (std::min)(1.0f, 0.70f + rootShadowStrength * 0.20f + crownWeight * 0.10f),
+                0.32f + Hash01(seed + segment * 199u + row * 83u + 41u) * 0.10f);
+        }
+    }
+
+    for (uint32_t row = 0; row + 1u < kDepthRows; ++row) {
+        for (uint32_t segment = 0; segment < kSegments; ++segment) {
+            PushTriangleTwoSided(
+                mesh.indices,
+                underside[row][segment],
+                underside[row][segment + 1u],
+                underside[row + 1u][segment]);
+            PushTriangleTwoSided(
+                mesh.indices,
+                underside[row][segment + 1u],
+                underside[row + 1u][segment + 1u],
+                underside[row + 1u][segment]);
+        }
+    }
+
+    for (uint32_t side = 0; side < 2u; ++side) {
+        const uint32_t depthRow = side == 0u ? 0u : kDepthRows - 1u;
+        uint32_t skirt[kSkirtRows][kSegments + 1u]{};
+        const Vector3 sideNormal = side == 0u ? Scale(depthAxis, -1.0f) : depthAxis;
+        for (uint32_t row = 0; row < kSkirtRows; ++row) {
+            const float t = static_cast<float>(row) / static_cast<float>(kSkirtRows - 1u);
+            for (uint32_t segment = 0; segment <= kSegments; ++segment) {
+                const float u = -0.98f + 1.96f * static_cast<float>(segment) / static_cast<float>(kSegments);
+                const Vector3 position = Add(
+                    Scale(lowerPositions[depthRow][segment], 1.0f - t),
+                    Scale(upperPositions[depthRow][segment], t));
+                const Vector3 normal = NormalizeOr(
+                    Add(sideNormal, Add(Scale(upAxis, -0.22f + t * 0.12f), Scale(spanAxis, -u * 0.08f))),
+                    sideNormal);
+                skirt[row][segment] = PushVertex(
+                    mesh,
+                    position,
+                    normal,
+                    {6.7f + static_cast<float>(segment) * 0.057f, t},
+                    (std::min)(1.0f, 0.58f + rootShadowStrength * 0.16f + (1.0f - t) * 0.16f),
+                    0.34f + Hash01(seed + side * 509u + segment * 211u + row * 89u) * 0.11f);
+            }
+        }
+
+        for (uint32_t row = 0; row + 1u < kSkirtRows; ++row) {
+            for (uint32_t segment = 0; segment < kSegments; ++segment) {
+                PushTriangleTwoSided(
+                    mesh.indices,
+                    skirt[row][segment],
+                    skirt[row + 1u][segment],
+                    skirt[row][segment + 1u]);
+                PushTriangleTwoSided(
+                    mesh.indices,
+                    skirt[row][segment + 1u],
+                    skirt[row + 1u][segment],
+                    skirt[row + 1u][segment + 1u]);
+            }
+        }
+    }
+}
+
 void AppendRockArch(
     TerrainCpuMesh& mesh,
     const RailPathSample& sample,
@@ -1431,6 +1663,40 @@ void AppendRockArch(
         embedStrength,
         seed + 6203u);
 
+    AppendArchCrownMotherIntegration(
+        mesh,
+        sample.position,
+        x,
+        y,
+        z,
+        floorY,
+        span,
+        pillarHeight,
+        rise,
+        archThickness,
+        depth,
+        motherBlendStrength,
+        rootShadowStrength,
+        embedStrength,
+        seed + 6907u);
+
+    AppendArchCeilingOverhangMass(
+        mesh,
+        sample.position,
+        x,
+        y,
+        z,
+        floorY,
+        span,
+        pillarHeight,
+        rise,
+        archThickness,
+        depth,
+        motherBlendStrength,
+        rootShadowStrength,
+        embedStrength,
+        seed + 7603u);
+
     constexpr uint32_t kArchStoneCount = 15;
     ArchStoneAnchor previousStone{};
     for (uint32_t stone = 0; stone < kArchStoneCount; ++stone) {
@@ -1451,7 +1717,11 @@ void AppendRockArch(
         const float depthJitter = (Hash01(seed + stone * 67u) - 0.5f) * depth * 0.46f;
         const float crownEmbed =
             archThickness * motherBlendStrength * embedStrength *
-            (0.10f + archCurve * 0.22f);
+            (0.20f + archCurve * 0.44f);
+        const float motherSink =
+            archThickness *
+            (0.08f + archCurve * 0.18f) *
+            (0.60f + motherBlendStrength * 0.26f);
         const Vector3 center = Add(
             sample.position,
             Add(
@@ -1462,6 +1732,7 @@ void AppendRockArch(
                         floorY + pillarHeight + rise * archCurve +
                             archThickness * 0.24f * embedStrength +
                             crownEmbed +
+                            motherSink +
                             verticalJitter),
                     Scale(z, depthJitter))));
         const float spanRadius = span / static_cast<float>(kArchStoneCount) *
@@ -1469,8 +1740,8 @@ void AppendRockArch(
         const float depthRadius = depth * (0.24f + Hash01(seed + stone * 73u) * 0.30f);
         const float thicknessRadius =
             archThickness *
-            (0.24f + Hash01(seed + stone * 79u) * 0.30f) *
-            (0.92f - archCurve * 0.16f);
+            (0.34f + Hash01(seed + stone * 79u) * 0.34f) *
+            (1.04f + archCurve * 0.04f);
         const uint32_t rockSeed = seed + stone * 149u + 2003u;
         const float rockVariation = RockVariationFromSeed(rockSeed, settings);
         const float tiltPitch = (Hash01(rockSeed + 911u) - 0.5f) * (0.34f + archCurve * 0.18f);
@@ -1483,19 +1754,19 @@ void AppendRockArch(
         const Vector3 ceilingInward = Scale(stoneUp, -1.0f);
         const Vector3 contactSurface = Add(
             center,
-            Scale(stoneUp, thicknessRadius * (0.74f + embedStrength * 0.34f)));
+            Scale(stoneUp, thicknessRadius * (1.08f + embedStrength * 0.54f + archCurve * 0.18f)));
         AppendArchErosionPocket(
             mesh,
             contactSurface,
             stoneSpan,
             stoneDepth,
             ceilingInward,
-            spanRadius * 1.58f,
-            depthRadius * 1.46f,
-            thicknessRadius * 1.84f,
+            spanRadius * (1.82f + archCurve * 0.22f),
+            depthRadius * (1.66f + archCurve * 0.16f),
+            thicknessRadius * (2.18f + archCurve * 0.26f),
             rockSeed + 283u,
             0.70f + static_cast<float>(stone) * 0.09f,
-            motherBlendStrength * (0.86f + archCurve * 0.30f),
+            motherBlendStrength * (1.02f + archCurve * 0.42f),
             rockVariation);
         AppendArchMotherCoverLip(
             mesh,
@@ -1503,12 +1774,12 @@ void AppendRockArch(
             stoneSpan,
             stoneDepth,
             ceilingInward,
-            spanRadius * (1.06f + archCurve * 0.16f),
-            depthRadius * (0.92f + Hash01(rockSeed + 293u) * 0.20f),
-            thicknessRadius * 1.36f,
+            spanRadius * (1.32f + archCurve * 0.28f),
+            depthRadius * (1.18f + Hash01(rockSeed + 293u) * 0.24f + archCurve * 0.14f),
+            thicknessRadius * (1.76f + archCurve * 0.30f),
             rockSeed + 317u,
             0.77f + static_cast<float>(stone) * 0.083f,
-            motherBlendStrength * (0.72f + archCurve * 0.24f),
+            motherBlendStrength * (0.94f + archCurve * 0.36f),
             rockVariation);
         AppendMotherRockBlendCollar(
             mesh,
@@ -1516,12 +1787,12 @@ void AppendRockArch(
             stoneSpan,
             stoneDepth,
             ceilingInward,
-            spanRadius * 1.22f,
-            depthRadius * 1.18f,
-            thicknessRadius * 0.88f,
+            spanRadius * (1.54f + archCurve * 0.14f),
+            depthRadius * (1.44f + archCurve * 0.16f),
+            thicknessRadius * (1.18f + archCurve * 0.16f),
             rockSeed + 431u,
             0.84f + static_cast<float>(stone) * 0.11f,
-            motherBlendStrength * (1.18f + archCurve * 0.34f),
+            motherBlendStrength * (1.34f + archCurve * 0.46f),
             rockVariation);
         AppendRootShadowPatch(
             mesh,
@@ -1529,11 +1800,11 @@ void AppendRockArch(
             stoneSpan,
             stoneDepth,
             ceilingInward,
-            spanRadius * 1.36f,
-            depthRadius * 1.25f,
+            spanRadius * (1.72f + archCurve * 0.20f),
+            depthRadius * (1.56f + archCurve * 0.18f),
             rockSeed + 593u,
             0.94f + static_cast<float>(stone) * 0.09f,
-            rootShadowStrength * (1.12f + archCurve * 0.28f),
+            rootShadowStrength * (1.34f + archCurve * 0.42f),
             rockVariation);
         AppendChippedArchFlakeAsset(
             mesh,
@@ -1546,9 +1817,9 @@ void AppendRockArch(
             thicknessRadius,
             rockSeed,
             1.0f + static_cast<float>(stone) * 0.11f,
-            0.64f + rootShadowStrength * 0.18f + archCurve * 0.10f,
+            0.72f + rootShadowStrength * 0.20f + archCurve * 0.14f,
             rockVariation,
-            (std::min)(1.0f, 0.46f + motherBlendStrength * 0.22f + archCurve * 0.18f));
+            (std::min)(1.0f, 0.66f + motherBlendStrength * 0.24f + archCurve * 0.26f));
 
         ArchStoneAnchor currentStone{};
         currentStone.center = center;
@@ -1648,6 +1919,158 @@ void AppendRockArch(
     }
 }
 
+void AppendOneSidedCliffOverhang(
+    TerrainCpuMesh& mesh,
+    const RailPathSample& sample,
+    const TerrainGenerationSettings& settings,
+    uint32_t seed,
+    float distanceT) {
+    constexpr uint32_t kSegments = 18;
+    constexpr uint32_t kRows = 6;
+    const float side = Hash01(seed + 11u) < 0.5f ? -1.0f : 1.0f;
+    const Vector3 along = sample.tangent;
+    const Vector3 inward = Scale(sample.right, -side);
+    const Vector3 wallOut = Scale(sample.right, side);
+    const Vector3 up = sample.up;
+    const float floorY = -settings.corridorRadius * 0.82f;
+    const float baseScale = (std::max)(settings.rockScatterScale, 0.35f);
+    const float length = settings.corridorRadius * baseScale * (1.15f + Hash01(seed + 17u) * 0.58f);
+    const float protrude = settings.corridorRadius * baseScale * (0.82f + Hash01(seed + 19u) * 0.42f);
+    const float wallLateral = settings.canyonHalfWidth * (0.88f + Hash01(seed + 23u) * 0.10f);
+    const float ceilingY =
+        floorY + settings.wallHeight * (0.66f + Hash01(seed + 29u) * 0.22f);
+    const float thickness = settings.corridorRadius * baseScale *
+        (0.30f + Hash01(seed + 31u) * 0.20f) *
+        (0.82f + (std::clamp)(settings.rockMotherBlendStrength, 0.0f, 1.5f) * 0.18f);
+    const float erosion = (std::clamp)(settings.largeScaleErosionStrength, 0.0f, 1.5f);
+
+    uint32_t underside[kRows][kSegments + 1u]{};
+    for (uint32_t row = 0; row < kRows; ++row) {
+        const float rowT = static_cast<float>(row) / static_cast<float>(kRows - 1u);
+        const float protrudeT = std::pow(rowT, 0.82f);
+        for (uint32_t segment = 0; segment <= kSegments; ++segment) {
+            const float segT = static_cast<float>(segment) / static_cast<float>(kSegments);
+            const float alongT = -1.0f + segT * 2.0f;
+            const float taper = 1.0f - std::abs(alongT) * 0.34f;
+            const float ridgeNoise =
+                SignedNoise(seed + 9109u, static_cast<int32_t>(segment), static_cast<int32_t>(row));
+            const float chipNoise =
+                SignedNoise(seed + 9127u, static_cast<int32_t>(row), static_cast<int32_t>(segment));
+            const float lateral =
+                side * wallLateral - side * protrude * protrudeT * (0.70f + taper * 0.30f);
+            const float vertical =
+                ceilingY -
+                thickness * (0.10f + protrudeT * 0.42f) -
+                thickness * erosion * (0.10f + (std::max)(0.0f, chipNoise) * 0.18f) +
+                ridgeNoise * thickness * 0.22f;
+            const Vector3 position = Add(
+                sample.position,
+                Add(
+                    Scale(along, alongT * length + ridgeNoise * settings.corridorRadius * 0.08f),
+                    Add(Scale(sample.right, lateral), Scale(up, vertical))));
+            const Vector3 normal = NormalizeOr(
+                Add(
+                    Scale(up, -0.76f),
+                    Add(Scale(inward, -0.24f - protrudeT * 0.20f), Scale(along, ridgeNoise * 0.10f))),
+                Scale(up, -1.0f));
+            underside[row][segment] = PushVertex(
+                mesh,
+                position,
+                normal,
+                {7.5f + segT * 1.35f, rowT},
+                (std::min)(1.0f, 0.50f + settings.rockRootShadowStrength * 0.20f + protrudeT * 0.18f),
+                0.34f + Hash01(seed + segment * 211u + row * 97u + 37u) * 0.16f);
+        }
+    }
+
+    for (uint32_t row = 0; row + 1u < kRows; ++row) {
+        for (uint32_t segment = 0; segment < kSegments; ++segment) {
+            PushTriangleTwoSided(
+                mesh.indices,
+                underside[row][segment],
+                underside[row][segment + 1u],
+                underside[row + 1u][segment]);
+            PushTriangleTwoSided(
+                mesh.indices,
+                underside[row][segment + 1u],
+                underside[row + 1u][segment + 1u],
+                underside[row + 1u][segment]);
+        }
+    }
+
+    for (uint32_t pocket = 0; pocket < 4u; ++pocket) {
+        const uint32_t pocketSeed = seed + 1201u + pocket * 173u;
+        const float alongOffset = (-0.72f + static_cast<float>(pocket) * 0.48f + (Hash01(pocketSeed + 7u) - 0.5f) * 0.18f) * length;
+        const float heightOffset =
+            floorY + settings.wallHeight * (0.34f + Hash01(pocketSeed + 11u) * 0.42f);
+        const Vector3 surface = Add(
+            sample.position,
+            Add(
+                Scale(along, alongOffset),
+                Add(Scale(wallOut, wallLateral - settings.corridorRadius * 0.05f), Scale(up, heightOffset))));
+        const float pocketA = settings.corridorRadius * (0.18f + Hash01(pocketSeed + 17u) * 0.18f);
+        const float pocketB = settings.corridorRadius * (0.16f + Hash01(pocketSeed + 19u) * 0.20f);
+        const float pocketDepth = settings.corridorRadius * (0.12f + Hash01(pocketSeed + 23u) * 0.12f);
+        AppendArchErosionPocket(
+            mesh,
+            surface,
+            along,
+            up,
+            inward,
+            pocketA,
+            pocketB,
+            pocketDepth,
+            pocketSeed + 31u,
+            8.8f + static_cast<float>(pocket) * 0.17f,
+            settings.motherRockErosionStrength * (0.82f + Hash01(pocketSeed + 29u) * 0.32f),
+            0.36f + Hash01(pocketSeed + 37u) * 0.12f);
+    }
+
+    const uint32_t fallCount = 5u + static_cast<uint32_t>(Hash01(seed + 1409u) * 5.0f);
+    for (uint32_t rock = 0; rock < fallCount; ++rock) {
+        const uint32_t rockSeed = seed + 1601u + rock * 191u;
+        const float alongOffset = (Hash01(rockSeed + 3u) - 0.5f) * length * 1.15f;
+        const float floorScatter = settings.corridorRadius *
+            (0.14f + Hash01(rockSeed + 5u) * 0.42f);
+        const Vector3 center = Add(
+            sample.position,
+            Add(
+                Scale(along, alongOffset),
+                Add(
+                    Scale(sample.right, side * (wallLateral - protrude * (0.24f + Hash01(rockSeed + 7u) * 0.32f))),
+                    Scale(up, floorY + floorScatter * 0.24f))));
+        const float radiusA = settings.corridorRadius * baseScale * (0.06f + Hash01(rockSeed + 11u) * 0.12f);
+        const float radiusB = settings.corridorRadius * baseScale * (0.045f + Hash01(rockSeed + 13u) * 0.10f);
+        const float radiusN = settings.corridorRadius * baseScale * (0.040f + Hash01(rockSeed + 17u) * 0.08f);
+        const float variation = RockVariationFromSeed(rockSeed, settings);
+        AppendRootShadowPatch(
+            mesh,
+            Add(center, Scale(up, -radiusN * 0.70f)),
+            along,
+            sample.right,
+            up,
+            radiusA * 1.18f,
+            radiusB * 1.08f,
+            rockSeed + 41u,
+            9.8f + static_cast<float>(rock) * 0.11f,
+            settings.rockRootShadowStrength * 0.95f,
+            variation);
+        AppendIrregularRockAsset(
+            mesh,
+            center,
+            along,
+            sample.right,
+            up,
+            radiusA,
+            radiusB,
+            radiusN,
+            rockSeed + 73u,
+            distanceT + 9.0f + static_cast<float>(rock) * 0.09f,
+            0.72f + settings.rockRootShadowStrength * 0.16f,
+            variation);
+    }
+}
+
 TerrainCpuMesh BuildChunkMesh(
     const TerrainChunkDebugInfo& chunk,
     const RailPath& railPath,
@@ -1721,13 +2144,13 @@ TerrainCpuMesh BuildChunkMesh(
             placement.distanceT);
     }
 
-    const uint32_t archCount = Hash01(chunk.seed + 701u) < settings.archDensity ? 1u : 0u;
-    for (uint32_t i = 0; i < archCount; ++i) {
+    const uint32_t overhangFeatureCount = Hash01(chunk.seed + 701u) < settings.archDensity ? 1u : 0u;
+    for (uint32_t i = 0; i < overhangFeatureCount; ++i) {
         const uint32_t seed = chunk.seed + 2003u + i * 173u;
         const float t = 0.28f + Hash01(seed + 9u) * 0.44f;
         const RailPathSample sample = railPath.Evaluate(
             chunk.startDistance + (chunk.endDistance - chunk.startDistance) * t);
-        AppendRockArch(mesh, sample, settings, seed);
+        AppendOneSidedCliffOverhang(mesh, sample, settings, seed, t);
     }
 
     for (size_t triangle = 0; triangle + 2 < mesh.indices.size(); triangle += 3) {

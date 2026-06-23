@@ -25,8 +25,8 @@ struct Material
     float invertDetailNormalY;
     float terrainDebugViewMode;
     float strataBreakupStrength;
-    float detailPadding1;
-    float detailPadding2;
+    float floorSandShadowStrength;
+    float backlightRimBoost;
 };
 
 struct DirectionalLight
@@ -281,6 +281,24 @@ static float RockCavity(float3 worldPosition, float3 normal, float strata)
     float verticalCrease = smoothstep(0.38f, 0.95f, 1.0f - abs(normal.y));
     float erosion = ErosionCrackMask(worldPosition, normal);
     return saturate(strata * 0.72f + cracks * 0.28f + verticalCrease * cracks * 0.22f + erosion * 0.52f);
+}
+
+static float FloorSandShadow(float3 worldPosition, float3 normal)
+{
+    float floorMask = smoothstep(0.42f, 0.86f, normal.y);
+    float2 p = worldPosition.xz;
+    float broad =
+        ValueNoise(float3(p.x * 0.020f + p.y * 0.010f, 0.0f, p.y * 0.026f) + 2501.0f);
+    float streakCoord =
+        p.x * 0.030f +
+        p.y * 0.010f +
+        ValueNoise(float3(p.x * 0.018f, 0.0f, p.y * 0.022f) + 2609.0f) * 1.15f;
+    float streak = smoothstep(0.30f, 0.82f, 1.0f - abs(frac(streakCoord) - 0.5f) * 2.0f);
+    float dune =
+        ValueNoise(float3(p.x * 0.090f, 0.0f, p.y * 0.038f) + 2707.0f) * 0.55f +
+        ValueNoise(float3(p.x * 0.210f, 0.0f, p.y * 0.075f) + 2801.0f) * 0.45f;
+    float broken = smoothstep(0.34f, 0.92f, broad * 0.42f + dune * 0.58f);
+    return saturate(floorMask * (streak * 0.48f + broken * 0.52f));
 }
 
 static float2 DecodeTerrainSurfaceAttributes(inout float2 uv)
@@ -583,6 +601,8 @@ PixelShaderOutput main(VertexShaderOutput input)
     float detailHybridBlend = saturate(gMaterial.detailHybridBlend);
     float cavityAoStrength = saturate(gMaterial.cavityAoStrength);
     float skyFillStrength = saturate(gMaterial.skyFillStrength);
+    float floorSandShadowStrength = saturate(gMaterial.floorSandShadowStrength);
+    float backlightRimBoost = saturate(gMaterial.backlightRimBoost);
     if (gMaterial.terrainDebugViewMode > 0.5f)
     {
         float debugNearWeight = DetailNearWeight(input.worldPosition, detailDistanceBlend);
@@ -661,6 +681,11 @@ PixelShaderOutput main(VertexShaderOutput input)
     rockColor = lerp(rockColor, rockColor * float3(0.40f, 0.31f, 0.23f), saturate(microCracks * 0.52f + chippedEdges * 0.44f));
     rockColor *= lerp(1.0f, 0.86f + dryGrain * 0.22f, saturate(microDetailStrength * noiseAmount));
     rockColor = lerp(rockColor, rockColor * float3(0.38f, 0.29f, 0.22f), rootContact * 0.34f);
+    float floorSandShadow = FloorSandShadow(input.worldPosition, normal) * floorSandShadowStrength;
+    rockColor = lerp(
+        rockColor,
+        rockColor * float3(0.58f, 0.47f, 0.34f),
+        floorSandShadow * (0.44f + dryGrain * 0.18f));
 
     if (gMaterial.enableLighting == 0)
     {
@@ -689,7 +714,9 @@ PixelShaderOutput main(VertexShaderOutput input)
     float silhouette = pow(1.0f - saturate(dot(normal, viewDir)), 2.35f);
     float backLight = pow(saturate(dot(-viewDir, lightDir)), 3.0f);
     float grazingLight = pow(saturate(dot(normal, lightDir)) * 0.5f + 0.5f, 3.0f);
-    float rim = silhouette * (0.24f + backLight * 0.96f + grazingLight * 0.22f) * rimStrength;
+    float wallRimMask = smoothstep(0.18f, 0.74f, 1.0f - abs(normal.y));
+    float boostedBackLight = backLight * (0.96f + backlightRimBoost * 0.82f * wallRimMask);
+    float rim = silhouette * (0.24f + boostedBackLight + grazingLight * (0.22f + backlightRimBoost * 0.16f * wallRimMask)) * rimStrength;
     lit += gDirectionalLight.color.rgb * float3(1.08f, 0.94f, 0.78f) * rim * gDirectionalLight.intensity;
 
     output.color = float4(saturate(lit), texColor.a);

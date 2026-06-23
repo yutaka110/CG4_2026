@@ -133,6 +133,8 @@ void BuildPassParams(const PostProcessPass& postPass, float passParams[kPostProc
         passParams[6] = postPass.parameters.fogColorB;
         passParams[7] = postPass.parameters.fogNearPlane;
         passParams[8] = postPass.parameters.fogFarPlane;
+        passParams[9] = postPass.parameters.fogDepthBoost;
+        passParams[10] = postPass.parameters.fogDepthBoostStart;
         return;
     }
     if (postPass.pipeline == "ContactAO") {

@@ -197,6 +197,8 @@ void PostProcessStack::ResetToVfxDefaults() {
     distanceFog.parameters.fogColorB = 0.34f;
     distanceFog.parameters.fogNearPlane = 0.1f;
     distanceFog.parameters.fogFarPlane = 5000.0f;
+    distanceFog.parameters.fogDepthBoost = 0.35f;
+    distanceFog.parameters.fogDepthBoostStart = 0.58f;
     passes_.push_back(distanceFog);
 
     PostProcessPass accretionComposite{};

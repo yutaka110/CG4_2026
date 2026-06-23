@@ -53,6 +53,10 @@ struct RuntimeCameraState {
     float fovY = 0.25f * 3.14159265358979323846f;
     float nearZ = 0.1f;
     float farZ = 1000.0f;
+    float debugMoveSpeed = 0.65f;
+    float debugFastMoveMultiplier = 6.0f;
+    float debugSlowMoveMultiplier = 0.25f;
+    float debugRotateSpeed = 0.02f;
     bool enableDebugInput = true;
 };
 

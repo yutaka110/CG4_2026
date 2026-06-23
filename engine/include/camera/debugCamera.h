@@ -16,6 +16,9 @@ public:
     void SetTransform(const Transform& transform);
     void SetLens(float fovY, float aspectRatio, float nearZ, float farZ);
     void SetInputEnabled(bool enabled) { inputEnabled_ = enabled; }
+    void SetMoveSpeed(float speed) { moveSpeed_ = speed; }
+    void SetRotateSpeed(float speed) { rotateSpeed_ = speed; }
+    void SetSpeedMultipliers(float slowMultiplier, float fastMultiplier);
 
     Vector3 rotation_ = {0.0f, 0.0f, 0.0f};
     Matrix4x4 matRot_{};
@@ -24,4 +27,8 @@ public:
 private:
     VfxCamera camera_{};
     bool inputEnabled_ = true;
+    float moveSpeed_ = 0.65f;
+    float rotateSpeed_ = 0.02f;
+    float slowMoveMultiplier_ = 0.25f;
+    float fastMoveMultiplier_ = 6.0f;
 };

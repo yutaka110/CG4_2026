@@ -69,6 +69,8 @@ struct TerrainAuthoringState {
     float materialStrataBreakupStrength = 0.68f;
     float materialSpecularStrength = 0.035f;
     float materialRimLightStrength = 0.45f;
+    float materialBacklightRimBoost = 0.28f;
+    float materialFloorSandShadowStrength = 0.38f;
     float materialDetailNormalStrength = 0.72f;
     float materialMicroDetailStrength = 0.62f;
     bool useDetailTextureCache = true;

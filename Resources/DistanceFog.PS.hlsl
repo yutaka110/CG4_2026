@@ -14,8 +14,8 @@ cbuffer PostProcessParams : register(b0)
     float gFogColorB;
     float gNearPlane;
     float gFarPlane;
-    float gAux9;
-    float gAux10;
+    float gFogDepthBoost;
+    float gFogDepthBoostStart;
     float gAux11;
     float gAux12;
     float gAux13;
@@ -46,9 +46,11 @@ float4 main(PSInput input) : SV_TARGET
     float fogRange = max(gFogEnd - gFogStart, 0.001f);
     float rangeMask = saturate((linearDepth - gFogStart) / fogRange);
     float exponentialMask = 1.0f - exp(-rangeMask * rangeMask * max(gFogDensity, 0.0f) * 1.45f);
+    float farBoostMask = smoothstep(saturate(gFogDepthBoostStart), 1.0f, rangeMask);
+    float depthBoost = farBoostMask * max(gFogDepthBoost, 0.0f) * (0.35f + rangeMask * 0.65f);
     float skyMask = smoothstep(0.992f, 1.0f, deviceDepth) * 0.18f;
-    float fogMask = saturate(max(exponentialMask, skyMask) * gIntensity);
-    fogMask = min(fogMask, 0.58f);
+    float fogMask = saturate(max(exponentialMask + depthBoost, skyMask) * gIntensity);
+    fogMask = min(fogMask, 0.66f);
 
     float3 fogColor = saturate(float3(gFogColorR, gFogColorG, gFogColorB));
     float3 liftedFog = fogColor + float3(0.08f, 0.06f, 0.04f) * smoothstep(0.55f, 1.0f, uv.y);

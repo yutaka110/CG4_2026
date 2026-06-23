@@ -243,6 +243,11 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
         ? static_cast<float>(windowWidth_) / static_cast<float>(windowHeight_)
         : 16.0f / 9.0f;
     debugCamera_.SetInputEnabled(runtimeState_.camera.enableDebugInput);
+    debugCamera_.SetMoveSpeed(runtimeState_.camera.debugMoveSpeed);
+    debugCamera_.SetRotateSpeed(runtimeState_.camera.debugRotateSpeed);
+    debugCamera_.SetSpeedMultipliers(
+        runtimeState_.camera.debugSlowMoveMultiplier,
+        runtimeState_.camera.debugFastMoveMultiplier);
     debugCamera_.SetTransform(runtimeState_.camera.transform);
     debugCamera_.SetLens(
         runtimeState_.camera.fovY,

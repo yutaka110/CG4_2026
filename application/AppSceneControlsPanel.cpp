@@ -282,6 +282,10 @@ void DrawMaterialSettingsControlsPanel(
     ImGui::SliderAngle("Camera FOV", &runtimeState.camera.fovY, 10.0f, 120.0f);
     ImGui::DragFloat("Camera Near", &runtimeState.camera.nearZ, 0.01f, 0.001f, 100.0f);
     ImGui::DragFloat("Camera Far", &runtimeState.camera.farZ, 1.0f, 1.0f, 5000.0f);
+    ImGui::DragFloat("Debug Move Speed", &runtimeState.camera.debugMoveSpeed, 0.05f, 0.0f, 10.0f);
+    ImGui::DragFloat("Debug Fast Multiplier", &runtimeState.camera.debugFastMoveMultiplier, 0.1f, 1.0f, 24.0f);
+    ImGui::DragFloat("Debug Slow Multiplier", &runtimeState.camera.debugSlowMoveMultiplier, 0.01f, 0.01f, 1.0f);
+    ImGui::DragFloat("Debug Rotate Speed", &runtimeState.camera.debugRotateSpeed, 0.001f, 0.0f, 0.20f);
 
     ImGui::SeparatorText("Rail Terrain Authoring");
     TerrainAuthoringState& terrain = runtimeState.terrain;
@@ -315,6 +319,8 @@ void DrawMaterialSettingsControlsPanel(
     ImGui::SliderFloat("Strata Breakup", &terrain.materialStrataBreakupStrength, 0.0f, 1.5f);
     ImGui::SliderFloat("Specular", &terrain.materialSpecularStrength, 0.0f, 0.25f);
     ImGui::SliderFloat("Rim Light", &terrain.materialRimLightStrength, 0.0f, 2.0f);
+    ImGui::SliderFloat("Backlight Rim Boost", &terrain.materialBacklightRimBoost, 0.0f, 2.0f);
+    ImGui::SliderFloat("Floor Sand Shadow", &terrain.materialFloorSandShadowStrength, 0.0f, 1.5f);
     ImGui::SliderFloat("Detail Normal", &terrain.materialDetailNormalStrength, 0.0f, 2.0f);
     ImGui::SliderFloat("Micro Detail", &terrain.materialMicroDetailStrength, 0.0f, 2.0f);
     ImGui::Checkbox("Use Detail Cache", &terrain.useDetailTextureCache);
@@ -337,6 +343,8 @@ void DrawMaterialSettingsControlsPanel(
         terrain.materialStrataBreakupStrength = 0.68f;
         terrain.materialSpecularStrength = 0.035f;
         terrain.materialRimLightStrength = 0.45f;
+        terrain.materialBacklightRimBoost = 0.28f;
+        terrain.materialFloorSandShadowStrength = 0.38f;
         terrain.materialDetailNormalStrength = 0.72f;
         terrain.materialMicroDetailStrength = 0.62f;
         terrain.useDetailTextureCache = true;
@@ -390,6 +398,7 @@ void DrawMaterialSettingsControlsPanel(
         terrain.canyonSunIntensity = 2.4f;
         terrain.materialSkyFillStrength = 0.30f;
         terrain.materialRimLightStrength = 0.62f;
+        terrain.materialBacklightRimBoost = 0.42f;
     }
     ImGui::SeparatorText("Terrain Generation");
     ImGui::Checkbox("Auto Advance Rail Preview", &terrain.autoAdvancePreview);
@@ -449,7 +458,7 @@ void DrawMaterialSettingsControlsPanel(
     ImGui::SliderFloat("Rock Material Variation", &terrain.settings.rockMaterialVariation, 0.0f, 1.0f);
     ImGui::SliderFloat("Mother Rock Erosion", &terrain.settings.motherRockErosionStrength, 0.0f, 1.5f);
     ImGui::SliderFloat("Large Scale Erosion", &terrain.settings.largeScaleErosionStrength, 0.0f, 1.5f);
-    ImGui::SliderFloat("Arch Density", &terrain.settings.archDensity, 0.0f, 1.0f);
+    ImGui::SliderFloat("Overhang Feature Density", &terrain.settings.archDensity, 0.0f, 1.0f);
     ImGui::SliderFloat("Dust Zone Density", &terrain.settings.dustZoneDensity, 0.0f, 1.0f);
     ImGui::Checkbox("Show VFX Zones", &terrain.showVfxZones);
     if (ImGui::Button("Save Terrain Preset")) {

@@ -224,6 +224,10 @@ bool TerrainPresetStore::Load(TerrainAuthoringState& authoring, std::string* err
             ParseFloat(value, loaded.materialSpecularStrength);
         } else if (key == "materialRimLightStrength") {
             ParseFloat(value, loaded.materialRimLightStrength);
+        } else if (key == "materialBacklightRimBoost") {
+            ParseFloat(value, loaded.materialBacklightRimBoost);
+        } else if (key == "materialFloorSandShadowStrength") {
+            ParseFloat(value, loaded.materialFloorSandShadowStrength);
         } else if (key == "materialDetailNormalStrength") {
             ParseFloat(value, loaded.materialDetailNormalStrength);
         } else if (key == "materialMicroDetailStrength") {
@@ -294,6 +298,8 @@ bool TerrainPresetStore::Load(TerrainAuthoringState& authoring, std::string* err
     loaded.materialStrataBreakupStrength = (std::clamp)(loaded.materialStrataBreakupStrength, 0.0f, 1.5f);
     loaded.materialSpecularStrength = (std::clamp)(loaded.materialSpecularStrength, 0.0f, 0.25f);
     loaded.materialRimLightStrength = (std::clamp)(loaded.materialRimLightStrength, 0.0f, 2.0f);
+    loaded.materialBacklightRimBoost = (std::clamp)(loaded.materialBacklightRimBoost, 0.0f, 2.0f);
+    loaded.materialFloorSandShadowStrength = (std::clamp)(loaded.materialFloorSandShadowStrength, 0.0f, 1.5f);
     loaded.materialDetailNormalStrength = (std::clamp)(loaded.materialDetailNormalStrength, 0.0f, 2.0f);
     loaded.materialMicroDetailStrength = (std::clamp)(loaded.materialMicroDetailStrength, 0.0f, 2.0f);
     loaded.materialDetailCacheScale = (std::clamp)(loaded.materialDetailCacheScale, 0.25f, 4.0f);
@@ -420,6 +426,8 @@ bool TerrainPresetStore::Save(const TerrainAuthoringState& authoring, std::strin
     output << "materialStrataBreakupStrength=" << authoring.materialStrataBreakupStrength << "\n";
     output << "materialSpecularStrength=" << authoring.materialSpecularStrength << "\n";
     output << "materialRimLightStrength=" << authoring.materialRimLightStrength << "\n";
+    output << "materialBacklightRimBoost=" << authoring.materialBacklightRimBoost << "\n";
+    output << "materialFloorSandShadowStrength=" << authoring.materialFloorSandShadowStrength << "\n";
     output << "materialDetailNormalStrength=" << authoring.materialDetailNormalStrength << "\n";
     output << "materialMicroDetailStrength=" << authoring.materialMicroDetailStrength << "\n";
     output << "useDetailTextureCache=" << (authoring.useDetailTextureCache ? 1 : 0) << "\n";
