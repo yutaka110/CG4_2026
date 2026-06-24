@@ -203,7 +203,8 @@ static float MicroGrain(float3 worldPosition)
     float g0 = ValueNoise(worldPosition * 1.65f + 311.0f);
     float g1 = ValueNoise(worldPosition * 3.25f + 719.0f);
     float g2 = ValueNoise(worldPosition * 6.40f + 1103.0f);
-    return saturate(g0 * 0.42f + g1 * 0.36f + g2 * 0.22f);
+    float g3 = ValueNoise(worldPosition * 11.50f + 1901.0f);
+    return saturate(g0 * 0.34f + g1 * 0.30f + g2 * 0.22f + g3 * 0.14f);
 }
 
 static float MicroVerticalCracks(float3 worldPosition, float3 normal)
@@ -213,19 +214,24 @@ static float MicroVerticalCracks(float3 worldPosition, float3 normal)
         ValueNoise(float3(worldPosition.x * 0.34f, worldPosition.y * 0.055f, worldPosition.z * 0.36f) + 541.0f);
     float split =
         ValueNoise(float3(worldPosition.x * 0.82f, worldPosition.y * 0.11f, worldPosition.z * 0.78f) + 887.0f);
+    float hairline =
+        ValueNoise(float3(worldPosition.x * 1.74f, worldPosition.y * 0.20f, worldPosition.z * 1.58f) + 1297.0f);
     float vein = smoothstep(0.77f, 0.97f, column) * smoothstep(0.34f, 0.86f, split);
+    float fineVein = smoothstep(0.82f, 0.985f, split) * smoothstep(0.58f, 0.94f, hairline);
     float broken = smoothstep(0.70f, 0.96f, 1.0f - abs(frac(worldPosition.y * 0.38f + split * 0.42f) - 0.5f) * 2.0f);
-    return saturate((vein * 0.82f + vein * broken * 0.36f) * wall);
+    return saturate((vein * 0.76f + fineVein * 0.42f + vein * broken * 0.42f) * wall);
 }
 
 static float ChippedStrataEdge(float3 worldPosition, float3 normal)
 {
     float wall = saturate(1.0f - abs(normal.y));
     float layer = abs(frac(worldPosition.y * 0.31f + TerrainNoise(worldPosition * 0.78f) * 0.52f) - 0.5f);
-    float edge = smoothstep(0.078f, 0.0f, layer);
+    float edge = smoothstep(0.094f, 0.0f, layer);
+    float sharpEdge = smoothstep(0.030f, 0.0f, layer);
     float breakup = ValueNoise(worldPosition * 1.18f + 421.0f);
     float fineBreakup = ValueNoise(worldPosition * 4.3f + 1721.0f);
-    return saturate(edge * wall * smoothstep(0.36f, 0.92f, breakup * 0.72f + fineBreakup * 0.28f));
+    float fractureGate = smoothstep(0.31f, 0.90f, breakup * 0.64f + fineBreakup * 0.36f);
+    return saturate((edge * 0.78f + sharpEdge * 0.42f) * wall * fractureGate);
 }
 
 static float DetailHeight(float3 worldPosition, float microDetailStrength)
@@ -233,16 +239,23 @@ static float DetailHeight(float3 worldPosition, float microDetailStrength)
     float broad = TerrainNoise(worldPosition);
     float mid = ValueNoise(worldPosition * 0.36f + 19.0f);
     float fine = ValueNoise(worldPosition * 0.92f + 73.0f);
+    float extraFine = ValueNoise(worldPosition * 2.45f + 509.0f);
     float layer = abs(frac(worldPosition.y * 0.19f + broad * 0.42f) - 0.5f);
     float ledge = smoothstep(0.18f, 0.0f, layer);
     float erosion = ErosionCrackMask(worldPosition, float3(0.0f, 0.0f, 1.0f));
-    float micro = (MicroGrain(worldPosition) - 0.5f) * 0.36f + MicroVerticalCracks(worldPosition, float3(0.0f, 0.0f, 1.0f)) * 0.34f;
-    return broad * 0.58f + mid * 0.24f + fine * 0.10f + ledge * 0.20f + erosion * 0.34f + micro * saturate(microDetailStrength);
+    float chip = ChippedStrataEdge(worldPosition, float3(0.0f, 0.0f, 1.0f));
+    float micro =
+        (MicroGrain(worldPosition) - 0.5f) * 0.42f +
+        (extraFine - 0.5f) * 0.16f +
+        MicroVerticalCracks(worldPosition, float3(0.0f, 0.0f, 1.0f)) * 0.46f +
+        chip * 0.24f;
+    return broad * 0.56f + mid * 0.23f + fine * 0.11f + ledge * 0.22f + erosion * 0.36f + micro * saturate(microDetailStrength);
 }
 
 static float3 PerturbRockNormal(float3 worldPosition, float3 normal, float strength, float microDetailStrength)
 {
-    strength = saturate(strength * 0.75f);
+    float wall = saturate(1.0f - abs(normal.y));
+    strength = saturate(strength * lerp(0.62f, 0.95f, wall));
     if (strength <= 0.001f)
     {
         return normal;
@@ -266,7 +279,7 @@ static float3 PerturbRockNormal(float3 worldPosition, float3 normal, float stren
     float mdhB =
         MicroGrain(worldPosition + bitangent * microStep) -
         MicroGrain(worldPosition - bitangent * microStep);
-    float microNormalStrength = saturate(microDetailStrength * 0.42f);
+    float microNormalStrength = saturate(microDetailStrength * lerp(0.30f, 0.58f, wall));
 
     return SafeNormalize(
         normal -
@@ -280,7 +293,24 @@ static float RockCavity(float3 worldPosition, float3 normal, float strata)
     float cracks = smoothstep(0.58f, 0.94f, fineLow);
     float verticalCrease = smoothstep(0.38f, 0.95f, 1.0f - abs(normal.y));
     float erosion = ErosionCrackMask(worldPosition, normal);
-    return saturate(strata * 0.72f + cracks * 0.28f + verticalCrease * cracks * 0.22f + erosion * 0.52f);
+    float grainPit = smoothstep(0.66f, 0.96f, 1.0f - MicroGrain(worldPosition * 1.25f + 211.0f));
+    return saturate(strata * 0.72f + cracks * 0.30f + verticalCrease * cracks * 0.26f + erosion * 0.56f + grainPit * verticalCrease * 0.18f);
+}
+
+static float WallDetailMask(float3 normal)
+{
+    return smoothstep(0.16f, 0.82f, 1.0f - abs(normal.y));
+}
+
+static float HighFrequencyRockDetail(float3 worldPosition, float3 normal, float strata, float microDetailStrength)
+{
+    float wall = WallDetailMask(normal);
+    float grain = smoothstep(0.50f, 0.93f, MicroGrain(worldPosition * 1.35f + 733.0f));
+    float cracks = MicroVerticalCracks(worldPosition * 1.08f + 41.0f, normal);
+    float chips = ChippedStrataEdge(worldPosition * 1.06f + 17.0f, normal);
+    float freckle = smoothstep(0.76f, 0.99f, ValueNoise(worldPosition * 7.8f + 2411.0f));
+    float detail = chips * 0.58f + cracks * 0.48f + grain * 0.22f + freckle * 0.16f + strata * 0.18f;
+    return saturate(detail * wall * saturate(microDetailStrength));
 }
 
 static float FloorSandShadow(float3 worldPosition, float3 normal)
@@ -588,8 +618,8 @@ PixelShaderOutput main(VertexShaderOutput input)
     float strataAmount = saturate(gMaterial.environmentCoefficient);
     float specularStrength = saturate(gMaterial.shininess);
     float rimStrength = saturate(gMaterial.rimLightStrength * 0.5f);
-    float detailNormalStrength = saturate(gMaterial.detailNormalStrength);
-    float microDetailStrength = saturate(gMaterial.microDetailStrength);
+    float detailNormalStrength = clamp(gMaterial.detailNormalStrength, 0.0f, 2.0f);
+    float microDetailStrength = clamp(gMaterial.microDetailStrength, 0.0f, 2.0f);
     float useDetailCache = saturate(gMaterial.useDetailCache);
     float detailCacheScale = max(gMaterial.detailCacheScale, 0.01f);
     float detailTileWorldSize = max(gMaterial.detailTileWorldSize, 1.0f);
@@ -603,6 +633,16 @@ PixelShaderOutput main(VertexShaderOutput input)
     float skyFillStrength = saturate(gMaterial.skyFillStrength);
     float floorSandShadowStrength = saturate(gMaterial.floorSandShadowStrength);
     float backlightRimBoost = saturate(gMaterial.backlightRimBoost);
+    float cameraDistance = distance(cameraWorldPosition, input.worldPosition);
+    float wallMaskBeforeDetail = WallDetailMask(normal);
+    float distanceAir = smoothstep(180.0f, 760.0f, cameraDistance);
+    float encodedFarWall = smoothstep(0.54f, 0.86f, contactAo);
+    float distantWallAtmosphere = saturate(pow(distanceAir, 0.92f) * encodedFarWall * wallMaskBeforeDetail);
+    detailNormalStrength *= lerp(1.0f, 0.22f, distantWallAtmosphere);
+    microDetailStrength *= lerp(1.0f, 0.16f, distantWallAtmosphere);
+    strataAmount *= lerp(1.0f, 0.48f, distantWallAtmosphere);
+    specularStrength *= lerp(1.0f, 0.24f, distantWallAtmosphere);
+    rimStrength *= lerp(1.0f, 0.52f, distantWallAtmosphere);
     if (gMaterial.terrainDebugViewMode > 0.5f)
     {
         float debugNearWeight = DetailNearWeight(input.worldPosition, detailDistanceBlend);
@@ -661,7 +701,12 @@ PixelShaderOutput main(VertexShaderOutput input)
     float dryGrain = lerp(proceduralGrain, detailCache.r, useDetailCache) * microDetailStrength;
     float cacheCavity = detailCache.a * useDetailCache;
     float cavity = RockCavity(input.worldPosition, normal, strata) + cacheCavity * microDetailStrength * 0.38f;
-    float ao = lerp(1.0f, 0.46f, saturate((cavity + microCracks * 0.42f + chippedEdges * 0.36f) * cavityAoStrength));
+    float wallDetailMask = WallDetailMask(normal);
+    float highFrequencyDetail = HighFrequencyRockDetail(input.worldPosition, normal, strata, microDetailStrength);
+    float ao = lerp(
+        1.0f,
+        0.42f,
+        saturate((cavity + microCracks * 0.55f + chippedEdges * 0.48f + highFrequencyDetail * 0.40f) * cavityAoStrength));
     float rootContact = saturate(contactAo * (0.75f + cavityAoStrength * 0.95f));
     ao *= lerp(1.0f, 0.20f, rootContact);
 
@@ -678,14 +723,22 @@ PixelShaderOutput main(VertexShaderOutput input)
     rockColor *= 0.92f + rockVariation * 0.18f;
     rockColor = lerp(rockColor, rockColor * float3(0.58f, 0.45f, 0.34f), strata);
     rockColor = lerp(rockColor, rockColor * float3(0.46f, 0.34f, 0.24f), saturate(erosionCracks * 0.65f));
-    rockColor = lerp(rockColor, rockColor * float3(0.40f, 0.31f, 0.23f), saturate(microCracks * 0.52f + chippedEdges * 0.44f));
-    rockColor *= lerp(1.0f, 0.86f + dryGrain * 0.22f, saturate(microDetailStrength * noiseAmount));
+    rockColor = lerp(
+        rockColor,
+        rockColor * float3(0.34f, 0.26f, 0.20f),
+        saturate((microCracks * 0.58f + chippedEdges * 0.54f + highFrequencyDetail * 0.68f) * (0.55f + wallDetailMask * 0.45f)));
+    float chippedHighlight = saturate((chippedEdges * 0.34f + highFrequencyDetail * 0.42f) * wallDetailMask);
+    rockColor += sandstone * float3(0.13f, 0.10f, 0.07f) * chippedHighlight * saturate(microDetailStrength * 0.75f);
+    rockColor *= lerp(1.0f, 0.82f + dryGrain * 0.28f + highFrequencyDetail * 0.08f, saturate(microDetailStrength * noiseAmount));
     rockColor = lerp(rockColor, rockColor * float3(0.38f, 0.29f, 0.22f), rootContact * 0.34f);
     float floorSandShadow = FloorSandShadow(input.worldPosition, normal) * floorSandShadowStrength;
     rockColor = lerp(
         rockColor,
         rockColor * float3(0.58f, 0.47f, 0.34f),
         floorSandShadow * (0.44f + dryGrain * 0.18f));
+    float3 distantAirColor = lerp(float3(0.58f, 0.61f, 0.61f), float3(0.86f, 0.88f, 0.85f), distanceAir);
+    rockColor = lerp(rockColor, distantAirColor * (0.70f + rockVariation * 0.08f), distantWallAtmosphere * 0.42f);
+    ao = lerp(ao, 0.82f, distantWallAtmosphere * 0.48f);
 
     if (gMaterial.enableLighting == 0)
     {
@@ -703,20 +756,28 @@ PixelShaderOutput main(VertexShaderOutput input)
     float3 skyColor = float3(0.34f, 0.42f, 0.55f) * skyFillStrength * (0.35f + upFacing * 0.65f);
     float3 groundBounce = float3(0.34f, 0.20f, 0.10f) * (0.16f + (1.0f - upFacing) * 0.12f);
     float3 lit = rockColor * (direct + skyColor + groundBounce) * ao;
+    float3 canyonAirLight = lerp(float3(0.42f, 0.46f, 0.47f), float3(0.76f, 0.78f, 0.76f), distanceAir);
+    lit = lerp(lit, canyonAirLight, distantWallAtmosphere * 0.26f);
 
     float3 viewDir = SafeNormalize(cameraWorldPosition - input.worldPosition);
     float3 halfDir = SafeNormalize(lightDir + viewDir);
     float specPower = lerp(16.0f, 36.0f, rockVariation);
     float specVariation = lerp(0.50f, 1.18f, rockVariation) * lerp(1.0f, 0.72f + dryGrain * 0.18f, microDetailStrength);
     float lowSpec = pow(saturate(dot(normal, halfDir)), specPower) * specularStrength * specVariation;
+    float facetSpec = pow(saturate(dot(normal, halfDir)), lerp(42.0f, 70.0f, rockVariation)) *
+        specularStrength * highFrequencyDetail * wallDetailMask * 0.42f;
+    lowSpec += facetSpec;
     lit += gDirectionalLight.color.rgb * lowSpec * shadowVisibility;
 
     float silhouette = pow(1.0f - saturate(dot(normal, viewDir)), 2.35f);
     float backLight = pow(saturate(dot(-viewDir, lightDir)), 3.0f);
     float grazingLight = pow(saturate(dot(normal, lightDir)) * 0.5f + 0.5f, 3.0f);
     float wallRimMask = smoothstep(0.18f, 0.74f, 1.0f - abs(normal.y));
-    float boostedBackLight = backLight * (0.96f + backlightRimBoost * 0.82f * wallRimMask);
+    float edgeOnlyRim = pow(silhouette, 1.35f) * wallRimMask;
+    float boostedBackLight = backLight * (0.76f + backlightRimBoost * 1.05f * edgeOnlyRim);
     float rim = silhouette * (0.24f + boostedBackLight + grazingLight * (0.22f + backlightRimBoost * 0.16f * wallRimMask)) * rimStrength;
+    rim *= lerp(1.0f, 1.34f, edgeOnlyRim * backlightRimBoost);
+    rim *= 1.0f + highFrequencyDetail * wallRimMask * 0.28f;
     lit += gDirectionalLight.color.rgb * float3(1.08f, 0.94f, 0.78f) * rim * gDirectionalLight.intensity;
 
     output.color = float4(saturate(lit), texColor.a);

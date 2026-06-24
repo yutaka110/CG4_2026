@@ -98,9 +98,9 @@ void DisableHeldHitEffects(AppRuntimeState& runtimeState, EffectRuntime& effectR
 }
 
 void ApplyVfxShowcaseMode(AppRuntimeState& runtimeState) {
-    runtimeState.clearColor[0] = 0.015f;
-    runtimeState.clearColor[1] = 0.018f;
-    runtimeState.clearColor[2] = 0.028f;
+    runtimeState.clearColor[0] = 0.78f;
+    runtimeState.clearColor[1] = 0.76f;
+    runtimeState.clearColor[2] = 0.74f;
     runtimeState.clearColor[3] = 1.0f;
 
     runtimeState.useMonsterBall = false;
@@ -108,6 +108,7 @@ void ApplyVfxShowcaseMode(AppRuntimeState& runtimeState) {
     runtimeState.showSkinnedModel = false;
     runtimeState.showSkeletonDebug = false;
     runtimeState.showSkybox = false;
+    runtimeState.showProceduralBackdrop = true;
     runtimeState.showVfxModelObjects = false;
     runtimeState.vfx.enableTrailMeshStream = true;
     runtimeState.vfx.enableTrailMeshStreamAutoFallback = false;
@@ -198,7 +199,9 @@ void DrawMaterialSettingsControlsPanel(
         reinterpret_cast<float*>(&runtimeState.transform.translate), 0.01f,
         -100.0f, 100.0f);
 
-    ImGui::SeparatorText("Animated Cube");
+    ImGui::SeparatorText("Scene Objects");
+    ImGui::Checkbox("Show Monster Ball", &runtimeState.useMonsterBall);
+    ImGui::SameLine();
     ImGui::Checkbox("Show Animated Cube", &runtimeState.showAnimatedCube);
     ImGui::SameLine();
     ImGui::Checkbox("Show Skinned", &runtimeState.showSkinnedModel);
@@ -206,6 +209,8 @@ void DrawMaterialSettingsControlsPanel(
     ImGui::Checkbox("Show Skeleton", &runtimeState.showSkeletonDebug);
     ImGui::SameLine();
     ImGui::Checkbox("Show Skybox", &runtimeState.showSkybox);
+    ImGui::SameLine();
+    ImGui::Checkbox("Procedural Backdrop", &runtimeState.showProceduralBackdrop);
     ImGui::SameLine();
     ImGui::Checkbox("Play Animation", &runtimeState.playAnimatedCube);
     ImGui::SameLine();
@@ -340,25 +345,25 @@ void DrawMaterialSettingsControlsPanel(
         terrain.materialBrightness = 1.0f;
         terrain.materialNoiseStrength = 1.0f;
         terrain.materialStrataStrength = 1.0f;
-        terrain.materialStrataBreakupStrength = 0.68f;
-        terrain.materialSpecularStrength = 0.035f;
-        terrain.materialRimLightStrength = 0.45f;
-        terrain.materialBacklightRimBoost = 0.28f;
+        terrain.materialStrataBreakupStrength = 0.92f;
+        terrain.materialSpecularStrength = 0.055f;
+        terrain.materialRimLightStrength = 0.62f;
+        terrain.materialBacklightRimBoost = 0.42f;
         terrain.materialFloorSandShadowStrength = 0.38f;
-        terrain.materialDetailNormalStrength = 0.72f;
-        terrain.materialMicroDetailStrength = 0.62f;
+        terrain.materialDetailNormalStrength = 1.05f;
+        terrain.materialMicroDetailStrength = 1.05f;
         terrain.useDetailTextureCache = true;
-        terrain.materialDetailCacheScale = 1.0f;
-        terrain.materialDetailTileWorldSize = 96.0f;
-        terrain.materialDetailNearScale = 1.35f;
-        terrain.materialDetailFarScale = 0.55f;
+        terrain.materialDetailCacheScale = 1.35f;
+        terrain.materialDetailTileWorldSize = 72.0f;
+        terrain.materialDetailNearScale = 1.75f;
+        terrain.materialDetailFarScale = 0.72f;
         terrain.materialDetailDistanceBlend = 180.0f;
         terrain.useDetailNormalMap = true;
-        terrain.materialDetailNormalMapStrength = 0.58f;
-        terrain.materialDetailHybridBlend = 0.52f;
+        terrain.materialDetailNormalMapStrength = 0.82f;
+        terrain.materialDetailHybridBlend = 0.66f;
         terrain.invertDetailNormalY = false;
-        terrain.materialCavityAoStrength = 0.58f;
-        terrain.materialSkyFillStrength = 0.30f;
+        terrain.materialCavityAoStrength = 0.72f;
+        terrain.materialSkyFillStrength = 0.24f;
     }
     ImGui::SeparatorText("Cascaded Shadows");
     ImGui::Checkbox("CSM Enabled", &terrain.cascadeShadowEnabled);
@@ -415,7 +420,7 @@ void DrawMaterialSettingsControlsPanel(
         terrain.canyonSunColor = {1.0f, 0.74f, 0.46f, 1.0f};
         terrain.canyonSunDirection = {-0.38f, -0.52f, 0.76f};
         terrain.canyonSunIntensity = 2.4f;
-        terrain.materialSkyFillStrength = 0.30f;
+        terrain.materialSkyFillStrength = 0.24f;
         terrain.materialRimLightStrength = 0.62f;
         terrain.materialBacklightRimBoost = 0.42f;
     }
@@ -458,6 +463,14 @@ void DrawMaterialSettingsControlsPanel(
     ImGui::SliderFloat("SDF Carve Density", &terrain.settings.sdfCarveDensity, 0.0f, 1.0f);
     ImGui::SliderFloat("SDF Carve Strength", &terrain.settings.sdfCarveStrength, 0.0f, 1.2f);
     ImGui::SliderFloat("SDF Carve Scale", &terrain.settings.sdfCarveScale, 0.25f, 2.5f);
+    ImGui::SliderFloat("Opening Silhouette Strength", &terrain.settings.openingSilhouetteStrength, 0.0f, 1.5f);
+    ImGui::SliderFloat("Opening Silhouette Scale", &terrain.settings.openingSilhouetteScale, 0.35f, 2.5f);
+    ImGui::DragFloat("Open Canyon Start", &terrain.settings.openCanyonStartDistance, 2.0f, 0.0f, 5000.0f);
+    ImGui::DragFloat("Open Canyon Transition", &terrain.settings.openCanyonTransitionLength, 2.0f, 1.0f, 2000.0f);
+    ImGui::SliderFloat("Open Canyon Strength", &terrain.settings.openCanyonStrength, 0.0f, 1.0f);
+    ImGui::DragFloat("Open Canyon Far Wall Distance", &terrain.settings.openCanyonFarWallDistance, 2.0f, 20.0f, 1000.0f);
+    ImGui::DragFloat("Open Canyon Far Wall Height", &terrain.settings.openCanyonFarWallHeight, 2.0f, 20.0f, 1000.0f);
+    ImGui::SliderFloat("Open Canyon Layer Spread", &terrain.settings.openCanyonLayerSpread, 0.0f, 2.0f);
     int surfaceLongitudinalSteps = static_cast<int>(terrain.settings.surfaceLongitudinalSteps);
     if (ImGui::SliderInt("Surface Length Steps", &surfaceLongitudinalSteps, 12, 64)) {
         terrain.settings.surfaceLongitudinalSteps = static_cast<uint32_t>(std::clamp(surfaceLongitudinalSteps, 12, 64));

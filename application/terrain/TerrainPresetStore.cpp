@@ -114,6 +114,22 @@ bool TerrainPresetStore::Load(TerrainGenerationSettings& settings, std::string* 
             ParseFloat(value, loaded.sdfCarveStrength);
         } else if (key == "sdfCarveScale") {
             ParseFloat(value, loaded.sdfCarveScale);
+        } else if (key == "openingSilhouetteStrength") {
+            ParseFloat(value, loaded.openingSilhouetteStrength);
+        } else if (key == "openingSilhouetteScale") {
+            ParseFloat(value, loaded.openingSilhouetteScale);
+        } else if (key == "openCanyonStartDistance") {
+            ParseFloat(value, loaded.openCanyonStartDistance);
+        } else if (key == "openCanyonTransitionLength") {
+            ParseFloat(value, loaded.openCanyonTransitionLength);
+        } else if (key == "openCanyonStrength") {
+            ParseFloat(value, loaded.openCanyonStrength);
+        } else if (key == "openCanyonFarWallDistance") {
+            ParseFloat(value, loaded.openCanyonFarWallDistance);
+        } else if (key == "openCanyonFarWallHeight") {
+            ParseFloat(value, loaded.openCanyonFarWallHeight);
+        } else if (key == "openCanyonLayerSpread") {
+            ParseFloat(value, loaded.openCanyonLayerSpread);
         } else if (key == "surfaceLongitudinalSteps") {
             ParseUInt(value, loaded.surfaceLongitudinalSteps);
         } else if (key == "surfaceRadialSegments") {
@@ -165,6 +181,14 @@ bool TerrainPresetStore::Load(TerrainGenerationSettings& settings, std::string* 
     loaded.sdfCarveDensity = (std::clamp)(loaded.sdfCarveDensity, 0.0f, 1.0f);
     loaded.sdfCarveStrength = (std::clamp)(loaded.sdfCarveStrength, 0.0f, 1.2f);
     loaded.sdfCarveScale = (std::clamp)(loaded.sdfCarveScale, 0.25f, 2.5f);
+    loaded.openingSilhouetteStrength = (std::clamp)(loaded.openingSilhouetteStrength, 0.0f, 1.5f);
+    loaded.openingSilhouetteScale = (std::clamp)(loaded.openingSilhouetteScale, 0.35f, 2.5f);
+    loaded.openCanyonStartDistance = (std::clamp)(loaded.openCanyonStartDistance, 0.0f, 5000.0f);
+    loaded.openCanyonTransitionLength = (std::clamp)(loaded.openCanyonTransitionLength, 1.0f, 2000.0f);
+    loaded.openCanyonStrength = (std::clamp)(loaded.openCanyonStrength, 0.0f, 1.0f);
+    loaded.openCanyonFarWallDistance = (std::clamp)(loaded.openCanyonFarWallDistance, 20.0f, 1000.0f);
+    loaded.openCanyonFarWallHeight = (std::clamp)(loaded.openCanyonFarWallHeight, 20.0f, 1000.0f);
+    loaded.openCanyonLayerSpread = (std::clamp)(loaded.openCanyonLayerSpread, 0.0f, 2.0f);
     loaded.surfaceLongitudinalSteps = (std::clamp)(loaded.surfaceLongitudinalSteps, 12u, 64u);
     loaded.surfaceRadialSegments = (std::clamp)(loaded.surfaceRadialSegments, 16u, 96u);
     loaded.lodNearDistance = (std::clamp)(loaded.lodNearDistance, loaded.chunkLength, 1000.0f);
@@ -389,6 +413,14 @@ bool TerrainPresetStore::Save(const TerrainGenerationSettings& settings, std::st
     output << "sdfCarveDensity=" << settings.sdfCarveDensity << "\n";
     output << "sdfCarveStrength=" << settings.sdfCarveStrength << "\n";
     output << "sdfCarveScale=" << settings.sdfCarveScale << "\n";
+    output << "openingSilhouetteStrength=" << settings.openingSilhouetteStrength << "\n";
+    output << "openingSilhouetteScale=" << settings.openingSilhouetteScale << "\n";
+    output << "openCanyonStartDistance=" << settings.openCanyonStartDistance << "\n";
+    output << "openCanyonTransitionLength=" << settings.openCanyonTransitionLength << "\n";
+    output << "openCanyonStrength=" << settings.openCanyonStrength << "\n";
+    output << "openCanyonFarWallDistance=" << settings.openCanyonFarWallDistance << "\n";
+    output << "openCanyonFarWallHeight=" << settings.openCanyonFarWallHeight << "\n";
+    output << "openCanyonLayerSpread=" << settings.openCanyonLayerSpread << "\n";
     output << "surfaceLongitudinalSteps=" << settings.surfaceLongitudinalSteps << "\n";
     output << "surfaceRadialSegments=" << settings.surfaceRadialSegments << "\n";
     output << "lodNearDistance=" << settings.lodNearDistance << "\n";
@@ -441,6 +473,14 @@ bool TerrainPresetStore::Save(const TerrainAuthoringState& authoring, std::strin
     output << "sdfCarveDensity=" << settings.sdfCarveDensity << "\n";
     output << "sdfCarveStrength=" << settings.sdfCarveStrength << "\n";
     output << "sdfCarveScale=" << settings.sdfCarveScale << "\n";
+    output << "openingSilhouetteStrength=" << settings.openingSilhouetteStrength << "\n";
+    output << "openingSilhouetteScale=" << settings.openingSilhouetteScale << "\n";
+    output << "openCanyonStartDistance=" << settings.openCanyonStartDistance << "\n";
+    output << "openCanyonTransitionLength=" << settings.openCanyonTransitionLength << "\n";
+    output << "openCanyonStrength=" << settings.openCanyonStrength << "\n";
+    output << "openCanyonFarWallDistance=" << settings.openCanyonFarWallDistance << "\n";
+    output << "openCanyonFarWallHeight=" << settings.openCanyonFarWallHeight << "\n";
+    output << "openCanyonLayerSpread=" << settings.openCanyonLayerSpread << "\n";
     output << "surfaceLongitudinalSteps=" << settings.surfaceLongitudinalSteps << "\n";
     output << "surfaceRadialSegments=" << settings.surfaceRadialSegments << "\n";
     output << "lodNearDistance=" << settings.lodNearDistance << "\n";

@@ -9,6 +9,8 @@ struct TerrainVolumeLocalSample {
     float noise = 0.0f;
     float archMask = 0.0f;
     float carveMask = 0.0f;
+    float openingMask = 0.0f;
+    float openCanyonBlend = 0.0f;
     float radiusScale = 1.0f;
 };
 
@@ -26,6 +28,8 @@ public:
         float distance,
         float angle,
         Vector3* outNormal = nullptr) const;
+    float OpeningMask(float distance, float angle) const;
+    float OpenCanyonBlend(float distance) const;
     Vector3 EstimateNormal(
         float distance,
         float lateral,

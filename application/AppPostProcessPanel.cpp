@@ -262,6 +262,10 @@ void DrawPostProcessPanel(
             ImGui::SliderFloat("Fog Depth Boost", &pass.parameters.fogDepthBoost, 0.0f, 2.0f);
             ImGui::SliderFloat("Fog Boost Start", &pass.parameters.fogDepthBoostStart, 0.0f, 1.0f);
             ImGui::SliderFloat("Backlit Fog Lift", &pass.parameters.backlitFogLift, 0.0f, 1.5f);
+            ImGui::SliderFloat("Opening Glow", &pass.parameters.openingGlowStrength, 0.0f, 2.0f);
+            ImGui::SliderFloat("Foreground Silhouette", &pass.parameters.foregroundSilhouetteStrength, 0.0f, 1.0f);
+            ImGui::SliderFloat("Low Fog Layer", &pass.parameters.lowFogLayerStrength, 0.0f, 1.5f);
+            ImGui::SliderFloat("Cool Floor Haze", &pass.parameters.coolFloorHazeStrength, 0.0f, 1.5f);
         } else if (pass.pipeline == "ContactAO") {
             ImGui::SliderFloat("AO Radius", &pass.parameters.contactAoRadiusPixels, 1.0f, 12.0f);
             ImGui::SliderFloat("AO Bias", &pass.parameters.contactAoBias, 0.01f, 3.0f);

@@ -209,9 +209,9 @@ float ShowcaseDuration(AppVfxRuntimeState::ShowcaseEffect effect) {
 }
 
 void ApplyShowcaseSceneDefaults(AppRuntimeState& runtimeState) {
-    runtimeState.clearColor[0] = 0.015f;
-    runtimeState.clearColor[1] = 0.018f;
-    runtimeState.clearColor[2] = 0.028f;
+    runtimeState.clearColor[0] = 0.78f;
+    runtimeState.clearColor[1] = 0.76f;
+    runtimeState.clearColor[2] = 0.74f;
     runtimeState.clearColor[3] = 1.0f;
 
     runtimeState.useMonsterBall = false;
@@ -219,6 +219,7 @@ void ApplyShowcaseSceneDefaults(AppRuntimeState& runtimeState) {
     runtimeState.showSkinnedModel = false;
     runtimeState.showSkeletonDebug = false;
     runtimeState.showSkybox = false;
+    runtimeState.showProceduralBackdrop = true;
     runtimeState.showVfxModelObjects = false;
 
     runtimeState.directionalLightData.color = {0.55f, 0.7f, 1.0f, 1.0f};

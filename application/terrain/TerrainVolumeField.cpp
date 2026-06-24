@@ -160,6 +160,105 @@ float TerrainVolumeField::SubtractiveCarveMask(float distance, float angle) cons
     return (std::clamp)(mask * placementBias * settings_.sdfCarveStrength, 0.0f, 1.2f);
 }
 
+float TerrainVolumeField::OpenCanyonBlend(float distance) const {
+    const float strength = (std::clamp)(settings_.openCanyonStrength, 0.0f, 1.0f);
+    if (strength <= 0.0f) {
+        return 0.0f;
+    }
+
+    const float transitionLength = (std::max)(settings_.openCanyonTransitionLength, 1.0f);
+    const float blend = SmoothStep(
+        settings_.openCanyonStartDistance,
+        settings_.openCanyonStartDistance + transitionLength,
+        distance);
+    return blend * strength;
+}
+
+float TerrainVolumeField::OpeningMask(float distance, float angle) const {
+    const float strength = (std::clamp)(settings_.openingSilhouetteStrength, 0.0f, 1.5f);
+    const float openCanyonBlend = OpenCanyonBlend(distance);
+    if (strength <= 0.0f && openCanyonBlend <= 0.0f) {
+        return 0.0f;
+    }
+
+    const float scale = (std::max)(settings_.openingSilhouetteScale, 0.35f);
+    const float cellLength = (std::max)(settings_.chunkLength * (1.95f / scale), 92.0f);
+    const float cell = std::floor(distance / cellLength);
+    const float local = distance / cellLength - cell;
+    float mask = 0.0f;
+
+    for (int32_t octave = 0; octave < 2; ++octave) {
+        const float octaveCell = cell + static_cast<float>(octave) * 0.37f;
+        const float gate = ValueNoise(
+            octaveCell,
+            71.0f,
+            11.0f,
+            settings_.seed + 2609u + static_cast<uint32_t>(octave) * 109u);
+        const float gateThreshold = 0.34f + strength * 0.38f;
+        if (gate > gateThreshold) {
+            continue;
+        }
+
+        const float center = 0.30f + ValueNoise(octaveCell, 79.0f, 17.0f, settings_.seed + 2711u) * 0.42f;
+        const float halfLength =
+            0.18f + ValueNoise(octaveCell, 83.0f, 23.0f, settings_.seed + 2801u) * (0.16f + strength * 0.05f);
+        const float sideGate = ValueNoise(octaveCell, 89.0f, 31.0f, settings_.seed + 2903u);
+        const float targetAngle =
+            sideGate < 0.42f ? kPi * 0.50f :
+            (sideGate < 0.70f ? kPi * 0.22f : kPi * 0.78f);
+        const float angleWidth =
+            0.38f + ValueNoise(octaveCell, 97.0f, 37.0f, settings_.seed + 3001u) * (0.32f + strength * 0.12f);
+
+        const float along = 1.0f - (std::min)(std::abs(local - center) / halfLength, 1.0f);
+        float angleDelta = std::abs(angle - targetAngle);
+        angleDelta = (std::min)(angleDelta, kTau - angleDelta);
+        const float angular = 1.0f - (std::min)(angleDelta / angleWidth, 1.0f);
+        const float ceilingBias = SmoothStep(0.10f, 0.76f, std::sin(angle));
+        const float upperWallBias = SmoothStep(0.18f, 0.92f, std::abs(std::cos(angle))) *
+            SmoothStep(-0.18f, 0.52f, std::sin(angle)) * 0.72f;
+        const float placementBias = (std::max)(ceilingBias, upperWallBias);
+        const float raggedEdge =
+            0.76f + Noise3(
+                distance + static_cast<float>(octave) * 43.0f,
+                std::cos(angle) * settings_.canyonHalfWidth,
+                std::sin(angle) * settings_.wallHeight,
+                0.075f) * 0.24f;
+        const float cellMask =
+            SmoothStep(0.0f, 1.0f, along) *
+            SmoothStep(0.0f, 1.0f, angular) *
+            placementBias *
+            (std::max)(0.35f, raggedEdge);
+        mask = (std::max)(mask, cellMask);
+    }
+
+    mask *= strength;
+
+    if (openCanyonBlend > 0.0f) {
+        const float skyAngle = std::sin(angle);
+        const float sideAngle = std::abs(std::cos(angle));
+        const float topOpen = SmoothStep(0.02f, 0.48f, skyAngle);
+        const float crownOpen = SmoothStep(0.34f, 0.86f, skyAngle);
+        const float wallKeep = 1.0f -
+            SmoothStep(0.70f, 0.98f, sideAngle) *
+            SmoothStep(-0.02f, 0.58f, skyAngle) *
+            0.58f;
+        const float raggedSkyline =
+            0.80f + Noise3(
+                distance * 0.72f + std::cos(angle) * 29.0f,
+                std::cos(angle) * settings_.canyonHalfWidth,
+                std::sin(angle) * settings_.wallHeight,
+                0.052f) * 0.20f;
+        const float overheadOpening =
+            (topOpen * 0.72f + crownOpen * 0.42f) *
+            wallKeep *
+            (std::max)(0.42f, raggedSkyline) *
+            (1.05f + openCanyonBlend * 0.22f);
+        mask = (std::max)(mask, overheadOpening * openCanyonBlend);
+    }
+
+    return (std::clamp)(mask, 0.0f, 1.35f);
+}
+
 float TerrainVolumeField::RadiusScale(float distance, float angle) const {
     const float lateral = std::cos(angle) * settings_.canyonHalfWidth;
     const float verticalBase = std::sin(angle) >= 0.0f ? settings_.wallHeight : settings_.corridorRadius * 0.92f;
@@ -232,6 +331,20 @@ float TerrainVolumeField::RadiusScale(float distance, float angle) const {
         0.18f;
     const float roughness = settings_.volumeRoughness * n;
     const float subtractiveCarve = SubtractiveCarveMask(distance, angle);
+    const float openingMask = OpeningMask(distance, angle);
+    const float openCanyonBlend = OpenCanyonBlend(distance);
+    const float openingLip =
+        openingMask *
+        (0.92f + settings_.volumeRoughness * 0.42f + settings_.largeScaleErosionStrength * 0.28f);
+    const float openCanyonCliff =
+        openCanyonBlend *
+        wallMask *
+        (0.28f + largeErosionStrength * 0.24f) *
+        (0.72f + SmoothStep(0.20f, 0.88f, std::abs(verticalGrooveNoise)) * 0.36f);
+    const float openCanyonCeilingRelease =
+        openCanyonBlend *
+        ceilingMask *
+        (0.08f + settings_.volumeRoughness * 0.08f);
     const float chippedEdge =
         subtractiveCarve *
         Noise3(distance + 91.0f, lateral * 1.9f, vertical * 1.25f, 0.23f) *
@@ -241,19 +354,25 @@ float TerrainVolumeField::RadiusScale(float distance, float angle) const {
         1.0f + roughness + ceilingBreak + sideLedge +
             macroPocket + diagonalShear + brokenTerrace +
             chippedStrata + verticalCrack + erodedLedge +
-            ArchMask(distance, angle) +
-            subtractiveCarve + chippedEdge);
+            ArchMask(distance, angle) * (1.0f - openCanyonBlend * 0.70f) +
+            subtractiveCarve + openingLip + chippedEdge +
+            openCanyonCliff - openCanyonCeilingRelease);
 }
 
 TerrainVolumeLocalSample TerrainVolumeField::SampleLocal(
     float distance,
     float lateral,
     float vertical) const {
-    const float lateralRadius = (std::max)(settings_.canyonHalfWidth, settings_.corridorRadius + 4.0f);
+    const float openCanyonBlend = OpenCanyonBlend(distance);
+    const float lateralRadius =
+        (std::max)(settings_.canyonHalfWidth, settings_.corridorRadius + 4.0f) *
+        std::lerp(1.0f, 1.38f, openCanyonBlend);
     const float verticalRadius =
         vertical >= 0.0f
-            ? (std::max)(settings_.wallHeight, settings_.corridorRadius + 4.0f)
-            : (std::max)(settings_.corridorRadius * 0.92f, 4.0f);
+            ? (std::max)(settings_.wallHeight, settings_.corridorRadius + 4.0f) *
+                std::lerp(1.0f, 1.58f, openCanyonBlend)
+            : (std::max)(settings_.corridorRadius * 0.92f, 4.0f) *
+                std::lerp(1.0f, 1.08f, openCanyonBlend);
     const float angle = std::atan2(vertical / verticalRadius, lateral / lateralRadius);
     const float radiusScale = RadiusScale(distance, angle);
     const float nx = lateral / (lateralRadius * radiusScale);
@@ -262,6 +381,8 @@ TerrainVolumeLocalSample TerrainVolumeField::SampleLocal(
     sample.noise = Noise3(distance, lateral, vertical, 0.025f);
     sample.archMask = ArchMask(distance, angle);
     sample.carveMask = SubtractiveCarveMask(distance, angle);
+    sample.openingMask = OpeningMask(distance, angle);
+    sample.openCanyonBlend = openCanyonBlend;
     sample.radiusScale = radiusScale;
     sample.sdf = std::sqrt(nx * nx + ny * ny) - 1.0f;
     return sample;
@@ -272,10 +393,15 @@ Vector3 TerrainVolumeField::SurfacePoint(
     float angle,
     Vector3* outNormal) const {
     const RailPathSample pathSample = railPath_.Evaluate(distance);
-    const float lateralRadius = (std::max)(settings_.canyonHalfWidth, settings_.corridorRadius + 4.0f);
+    const float openCanyonBlend = OpenCanyonBlend(distance);
+    const float lateralRadius =
+        (std::max)(settings_.canyonHalfWidth, settings_.corridorRadius + 4.0f) *
+        std::lerp(1.0f, 1.38f, openCanyonBlend);
     const float verticalBase = std::sin(angle) >= 0.0f
-        ? (std::max)(settings_.wallHeight, settings_.corridorRadius + 4.0f)
-        : (std::max)(settings_.corridorRadius * 0.92f, 4.0f);
+        ? (std::max)(settings_.wallHeight, settings_.corridorRadius + 4.0f) *
+            std::lerp(1.0f, 1.58f, openCanyonBlend)
+        : (std::max)(settings_.corridorRadius * 0.92f, 4.0f) *
+            std::lerp(1.0f, 1.08f, openCanyonBlend);
     const float radiusScale = RadiusScale(distance, angle);
     const float lateral = std::cos(angle) * lateralRadius * radiusScale;
     const float vertical = std::sin(angle) * verticalBase * radiusScale;

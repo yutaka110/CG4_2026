@@ -81,11 +81,12 @@ struct AppRuntimeState {
     RuntimeCameraState camera{};
     Vector3 cameraWorldPosition{};
 
-    bool useMonsterBall = true;
+    bool useMonsterBall = false;
     bool showAnimatedCube = true;
     bool showSkinnedModel = false;
     bool showSkeletonDebug = false;
-    bool showSkybox = true;
+    bool showSkybox = false;
+    bool showProceduralBackdrop = true;
     uint32_t selectedSkinnedModelIndex = 0;
     bool showVfxModelObjects = true;
     uint32_t selectedVfxModelObjectIndex = 0;

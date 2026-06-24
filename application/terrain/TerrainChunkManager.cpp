@@ -209,6 +209,14 @@ uint32_t SettingsHash(const TerrainGenerationSettings& settings) {
     mixFloat(settings.sdfCarveDensity);
     mixFloat(settings.sdfCarveStrength);
     mixFloat(settings.sdfCarveScale);
+    mixFloat(settings.openingSilhouetteStrength);
+    mixFloat(settings.openingSilhouetteScale);
+    mixFloat(settings.openCanyonStartDistance);
+    mixFloat(settings.openCanyonTransitionLength);
+    mixFloat(settings.openCanyonStrength);
+    mixFloat(settings.openCanyonFarWallDistance);
+    mixFloat(settings.openCanyonFarWallHeight);
+    mixFloat(settings.openCanyonLayerSpread);
     hash = Hash(hash ^ settings.surfaceLongitudinalSteps);
     hash = Hash(hash ^ settings.surfaceRadialSegments);
     mixFloat(settings.lodNearDistance);
@@ -345,6 +353,41 @@ void PushGridIndices(
                 indices.insert(indices.end(), {a, c, b, b, c, d});
             } else {
                 indices.insert(indices.end(), {a, b, c, b, d, c});
+            }
+        }
+    }
+}
+
+void PushMaskedGridIndices(
+    std::vector<uint32_t>& indices,
+    uint32_t base,
+    uint32_t rows,
+    uint32_t columns,
+    const std::vector<float>& openingMasks,
+    bool flipWinding) {
+    for (uint32_t y = 0; y + 1 < rows; ++y) {
+        for (uint32_t x = 0; x + 1 < columns; ++x) {
+            const uint32_t a = y * columns + x;
+            const uint32_t b = a + 1;
+            const uint32_t c = a + columns;
+            const uint32_t d = c + 1;
+            const float avgMask =
+                (openingMasks[a] + openingMasks[b] + openingMasks[c] + openingMasks[d]) * 0.25f;
+            const float maxMask = (std::max)(
+                (std::max)(openingMasks[a], openingMasks[b]),
+                (std::max)(openingMasks[c], openingMasks[d]));
+            if (avgMask > 0.42f || (maxMask > 0.74f && avgMask > 0.28f)) {
+                continue;
+            }
+
+            const uint32_t ia = base + a;
+            const uint32_t ib = base + b;
+            const uint32_t ic = base + c;
+            const uint32_t id = base + d;
+            if (flipWinding) {
+                indices.insert(indices.end(), {ia, ic, ib, ib, ic, id});
+            } else {
+                indices.insert(indices.end(), {ia, ib, ic, ib, id, ic});
             }
         }
     }
@@ -536,6 +579,873 @@ void AppendChippedOrientedBox(
         const uint32_t chipVertex = PushVertex(mesh, inset, chipNormal, {0.5f, 0.5f});
         PushTriangleTwoSided(mesh.indices, cornerIndices[c0], cornerIndices[c1], chipVertex);
         PushTriangleTwoSided(mesh.indices, cornerIndices[c0], chipVertex, cornerIndices[c2]);
+    }
+}
+
+void AppendMesaQuad(
+    TerrainCpuMesh& mesh,
+    const Vector3& a,
+    const Vector3& b,
+    const Vector3& c,
+    const Vector3& d,
+    const Vector3& normal,
+    const Vector2& uvOrigin,
+    const Vector2& uvSpan,
+    float contactAo,
+    float rockVariation) {
+    const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+    PushVertex(mesh, a, normal, uvOrigin, contactAo, rockVariation);
+    PushVertex(mesh, b, normal, {uvOrigin.x + uvSpan.x, uvOrigin.y}, contactAo, rockVariation);
+    PushVertex(mesh, c, normal, {uvOrigin.x + uvSpan.x, uvOrigin.y + uvSpan.y}, contactAo, rockVariation);
+    PushVertex(mesh, d, normal, {uvOrigin.x, uvOrigin.y + uvSpan.y}, contactAo, rockVariation);
+    PushTriangleTwoSided(mesh.indices, base, base + 1u, base + 2u);
+    PushTriangleTwoSided(mesh.indices, base, base + 2u, base + 3u);
+}
+
+Vector3 MesaCorner(
+    const Vector3& center,
+    const Vector3& axisAlong,
+    const Vector3& axisDepth,
+    const Vector3& axisUp,
+    float along,
+    float depth,
+    float height) {
+    return Add(center, Add(Scale(axisAlong, along), Add(Scale(axisDepth, depth), Scale(axisUp, height))));
+}
+
+Vector3 LerpVector(const Vector3& a, const Vector3& b, float t) {
+    return Add(Scale(a, 1.0f - t), Scale(b, t));
+}
+
+void AppendSubdividedMesaPatch(
+    TerrainCpuMesh& mesh,
+    const Vector3& bottomLeft,
+    const Vector3& bottomRight,
+    const Vector3& topRight,
+    const Vector3& topLeft,
+    const Vector3& normalHint,
+    const Vector3& axisAlong,
+    const Vector3& axisDepth,
+    const Vector3& axisUp,
+    uint32_t seed,
+    uint32_t columns,
+    uint32_t rows,
+    const Vector2& uvOrigin,
+    const Vector2& uvSpan,
+    float contactAo,
+    float rockVariation,
+    float displacement,
+    float ledgeStrength) {
+    const uint32_t safeColumns = (std::max)(columns, 1u);
+    const uint32_t safeRows = (std::max)(rows, 1u);
+    const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+    const float disp = (std::max)(0.0f, displacement);
+    const Vector3 faceNormal = NormalizeOr(normalHint, axisDepth);
+
+    for (uint32_t y = 0; y <= safeRows; ++y) {
+        const float v = static_cast<float>(y) / static_cast<float>(safeRows);
+        const Vector3 left = LerpVector(bottomLeft, topLeft, v);
+        const Vector3 right = LerpVector(bottomRight, topRight, v);
+        for (uint32_t x = 0; x <= safeColumns; ++x) {
+            const float u = static_cast<float>(x) / static_cast<float>(safeColumns);
+            Vector3 p = LerpVector(left, right, u);
+            const float edgeFade =
+                std::sin(u * 3.14159265359f) *
+                (0.35f + 0.65f * std::sin(v * 3.14159265359f));
+            const float broad =
+                SignedNoise(seed + 17u, static_cast<int32_t>(x / 2u), static_cast<int32_t>(y / 2u));
+            const float mid =
+                SignedNoise(seed + 31u, static_cast<int32_t>(x), static_cast<int32_t>(y));
+            const float terrace =
+                std::sin(v * (18.0f + Hash01(seed + 43u) * 11.0f) + Hash01(seed + 47u) * 6.28318530718f);
+            const float ledge = (terrace > 0.58f ? (terrace - 0.58f) / 0.42f : 0.0f) * ledgeStrength;
+            p = Add(
+                p,
+                Add(
+                    Scale(faceNormal, (broad * 0.62f + mid * 0.38f) * disp * edgeFade),
+                    Add(
+                        Scale(axisDepth, ledge * disp * 0.72f * edgeFade),
+                        Scale(axisUp, -ledge * disp * 0.16f))));
+
+            const Vector3 n = NormalizeOr(
+                Add(faceNormal, Add(Scale(axisDepth, broad * 0.18f), Scale(axisUp, ledge * 0.12f))),
+                faceNormal);
+            PushVertex(
+                mesh,
+                p,
+                n,
+                {uvOrigin.x + uvSpan.x * u, uvOrigin.y + uvSpan.y * v},
+                contactAo,
+                rockVariation);
+        }
+    }
+
+    const uint32_t stride = safeColumns + 1u;
+    for (uint32_t y = 0; y < safeRows; ++y) {
+        for (uint32_t x = 0; x < safeColumns; ++x) {
+            const uint32_t a = base + y * stride + x;
+            const uint32_t b = a + 1u;
+            const uint32_t c = a + stride;
+            const uint32_t d = c + 1u;
+            PushTriangleTwoSided(mesh.indices, a, b, c);
+            PushTriangleTwoSided(mesh.indices, b, d, c);
+        }
+    }
+}
+
+void AppendDistantMesaBlock(
+    TerrainCpuMesh& mesh,
+    const RailPathSample& sample,
+    const TerrainGenerationSettings& settings,
+    uint32_t seed,
+    float side,
+    float lateral,
+    float floorY,
+    float height,
+    float halfAlong,
+    float halfDepth,
+    float taper,
+    float contactAo,
+    float rockVariation,
+    float uvSeed,
+    float erosionStrength) {
+    const Vector3 axisAlong = sample.tangent;
+    const Vector3 axisUp = sample.up;
+    const Vector3 axisDepth = Scale(sample.right, side);
+    const Vector3 baseCenter = Add(sample.position, Add(Scale(sample.right, side * lateral), Scale(sample.up, floorY)));
+    const float safeTaper = (std::clamp)(taper, 0.28f, 0.84f);
+    const float topAlong = halfAlong * safeTaper * (0.90f + Hash01(seed + 11u) * 0.16f);
+    const float topDepth = halfDepth * (safeTaper * 0.76f + 0.12f + Hash01(seed + 13u) * 0.10f);
+    const float capLift = height * (0.045f + Hash01(seed + 19u) * 0.045f);
+    const float lean = (Hash01(seed + 23u) - 0.5f) * halfDepth * 0.30f;
+    const float alongSkew = (Hash01(seed + 29u) - 0.5f) * halfAlong * 0.10f;
+
+    Vector3 bottom[4] = {
+        MesaCorner(baseCenter, axisAlong, axisDepth, axisUp, -halfAlong, -halfDepth, 0.0f),
+        MesaCorner(baseCenter, axisAlong, axisDepth, axisUp, halfAlong, -halfDepth * 0.92f, 0.0f),
+        MesaCorner(baseCenter, axisAlong, axisDepth, axisUp, halfAlong * 0.92f, halfDepth, 0.0f),
+        MesaCorner(baseCenter, axisAlong, axisDepth, axisUp, -halfAlong * 0.88f, halfDepth * 0.84f, 0.0f),
+    };
+    Vector3 topCenter = Add(baseCenter, Add(Scale(axisDepth, lean), Add(Scale(axisAlong, alongSkew), Scale(axisUp, height))));
+    Vector3 top[4] = {
+        MesaCorner(topCenter, axisAlong, axisDepth, axisUp, -topAlong, -topDepth, 0.0f),
+        MesaCorner(topCenter, axisAlong, axisDepth, axisUp, topAlong * (0.86f + Hash01(seed + 31u) * 0.22f), -topDepth, capLift * 0.18f),
+        MesaCorner(topCenter, axisAlong, axisDepth, axisUp, topAlong, topDepth * (0.82f + Hash01(seed + 37u) * 0.18f), capLift),
+        MesaCorner(topCenter, axisAlong, axisDepth, axisUp, -topAlong * (0.80f + Hash01(seed + 41u) * 0.20f), topDepth, -capLift * 0.12f),
+    };
+
+    const float uvScale = 0.55f + height * 0.010f;
+    const float faceAo = (std::clamp)(contactAo, 0.0f, 1.0f);
+    for (uint32_t i = 0; i < 4u; ++i) {
+        const uint32_t next = (i + 1u) & 3u;
+        const Vector3 faceNormal = NormalizeOr(
+            Cross(Subtract(bottom[next], bottom[i]), Subtract(top[i], bottom[i])),
+            Scale(axisDepth, -1.0f));
+        const bool frontFace = i == 0u;
+        const bool sideFace = i == 1u || i == 3u;
+        AppendSubdividedMesaPatch(
+            mesh,
+            bottom[i],
+            bottom[next],
+            top[next],
+            top[i],
+            faceNormal,
+            axisAlong,
+            axisDepth,
+            axisUp,
+            seed + i * 197u,
+            frontFace ? 8u : (sideFace ? 5u : 4u),
+            frontFace ? 7u : 5u,
+            {uvSeed + static_cast<float>(i) * 1.7f, 0.0f},
+            {uvScale, uvScale * 1.35f},
+            faceAo,
+            rockVariation,
+            height * (frontFace ? 0.045f : 0.028f),
+            frontFace ? 0.72f : 0.42f);
+    }
+
+    AppendMesaQuad(
+        mesh,
+        top[3],
+        top[2],
+        top[1],
+        top[0],
+        axisUp,
+        {uvSeed + 8.0f, 0.0f},
+        {uvScale * 1.2f, uvScale * 0.72f},
+        (std::clamp)(faceAo * 0.78f, 0.0f, 1.0f),
+        rockVariation);
+
+    const float skirtDrop = height * (0.26f + Hash01(seed + 43u) * 0.18f);
+    const float skirtReach = halfDepth * (0.82f + Hash01(seed + 47u) * 0.42f);
+    const float skirtAlongGrow = halfAlong * (0.16f + Hash01(seed + 51u) * 0.16f);
+    Vector3 skirtInner[2] = {
+        MesaCorner(baseCenter, axisAlong, axisDepth, axisUp, -halfAlong - skirtAlongGrow, -halfDepth - skirtReach, -skirtDrop),
+        MesaCorner(baseCenter, axisAlong, axisDepth, axisUp, halfAlong + skirtAlongGrow, -halfDepth * 0.92f - skirtReach, -skirtDrop * 0.82f),
+    };
+    const Vector3 skirtNormal = NormalizeOr(
+        Add(Scale(axisDepth, -0.55f), Scale(axisUp, 0.45f)),
+        Scale(axisDepth, -1.0f));
+    AppendSubdividedMesaPatch(
+        mesh,
+        skirtInner[0],
+        skirtInner[1],
+        bottom[1],
+        bottom[0],
+        skirtNormal,
+        axisAlong,
+        axisDepth,
+        axisUp,
+        seed + 379u,
+        8u,
+        3u,
+        {uvSeed + 12.0f, 0.0f},
+        {uvScale * 1.5f, uvScale * 0.58f},
+        (std::clamp)(faceAo + 0.08f, 0.0f, 1.0f),
+        rockVariation,
+        height * 0.030f,
+        0.35f);
+
+    const float backDrop = height * (0.10f + Hash01(seed + 389u) * 0.08f);
+    const float backReach = halfDepth * (1.45f + Hash01(seed + 397u) * 0.50f);
+    const float backAlongGrow = halfAlong * (0.28f + Hash01(seed + 401u) * 0.22f);
+    const Vector3 backBottomLeft =
+        MesaCorner(baseCenter, axisAlong, axisDepth, axisUp, -halfAlong - backAlongGrow, halfDepth + backReach, -backDrop);
+    const Vector3 backBottomRight =
+        MesaCorner(baseCenter, axisAlong, axisDepth, axisUp, halfAlong + backAlongGrow, halfDepth * 0.92f + backReach, -backDrop * 0.72f);
+    const Vector3 backTopLeft =
+        MesaCorner(topCenter, axisAlong, axisDepth, axisUp, -topAlong * 1.08f - backAlongGrow * 0.32f, topDepth + backReach * 0.55f, -height * 0.18f);
+    const Vector3 backTopRight =
+        MesaCorner(topCenter, axisAlong, axisDepth, axisUp, topAlong * 1.04f + backAlongGrow * 0.28f, topDepth * 0.92f + backReach * 0.50f, -height * 0.22f);
+    const Vector3 backNormal = NormalizeOr(
+        Add(Scale(axisDepth, 0.62f), Scale(axisUp, 0.20f)),
+        axisDepth);
+    AppendSubdividedMesaPatch(
+        mesh,
+        backBottomLeft,
+        backBottomRight,
+        backTopRight,
+        backTopLeft,
+        backNormal,
+        axisAlong,
+        axisDepth,
+        axisUp,
+        seed + 409u,
+        8u,
+        5u,
+        {uvSeed + 15.0f, 0.0f},
+        {uvScale * 1.7f, uvScale * 0.86f},
+        (std::clamp)(faceAo + 0.20f, 0.0f, 1.0f),
+        (std::clamp)(rockVariation + 0.08f, 0.0f, 1.0f),
+        height * 0.040f,
+        0.26f);
+
+    const uint32_t terraceCount = 1u + static_cast<uint32_t>(Hash01(seed + 53u) * 3.0f * erosionStrength);
+    for (uint32_t terrace = 0; terrace < terraceCount; ++terrace) {
+        const float t = (static_cast<float>(terrace) + 0.35f + Hash01(seed + terrace * 61u + 59u) * 0.40f) /
+            static_cast<float>(terraceCount + 1u);
+        const float ledgeY = height * (0.16f + t * 0.46f);
+        const float ledgeAlong = halfAlong * (0.68f + Hash01(seed + terrace * 67u + 71u) * 0.44f);
+        const float ledgeOut = halfDepth * (0.72f + Hash01(seed + terrace * 73u + 79u) * 0.22f);
+        const float ledgeThickness = (std::max)(height * 0.018f, 0.9f + Hash01(seed + terrace * 83u + 89u) * 1.8f);
+        const float ledgeSide = Hash01(seed + terrace * 97u + 101u) < 0.58f ? -1.0f : 1.0f;
+        const Vector3 ledgeCenter = Add(
+            baseCenter,
+            Add(
+                Scale(axisAlong, (Hash01(seed + terrace * 103u + 107u) - 0.5f) * halfAlong * 0.58f),
+                Add(Scale(axisDepth, ledgeSide * ledgeOut), Scale(axisUp, ledgeY))));
+        AppendChippedOrientedBox(
+            mesh,
+            ledgeCenter,
+            axisAlong,
+            axisUp,
+            axisDepth,
+            ledgeAlong,
+            ledgeThickness,
+            halfDepth * (0.10f + Hash01(seed + terrace * 109u + 113u) * 0.10f),
+            uvScale * 0.42f,
+            seed + terrace * 127u + 131u,
+            0.42f + erosionStrength * 0.24f);
+    }
+
+    if (Hash01(seed + 149u) < 0.78f * erosionStrength) {
+        const float shoulderHeight = height * (0.18f + Hash01(seed + 151u) * 0.16f);
+        const float shoulderAlong = halfAlong * (0.72f + Hash01(seed + 157u) * 0.36f);
+        const float shoulderDepth = halfDepth * (0.38f + Hash01(seed + 163u) * 0.20f);
+        const Vector3 shoulderCenter = Add(
+            baseCenter,
+            Add(
+                Scale(axisAlong, (Hash01(seed + 167u) - 0.5f) * halfAlong * 1.18f),
+                Add(Scale(axisDepth, -halfDepth * (0.44f + Hash01(seed + 173u) * 0.20f)), Scale(axisUp, shoulderHeight * 0.28f))));
+        AppendChippedOrientedBox(
+            mesh,
+            shoulderCenter,
+            axisAlong,
+            axisUp,
+            axisDepth,
+            shoulderAlong,
+            shoulderHeight * 0.30f,
+            shoulderDepth,
+            uvScale * 0.55f,
+            seed + 181u,
+            0.62f);
+    }
+}
+
+void AppendOpenCanyonDistantMesaClusterSide(
+    TerrainCpuMesh& mesh,
+    const RailPath& railPath,
+    const TerrainVolumeField& volumeField,
+    const TerrainGenerationSettings& settings,
+    const TerrainChunkDebugInfo& chunk,
+    float side,
+    uint32_t layerIndex) {
+    const float startBlend = volumeField.OpenCanyonBlend(chunk.startDistance);
+    const float endBlend = volumeField.OpenCanyonBlend(chunk.endDistance);
+    const float chunkBlend = (std::max)(startBlend, endBlend);
+    if (chunkBlend <= 0.02f || settings.openCanyonFarWallHeight <= 1.0f || settings.openCanyonFarWallDistance <= 1.0f) {
+        return;
+    }
+
+    const bool horizonShelfLayer = layerIndex >= 3u;
+    const float shelfVariant = horizonShelfLayer ? static_cast<float>(layerIndex - 3u) : 0.0f;
+    const float layer = static_cast<float>(layerIndex);
+    const float layerSpread = (std::clamp)(settings.openCanyonLayerSpread, 0.0f, 2.0f);
+    const uint32_t sideSeed = chunk.seed + (side < 0.0f ? 8101u : 9109u) + layerIndex * 1697u;
+    const uint32_t baseCount = horizonShelfLayer ? 2u : (layerIndex == 0u ? 2u : 2u);
+    const uint32_t clusterCount = ScaleCountByLod(baseCount + (side < 0.0f && horizonShelfLayer ? 1u : 0u), chunk.lodTier);
+    if (clusterCount == 0u) {
+        return;
+    }
+
+    const float layerDistanceScale = horizonShelfLayer
+        ? 3.35f + shelfVariant * 0.78f + layerSpread * 0.92f
+        : 1.06f + layer * (0.94f + layerSpread * 0.48f);
+    const float layerHeightScale = horizonShelfLayer
+        ? 0.26f + shelfVariant * 0.09f + layerSpread * 0.07f
+        : 0.82f + layer * (0.22f + layerSpread * 0.10f);
+    const float layerFloorLift = horizonShelfLayer
+        ? settings.wallHeight * (0.00f + shelfVariant * 0.11f)
+        : layer * settings.wallHeight * 0.16f;
+    const float baseDistance =
+        settings.canyonHalfWidth * (1.55f + Hash01(sideSeed + 13u) * 0.20f) +
+        settings.openCanyonFarWallDistance * layerDistanceScale * (0.84f + Hash01(sideSeed + 17u) * 0.25f);
+    const float baseHeight = horizonShelfLayer
+        ? settings.wallHeight * (0.62f + shelfVariant * 0.16f) + settings.openCanyonFarWallHeight * layerHeightScale * (0.20f + Hash01(sideSeed + 19u) * 0.14f)
+        : settings.wallHeight * 1.38f +
+            settings.openCanyonFarWallHeight * layerHeightScale * (0.62f + Hash01(sideSeed + 19u) * 0.22f);
+    const float floorY = -settings.corridorRadius * (0.82f + Hash01(sideSeed + 23u) * 0.18f) + layerFloorLift;
+
+    for (uint32_t cluster = 0; cluster < clusterCount; ++cluster) {
+        const uint32_t clusterSeed = sideSeed + cluster * 463u + 211u;
+        const float slotT = (static_cast<float>(cluster) + 0.22f + Hash01(clusterSeed + 3u) * 0.56f) /
+            static_cast<float>((std::max)(clusterCount, 1u));
+        const float st = (std::clamp)(slotT, 0.0f, 1.0f);
+        const float distance =
+            chunk.startDistance + (chunk.endDistance - chunk.startDistance) * st +
+            (Hash01(clusterSeed + 5u) - 0.5f) * settings.chunkLength * (horizonShelfLayer ? 0.72f : 0.44f);
+        const float openBlend = volumeField.OpenCanyonBlend(distance);
+        if (openBlend <= 0.04f) {
+            continue;
+        }
+        const RailPathSample sample = railPath.Evaluate(distance);
+        const float alongNoise =
+            SignedNoise(sideSeed + 101u, static_cast<int32_t>(cluster), static_cast<int32_t>(layerIndex)) * 0.5f +
+            SignedNoise(sideSeed + 103u, static_cast<int32_t>(cluster / 2u), 2) * 0.5f;
+        const float shelfSideBoost = horizonShelfLayer && side < 0.0f ? 1.32f : 1.0f;
+        const float lateral =
+            baseDistance * (horizonShelfLayer ? 1.08f + shelfVariant * 0.16f : 0.92f + alongNoise * 0.10f) +
+            settings.openCanyonFarWallDistance * (Hash01(clusterSeed + 7u) - 0.5f) * (horizonShelfLayer ? 0.18f : 0.24f);
+        const float mesaHeight = baseHeight *
+            (horizonShelfLayer ? 0.42f + Hash01(clusterSeed + 11u) * 0.16f : 0.58f + Hash01(clusterSeed + 13u) * 0.26f) *
+            openBlend;
+        const float halfAlong = settings.chunkLength *
+            (horizonShelfLayer ? (0.78f + shelfVariant * 0.22f + Hash01(clusterSeed + 17u) * 0.46f) * shelfSideBoost
+                               : 0.96f + Hash01(clusterSeed + 19u) * 0.62f);
+        const float halfDepth = settings.openCanyonFarWallDistance *
+            (horizonShelfLayer ? 0.20f + Hash01(clusterSeed + 23u) * 0.10f
+                               : 0.30f + Hash01(clusterSeed + 29u) * 0.18f);
+        const float contactAo = (std::clamp)(horizonShelfLayer ? 0.84f : 0.58f + layer * 0.12f, 0.0f, 1.0f);
+        const float rockVariation = (std::clamp)(
+            horizonShelfLayer ? 0.90f + Hash01(clusterSeed + 31u) * 0.08f : 0.68f + layer * 0.08f + Hash01(clusterSeed + 37u) * 0.08f,
+            0.0f,
+            1.0f);
+        AppendDistantMesaBlock(
+            mesh,
+            sample,
+            settings,
+            clusterSeed,
+            side,
+            lateral,
+            floorY + settings.wallHeight * (horizonShelfLayer ? 0.04f : 0.02f),
+            mesaHeight,
+            halfAlong,
+            halfDepth,
+            horizonShelfLayer ? 0.64f : 0.42f + Hash01(clusterSeed + 41u) * 0.18f,
+            contactAo,
+            rockVariation,
+            distance * 0.004f + layer * 2.1f,
+            horizonShelfLayer ? 0.20f : 0.72f);
+
+        if (!horizonShelfLayer && Hash01(clusterSeed + 43u) < 0.74f) {
+            const RailPathSample capSample = railPath.Evaluate(distance + (Hash01(clusterSeed + 47u) - 0.5f) * settings.chunkLength * 0.28f);
+            AppendDistantMesaBlock(
+                mesh,
+                capSample,
+                settings,
+                clusterSeed + 503u,
+                side,
+                lateral + settings.openCanyonFarWallDistance * (0.04f + Hash01(clusterSeed + 53u) * 0.08f),
+                floorY + mesaHeight * (0.30f + Hash01(clusterSeed + 59u) * 0.12f),
+                mesaHeight * (0.24f + Hash01(clusterSeed + 61u) * 0.18f),
+                halfAlong * (0.58f + Hash01(clusterSeed + 67u) * 0.30f),
+                halfDepth * (0.34f + Hash01(clusterSeed + 71u) * 0.18f),
+                0.54f,
+                (std::clamp)(contactAo + 0.08f, 0.0f, 1.0f),
+                rockVariation,
+                distance * 0.005f + 4.0f,
+                0.48f);
+        }
+    }
+}
+
+void AppendOpenCanyonMegaCliffWall(
+    TerrainCpuMesh& mesh,
+    const RailPath& railPath,
+    const TerrainVolumeField& volumeField,
+    const TerrainGenerationSettings& settings,
+    const TerrainChunkDebugInfo& chunk,
+    float side) {
+    const float startBlend = volumeField.OpenCanyonBlend(chunk.startDistance);
+    const float endBlend = volumeField.OpenCanyonBlend(chunk.endDistance);
+    const float chunkBlend = (std::max)(startBlend, endBlend);
+    if (chunkBlend <= 0.04f || settings.openCanyonFarWallHeight <= 1.0f) {
+        return;
+    }
+
+    constexpr uint32_t kColumns = 24;
+    constexpr uint32_t kRows = 8;
+    constexpr uint32_t kTalusRows = 4;
+    const uint32_t seed = settings.seed + (side < 0.0f ? 41131u : 42139u);
+    const float alongStart = chunk.startDistance - settings.chunkLength * 0.34f;
+    const float alongEnd = chunk.endDistance + settings.chunkLength * 0.82f;
+    const float baseLateral = settings.canyonHalfWidth * 1.86f + settings.corridorRadius * 0.74f;
+    const float lateralWobble = settings.canyonHalfWidth * 0.22f;
+    const float floorY = -settings.corridorRadius * 1.02f;
+    const float wallBase = floorY + settings.wallHeight * 0.03f;
+    const float wallHeight =
+        settings.wallHeight * 2.3f +
+        settings.openCanyonFarWallHeight * 0.78f;
+    const float talusReach = settings.canyonHalfWidth * 0.58f + settings.corridorRadius * 0.36f;
+    const float ledgeDepth = settings.wallHeight * 0.22f;
+    const float topRagged = settings.openCanyonFarWallHeight * 0.28f;
+
+    RailPathSample samples[kColumns + 1]{};
+    float distances[kColumns + 1]{};
+    float laterals[kColumns + 1]{};
+    float bottomHeights[kColumns + 1]{};
+    float topHeights[kColumns + 1]{};
+    float silhouetteCuts[kColumns + 1]{};
+    for (uint32_t x = 0; x <= kColumns; ++x) {
+        const float u = static_cast<float>(x) / static_cast<float>(kColumns);
+        const float d = std::lerp(alongStart, alongEnd, u);
+        const float openBlend = volumeField.OpenCanyonBlend(d);
+        const int32_t noiseX = static_cast<int32_t>(std::floor(d * 0.035f));
+        const float longNoise =
+            SignedNoise(seed + 13u, noiseX / 2, 0) * 0.62f +
+            SignedNoise(seed + 17u, noiseX, 2) * 0.38f;
+        const float highNoise =
+            SignedNoise(seed + 23u, noiseX / 3, 5) * 0.54f +
+            SignedNoise(seed + 29u, noiseX, 7) * 0.46f;
+        const float biteNoise =
+            SignedNoise(seed + 31u, noiseX / 2, 11) * 0.58f +
+            SignedNoise(seed + 37u, noiseX, 13) * 0.42f;
+        const float edgeFade = std::sin(u * 3.14159265359f);
+        const float broadCollapse =
+            SignedNoise(seed + 97u, noiseX / 4, 19) * 0.62f +
+            SignedNoise(seed + 101u, noiseX / 2, 23) * 0.38f;
+        const float bite = (std::clamp)((biteNoise + broadCollapse * 0.42f + 0.10f) / 1.20f, 0.0f, 1.0f);
+
+        distances[x] = d;
+        samples[x] = railPath.Evaluate(d);
+        laterals[x] =
+            baseLateral +
+            longNoise * lateralWobble -
+            (1.0f - openBlend) * settings.canyonHalfWidth * 0.22f;
+        bottomHeights[x] =
+            wallBase +
+            SignedNoise(seed + 41u, noiseX, 17) * settings.wallHeight * 0.16f -
+            (1.0f - edgeFade) * settings.wallHeight * 0.08f;
+        silhouetteCuts[x] = (std::clamp)((bite - 0.36f) / 0.58f, 0.0f, 1.0f);
+        topHeights[x] =
+            wallBase +
+            wallHeight +
+            highNoise * topRagged * 1.18f -
+            silhouetteCuts[x] * topRagged * (1.15f + Hash01(seed + x * 151u + 43u) * 1.05f);
+    }
+
+    const uint32_t faceBase = static_cast<uint32_t>(mesh.vertices.size());
+    for (uint32_t y = 0; y <= kRows; ++y) {
+        const float v = static_cast<float>(y) / static_cast<float>(kRows);
+        for (uint32_t x = 0; x <= kColumns; ++x) {
+            const RailPathSample& sample = samples[x];
+            const Vector3 axisRight = sample.right;
+            const Vector3 axisUp = sample.up;
+            const float u = static_cast<float>(x) / static_cast<float>(kColumns);
+            const int32_t noiseX = static_cast<int32_t>(std::floor(distances[x] * 0.035f));
+            const float shelf =
+                std::sin(v * (18.0f + Hash01(seed + 47u) * 8.0f) + distances[x] * 0.018f);
+            const float ledge = shelf > 0.46f ? (shelf - 0.46f) / 0.54f : 0.0f;
+            const float interiorFade = std::sin(u * 3.14159265359f) * (0.25f + 0.75f * std::sin(v * 3.14159265359f));
+            const float crack =
+                SignedNoise(seed + 53u, noiseX, static_cast<int32_t>(y)) * settings.wallHeight * 0.08f * interiorFade;
+            const float verticalSag = std::pow(v, 1.7f) * silhouetteCuts[x] * topRagged * 0.18f;
+            const float height = std::lerp(bottomHeights[x], topHeights[x], v) + crack - verticalSag;
+            const float inset =
+                ledge * ledgeDepth * interiorFade +
+                SignedNoise(seed + 59u, noiseX, static_cast<int32_t>(y)) * settings.wallHeight * 0.035f * interiorFade;
+            const Vector3 faceNormal = NormalizeOr(Add(Scale(axisRight, -side), Scale(axisUp, 0.08f)), Scale(axisRight, -side));
+            const Vector3 p = Add(
+                sample.position,
+                Add(
+                    Scale(axisRight, side * (laterals[x] + inset)),
+                    Add(
+                        Scale(axisUp, height),
+                        Scale(sample.tangent, SignedNoise(seed + 61u, noiseX, static_cast<int32_t>(y)) * settings.chunkLength * 0.035f * interiorFade))));
+            const Vector3 normal = NormalizeOr(
+                Add(faceNormal, Add(Scale(axisRight, -side * ledge * 0.12f), Scale(axisUp, ledge * 0.10f))),
+                faceNormal);
+            PushVertex(
+                mesh,
+                p,
+                normal,
+                {distances[x] * 0.0042f, v * 4.2f},
+                0.20f + v * 0.10f,
+                0.46f);
+        }
+    }
+
+    const uint32_t faceStride = kColumns + 1u;
+    for (uint32_t y = 0; y < kRows; ++y) {
+        for (uint32_t x = 0; x < kColumns; ++x) {
+            const float upperCell = static_cast<float>(y + 1u) / static_cast<float>(kRows);
+            const float cut = (silhouetteCuts[x] + silhouetteCuts[x + 1u]) * 0.5f;
+            if ((upperCell > 0.76f && cut > 0.58f) || (upperCell > 0.58f && cut > 0.90f)) {
+                continue;
+            }
+            const uint32_t a = faceBase + y * faceStride + x;
+            const uint32_t b = a + 1u;
+            const uint32_t c = a + faceStride;
+            const uint32_t d = c + 1u;
+            PushTriangleTwoSided(mesh.indices, a, b, c);
+            PushTriangleTwoSided(mesh.indices, b, d, c);
+        }
+    }
+
+    constexpr uint32_t kStepLedgeCount = 3;
+    for (uint32_t ledgeIndex = 0; ledgeIndex < kStepLedgeCount; ++ledgeIndex) {
+        const float ledgeT = 0.24f + static_cast<float>(ledgeIndex) * 0.22f + Hash01(seed + ledgeIndex * 97u + 73u) * 0.045f;
+        const float ledgeOut =
+            ledgeDepth * (0.62f + ledgeIndex * 0.12f) +
+            Hash01(seed + ledgeIndex * 101u + 79u) * settings.wallHeight * 0.055f;
+        const float ledgeDrop = settings.wallHeight * (0.090f + ledgeIndex * 0.020f);
+        const uint32_t ledgeBase = static_cast<uint32_t>(mesh.vertices.size());
+        for (uint32_t row = 0; row < 2u; ++row) {
+            const float r = static_cast<float>(row);
+            for (uint32_t x = 0; x <= kColumns; ++x) {
+                const RailPathSample& sample = samples[x];
+                const Vector3 axisRight = sample.right;
+                const Vector3 axisUp = sample.up;
+                const int32_t noiseX = static_cast<int32_t>(std::floor(distances[x] * 0.035f));
+                const float broken =
+                    SignedNoise(seed + ledgeIndex * 211u + 83u, noiseX / 2, 0) * 0.52f +
+                    SignedNoise(seed + ledgeIndex * 223u + 89u, noiseX, 2) * 0.48f;
+                const float embeddedScar =
+                    SignedNoise(seed + ledgeIndex * 241u + 107u, noiseX / 3, 5) * settings.wallHeight * 0.025f;
+                const float localOut = ledgeOut * (0.50f + broken * 0.22f);
+                const float height =
+                    std::lerp(bottomHeights[x], topHeights[x], ledgeT) -
+                    r * ledgeDrop +
+                    SignedNoise(seed + ledgeIndex * 229u + 97u, noiseX, static_cast<int32_t>(row)) * settings.wallHeight * 0.050f;
+                const Vector3 p = Add(
+                    sample.position,
+                    Add(
+                        Scale(axisRight, side * (laterals[x] + embeddedScar - localOut * r)),
+                        Add(
+                            Scale(axisUp, height),
+                            Scale(sample.tangent, broken * settings.chunkLength * 0.030f))));
+                const Vector3 normal = NormalizeOr(Add(Scale(axisRight, -side * 0.78f), Scale(axisUp, 0.36f + r * 0.18f)), Scale(axisRight, -side));
+                PushVertex(
+                    mesh,
+                    p,
+                    normal,
+                    {distances[x] * 0.0046f + 10.0f + static_cast<float>(ledgeIndex) * 1.7f, r},
+                    0.22f,
+                    0.38f);
+            }
+        }
+
+        const uint32_t ledgeStride = kColumns + 1u;
+        for (uint32_t x = 0; x < kColumns; ++x) {
+            const int32_t noiseX = static_cast<int32_t>(std::floor(distances[x] * 0.035f));
+            const float presence =
+                SignedNoise(seed + ledgeIndex * 239u + 103u, noiseX / 2, 0) * 0.62f +
+                SignedNoise(seed + ledgeIndex * 251u + 109u, noiseX, 2) * 0.38f;
+            if (presence < -0.18f || presence > 0.72f) {
+                continue;
+            }
+            const uint32_t a = ledgeBase + x;
+            const uint32_t b = a + 1u;
+            const uint32_t c = ledgeBase + ledgeStride + x;
+            const uint32_t d = c + 1u;
+            PushTriangleTwoSided(mesh.indices, a, c, b);
+            PushTriangleTwoSided(mesh.indices, b, c, d);
+        }
+    }
+
+    const uint32_t talusBase = static_cast<uint32_t>(mesh.vertices.size());
+    for (uint32_t y = 0; y <= kTalusRows; ++y) {
+        const float v = static_cast<float>(y) / static_cast<float>(kTalusRows);
+        for (uint32_t x = 0; x <= kColumns; ++x) {
+            const RailPathSample& sample = samples[x];
+            const Vector3 axisRight = sample.right;
+            const Vector3 axisUp = sample.up;
+            const int32_t noiseX = static_cast<int32_t>(std::floor(distances[x] * 0.035f));
+            const float fanNoise =
+                SignedNoise(seed + 67u, noiseX, static_cast<int32_t>(y)) * settings.wallHeight * 0.10f;
+            const float nearFloor = floorY - settings.wallHeight * 0.12f + fanNoise;
+            const float height = std::lerp(nearFloor, bottomHeights[x], v);
+            const float spread = (1.0f - v) * talusReach;
+            const Vector3 p = Add(
+                sample.position,
+                Add(
+                    Scale(axisRight, side * (laterals[x] + spread)),
+                    Add(
+                        Scale(axisUp, height),
+                        Scale(sample.tangent, SignedNoise(seed + 71u, noiseX, static_cast<int32_t>(y)) * settings.chunkLength * 0.04f))));
+            const Vector3 normal = NormalizeOr(Add(Scale(axisRight, -side * 0.24f), Scale(axisUp, 0.82f)), axisUp);
+            PushVertex(
+                mesh,
+                p,
+                normal,
+                {distances[x] * 0.0045f + 7.0f, v * 1.5f},
+                0.58f,
+                0.40f);
+        }
+    }
+
+    const uint32_t talusStride = kColumns + 1u;
+    for (uint32_t y = 0; y < kTalusRows; ++y) {
+        for (uint32_t x = 0; x < kColumns; ++x) {
+            const uint32_t a = talusBase + y * talusStride + x;
+            const uint32_t b = a + 1u;
+            const uint32_t c = a + talusStride;
+            const uint32_t d = c + 1u;
+            PushTriangleTwoSided(mesh.indices, a, c, b);
+            PushTriangleTwoSided(mesh.indices, b, c, d);
+        }
+    }
+}
+
+void AppendOpenCanyonSideVeil(
+    TerrainCpuMesh& mesh,
+    const RailPath& railPath,
+    const TerrainVolumeField& volumeField,
+    const TerrainGenerationSettings& settings,
+    const TerrainChunkDebugInfo& chunk,
+    float side,
+    uint32_t layerIndex) {
+    const float startBlend = volumeField.OpenCanyonBlend(chunk.startDistance);
+    const float endBlend = volumeField.OpenCanyonBlend(chunk.endDistance);
+    const float chunkBlend = (std::max)(startBlend, endBlend);
+    if (chunkBlend <= 0.05f || settings.openCanyonFarWallHeight <= 1.0f) {
+        return;
+    }
+
+    constexpr uint32_t kColumns = 12;
+    constexpr uint32_t kFaceRows = 4;
+    constexpr uint32_t kTalusRows = 3;
+    const uint32_t seed = chunk.seed + (side < 0.0f ? 12107u : 13121u) + layerIndex * 1709u;
+    const float layer = static_cast<float>(layerIndex);
+    const float alongLead = settings.chunkLength * (0.18f + layer * 0.16f);
+    const float alongSpan = (chunk.endDistance - chunk.startDistance) * (0.92f + layer * 0.10f);
+    const float baseLateral =
+        settings.canyonHalfWidth * (1.36f + layer * 0.16f) +
+        settings.openCanyonFarWallDistance * (0.92f + layer * 0.42f);
+    const float lateralWobble = settings.canyonHalfWidth * (0.10f + layer * 0.035f);
+    const float floorY = -settings.corridorRadius * (1.04f + Hash01(seed + 13u) * 0.10f);
+    const float bottomBase = floorY + settings.wallHeight * (0.04f + layer * 0.05f);
+    const float topBase =
+        bottomBase +
+        settings.wallHeight * (1.08f + layer * 0.16f) +
+        settings.openCanyonFarWallHeight * (0.10f + layer * 0.040f);
+    const float topRagged = settings.openCanyonFarWallHeight * (0.13f + layer * 0.035f);
+    const float talusReach =
+        settings.canyonHalfWidth * (0.34f + layer * 0.10f) +
+        settings.openCanyonFarWallDistance * (0.06f + layer * 0.025f);
+    const float rockVariation = (std::clamp)(0.88f + layer * 0.035f + Hash01(seed + 19u) * 0.05f, 0.0f, 1.0f);
+
+    RailPathSample samples[kColumns + 1]{};
+    float distances[kColumns + 1]{};
+    float laterals[kColumns + 1]{};
+    float bottomHeights[kColumns + 1]{};
+    float topHeights[kColumns + 1]{};
+    float silhouetteCuts[kColumns + 1]{};
+    for (uint32_t x = 0; x <= kColumns; ++x) {
+        const float u = static_cast<float>(x) / static_cast<float>(kColumns);
+        const float d =
+            chunk.startDistance +
+            alongLead +
+            alongSpan * u +
+            SignedNoise(seed + 23u, static_cast<int32_t>(x), static_cast<int32_t>(layerIndex)) * settings.chunkLength * 0.10f;
+        distances[x] = d;
+        samples[x] = railPath.Evaluate(d);
+        const float openBlend = volumeField.OpenCanyonBlend(d);
+        const float edgeFade = std::sin(u * 3.14159265359f);
+        const float broad =
+            SignedNoise(seed + 31u, static_cast<int32_t>(x / 2u), static_cast<int32_t>(layerIndex));
+        const float chip =
+            SignedNoise(seed + 37u, static_cast<int32_t>(x), static_cast<int32_t>(layerIndex + 3u));
+        const float biteNoise =
+            0.55f * SignedNoise(seed + 97u, static_cast<int32_t>(x / 2u), static_cast<int32_t>(layerIndex + 5u)) +
+            0.45f * SignedNoise(seed + 101u, static_cast<int32_t>(x), static_cast<int32_t>(layerIndex + 7u));
+        const float edgeCut = std::pow(std::abs(u - 0.5f) * 2.0f, 1.8f);
+        const float bite = (std::clamp)((biteNoise + 0.26f) / 1.26f, 0.0f, 1.0f);
+        const float majorCut = bite > 0.56f ? (bite - 0.56f) / 0.44f : 0.0f;
+        silhouetteCuts[x] = (std::clamp)(majorCut * 0.76f + edgeCut * 0.36f, 0.0f, 1.0f);
+        laterals[x] =
+            baseLateral +
+            broad * lateralWobble +
+            chip * lateralWobble * 0.42f;
+        bottomHeights[x] =
+            bottomBase +
+            SignedNoise(seed + 41u, static_cast<int32_t>(x), 1) * settings.wallHeight * 0.16f -
+            (1.0f - edgeFade) * settings.wallHeight * 0.12f;
+        topHeights[x] =
+            topBase +
+            broad * topRagged +
+            chip * topRagged * 0.42f -
+            (1.0f - edgeFade) * topRagged * 0.38f -
+            silhouetteCuts[x] * topRagged * (0.78f + Hash01(seed + x * 131u + 109u) * 0.44f);
+        const float collapse = 1.0f - openBlend;
+        bottomHeights[x] -= collapse * settings.wallHeight * 0.42f;
+        topHeights[x] -= collapse * settings.wallHeight * 0.68f;
+    }
+
+    const uint32_t faceBase = static_cast<uint32_t>(mesh.vertices.size());
+    for (uint32_t y = 0; y <= kFaceRows; ++y) {
+        const float v = static_cast<float>(y) / static_cast<float>(kFaceRows);
+        for (uint32_t x = 0; x <= kColumns; ++x) {
+            const float u = static_cast<float>(x) / static_cast<float>(kColumns);
+            const RailPathSample& sample = samples[x];
+            const Vector3 axisRight = sample.right;
+            const Vector3 axisUp = sample.up;
+            const Vector3 faceNormal = NormalizeOr(Add(Scale(axisRight, -side), Scale(axisUp, 0.10f)), Scale(axisRight, -side));
+            const float shelf =
+                std::sin(v * (15.0f + Hash01(seed + 53u) * 6.0f) + Hash01(seed + 59u) * 6.28318530718f);
+            const float ledge = shelf > 0.48f ? (shelf - 0.48f) / 0.52f : 0.0f;
+            const float interiorFade = std::sin(u * 3.14159265359f) * (0.35f + 0.65f * std::sin(v * 3.14159265359f));
+            const float crackNoise =
+                SignedNoise(seed + 67u, static_cast<int32_t>(x), static_cast<int32_t>(y)) * settings.wallHeight * 0.035f;
+            const float height = std::lerp(bottomHeights[x], topHeights[x], v) + crackNoise * interiorFade;
+            const Vector3 p = Add(
+                sample.position,
+                Add(
+                    Scale(axisRight, side * (laterals[x] + ledge * settings.wallHeight * 0.18f * interiorFade)),
+                    Add(
+                        Scale(axisUp, height - ledge * settings.wallHeight * 0.10f),
+                        Scale(sample.tangent, -ledge * settings.wallHeight * 0.12f * interiorFade))));
+            const Vector3 normal = NormalizeOr(
+                Add(faceNormal, Add(Scale(axisRight, SignedNoise(seed + 71u, static_cast<int32_t>(x), static_cast<int32_t>(y)) * 0.10f), Scale(axisUp, ledge * 0.10f))),
+                faceNormal);
+            PushVertex(
+                mesh,
+                p,
+                normal,
+                {distances[x] * 0.0037f + layer * 4.0f + u * 1.4f, v * 2.1f},
+                0.015f + layer * 0.012f,
+                rockVariation);
+        }
+    }
+
+    const uint32_t faceStride = kColumns + 1u;
+    for (uint32_t y = 0; y < kFaceRows; ++y) {
+        for (uint32_t x = 0; x < kColumns; ++x) {
+            const float upperCell = static_cast<float>(y + 1u) / static_cast<float>(kFaceRows);
+            const float cut = (silhouetteCuts[x] + silhouetteCuts[x + 1u]) * 0.5f;
+            if ((upperCell > 0.72f && cut > 0.54f) || (upperCell > 0.48f && cut > 0.88f)) {
+                continue;
+            }
+            const uint32_t a = faceBase + y * faceStride + x;
+            const uint32_t b = a + 1u;
+            const uint32_t c = a + faceStride;
+            const uint32_t d = c + 1u;
+            PushTriangleTwoSided(mesh.indices, a, b, c);
+            PushTriangleTwoSided(mesh.indices, b, d, c);
+        }
+    }
+
+    const uint32_t talusBase = static_cast<uint32_t>(mesh.vertices.size());
+    for (uint32_t y = 0; y <= kTalusRows; ++y) {
+        const float v = static_cast<float>(y) / static_cast<float>(kTalusRows);
+        for (uint32_t x = 0; x <= kColumns; ++x) {
+            const float u = static_cast<float>(x) / static_cast<float>(kColumns);
+            const RailPathSample& sample = samples[x];
+            const Vector3 axisRight = sample.right;
+            const Vector3 axisUp = sample.up;
+            const Vector3 talusNormal = NormalizeOr(Add(Scale(axisRight, -side * 0.20f), Scale(axisUp, 0.78f)), axisUp);
+            const float fanNoise =
+                SignedNoise(seed + 83u, static_cast<int32_t>(x), static_cast<int32_t>(y)) * settings.wallHeight * 0.055f;
+            const float nearFloor = floorY - settings.wallHeight * (0.22f + layer * 0.05f) + fanNoise;
+            const float height = std::lerp(nearFloor, bottomHeights[x], v);
+            const float widthGrow = (1.0f - v) * talusReach;
+            const Vector3 p = Add(
+                sample.position,
+                Add(
+                    Scale(axisRight, side * (laterals[x] + widthGrow)),
+                    Add(
+                        Scale(axisUp, height),
+                        Scale(sample.tangent, SignedNoise(seed + 89u, static_cast<int32_t>(x), static_cast<int32_t>(y)) * settings.chunkLength * 0.04f))));
+            PushVertex(
+                mesh,
+                p,
+                talusNormal,
+                {distances[x] * 0.0038f + 3.0f + u * 1.6f, v * 1.05f},
+                0.10f + layer * 0.04f,
+                (std::clamp)(rockVariation - 0.10f, 0.0f, 1.0f));
+        }
+    }
+
+    const uint32_t talusStride = kColumns + 1u;
+    for (uint32_t y = 0; y < kTalusRows; ++y) {
+        for (uint32_t x = 0; x < kColumns; ++x) {
+            const uint32_t a = talusBase + y * talusStride + x;
+            const uint32_t b = a + 1u;
+            const uint32_t c = a + talusStride;
+            const uint32_t d = c + 1u;
+            PushTriangleTwoSided(mesh.indices, a, c, b);
+            PushTriangleTwoSided(mesh.indices, b, c, d);
+        }
+    }
+}
+
+void AppendOpenCanyonDistantWalls(
+    TerrainCpuMesh& mesh,
+    const RailPath& railPath,
+    const TerrainVolumeField& volumeField,
+    const TerrainGenerationSettings& settings,
+    const TerrainChunkDebugInfo& chunk) {
+    constexpr float kMainCliffSide = 1.0f;
+    AppendOpenCanyonMegaCliffWall(mesh, railPath, volumeField, settings, chunk, kMainCliffSide);
+
+    constexpr uint32_t kLayerCount = 3;
+    for (uint32_t layer = 0; layer < kLayerCount; ++layer) {
+        AppendOpenCanyonDistantMesaClusterSide(mesh, railPath, volumeField, settings, chunk, -1.0f, layer);
+        AppendOpenCanyonDistantMesaClusterSide(mesh, railPath, volumeField, settings, chunk, 1.0f, layer);
+    }
+    constexpr uint32_t kVeilLayerCount = 1;
+    for (uint32_t layer = 0; layer < kVeilLayerCount; ++layer) {
+        AppendOpenCanyonSideVeil(mesh, railPath, volumeField, settings, chunk, -kMainCliffSide, layer);
     }
 }
 
@@ -2357,12 +3267,17 @@ TerrainCpuMesh BuildChunkMesh(
     mesh.indices.reserve(longitudinalSteps * radialSegments * 6 + 4096);
 
     const uint32_t volumeBase = static_cast<uint32_t>(mesh.vertices.size());
+    std::vector<float> openingMasks;
+    openingMasks.reserve(
+        static_cast<size_t>(longitudinalSteps + 1) *
+        static_cast<size_t>(radialSegments + 1));
     for (uint32_t s = 0; s <= longitudinalSteps; ++s) {
         const float st = static_cast<float>(s) / static_cast<float>(longitudinalSteps);
         const float distance = chunk.startDistance + (chunk.endDistance - chunk.startDistance) * st;
         for (uint32_t a = 0; a <= radialSegments; ++a) {
             const float at = static_cast<float>(a) / static_cast<float>(radialSegments);
             const float angle = 6.28318530718f * at;
+            openingMasks.push_back(volumeField.OpeningMask(distance, angle));
             Vector3 normal{};
             const Vector3 position = volumeField.SurfacePoint(distance, angle, &normal);
             VertexData vertex{};
@@ -2372,17 +3287,32 @@ TerrainCpuMesh BuildChunkMesh(
             mesh.vertices.push_back(vertex);
         }
     }
-    PushGridIndices(mesh.indices, volumeBase, longitudinalSteps + 1, radialSegments + 1, true);
+    PushMaskedGridIndices(
+        mesh.indices,
+        volumeBase,
+        longitudinalSteps + 1,
+        radialSegments + 1,
+        openingMasks,
+        true);
+    AppendOpenCanyonDistantWalls(mesh, railPath, volumeField, settings, chunk);
 
+    const float openChunkBlend = (std::max)(
+        volumeField.OpenCanyonBlend(chunk.startDistance),
+        volumeField.OpenCanyonBlend(chunk.endDistance));
+    const float openCanyonPillarSuppression = 1.0f - openChunkBlend * 0.92f;
     const uint32_t pillarCount = ScaleCountByLod(
-        static_cast<uint32_t>(settings.rockPillarDensity * 5.0f),
+        static_cast<uint32_t>(settings.rockPillarDensity * 5.0f * (std::max)(0.0f, openCanyonPillarSuppression)),
         chunk.lodTier);
     for (uint32_t i = 0; i < pillarCount; ++i) {
         const uint32_t seed = chunk.seed + 1009u + i * 131u;
         const float t = (static_cast<float>(i) + 0.35f + Hash01(seed + 3u) * 0.5f) /
             static_cast<float>((std::max)(pillarCount, 1u));
-        const RailPathSample sample = railPath.Evaluate(
-            chunk.startDistance + (chunk.endDistance - chunk.startDistance) * std::clamp(t, 0.0f, 1.0f));
+        const float distance = chunk.startDistance + (chunk.endDistance - chunk.startDistance) * std::clamp(t, 0.0f, 1.0f);
+        const float localOpenBlend = volumeField.OpenCanyonBlend(distance);
+        if (localOpenBlend > 0.34f && Hash01(seed + 71u) < localOpenBlend * 0.94f) {
+            continue;
+        }
+        const RailPathSample sample = railPath.Evaluate(distance);
         const float side = Hash01(seed + 5u) < 0.5f ? -1.0f : 1.0f;
         AppendRockPillar(mesh, sample, settings, seed, side, t);
     }
@@ -2411,6 +3341,9 @@ TerrainCpuMesh BuildChunkMesh(
             continue;
         }
         const RockScatterPlacement& placement = scatterPlacements[placementIndex];
+        if (volumeField.OpeningMask(placement.distance, placement.angle) > 0.40f) {
+            continue;
+        }
         AppendRockScatterAsset(
             mesh,
             volumeField,
@@ -2794,6 +3727,16 @@ void AppendVolumeDebugDraw(
             Vector4 color = sdf.sdf < 0.0f ? insideColor : outsideColor;
             if (sdf.carveMask > 0.04f) {
                 color = {1.0f, 0.22f + sdf.carveMask * 0.35f, 0.95f, 0.45f + sdf.carveMask * 0.45f};
+            }
+            if (sdf.openingMask > 0.04f) {
+                color = {0.88f, 0.96f, 1.0f, 0.40f + sdf.openingMask * 0.45f};
+            }
+            if (sdf.openCanyonBlend > 0.04f) {
+                color = {
+                    0.58f + sdf.openCanyonBlend * 0.32f,
+                    0.82f + sdf.openCanyonBlend * 0.14f,
+                    1.0f,
+                    0.34f + sdf.openCanyonBlend * 0.42f};
             }
             color.w = 0.25f + nearSurface * 0.75f;
             debugDraw.AddPoint(point, 0.12f + nearSurface * 0.35f, color);

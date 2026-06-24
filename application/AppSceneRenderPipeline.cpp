@@ -556,12 +556,11 @@ void DrawSkinnedModelInstance(
 } // namespace
 
 void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx) const {
-    const float opaqueBlack[4] = {0.0f, 0.0f, 0.0f, 1.0f};
     ctx.renderGraph->DeclarePersistentRenderTarget(
         "SceneColor",
         1.0f,
         DXGI_FORMAT_R8G8B8A8_UNORM,
-        opaqueBlack,
+        ctx.runtimeState != nullptr ? ctx.runtimeState->clearColor : nullptr,
         D3D12_RESOURCE_STATE_RENDER_TARGET);
     ctx.renderGraph->DeclarePersistentDepthTarget(
         "SceneDepth",
@@ -576,11 +575,11 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         0,
         D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
-    if (ctx.runtimeState->showSkybox &&
+    if ((ctx.runtimeState->showSkybox || ctx.runtimeState->showProceduralBackdrop) &&
         ctx.scene->skybox.cbvResource &&
         ctx.scene->skyboxTextureSrvHandleGPU.ptr != 0) {
         ctx.renderGraph->AddPass({
-            "Background.Skybox",
+            ctx.runtimeState->showProceduralBackdrop ? "Background.ProceduralBackdrop" : "Background.Skybox",
             ge3::graphics::RenderPassLayer::Geometry,
             {
                 {"SceneColor", ge3::graphics::RenderResourceAccessType::WriteRtv},

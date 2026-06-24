@@ -111,6 +111,10 @@ void WritePass(std::ostream& output, const PostProcessPass& pass) {
     output << prefix << "fogDepthBoost=" << pass.parameters.fogDepthBoost << "\n";
     output << prefix << "fogDepthBoostStart=" << pass.parameters.fogDepthBoostStart << "\n";
     output << prefix << "backlitFogLift=" << pass.parameters.backlitFogLift << "\n";
+    output << prefix << "openingGlowStrength=" << pass.parameters.openingGlowStrength << "\n";
+    output << prefix << "foregroundSilhouetteStrength=" << pass.parameters.foregroundSilhouetteStrength << "\n";
+    output << prefix << "lowFogLayerStrength=" << pass.parameters.lowFogLayerStrength << "\n";
+    output << prefix << "coolFloorHazeStrength=" << pass.parameters.coolFloorHazeStrength << "\n";
     output << prefix << "contactAoRadiusPixels=" << pass.parameters.contactAoRadiusPixels << "\n";
     output << prefix << "contactAoBias=" << pass.parameters.contactAoBias << "\n";
     output << prefix << "contactAoFalloff=" << pass.parameters.contactAoFalloff << "\n";
@@ -171,6 +175,10 @@ void ApplyFloatField(PostProcessPass& pass, const std::string& field, float valu
     else if (field == "fogDepthBoost") pass.parameters.fogDepthBoost = value;
     else if (field == "fogDepthBoostStart") pass.parameters.fogDepthBoostStart = value;
     else if (field == "backlitFogLift") pass.parameters.backlitFogLift = value;
+    else if (field == "openingGlowStrength") pass.parameters.openingGlowStrength = value;
+    else if (field == "foregroundSilhouetteStrength") pass.parameters.foregroundSilhouetteStrength = value;
+    else if (field == "lowFogLayerStrength") pass.parameters.lowFogLayerStrength = value;
+    else if (field == "coolFloorHazeStrength") pass.parameters.coolFloorHazeStrength = value;
     else if (field == "contactAoRadiusPixels") pass.parameters.contactAoRadiusPixels = value;
     else if (field == "contactAoBias") pass.parameters.contactAoBias = value;
     else if (field == "contactAoFalloff") pass.parameters.contactAoFalloff = value;
