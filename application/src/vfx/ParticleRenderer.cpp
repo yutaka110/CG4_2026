@@ -308,7 +308,7 @@ void ParticleRenderer::RegisterPasses(
             const ParticleRenderQueue& queue = ctx.effectRuntime->particleQueue;
             const VfxRenderContext renderContext = vfx::BuildPassRenderContext(ctx, vfxResources);
             const bool hasTerrainDust = HasTerrainDustEmitters(renderContext);
-            if (!ctx.runtimeState->vfx.enableParticles && !hasTerrainDust) {
+            if (!ctx.runtimeState->vfx.enableParticles) {
                 return;
             }
             if (queue.empty() && !hasTerrainDust) {

@@ -27,6 +27,7 @@ void DrawRenderTargetPreviewPanel(
     DrawPreviewImage("PostColor", input.postColorPreview);
     DrawPreviewImage("SceneDepth (Debug)", input.depthPreview);
     DrawPreviewImage("Emissive Isolation", input.emissivePreview);
+    DrawPreviewImage("Terrain Hi-Z", input.terrainHiZPreview);
 
     ImGui::SeparatorText("Shadow Debug View");
     if (!input.showCascadeShadowPreview) {
@@ -79,6 +80,12 @@ void DrawDebugViewsPanel(
     }
     ImGui::SliderFloat("Depth Preview Power", &runtimeState.debugDepthPreviewPower, 0.2f, 4.0f, "%.2f");
     ImGui::SliderFloat("Emissive Preview Boost", &runtimeState.debugEmissivePreviewBoost, 0.1f, 8.0f, "%.2f");
+    ImGui::SeparatorText("Terrain Hi-Z Occlusion");
+    ImGui::Checkbox("Hi-Z Debug Preview", &runtimeState.terrain.showHiZDebugPreview);
+    ImGui::SliderInt("Hi-Z Preview Mip", &runtimeState.terrain.hiZDebugMip, 0, 4);
+    ImGui::SliderInt("Debris Occlusion Mip", &runtimeState.terrain.debrisOcclusionMip, 0, 4);
+    ImGui::SliderFloat("Debris Occlusion Strength", &runtimeState.terrain.debrisOcclusionStrength, 0.0f, 2.0f, "%.2f");
+    ImGui::SliderFloat("Debris Occlusion Bias", &runtimeState.terrain.debrisOcclusionDepthBias, 0.0f, 0.05f, "%.4f");
     ImGui::SeparatorText("Cascaded Shadow Map");
     ImGui::Checkbox("Shadow Debug View", &runtimeState.terrain.showShadowDebugView);
     ImGui::SliderInt("Preview Cascade", &runtimeState.terrain.shadowDebugCascade, 0, 3);

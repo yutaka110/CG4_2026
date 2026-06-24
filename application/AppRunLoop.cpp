@@ -5,7 +5,10 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <memory>
+#include <sstream>
 
 #include "AppFrameRenderer.h"
 #include "AppImGuiLayer.h"
@@ -77,6 +80,34 @@ Matrix4x4 ToMatrix4x4(FXMMATRIX matrix) {
         }
     }
     return result;
+}
+
+uint32_t ReadEnvironmentUInt(const char* name, uint32_t fallback) {
+    char value[32]{};
+    const DWORD length = GetEnvironmentVariableA(name, value, static_cast<DWORD>(sizeof(value)));
+    if (length == 0 || length >= sizeof(value)) {
+        return fallback;
+    }
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(value, &end, 10);
+    if (end == value) {
+        return fallback;
+    }
+    return static_cast<uint32_t>(parsed);
+}
+
+std::string CsvQuote(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 2);
+    escaped.push_back('"');
+    for (const char ch : value) {
+        if (ch == '"') {
+            escaped.push_back('"');
+        }
+        escaped.push_back(ch);
+    }
+    escaped.push_back('"');
+    return escaped;
 }
 
 std::array<float, AppSceneResources::kCascadeShadowCount> GetCascadeShadowSplits(
@@ -345,6 +376,7 @@ void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
 
     terrainChunkManager_.Update(
         dev_.GetDevice(),
+        &heaps_.srv,
         railPath_,
         terrain.settings,
         terrain.previewDistance,
@@ -551,6 +583,36 @@ void AppRunLoop::RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList)
             commandList->IASetIndexBuffer(&chunk.ibv);
             commandList->DrawIndexedInstanced(chunk.indexCount, 1, 0, 0, 0);
         }
+
+        if (appPipelines_.GetTerrainDebrisShadowPSO() != nullptr) {
+            commandList->SetPipelineState(appPipelines_.GetTerrainDebrisShadowPSO());
+            for (const TerrainRenderChunk& chunk : chunks) {
+                if (chunk.debrisIndexCount == 0 ||
+                    chunk.debrisInstanceCount == 0 ||
+                    chunk.transformResource == nullptr ||
+                    chunk.debrisVbv.BufferLocation == 0 ||
+                    chunk.debrisInstanceVbv.BufferLocation == 0 ||
+                    chunk.debrisIbv.BufferLocation == 0) {
+                    continue;
+                }
+                D3D12_VERTEX_BUFFER_VIEW debrisVertexBuffers[2] = {
+                    chunk.debrisVbv,
+                    chunk.debrisInstanceVbv,
+                };
+                commandList->SetGraphicsRootConstantBufferView(
+                    1,
+                    chunk.transformResource->GetGPUVirtualAddress());
+                commandList->IASetVertexBuffers(0, 2, debrisVertexBuffers);
+                commandList->IASetIndexBuffer(&chunk.debrisIbv);
+                commandList->DrawIndexedInstanced(
+                    chunk.debrisIndexCount,
+                    chunk.debrisInstanceCount,
+                    0,
+                    0,
+                    0);
+            }
+            commandList->SetPipelineState(appPipelines_.GetTerrainShadowPSO());
+        }
     }
 
     D3D12_RESOURCE_BARRIER toSample[AppSceneResources::kCascadeShadowCount]{};
@@ -635,6 +697,85 @@ void AppRunLoop::FireShowcaseIceProjectile() {
     runtimeState_.vfx.iceProjectileTimer = 0.0f;
 }
 
+void AppRunLoop::DumpRenderGraphDebugFrame() {
+    if (!renderGraphDumpConfigured_) {
+        renderGraphDumpConfigured_ = true;
+        renderGraphDumpFrameLimit_ = ReadEnvironmentUInt("GE3_RENDERGRAPH_DUMP_FRAMES", 0);
+        const std::filesystem::path dumpRequestPath{"logs/rendergraph_dump_request.txt"};
+        if (renderGraphDumpFrameLimit_ == 0 && std::filesystem::exists(dumpRequestPath)) {
+            renderGraphDumpFrameLimit_ = 180;
+            std::ifstream request(dumpRequestPath);
+            if (request) {
+                uint32_t requestedFrames = 0;
+                request >> requestedFrames;
+                if (requestedFrames > 0) {
+                    renderGraphDumpFrameLimit_ = requestedFrames;
+                }
+            }
+        }
+        renderGraphDumpEnabled_ = renderGraphDumpFrameLimit_ > 0;
+        if (renderGraphDumpEnabled_) {
+            std::filesystem::create_directories("logs");
+            renderGraphDump_.open("logs/rendergraph_debug.csv", std::ios::out | std::ios::trunc);
+            if (!renderGraphDump_) {
+                renderGraphDumpEnabled_ = false;
+            } else {
+                renderGraphDump_ <<
+                    "frame,totalPasses,executedPasses,vfxRegistered,vfxExecuted,vfxExecutedPasses,"
+                    "terrainRenderChunks,terrainDebrisInstances,terrainEligibleCullChunks,"
+                    "terrainHiZBuilds,terrainHiZMipDispatches,terrainDebrisCullDispatches\n";
+                renderGraphDump_.flush();
+            }
+        }
+    }
+    if (!renderGraphDumpEnabled_ ||
+        renderGraphDumpFrameIndex_ >= renderGraphDumpFrameLimit_ ||
+        !renderGraphDump_) {
+        return;
+    }
+
+    uint32_t executedPasses = 0;
+    uint32_t vfxRegistered = 0;
+    uint32_t vfxExecuted = 0;
+    std::ostringstream vfxNames;
+    bool firstVfx = true;
+    for (const ge3::graphics::RenderPassDebugInfo& pass : lastRenderPassDebugInfo_) {
+        if (pass.executed) {
+            ++executedPasses;
+        }
+        if (pass.layer != ge3::graphics::RenderPassLayer::Vfx) {
+            continue;
+        }
+        ++vfxRegistered;
+        if (!pass.executed) {
+            continue;
+        }
+        ++vfxExecuted;
+        if (!firstVfx) {
+            vfxNames << "|";
+        }
+        firstVfx = false;
+        vfxNames << pass.name;
+    }
+
+    const TerrainDebrisCullingStats& debrisStats = terrainChunkManager_.LastDebrisCullingStats();
+    renderGraphDump_ <<
+        renderGraphDumpFrameIndex_ << "," <<
+        lastRenderPassDebugInfo_.size() << "," <<
+        executedPasses << "," <<
+        vfxRegistered << "," <<
+        vfxExecuted << "," <<
+        CsvQuote(vfxNames.str()) << "," <<
+        debrisStats.renderChunkCount << "," <<
+        debrisStats.debrisInstanceCount << "," <<
+        debrisStats.eligibleChunkCount << "," <<
+        debrisStats.hiZBuildCount << "," <<
+        debrisStats.hiZMipDispatchCount << "," <<
+        debrisStats.debrisCullDispatchCount << "\n";
+    renderGraphDump_.flush();
+    ++renderGraphDumpFrameIndex_;
+}
+
 void AppRunLoop::PlayShowcaseEffect(AppVfxRuntimeState::ShowcaseEffect effect, bool resetAutoTimer) {
     runtimeState_.vfx.showcaseMode = true;
     runtimeState_.vfx.showcaseEffect = effect;
@@ -686,20 +827,13 @@ void AppRunLoop::PlayShowcaseEffect(AppVfxRuntimeState::ShowcaseEffect effect, b
         runtimeState_.vfx.enableElectricOrbStrike = false;
         break;
     case AppVfxRuntimeState::ShowcaseEffect::BlackHole: {
-        runtimeState_.vfx.enableParticles = true;
-        runtimeState_.vfx.enableTrails = true;
+        runtimeState_.vfx.enableParticles = false;
+        runtimeState_.vfx.enableTrails = false;
         runtimeState_.vfx.enableBeams = false;
         runtimeState_.vfx.enableDistortions = true;
         runtimeState_.vfx.enableRings = false;
         runtimeState_.vfx.enableCylinders = false;
         runtimeState_.vfx.enableElectricOrbStrike = false;
-        const AppVfxRuntimeState::ShowcaseTuning& tuning =
-            runtimeState_.vfx.showcaseTuning[ShowcaseIndex(effect)];
-        vfxEngine_.Runtime().PlayEffectWithParams(
-            "warp_core",
-            {0.0f, -0.08f, -1.15f},
-            {0.88f, 0.54f + tuning.param4 * 0.18f, 1.0f, 1.0f},
-            {1.0f + tuning.param2 * 0.25f, 1.0f + tuning.param2 * 0.25f, 1.0f});
         break;
     }
     default:
@@ -924,6 +1058,9 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             vfxEngine_.RenderTargets().GetSrvHandle(postExecutionPlan.finalOutputResource),
             vfxEngine_.RenderTargets().GetSrvHandle("DebugDepthPreview"),
             vfxEngine_.RenderTargets().GetSrvHandle("DebugEmissivePreview"),
+            runtimeState_.terrain.showHiZDebugPreview
+                ? terrainChunkManager_.GetHiZDebugSrv(static_cast<uint32_t>((std::max)(runtimeState_.terrain.hiZDebugMip, 0)))
+                : D3D12_GPU_DESCRIPTOR_HANDLE{},
             &renderResources_,
             &scene_,
             &appPipelines_,
@@ -961,6 +1098,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     graphContext.frameState = &frameState_;
     graphContext.srvDescriptorHeap = srvDescriptorHeap_.Get();
     graphContext.backBuffer = backBuffer;
+    graphContext.depthTextureResource = engineContext_.GetDepthStencil();
     graphContext.rtv = rtv;
     graphContext.dsv = dsvHandle;
     graphContext.depthTextureHandle = engineContext_.GetDepthSrvGpuHandle();
@@ -1032,8 +1170,10 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     lastTransientTargetStorageCount_ = vfxGraphResourceStats.transientTargetStorageCount;
     lastTransientBufferCount_ = vfxGraphResourceStats.transientBufferCount;
     lastTransientBufferStorageCount_ = vfxGraphResourceStats.transientBufferStorageCount;
+    terrainChunkManager_.ResetDebrisCullingStats();
     RenderCascadeShadowMaps(commandList.Get());
     renderGraph_.Execute(commandList.Get());
+    DumpRenderGraphDebugFrame();
     vfxEngine_.CaptureFrameTelemetry(commandList.Get());
     frameRenderer_.EndFrame(commandList.Get(), backBuffer);
 

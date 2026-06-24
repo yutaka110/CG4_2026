@@ -36,6 +36,7 @@ struct AppImGuiFrameContext {
     D3D12_GPU_DESCRIPTOR_HANDLE postColorPreview{};
     D3D12_GPU_DESCRIPTOR_HANDLE depthPreview{};
     D3D12_GPU_DESCRIPTOR_HANDLE emissivePreview{};
+    D3D12_GPU_DESCRIPTOR_HANDLE terrainHiZPreview{};
     AppRenderResources* renderResources = nullptr;
     AppSceneResources* scene = nullptr;
     AppPipelines* appPipelines = nullptr;

@@ -118,6 +118,10 @@ bool TerrainPresetStore::Load(TerrainGenerationSettings& settings, std::string* 
             ParseUInt(value, loaded.surfaceLongitudinalSteps);
         } else if (key == "surfaceRadialSegments") {
             ParseUInt(value, loaded.surfaceRadialSegments);
+        } else if (key == "lodNearDistance") {
+            ParseFloat(value, loaded.lodNearDistance);
+        } else if (key == "lodFarDistance") {
+            ParseFloat(value, loaded.lodFarDistance);
         } else if (key == "rockPillarDensity") {
             ParseFloat(value, loaded.rockPillarDensity);
         } else if (key == "rockScatterDensity") {
@@ -128,6 +132,8 @@ bool TerrainPresetStore::Load(TerrainGenerationSettings& settings, std::string* 
             ParseFloat(value, loaded.rockEmbedStrength);
         } else if (key == "rockContactPebbleDensity") {
             ParseFloat(value, loaded.rockContactPebbleDensity);
+        } else if (key == "floorPebbleDensity") {
+            ParseFloat(value, loaded.floorPebbleDensity);
         } else if (key == "rockClusterStrength") {
             ParseFloat(value, loaded.rockClusterStrength);
         } else if (key == "rockRootShadowStrength") {
@@ -140,6 +146,8 @@ bool TerrainPresetStore::Load(TerrainGenerationSettings& settings, std::string* 
             ParseFloat(value, loaded.motherRockErosionStrength);
         } else if (key == "largeScaleErosionStrength") {
             ParseFloat(value, loaded.largeScaleErosionStrength);
+        } else if (key == "surfaceBreakupDensity") {
+            ParseFloat(value, loaded.surfaceBreakupDensity);
         } else if (key == "archDensity") {
             ParseFloat(value, loaded.archDensity);
         } else if (key == "dustZoneDensity") {
@@ -159,17 +167,21 @@ bool TerrainPresetStore::Load(TerrainGenerationSettings& settings, std::string* 
     loaded.sdfCarveScale = (std::clamp)(loaded.sdfCarveScale, 0.25f, 2.5f);
     loaded.surfaceLongitudinalSteps = (std::clamp)(loaded.surfaceLongitudinalSteps, 12u, 64u);
     loaded.surfaceRadialSegments = (std::clamp)(loaded.surfaceRadialSegments, 16u, 96u);
+    loaded.lodNearDistance = (std::clamp)(loaded.lodNearDistance, loaded.chunkLength, 1000.0f);
+    loaded.lodFarDistance = (std::max)(loaded.lodFarDistance, loaded.lodNearDistance + loaded.chunkLength);
     loaded.rockPillarDensity = (std::clamp)(loaded.rockPillarDensity, 0.0f, 1.0f);
     loaded.rockScatterDensity = (std::clamp)(loaded.rockScatterDensity, 0.0f, 1.5f);
     loaded.rockScatterScale = (std::clamp)(loaded.rockScatterScale, 0.2f, 2.5f);
     loaded.rockEmbedStrength = (std::clamp)(loaded.rockEmbedStrength, 0.0f, 1.5f);
     loaded.rockContactPebbleDensity = (std::clamp)(loaded.rockContactPebbleDensity, 0.0f, 1.5f);
+    loaded.floorPebbleDensity = (std::clamp)(loaded.floorPebbleDensity, 0.0f, 1.5f);
     loaded.rockClusterStrength = (std::clamp)(loaded.rockClusterStrength, 0.0f, 1.0f);
     loaded.rockRootShadowStrength = (std::clamp)(loaded.rockRootShadowStrength, 0.0f, 1.5f);
     loaded.rockMotherBlendStrength = (std::clamp)(loaded.rockMotherBlendStrength, 0.0f, 1.5f);
     loaded.rockMaterialVariation = (std::clamp)(loaded.rockMaterialVariation, 0.0f, 1.0f);
     loaded.motherRockErosionStrength = (std::clamp)(loaded.motherRockErosionStrength, 0.0f, 1.5f);
     loaded.largeScaleErosionStrength = (std::clamp)(loaded.largeScaleErosionStrength, 0.0f, 1.5f);
+    loaded.surfaceBreakupDensity = (std::clamp)(loaded.surfaceBreakupDensity, 0.0f, 1.5f);
     loaded.archDensity = (std::clamp)(loaded.archDensity, 0.0f, 1.0f);
     loaded.dustZoneDensity = (std::clamp)(loaded.dustZoneDensity, 0.0f, 1.0f);
     settings = loaded;
@@ -286,6 +298,24 @@ bool TerrainPresetStore::Load(TerrainAuthoringState& authoring, std::string* err
             ParseFloat(value, loaded.cascadeShadowSplit2);
         } else if (key == "cascadeShadowSplit3") {
             ParseFloat(value, loaded.cascadeShadowSplit3);
+        } else if (key == "showHiZDebugPreview") {
+            ParseBool(value, loaded.showHiZDebugPreview);
+        } else if (key == "hiZDebugMip") {
+            uint32_t mip = static_cast<uint32_t>((std::max)(loaded.hiZDebugMip, 0));
+            if (ParseUInt(value, mip)) {
+                loaded.hiZDebugMip = static_cast<int>(mip);
+            }
+        } else if (key == "debrisOcclusionMip") {
+            uint32_t mip = static_cast<uint32_t>((std::max)(loaded.debrisOcclusionMip, 0));
+            if (ParseUInt(value, mip)) {
+                loaded.debrisOcclusionMip = static_cast<int>(mip);
+            }
+        } else if (key == "debrisOcclusionStrength") {
+            ParseFloat(value, loaded.debrisOcclusionStrength);
+        } else if (key == "debrisOcclusionDepthBias") {
+            ParseFloat(value, loaded.debrisOcclusionDepthBias);
+        } else if (key == "debrisOcclusionUpdateInterval") {
+            ParseUInt(value, loaded.debrisOcclusionUpdateInterval);
         }
     }
 
@@ -321,6 +351,11 @@ bool TerrainPresetStore::Load(TerrainAuthoringState& authoring, std::string* err
     loaded.cascadeShadowSplit1 = (std::max)(loaded.cascadeShadowSplit1, loaded.cascadeShadowSplit0 + 10.0f);
     loaded.cascadeShadowSplit2 = (std::max)(loaded.cascadeShadowSplit2, loaded.cascadeShadowSplit1 + 10.0f);
     loaded.cascadeShadowSplit3 = (std::max)(loaded.cascadeShadowSplit3, loaded.cascadeShadowSplit2 + 10.0f);
+    loaded.hiZDebugMip = (std::clamp)(loaded.hiZDebugMip, 0, 4);
+    loaded.debrisOcclusionMip = (std::clamp)(loaded.debrisOcclusionMip, 0, 4);
+    loaded.debrisOcclusionStrength = (std::clamp)(loaded.debrisOcclusionStrength, 0.0f, 2.0f);
+    loaded.debrisOcclusionDepthBias = (std::clamp)(loaded.debrisOcclusionDepthBias, 0.0f, 0.05f);
+    loaded.debrisOcclusionUpdateInterval = (std::clamp)(loaded.debrisOcclusionUpdateInterval, 1u, 8u);
     authoring = loaded;
     TrackWriteTime();
     return true;
@@ -356,17 +391,21 @@ bool TerrainPresetStore::Save(const TerrainGenerationSettings& settings, std::st
     output << "sdfCarveScale=" << settings.sdfCarveScale << "\n";
     output << "surfaceLongitudinalSteps=" << settings.surfaceLongitudinalSteps << "\n";
     output << "surfaceRadialSegments=" << settings.surfaceRadialSegments << "\n";
+    output << "lodNearDistance=" << settings.lodNearDistance << "\n";
+    output << "lodFarDistance=" << settings.lodFarDistance << "\n";
     output << "rockPillarDensity=" << settings.rockPillarDensity << "\n";
     output << "rockScatterDensity=" << settings.rockScatterDensity << "\n";
     output << "rockScatterScale=" << settings.rockScatterScale << "\n";
     output << "rockEmbedStrength=" << settings.rockEmbedStrength << "\n";
     output << "rockContactPebbleDensity=" << settings.rockContactPebbleDensity << "\n";
+    output << "floorPebbleDensity=" << settings.floorPebbleDensity << "\n";
     output << "rockClusterStrength=" << settings.rockClusterStrength << "\n";
     output << "rockRootShadowStrength=" << settings.rockRootShadowStrength << "\n";
     output << "rockMotherBlendStrength=" << settings.rockMotherBlendStrength << "\n";
     output << "rockMaterialVariation=" << settings.rockMaterialVariation << "\n";
     output << "motherRockErosionStrength=" << settings.motherRockErosionStrength << "\n";
     output << "largeScaleErosionStrength=" << settings.largeScaleErosionStrength << "\n";
+    output << "surfaceBreakupDensity=" << settings.surfaceBreakupDensity << "\n";
     output << "archDensity=" << settings.archDensity << "\n";
     output << "dustZoneDensity=" << settings.dustZoneDensity << "\n";
     TrackWriteTime();
@@ -404,17 +443,21 @@ bool TerrainPresetStore::Save(const TerrainAuthoringState& authoring, std::strin
     output << "sdfCarveScale=" << settings.sdfCarveScale << "\n";
     output << "surfaceLongitudinalSteps=" << settings.surfaceLongitudinalSteps << "\n";
     output << "surfaceRadialSegments=" << settings.surfaceRadialSegments << "\n";
+    output << "lodNearDistance=" << settings.lodNearDistance << "\n";
+    output << "lodFarDistance=" << settings.lodFarDistance << "\n";
     output << "rockPillarDensity=" << settings.rockPillarDensity << "\n";
     output << "rockScatterDensity=" << settings.rockScatterDensity << "\n";
     output << "rockScatterScale=" << settings.rockScatterScale << "\n";
     output << "rockEmbedStrength=" << settings.rockEmbedStrength << "\n";
     output << "rockContactPebbleDensity=" << settings.rockContactPebbleDensity << "\n";
+    output << "floorPebbleDensity=" << settings.floorPebbleDensity << "\n";
     output << "rockClusterStrength=" << settings.rockClusterStrength << "\n";
     output << "rockRootShadowStrength=" << settings.rockRootShadowStrength << "\n";
     output << "rockMotherBlendStrength=" << settings.rockMotherBlendStrength << "\n";
     output << "rockMaterialVariation=" << settings.rockMaterialVariation << "\n";
     output << "motherRockErosionStrength=" << settings.motherRockErosionStrength << "\n";
     output << "largeScaleErosionStrength=" << settings.largeScaleErosionStrength << "\n";
+    output << "surfaceBreakupDensity=" << settings.surfaceBreakupDensity << "\n";
     output << "archDensity=" << settings.archDensity << "\n";
     output << "dustZoneDensity=" << settings.dustZoneDensity << "\n";
     output << "materialBaseColorR=" << authoring.materialBaseColor.x << "\n";
@@ -457,6 +500,12 @@ bool TerrainPresetStore::Save(const TerrainAuthoringState& authoring, std::strin
     output << "cascadeShadowSplit1=" << authoring.cascadeShadowSplit1 << "\n";
     output << "cascadeShadowSplit2=" << authoring.cascadeShadowSplit2 << "\n";
     output << "cascadeShadowSplit3=" << authoring.cascadeShadowSplit3 << "\n";
+    output << "showHiZDebugPreview=" << (authoring.showHiZDebugPreview ? 1 : 0) << "\n";
+    output << "hiZDebugMip=" << authoring.hiZDebugMip << "\n";
+    output << "debrisOcclusionMip=" << authoring.debrisOcclusionMip << "\n";
+    output << "debrisOcclusionStrength=" << authoring.debrisOcclusionStrength << "\n";
+    output << "debrisOcclusionDepthBias=" << authoring.debrisOcclusionDepthBias << "\n";
+    output << "debrisOcclusionUpdateInterval=" << authoring.debrisOcclusionUpdateInterval << "\n";
     TrackWriteTime();
     return true;
 }

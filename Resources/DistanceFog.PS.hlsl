@@ -16,7 +16,7 @@ cbuffer PostProcessParams : register(b0)
     float gFarPlane;
     float gFogDepthBoost;
     float gFogDepthBoostStart;
-    float gAux11;
+    float gBacklitFogLift;
     float gAux12;
     float gAux13;
     float gAux14;
@@ -53,7 +53,12 @@ float4 main(PSInput input) : SV_TARGET
     fogMask = min(fogMask, 0.66f);
 
     float3 fogColor = saturate(float3(gFogColorR, gFogColorG, gFogColorB));
-    float3 liftedFog = fogColor + float3(0.08f, 0.06f, 0.04f) * smoothstep(0.55f, 1.0f, uv.y);
+    float verticalLift = smoothstep(0.48f, 1.0f, uv.y);
+    float backlitLift = farBoostMask * max(gBacklitFogLift, 0.0f);
+    float3 liftedFog =
+        fogColor +
+        float3(0.08f, 0.06f, 0.04f) * verticalLift +
+        float3(0.24f, 0.15f, 0.065f) * backlitLift;
     float3 result = lerp(color.rgb, liftedFog, fogMask);
     return float4(saturate(result), color.a);
 }

@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <array>
 #include <cstdint>
+#include <fstream>
 #include <string>
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -83,6 +84,7 @@ private:
     void UpdateShowcaseWindowTitle();
     void UpdateTerrainAuthoring(float deltaTime);
     void RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList);
+    void DumpRenderGraphDebugFrame();
     bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
@@ -123,6 +125,11 @@ private:
     uint32_t lastTransientTargetStorageCount_ = 0;
     uint32_t lastTransientBufferCount_ = 0;
     uint32_t lastTransientBufferStorageCount_ = 0;
+    bool renderGraphDumpConfigured_ = false;
+    bool renderGraphDumpEnabled_ = false;
+    uint32_t renderGraphDumpFrameLimit_ = 0;
+    uint32_t renderGraphDumpFrameIndex_ = 0;
+    std::ofstream renderGraphDump_;
     D3D12_RESOURCE_STATES sceneDepthState_ = D3D12_RESOURCE_STATE_DEPTH_WRITE;
     bool previousLeftMouseDown_ = false;
     bool releaseShowcaseInitialized_ = false;

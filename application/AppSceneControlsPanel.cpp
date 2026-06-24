@@ -386,6 +386,25 @@ void DrawMaterialSettingsControlsPanel(
         terrain.cascadeShadowSplit3 = 960.0f;
         terrain.shadowDebugCascade = 0;
     }
+    ImGui::SeparatorText("Debris Hi-Z Occlusion");
+    ImGui::Checkbox("Hi-Z Debug Preview", &terrain.showHiZDebugPreview);
+    ImGui::SliderInt("Hi-Z Preview Mip", &terrain.hiZDebugMip, 0, 4);
+    ImGui::SliderInt("Debris Occlusion Mip", &terrain.debrisOcclusionMip, 0, 4);
+    ImGui::SliderFloat("Occlusion Strength", &terrain.debrisOcclusionStrength, 0.0f, 2.0f, "%.2f");
+    ImGui::SliderFloat("Occlusion Depth Bias", &terrain.debrisOcclusionDepthBias, 0.0f, 0.05f, "%.4f");
+    int debrisOcclusionUpdateInterval = static_cast<int>(terrain.debrisOcclusionUpdateInterval);
+    if (ImGui::SliderInt("Occlusion Update Interval", &debrisOcclusionUpdateInterval, 1, 8)) {
+        terrain.debrisOcclusionUpdateInterval =
+            static_cast<uint32_t>(std::clamp(debrisOcclusionUpdateInterval, 1, 8));
+    }
+    if (ImGui::Button("Reset Debris Occlusion")) {
+        terrain.showHiZDebugPreview = true;
+        terrain.hiZDebugMip = 3;
+        terrain.debrisOcclusionMip = 2;
+        terrain.debrisOcclusionStrength = 0.75f;
+        terrain.debrisOcclusionDepthBias = 0.012f;
+        terrain.debrisOcclusionUpdateInterval = 2;
+    }
     ImGui::SeparatorText("Canyon Sun / Sky");
     ImGui::Checkbox("Use Canyon Sun", &terrain.useCanyonSunLighting);
     ImGui::ColorEdit3("Sun Color", &terrain.canyonSunColor.x);
@@ -447,17 +466,21 @@ void DrawMaterialSettingsControlsPanel(
     if (ImGui::SliderInt("Surface Radial Segments", &surfaceRadialSegments, 16, 96)) {
         terrain.settings.surfaceRadialSegments = static_cast<uint32_t>(std::clamp(surfaceRadialSegments, 16, 96));
     }
+    ImGui::SliderFloat("LOD Near Distance", &terrain.settings.lodNearDistance, 40.0f, 1000.0f);
+    ImGui::SliderFloat("LOD Far Distance", &terrain.settings.lodFarDistance, 80.0f, 1800.0f);
     ImGui::SliderFloat("Rock Pillar Density", &terrain.settings.rockPillarDensity, 0.0f, 1.0f);
     ImGui::SliderFloat("Rock Scatter Density", &terrain.settings.rockScatterDensity, 0.0f, 1.5f);
     ImGui::SliderFloat("Rock Scatter Scale", &terrain.settings.rockScatterScale, 0.2f, 2.5f);
     ImGui::SliderFloat("Rock Embed Strength", &terrain.settings.rockEmbedStrength, 0.0f, 1.5f);
     ImGui::SliderFloat("Contact Pebbles", &terrain.settings.rockContactPebbleDensity, 0.0f, 1.5f);
+    ImGui::SliderFloat("Floor Pebble Density", &terrain.settings.floorPebbleDensity, 0.0f, 1.5f);
     ImGui::SliderFloat("Rock Cluster Strength", &terrain.settings.rockClusterStrength, 0.0f, 1.0f);
     ImGui::SliderFloat("Rock Root Shadow", &terrain.settings.rockRootShadowStrength, 0.0f, 1.5f);
     ImGui::SliderFloat("Rock Mother Blend", &terrain.settings.rockMotherBlendStrength, 0.0f, 1.5f);
     ImGui::SliderFloat("Rock Material Variation", &terrain.settings.rockMaterialVariation, 0.0f, 1.0f);
     ImGui::SliderFloat("Mother Rock Erosion", &terrain.settings.motherRockErosionStrength, 0.0f, 1.5f);
     ImGui::SliderFloat("Large Scale Erosion", &terrain.settings.largeScaleErosionStrength, 0.0f, 1.5f);
+    ImGui::SliderFloat("Surface Breakup Density", &terrain.settings.surfaceBreakupDensity, 0.0f, 1.5f);
     ImGui::SliderFloat("Overhang Feature Density", &terrain.settings.archDensity, 0.0f, 1.0f);
     ImGui::SliderFloat("Dust Zone Density", &terrain.settings.dustZoneDensity, 0.0f, 1.0f);
     ImGui::Checkbox("Show VFX Zones", &terrain.showVfxZones);

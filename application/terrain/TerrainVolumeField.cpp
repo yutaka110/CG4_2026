@@ -166,6 +166,7 @@ float TerrainVolumeField::RadiusScale(float distance, float angle) const {
     const float vertical = std::sin(angle) * verticalBase;
     const float erosionStrength = (std::clamp)(settings_.motherRockErosionStrength, 0.0f, 1.5f);
     const float largeErosionStrength = (std::clamp)(settings_.largeScaleErosionStrength, 0.0f, 1.5f);
+    const float breakupDensity = (std::clamp)(settings_.surfaceBreakupDensity, 0.0f, 1.5f);
     const float n = Noise3(distance, lateral, vertical, 0.025f);
     const float ceilingMask = SmoothStep(0.22f, 0.86f, std::sin(angle));
     const float wallMask = SmoothStep(0.18f, 0.96f, std::abs(std::cos(angle)));
@@ -220,10 +221,15 @@ float TerrainVolumeField::RadiusScale(float distance, float angle) const {
         SmoothStep(0.60f, 0.96f, std::abs(diagonalCutNoise)) *
         (diagonalCutNoise < 0.0f ? -0.20f : 0.26f);
     const float brokenTerrace =
-        wallMask * largeErosionStrength *
-        SmoothStep(0.105f, 0.0f, ledgeBand) *
-        SmoothStep(0.34f, 0.92f, std::abs(fractureNoise)) *
-        (fractureNoise < 0.0f ? -0.14f : 0.20f);
+        wallMask * largeErosionStrength * (0.74f + breakupDensity * 0.36f) *
+        SmoothStep(0.12f + breakupDensity * 0.015f, 0.0f, ledgeBand) *
+        SmoothStep(0.34f - breakupDensity * 0.09f, 0.92f, std::abs(fractureNoise)) *
+        (fractureNoise < 0.0f ? -0.14f - breakupDensity * 0.035f : 0.20f + breakupDensity * 0.045f);
+    const float chippedStrata =
+        motherMask * largeErosionStrength * breakupDensity *
+        SmoothStep(0.44f, 0.92f, std::abs(fractureNoise + longCutNoise * 0.55f)) *
+        Noise3(distance * 1.8f + vertical * 0.37f, lateral * 1.45f, vertical * 0.82f, 0.145f) *
+        0.18f;
     const float roughness = settings_.volumeRoughness * n;
     const float subtractiveCarve = SubtractiveCarveMask(distance, angle);
     const float chippedEdge =
@@ -234,7 +240,7 @@ float TerrainVolumeField::RadiusScale(float distance, float angle) const {
         0.52f,
         1.0f + roughness + ceilingBreak + sideLedge +
             macroPocket + diagonalShear + brokenTerrace +
-            verticalCrack + erodedLedge +
+            chippedStrata + verticalCrack + erodedLedge +
             ArchMask(distance, angle) +
             subtractiveCarve + chippedEdge);
 }

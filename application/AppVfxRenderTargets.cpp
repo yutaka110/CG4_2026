@@ -27,7 +27,6 @@ bool RequestEquals(
         lhs.clearColor[1] == rhs.clearColor[1] &&
         lhs.clearColor[2] == rhs.clearColor[2] &&
         lhs.clearColor[3] == rhs.clearColor[3] &&
-        lhs.initialState == rhs.initialState &&
         lhs.lifetimeBegin == rhs.lifetimeBegin &&
         lhs.lifetimeEnd == rhs.lifetimeEnd &&
         lhs.transient == rhs.transient &&

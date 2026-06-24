@@ -4,10 +4,13 @@
 #include "AppSceneResources.h"
 #include "AppVfxRenderPipeline.h"
 #include "AppPipelines.h"
+#include "terrain/TerrainChunkManager.h"
 #include "vfx/VfxRenderInputs.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cwchar>
+#include <cwctype>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -16,6 +19,7 @@
 
 namespace {
 constexpr float kElectricOrbStrikeMinimumDuration = 4.10f;
+constexpr float kEffectAssetReloadPollInterval = 1.0f;
 
 size_t ShowcaseIndex(AppVfxRuntimeState::ShowcaseEffect effect) {
     return static_cast<size_t>(effect);
@@ -31,6 +35,65 @@ bool IsSameAuthoredComponent(
         return true;
     }
     return source->name == destination->name && source->type == destination->type;
+}
+
+bool HasTerrainDustEmitters(const AppFrameGraphBuildContext& graphContext) {
+    if (graphContext.runtimeState == nullptr ||
+        graphContext.terrainChunkManager == nullptr ||
+        !graphContext.runtimeState->terrain.enabled ||
+        graphContext.runtimeState->terrain.settings.dustZoneDensity <= 0.0f) {
+        return false;
+    }
+
+    for (const TerrainChunkDebugInfo& chunk : graphContext.terrainChunkManager->Chunks()) {
+        if (!chunk.vfxZones.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool HasVfxParticleWork(
+    const AppFrameGraphBuildContext& graphContext,
+    const EffectRuntimeFrame& runtimeFrame) {
+    return graphContext.runtimeState != nullptr &&
+        graphContext.runtimeState->vfx.enableParticles &&
+        (!runtimeFrame.particleQueue.empty() || HasTerrainDustEmitters(graphContext));
+}
+
+bool HasAnyVfxWork(
+    const AppFrameGraphBuildContext& graphContext,
+    const EffectRuntimeFrame& runtimeFrame) {
+    if (graphContext.runtimeState == nullptr) {
+        return false;
+    }
+    const AppVfxRuntimeState& runtimeState = graphContext.runtimeState->vfx;
+    if (HasVfxParticleWork(graphContext, runtimeFrame)) {
+        return true;
+    }
+    return (runtimeState.enableTrails && !runtimeFrame.trailQueue.empty()) ||
+        (runtimeState.enableBeams && !runtimeFrame.beamQueue.empty()) ||
+        (runtimeState.enableRings && !runtimeFrame.ringQueue.empty()) ||
+        (runtimeState.enableCylinders && !runtimeFrame.cylinderQueue.empty()) ||
+        (runtimeState.enableElectricOrbStrike && runtimeState.electricOrbStrikeActive) ||
+        (runtimeState.enableDistortions && !runtimeFrame.distortionQueue.empty());
+}
+
+bool ReadEnvFlag(const wchar_t* name) {
+    wchar_t value[32]{};
+    const DWORD length = GetEnvironmentVariableW(name, value, static_cast<DWORD>(_countof(value)));
+    if (length == 0) {
+        return false;
+    }
+
+    for (DWORD i = 0; i < length && i < _countof(value); ++i) {
+        value[i] = static_cast<wchar_t>(std::towlower(value[i]));
+    }
+
+    return value[0] == L'1' ||
+        std::wcscmp(value, L"true") == 0 ||
+        std::wcscmp(value, L"yes") == 0 ||
+        std::wcscmp(value, L"on") == 0;
 }
 
 void ApplyLiveTuningToComponent(
@@ -570,7 +633,20 @@ void VfxEngine::Update(AppVfxRuntimeState& runtimeState, float deltaTime) {
     beamTime_ += deltaTime;
     beam_.SetTime(beamTime_);
     effectRuntime_.Update(deltaTime);
-    ReloadChangedEffectAssets();
+
+    if (!effectHotReloadConfigured_) {
+        effectHotReloadConfigured_ = true;
+        effectHotReloadEnabled_ = ReadEnvFlag(L"GE3_EFFECT_HOT_RELOAD");
+    }
+    if (!effectHotReloadEnabled_) {
+        return;
+    }
+
+    effectAssetReloadPollTimer_ += (std::max)(0.0f, deltaTime);
+    if (effectAssetReloadPollTimer_ >= kEffectAssetReloadPollInterval) {
+        effectAssetReloadPollTimer_ = 0.0f;
+        ReloadChangedEffectAssets();
+    }
 }
 
 void VfxEngine::ReloadChangedEffectAssets() {
@@ -666,6 +742,7 @@ void VfxEngine::RegisterRenderPasses(
     RegisterDefaultTextures(scene);
 
     frameGraphEffectRuntimeFrame_ = BuildFrame();
+    const bool hasAnyVfxWork = HasAnyVfxWork(graphContext, frameGraphEffectRuntimeFrame_);
     const ParticleRenderQueue& particleQueue = frameGraphEffectRuntimeFrame_.particleQueue;
     const ParticleRenderFallback primaryParticleFx =
         !particleQueue.empty() ? frameGraphEffectRuntimeFrame_.PrimaryParticleFallback()
@@ -700,6 +777,9 @@ void VfxEngine::RegisterRenderPasses(
                 context,
                 selectedResources);
         });
+    if (!hasAnyVfxWork) {
+        return;
+    }
     gpuParticleSystem_.EnsureGraphBuffers(device, *graphContext.renderGraph);
     if (!gpuParticleSystem_.IsGpuManagedParticlePoolInitialized() &&
         graphContext.appPipelines != nullptr &&

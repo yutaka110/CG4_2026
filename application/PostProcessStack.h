@@ -56,6 +56,7 @@ struct PostProcessPass {
         float fogFarPlane = 5000.0f;
         float fogDepthBoost = 0.35f;
         float fogDepthBoostStart = 0.58f;
+        float backlitFogLift = 0.18f;
         float contactAoRadiusPixels = 3.0f;
         float contactAoBias = 0.25f;
         float contactAoFalloff = 9.0f;

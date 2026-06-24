@@ -866,6 +866,10 @@
     <None Include="Resources\Spear.PS.hlsl" />
     <None Include="Resources\Spear.VS.hlsl" />
     <None Include="Resources\Skybox.hlsli" />
+    <None Include="Resources\TerrainDebrisCull.CS.hlsl" />
+    <None Include="Resources\TerrainHiZBuild.CS.hlsl" />
+    <None Include="Resources\TerrainDebris.VS.hlsl" />
+    <None Include="Resources\TerrainDebrisShadow.VS.hlsl" />
     <None Include="Resources\Terrain.PS.hlsl" />
     <None Include="Resources\TerrainShadow.VS.hlsl" />
     <None Include="Resources\effects\AuthoringMetadataDemo.effect" />

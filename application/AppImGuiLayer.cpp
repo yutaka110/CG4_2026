@@ -248,9 +248,17 @@ void ResetShowcaseIceProjectiles(AppVfxRuntimeState& vfxState) {
 }
 
 void ClearShowcaseEffectState(AppRuntimeState& runtimeState, EffectRuntime& effectRuntime) {
+    runtimeState.vfx.enableParticles = false;
+    runtimeState.vfx.enableTrails = false;
+    runtimeState.vfx.enableBeams = false;
+    runtimeState.vfx.enableDistortions = false;
+    runtimeState.vfx.enableRings = false;
+    runtimeState.vfx.enableCylinders = false;
+    runtimeState.vfx.enableElectricOrbStrike = false;
     runtimeState.vfx.electricOrbStrikeActive = false;
     runtimeState.vfx.electricOrbStrikeLoop = false;
     runtimeState.vfx.electricOrbStrikeTimer = 0.0f;
+    runtimeState.vfx.showcaseAutoTimer = 0.0f;
     ResetShowcaseIceProjectiles(runtimeState.vfx);
     effectRuntime.ClearInstances();
 }
@@ -319,20 +327,13 @@ void PlayShowcasePresentationEffect(
         runtimeState.vfx.iceProjectilePreviewActive = true;
         break;
     case AppVfxRuntimeState::ShowcaseEffect::BlackHole: {
-        runtimeState.vfx.enableParticles = true;
-        runtimeState.vfx.enableTrails = true;
+        runtimeState.vfx.enableParticles = false;
+        runtimeState.vfx.enableTrails = false;
         runtimeState.vfx.enableBeams = false;
         runtimeState.vfx.enableDistortions = true;
         runtimeState.vfx.enableRings = false;
         runtimeState.vfx.enableCylinders = false;
         runtimeState.vfx.enableElectricOrbStrike = false;
-        const AppVfxRuntimeState::ShowcaseTuning& tuning =
-            runtimeState.vfx.showcaseTuning[ShowcaseIndex(effect)];
-        effectRuntime.PlayEffectWithParams(
-            "warp_core",
-            {0.0f, -0.08f, -1.15f},
-            {0.88f, 0.54f + tuning.param4 * 0.18f, 1.0f, 1.0f},
-            {1.0f + tuning.param2 * 0.25f, 1.0f + tuning.param2 * 0.25f, 1.0f});
         break;
     }
     default:
@@ -613,14 +614,11 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
 
     if (!showcasePresentationInitialized_) {
         showcasePresentationInitialized_ = true;
-        runtimeState.vfx.showcaseAutoRotate = true;
+        runtimeState.vfx.showcaseAutoRotate = false;
         runtimeState.vfx.showcaseHudVisible = true;
         runtimeState.vfx.showcaseTuningVisible = false;
-        PlayShowcasePresentationEffect(
-            runtimeState,
-            effectRuntime,
-            postProcessStack,
-            AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike);
+        ClearShowcaseEffectState(runtimeState, effectRuntime);
+        ConfigureShowcasePostProcess(postProcessStack, runtimeState.vfx);
     }
 
     if (viewportFocusMode_) {
@@ -736,6 +734,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         context.postColorPreview,
                         context.depthPreview,
                         context.emissivePreview,
+                        context.terrainHiZPreview,
                         context.scene != nullptr ? context.scene->cascadeShadowSrvGpuHandles : std::array<D3D12_GPU_DESCRIPTOR_HANDLE, 4>{},
                         runtimeState.terrain.shadowDebugCascade,
                         runtimeState.terrain.showShadowDebugView});

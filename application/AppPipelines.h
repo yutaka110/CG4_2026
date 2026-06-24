@@ -26,11 +26,16 @@ public:
     ID3D12RootSignature* GetSkeletonDebugRootSignature() const { return skeletonDebugRootSignature_.Get(); }
     ID3D12RootSignature* GetComputeRootSignature() const { return computeRootSignature_.Get(); }
     ID3D12RootSignature* GetSkinningComputeRootSignature() const { return skinningComputeRootSignature_.Get(); }
+    ID3D12RootSignature* GetTerrainHiZBuildRootSignature() const { return terrainHiZBuildRootSignature_.Get(); }
+    ID3D12RootSignature* GetTerrainDebrisCullRootSignature() const { return terrainDebrisCullRootSignature_.Get(); }
 
     ID3D12PipelineState* GetMainPSO() const { return mainPso_.Get(); }
     ID3D12PipelineState* GetTerrainPSO() const { return terrainPso_.Get(); }
     ID3D12PipelineState* GetTerrainWireframePSO() const { return terrainWireframePso_.Get(); }
     ID3D12PipelineState* GetTerrainShadowPSO() const { return terrainShadowPso_.Get(); }
+    ID3D12PipelineState* GetTerrainDebrisPSO() const { return terrainDebrisPso_.Get(); }
+    ID3D12PipelineState* GetTerrainDebrisShadowPSO() const { return terrainDebrisShadowPso_.Get(); }
+    ID3D12PipelineState* GetTerrainDebrisCullPSO() const { return terrainDebrisCullPso_.Get(); }
     ID3D12PipelineState* GetSkinnedPSO() const { return skinnedPso_.Get(); }
     ID3D12PipelineState* GetMainOpaquePSO() const { return mainOpaquePso_.Get(); }
     ID3D12PipelineState* GetMainAlphaPSO() const { return mainAlphaPso_.Get(); }
@@ -39,6 +44,7 @@ public:
 
     ID3D12PipelineState* GetComputePSO() const { return computePso_.Get(); }
     ID3D12PipelineState* GetSkinningComputePSO() const { return skinningComputePso_.Get(); }
+    ID3D12PipelineState* GetTerrainHiZBuildPSO() const { return terrainHiZBuildPso_.Get(); }
     ID3D12RootSignature* GetGpuParticleComputeRootSignature() const { return gpuParticleComputeRootSignature_.Get(); }
     ID3D12RootSignature* GetTrailMeshStreamComputeRootSignature() const { return trailMeshStreamComputeRootSignature_.Get(); }
     ID3D12RootSignature* GetTrailMeshBuildComputeRootSignature() const { return trailMeshBuildComputeRootSignature_.Get(); }
@@ -101,6 +107,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> skeletonDebugRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> computeRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> skinningComputeRootSignature_;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> terrainHiZBuildRootSignature_;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> terrainDebrisCullRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> gpuParticleComputeRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> trailMeshStreamComputeRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> trailMeshBuildComputeRootSignature_;
@@ -111,6 +119,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> terrainPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> terrainWireframePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> terrainShadowPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> terrainDebrisPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> terrainDebrisShadowPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> terrainDebrisCullPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> skinnedPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainOpaquePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainAlphaPso_;
@@ -119,6 +130,7 @@ private:
 
     Microsoft::WRL::ComPtr<ID3D12PipelineState> computePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> skinningComputePso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> terrainHiZBuildPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> gpuParticleComputePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> gpuParticleResetComputePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> gpuParticlePoolResetComputePso_;
@@ -172,6 +184,10 @@ private:
     Microsoft::WRL::ComPtr<IDxcBlob> ps_;
     Microsoft::WRL::ComPtr<IDxcBlob> terrainPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> terrainShadowVs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> terrainDebrisVs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> terrainDebrisShadowVs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> terrainHiZBuildCs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> terrainDebrisCullCs_;
     Microsoft::WRL::ComPtr<IDxcBlob> spriteVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> spritePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> skyboxVs_;
@@ -229,7 +245,11 @@ private:
     Microsoft::WRL::ComPtr<IDxcBlob> vignettePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> debugDepthPreviewPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> debugEmissivePreviewPs_;
+    std::unordered_map<std::wstring, std::filesystem::path> shaderResolvedPaths_;
     std::unordered_map<std::wstring, std::filesystem::file_time_type> shaderWriteTimes_;
+    uint32_t hotReloadPollFrame_ = 0;
+    bool shaderHotReloadConfigured_ = false;
+    bool shaderHotReloadEnabled_ = false;
 
     Microsoft::WRL::ComPtr<IDxcBlob> Compile_(const std::wstring& filePath, const wchar_t* profile);
     void TrackShader_(const std::wstring& filePath);

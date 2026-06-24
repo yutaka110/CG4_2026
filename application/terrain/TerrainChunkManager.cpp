@@ -1,6 +1,7 @@
 #include "TerrainChunkManager.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstring>
 #include <utility>
@@ -10,6 +11,10 @@
 #include "TerrainVolumeField.h"
 
 namespace {
+constexpr uint32_t kTerrainHiZMipCount = 5;
+constexpr uint32_t kTerrainHiZBaseWidth = 256;
+constexpr uint32_t kTerrainHiZBaseHeight = 144;
+
 struct TerrainCpuMesh {
     std::vector<VertexData> vertices;
     std::vector<uint32_t> indices;
@@ -128,6 +133,62 @@ Microsoft::WRL::ComPtr<ID3D12Resource> CreateUploadBuffer(
     return resource;
 }
 
+Microsoft::WRL::ComPtr<ID3D12Resource> CreateDefaultBuffer(
+    ID3D12Device* device,
+    size_t sizeInBytes,
+    D3D12_RESOURCE_FLAGS flags,
+    D3D12_RESOURCE_STATES initialState) {
+    if (device == nullptr || sizeInBytes == 0) {
+        return {};
+    }
+
+    D3D12_HEAP_PROPERTIES heapProps{};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    D3D12_RESOURCE_DESC resourceDesc{};
+    resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    resourceDesc.Width = (sizeInBytes + 0xFF) & ~static_cast<size_t>(0xFF);
+    resourceDesc.Height = 1;
+    resourceDesc.DepthOrArraySize = 1;
+    resourceDesc.MipLevels = 1;
+    resourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+    resourceDesc.SampleDesc.Count = 1;
+    resourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    resourceDesc.Flags = flags;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+    if (FAILED(device->CreateCommittedResource(
+            &heapProps,
+            D3D12_HEAP_FLAG_NONE,
+            &resourceDesc,
+            initialState,
+            nullptr,
+            IID_PPV_ARGS(&resource)))) {
+        return {};
+    }
+    return resource;
+}
+
+D3D12_RESOURCE_BARRIER MakeTransition(
+    ID3D12Resource* resource,
+    D3D12_RESOURCE_STATES before,
+    D3D12_RESOURCE_STATES after) {
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = resource;
+    barrier.Transition.StateBefore = before;
+    barrier.Transition.StateAfter = after;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    return barrier;
+}
+
+D3D12_RESOURCE_BARRIER MakeUavBarrier(ID3D12Resource* resource) {
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barrier.UAV.pResource = resource;
+    return barrier;
+}
+
 uint32_t SettingsHash(const TerrainGenerationSettings& settings) {
     uint32_t hash = Hash(settings.seed);
     auto mixFloat = [&](float value) {
@@ -150,20 +211,54 @@ uint32_t SettingsHash(const TerrainGenerationSettings& settings) {
     mixFloat(settings.sdfCarveScale);
     hash = Hash(hash ^ settings.surfaceLongitudinalSteps);
     hash = Hash(hash ^ settings.surfaceRadialSegments);
+    mixFloat(settings.lodNearDistance);
+    mixFloat(settings.lodFarDistance);
     mixFloat(settings.rockPillarDensity);
     mixFloat(settings.rockScatterDensity);
     mixFloat(settings.rockScatterScale);
     mixFloat(settings.rockEmbedStrength);
     mixFloat(settings.rockContactPebbleDensity);
+    mixFloat(settings.floorPebbleDensity);
     mixFloat(settings.rockClusterStrength);
     mixFloat(settings.rockRootShadowStrength);
     mixFloat(settings.rockMotherBlendStrength);
     mixFloat(settings.rockMaterialVariation);
     mixFloat(settings.motherRockErosionStrength);
     mixFloat(settings.largeScaleErosionStrength);
+    mixFloat(settings.surfaceBreakupDensity);
     mixFloat(settings.archDensity);
     mixFloat(settings.dustZoneDensity);
     return hash;
+}
+
+uint32_t TerrainLodTierForDistance(float distanceFromFocus, const TerrainGenerationSettings& settings) {
+    const float nearDistance = (std::max)(settings.lodNearDistance, settings.chunkLength);
+    const float farDistance = (std::max)(settings.lodFarDistance, nearDistance + settings.chunkLength);
+    if (distanceFromFocus <= nearDistance) {
+        return 0u;
+    }
+    if (distanceFromFocus <= farDistance) {
+        return 1u;
+    }
+    return 2u;
+}
+
+float TerrainLodDensityScale(uint32_t lodTier) {
+    if (lodTier == 0u) {
+        return 1.0f;
+    }
+    if (lodTier == 1u) {
+        return 0.55f;
+    }
+    return 0.18f;
+}
+
+uint32_t ScaleCountByLod(uint32_t count, uint32_t lodTier) {
+    if (lodTier == 0u || count == 0u) {
+        return count;
+    }
+    const float scaled = static_cast<float>(count) * TerrainLodDensityScale(lodTier);
+    return (std::max)(1u, static_cast<uint32_t>(std::floor(scaled + 0.25f)));
 }
 
 std::vector<RockScatterPlacement> BuildRockScatterPlacements(
@@ -276,6 +371,57 @@ uint32_t PushVertex(
     vertex.normal = NormalizeOr(normal, {0.0f, 1.0f, 0.0f});
     mesh.vertices.push_back(vertex);
     return static_cast<uint32_t>(mesh.vertices.size() - 1);
+}
+
+TerrainCpuMesh BuildDebrisBaseMesh() {
+    TerrainCpuMesh mesh{};
+    constexpr uint32_t kLatSegments = 7;
+    constexpr uint32_t kLonSegments = 10;
+    uint32_t vertices[kLatSegments + 1][kLonSegments] = {};
+
+    mesh.vertices.reserve((kLatSegments + 1) * kLonSegments);
+    mesh.indices.reserve(kLatSegments * kLonSegments * 6);
+
+    for (uint32_t lat = 0; lat <= kLatSegments; ++lat) {
+        const float v = static_cast<float>(lat) / static_cast<float>(kLatSegments);
+        const float phi = 3.14159265359f * v;
+        const float y = std::cos(phi);
+        const float ring = std::sin(phi);
+        const float squash = 0.56f + 0.18f * std::sin(phi);
+        for (uint32_t lon = 0; lon < kLonSegments; ++lon) {
+            const float u = static_cast<float>(lon) / static_cast<float>(kLonSegments);
+            const float angle = 6.28318530718f * u;
+            const float sideWarp = 1.0f + 0.12f * std::sin(angle * 3.0f + phi * 1.7f);
+            const Vector3 position{
+                std::cos(angle) * ring * sideWarp,
+                y * squash,
+                std::sin(angle) * ring * (1.0f - 0.08f * std::cos(phi * 2.0f)),
+            };
+            vertices[lat][lon] = PushVertex(
+                mesh,
+                position,
+                NormalizeOr(position, {0.0f, 1.0f, 0.0f}),
+                {u, v});
+        }
+    }
+
+    for (uint32_t lat = 0; lat < kLatSegments; ++lat) {
+        for (uint32_t lon = 0; lon < kLonSegments; ++lon) {
+            const uint32_t next = (lon + 1u) % kLonSegments;
+            PushTriangleTwoSided(
+                mesh.indices,
+                vertices[lat][lon],
+                vertices[lat + 1u][lon],
+                vertices[lat][next]);
+            PushTriangleTwoSided(
+                mesh.indices,
+                vertices[lat][next],
+                vertices[lat + 1u][lon],
+                vertices[lat + 1u][next]);
+        }
+    }
+
+    return mesh;
 }
 
 void AppendQuadTwoSided(
@@ -1943,6 +2089,7 @@ void AppendOneSidedCliffOverhang(
         (0.30f + Hash01(seed + 31u) * 0.20f) *
         (0.82f + (std::clamp)(settings.rockMotherBlendStrength, 0.0f, 1.5f) * 0.18f);
     const float erosion = (std::clamp)(settings.largeScaleErosionStrength, 0.0f, 1.5f);
+    const float breakup = (std::clamp)(settings.surfaceBreakupDensity, 0.0f, 1.5f);
 
     uint32_t underside[kRows][kSegments + 1u]{};
     for (uint32_t row = 0; row < kRows; ++row) {
@@ -1961,8 +2108,8 @@ void AppendOneSidedCliffOverhang(
             const float vertical =
                 ceilingY -
                 thickness * (0.10f + protrudeT * 0.42f) -
-                thickness * erosion * (0.10f + (std::max)(0.0f, chipNoise) * 0.18f) +
-                ridgeNoise * thickness * 0.22f;
+                thickness * erosion * (0.10f + (std::max)(0.0f, chipNoise) * (0.18f + breakup * 0.07f)) +
+                ridgeNoise * thickness * (0.22f + breakup * 0.09f);
             const Vector3 position = Add(
                 sample.position,
                 Add(
@@ -1998,9 +2145,11 @@ void AppendOneSidedCliffOverhang(
         }
     }
 
-    for (uint32_t pocket = 0; pocket < 4u; ++pocket) {
+    const uint32_t pocketCount = 4u + static_cast<uint32_t>(breakup * 2.0f + Hash01(seed + 1187u) * breakup);
+    for (uint32_t pocket = 0; pocket < pocketCount; ++pocket) {
         const uint32_t pocketSeed = seed + 1201u + pocket * 173u;
-        const float alongOffset = (-0.72f + static_cast<float>(pocket) * 0.48f + (Hash01(pocketSeed + 7u) - 0.5f) * 0.18f) * length;
+        const float pocketT = (static_cast<float>(pocket) + 0.5f) / static_cast<float>((std::max)(pocketCount, 1u));
+        const float alongOffset = (-0.84f + pocketT * 1.68f + (Hash01(pocketSeed + 7u) - 0.5f) * 0.24f) * length;
         const float heightOffset =
             floorY + settings.wallHeight * (0.34f + Hash01(pocketSeed + 11u) * 0.42f);
         const Vector3 surface = Add(
@@ -2008,9 +2157,9 @@ void AppendOneSidedCliffOverhang(
             Add(
                 Scale(along, alongOffset),
                 Add(Scale(wallOut, wallLateral - settings.corridorRadius * 0.05f), Scale(up, heightOffset))));
-        const float pocketA = settings.corridorRadius * (0.18f + Hash01(pocketSeed + 17u) * 0.18f);
-        const float pocketB = settings.corridorRadius * (0.16f + Hash01(pocketSeed + 19u) * 0.20f);
-        const float pocketDepth = settings.corridorRadius * (0.12f + Hash01(pocketSeed + 23u) * 0.12f);
+        const float pocketA = settings.corridorRadius * (0.16f + Hash01(pocketSeed + 17u) * (0.16f + breakup * 0.06f));
+        const float pocketB = settings.corridorRadius * (0.14f + Hash01(pocketSeed + 19u) * (0.18f + breakup * 0.05f));
+        const float pocketDepth = settings.corridorRadius * (0.11f + Hash01(pocketSeed + 23u) * (0.12f + breakup * 0.05f));
         AppendArchErosionPocket(
             mesh,
             surface,
@@ -2022,7 +2171,7 @@ void AppendOneSidedCliffOverhang(
             pocketDepth,
             pocketSeed + 31u,
             8.8f + static_cast<float>(pocket) * 0.17f,
-            settings.motherRockErosionStrength * (0.82f + Hash01(pocketSeed + 29u) * 0.32f),
+            settings.motherRockErosionStrength * (0.86f + breakup * 0.22f + Hash01(pocketSeed + 29u) * 0.32f),
             0.36f + Hash01(pocketSeed + 37u) * 0.12f);
     }
 
@@ -2071,13 +2220,135 @@ void AppendOneSidedCliffOverhang(
     }
 }
 
+void AppendFloorPebbleField(
+    TerrainCpuMesh& mesh,
+    const TerrainChunkDebugInfo& chunk,
+    const TerrainGenerationSettings& settings) {
+    uint32_t lastGroupKey = 0xffffffffu;
+    for (const TerrainDebrisInstance& debris : chunk.debrisInstances) {
+        if (debris.groupKey != lastGroupKey) {
+            lastGroupKey = debris.groupKey;
+            const float density = (std::clamp)(settings.floorPebbleDensity, 0.0f, 1.5f);
+            const float variation = RockVariationFromSeed(debris.groupKey, settings);
+            const float shadowScale = debris.groupKey == 0u ? 0.0f : 1.0f;
+            if (shadowScale > 0.0f) {
+                AppendRootShadowPatch(
+                    mesh,
+                    debris.position,
+                    debris.tangent,
+                    debris.right,
+                    debris.up,
+                    debris.shadowRadiusA,
+                    debris.shadowRadiusB,
+                    debris.groupKey + 37u,
+                    10.8f + static_cast<float>(debris.groupKey & 0xffu) * 0.07f,
+                    settings.rockRootShadowStrength * (0.26f + density * 0.10f),
+                    variation);
+            }
+        }
+
+        AppendIrregularRockAsset(
+            mesh,
+            Add(debris.position, Scale(debris.up, debris.radiusN * 0.14f)),
+            debris.tangent,
+            debris.right,
+            debris.up,
+            debris.radiusA,
+            debris.radiusB,
+            debris.radiusN,
+            debris.seed,
+            debris.uvOffset,
+            debris.contactAo,
+            debris.variation);
+    }
+}
+
+std::vector<TerrainDebrisInstance> BuildFloorDebrisInstances(
+    const TerrainChunkDebugInfo& chunk,
+    const RailPath& railPath,
+    const TerrainGenerationSettings& settings) {
+    std::vector<TerrainDebrisInstance> instances;
+    const float density = (std::clamp)(settings.floorPebbleDensity, 0.0f, 1.5f) *
+        TerrainLodDensityScale(chunk.lodTier);
+    if (density <= 0.001f) {
+        return instances;
+    }
+
+    const float floorY = -settings.corridorRadius * 0.82f;
+    const float baseScale = (std::max)(settings.rockScatterScale, 0.35f);
+    const uint32_t pebbleGroups = static_cast<uint32_t>(
+        density * (4.0f + settings.rockScatterDensity * 3.2f + settings.rockPillarDensity * 1.6f));
+    instances.reserve(static_cast<size_t>(pebbleGroups) * 5u);
+
+    for (uint32_t group = 0; group < pebbleGroups; ++group) {
+        const uint32_t groupSeed = chunk.seed + 5407u + group * 251u;
+        const float t =
+            (static_cast<float>(group) + 0.25f + Hash01(groupSeed + 3u) * 0.50f) /
+            static_cast<float>((std::max)(pebbleGroups, 1u));
+        const RailPathSample sample = railPath.Evaluate(
+            chunk.startDistance + (chunk.endDistance - chunk.startDistance) * std::clamp(t, 0.0f, 1.0f));
+        const float sideSign = Hash01(groupSeed + 7u) < 0.5f ? -1.0f : 1.0f;
+        const bool wallBiased = Hash01(groupSeed + 11u) < 0.80f;
+        const float lateral =
+            wallBiased
+                ? sideSign * settings.corridorRadius * (0.70f + Hash01(groupSeed + 13u) * 1.00f)
+                : (Hash01(groupSeed + 17u) - 0.5f) * settings.corridorRadius * 0.82f;
+        const float forward = (Hash01(groupSeed + 19u) - 0.5f) * settings.chunkLength * 0.18f;
+        const Vector3 patchCenter = Add(
+            sample.position,
+            Add(
+                Scale(sample.tangent, forward),
+                Add(Scale(sample.right, lateral), Scale(sample.up, floorY + settings.corridorRadius * 0.018f))));
+
+        const float groupRadiusA = settings.corridorRadius * (0.11f + Hash01(groupSeed + 23u) * 0.18f);
+        const float groupRadiusB = settings.corridorRadius * (0.065f + Hash01(groupSeed + 29u) * 0.13f);
+        const uint32_t pebbleCount =
+            2u +
+            static_cast<uint32_t>(density * (2.5f + Hash01(groupSeed + 41u) * 3.0f));
+        for (uint32_t pebble = 0; pebble < pebbleCount; ++pebble) {
+            const uint32_t pebbleSeed = groupSeed + 4001u + pebble * 83u;
+            const float angle = 6.28318530718f * Hash01(pebbleSeed + 5u);
+            const float ring = std::sqrt(Hash01(pebbleSeed + 7u));
+            const Vector3 center = Add(
+                patchCenter,
+                Add(
+                    Scale(sample.tangent, std::cos(angle) * groupRadiusA * ring),
+                    Scale(sample.right, std::sin(angle) * groupRadiusB * ring)));
+            TerrainDebrisInstance instance{};
+            instance.position = center;
+            instance.tangent = sample.tangent;
+            instance.right = sample.right;
+            instance.up = sample.up;
+            instance.radiusA = settings.corridorRadius * baseScale * (0.012f + Hash01(pebbleSeed + 11u) * 0.030f);
+            instance.radiusB = settings.corridorRadius * baseScale * (0.010f + Hash01(pebbleSeed + 13u) * 0.024f);
+            instance.radiusN = settings.corridorRadius * baseScale * (0.008f + Hash01(pebbleSeed + 17u) * 0.020f);
+            instance.shadowRadiusA = groupRadiusA * 0.42f;
+            instance.shadowRadiusB = groupRadiusB * 0.34f;
+            instance.seed = pebbleSeed + 31u;
+            instance.groupKey = groupSeed;
+            instance.uvOffset = 11.4f + static_cast<float>(group) * 0.09f + static_cast<float>(pebble) * 0.017f;
+            instance.contactAo = 0.50f + settings.rockRootShadowStrength * 0.12f;
+            instance.variation = RockVariationFromSeed(pebbleSeed, settings);
+            instances.push_back(instance);
+        }
+    }
+    return instances;
+}
+
 TerrainCpuMesh BuildChunkMesh(
     const TerrainChunkDebugInfo& chunk,
     const RailPath& railPath,
     const TerrainGenerationSettings& settings) {
     TerrainCpuMesh mesh{};
-    const uint32_t longitudinalSteps = (std::clamp)(settings.surfaceLongitudinalSteps, 12u, 64u);
-    const uint32_t radialSegments = (std::clamp)(settings.surfaceRadialSegments, 16u, 96u);
+    const uint32_t lodDivisor = chunk.lodTier == 0u ? 1u : (chunk.lodTier == 1u ? 2u : 3u);
+    const uint32_t longitudinalSteps = (std::clamp)(
+        settings.surfaceLongitudinalSteps / lodDivisor,
+        12u,
+        64u);
+    const uint32_t radialSegments = (std::clamp)(
+        settings.surfaceRadialSegments / lodDivisor,
+        16u,
+        96u);
     TerrainVolumeField volumeField(railPath, settings);
 
     mesh.vertices.reserve(
@@ -2103,7 +2374,9 @@ TerrainCpuMesh BuildChunkMesh(
     }
     PushGridIndices(mesh.indices, volumeBase, longitudinalSteps + 1, radialSegments + 1, true);
 
-    const uint32_t pillarCount = static_cast<uint32_t>(settings.rockPillarDensity * 5.0f);
+    const uint32_t pillarCount = ScaleCountByLod(
+        static_cast<uint32_t>(settings.rockPillarDensity * 5.0f),
+        chunk.lodTier);
     for (uint32_t i = 0; i < pillarCount; ++i) {
         const uint32_t seed = chunk.seed + 1009u + i * 131u;
         const float t = (static_cast<float>(i) + 0.35f + Hash01(seed + 3u) * 0.5f) /
@@ -2114,10 +2387,11 @@ TerrainCpuMesh BuildChunkMesh(
         AppendRockPillar(mesh, sample, settings, seed, side, t);
     }
 
-    const uint32_t outcropCount =
+    const uint32_t outcropCount = ScaleCountByLod(
         2u +
         static_cast<uint32_t>(settings.rockPillarDensity * 5.0f) +
-        static_cast<uint32_t>(settings.volumeRoughness * 4.0f);
+        static_cast<uint32_t>(settings.volumeRoughness * 4.0f),
+        chunk.lodTier);
     for (uint32_t i = 0; i < outcropCount; ++i) {
         const uint32_t seed = chunk.seed + 1601u + i * 149u;
         const float t = (static_cast<float>(i) + Hash01(seed + 5u)) /
@@ -2131,7 +2405,12 @@ TerrainCpuMesh BuildChunkMesh(
 
     const std::vector<RockScatterPlacement> scatterPlacements =
         BuildRockScatterPlacements(chunk.startDistance, chunk.endDistance, chunk.seed, settings);
-    for (const RockScatterPlacement& placement : scatterPlacements) {
+    const uint32_t scatterStride = chunk.lodTier == 0u ? 1u : (chunk.lodTier == 1u ? 2u : 4u);
+    for (size_t placementIndex = 0; placementIndex < scatterPlacements.size(); ++placementIndex) {
+        if ((placementIndex % scatterStride) != 0u) {
+            continue;
+        }
+        const RockScatterPlacement& placement = scatterPlacements[placementIndex];
         AppendRockScatterAsset(
             mesh,
             volumeField,
@@ -2144,7 +2423,8 @@ TerrainCpuMesh BuildChunkMesh(
             placement.distanceT);
     }
 
-    const uint32_t overhangFeatureCount = Hash01(chunk.seed + 701u) < settings.archDensity ? 1u : 0u;
+    const uint32_t overhangFeatureCount =
+        chunk.lodTier <= 1u && Hash01(chunk.seed + 701u) < settings.archDensity ? 1u : 0u;
     for (uint32_t i = 0; i < overhangFeatureCount; ++i) {
         const uint32_t seed = chunk.seed + 2003u + i * 173u;
         const float t = 0.28f + Hash01(seed + 9u) * 0.44f;
@@ -2212,6 +2492,265 @@ void UploadMeshToChunk(
     }
 }
 
+std::vector<TerrainDebrisInstanceGpu> BuildDebrisGpuInstances(
+    const TerrainChunkDebugInfo& debugChunk) {
+    std::vector<TerrainDebrisInstanceGpu> gpuInstances;
+    gpuInstances.reserve(debugChunk.debrisInstances.size());
+
+    const float lodScale =
+        debugChunk.lodTier == 0u ? 1.0f : (debugChunk.lodTier == 1u ? 0.92f : 0.78f);
+    const float contactScale =
+        debugChunk.lodTier == 0u ? 1.0f : (debugChunk.lodTier == 1u ? 0.74f : 0.48f);
+
+    for (const TerrainDebrisInstance& debris : debugChunk.debrisInstances) {
+        TerrainDebrisInstanceGpu gpu{};
+        gpu.positionLod = {
+            debris.position.x,
+            debris.position.y + debris.radiusN * (0.10f + 0.06f * lodScale),
+            debris.position.z,
+            static_cast<float>(debugChunk.lodTier),
+        };
+        gpu.tangentRadiusA = {
+            debris.tangent.x,
+            debris.tangent.y,
+            debris.tangent.z,
+            debris.radiusA * lodScale,
+        };
+        gpu.rightRadiusB = {
+            debris.right.x,
+            debris.right.y,
+            debris.right.z,
+            debris.radiusB * lodScale,
+        };
+        gpu.upRadiusN = {
+            debris.up.x,
+            debris.up.y,
+            debris.up.z,
+            debris.radiusN * (0.82f + lodScale * 0.18f),
+        };
+        gpu.attributes = {
+            (std::clamp)(debris.contactAo * contactScale, 0.0f, 1.0f),
+            (std::clamp)(debris.variation, 0.0f, 1.0f),
+            debris.uvOffset,
+            static_cast<float>(Hash(debris.seed) & 0x00ffffffu) / static_cast<float>(0x01000000u),
+        };
+        gpuInstances.push_back(gpu);
+    }
+
+    return gpuInstances;
+}
+
+void UploadDebrisInstancesToChunk(
+    ID3D12Device* device,
+    ge3::core::DescriptorHeap* srvHeap,
+    TerrainRenderChunk& chunk,
+    const TerrainChunkDebugInfo& debugChunk) {
+    if (device == nullptr || debugChunk.debrisInstances.empty()) {
+        return;
+    }
+
+    const TerrainCpuMesh debrisMesh = BuildDebrisBaseMesh();
+    const std::vector<TerrainDebrisInstanceGpu> gpuInstances = BuildDebrisGpuInstances(debugChunk);
+    if (debrisMesh.vertices.empty() || debrisMesh.indices.empty() || gpuInstances.empty()) {
+        return;
+    }
+
+    chunk.debrisVertexCount = static_cast<uint32_t>(debrisMesh.vertices.size());
+    chunk.debrisIndexCount = static_cast<uint32_t>(debrisMesh.indices.size());
+    chunk.debrisInstanceCount = static_cast<uint32_t>(gpuInstances.size());
+    chunk.debrisInstanceCapacityPerBucket = chunk.debrisInstanceCount;
+    chunk.debrisVertexResource = CreateUploadBuffer(device, sizeof(VertexData) * debrisMesh.vertices.size());
+    chunk.debrisIndexResource = CreateUploadBuffer(device, sizeof(uint32_t) * debrisMesh.indices.size());
+    chunk.debrisInstanceResource = CreateUploadBuffer(device, sizeof(TerrainDebrisInstanceGpu) * gpuInstances.size());
+    chunk.debrisVisibleInstanceResource = CreateDefaultBuffer(
+        device,
+        sizeof(TerrainDebrisInstanceGpu) *
+            gpuInstances.size() *
+            TerrainRenderChunk::kDebrisLodBucketCount,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    chunk.debrisIndirectArgsResource = CreateDefaultBuffer(
+        device,
+        sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) *
+            TerrainRenderChunk::kDebrisLodBucketCount,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    chunk.debrisVisibleInstanceState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    chunk.debrisIndirectArgsState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    if (chunk.debrisVertexResource == nullptr ||
+        chunk.debrisIndexResource == nullptr ||
+        chunk.debrisInstanceResource == nullptr ||
+        chunk.debrisVisibleInstanceResource == nullptr ||
+        chunk.debrisIndirectArgsResource == nullptr) {
+        chunk.debrisVertexCount = 0;
+        chunk.debrisIndexCount = 0;
+        chunk.debrisInstanceCount = 0;
+        chunk.debrisInstanceCapacityPerBucket = 0;
+        return;
+    }
+
+    VertexData* mappedVertices = nullptr;
+    uint32_t* mappedIndices = nullptr;
+    TerrainDebrisInstanceGpu* mappedInstances = nullptr;
+    chunk.debrisVertexResource->Map(0, nullptr, reinterpret_cast<void**>(&mappedVertices));
+    chunk.debrisIndexResource->Map(0, nullptr, reinterpret_cast<void**>(&mappedIndices));
+    chunk.debrisInstanceResource->Map(0, nullptr, reinterpret_cast<void**>(&mappedInstances));
+    if (mappedVertices != nullptr) {
+        std::memcpy(mappedVertices, debrisMesh.vertices.data(), sizeof(VertexData) * debrisMesh.vertices.size());
+    }
+    if (mappedIndices != nullptr) {
+        std::memcpy(mappedIndices, debrisMesh.indices.data(), sizeof(uint32_t) * debrisMesh.indices.size());
+    }
+    if (mappedInstances != nullptr) {
+        std::memcpy(
+            mappedInstances,
+            gpuInstances.data(),
+            sizeof(TerrainDebrisInstanceGpu) * gpuInstances.size());
+    }
+
+    chunk.debrisVbv.BufferLocation = chunk.debrisVertexResource->GetGPUVirtualAddress();
+    chunk.debrisVbv.SizeInBytes = UINT(sizeof(VertexData) * debrisMesh.vertices.size());
+    chunk.debrisVbv.StrideInBytes = sizeof(VertexData);
+    chunk.debrisInstanceVbv.BufferLocation = chunk.debrisInstanceResource->GetGPUVirtualAddress();
+    chunk.debrisInstanceVbv.SizeInBytes = UINT(sizeof(TerrainDebrisInstanceGpu) * gpuInstances.size());
+    chunk.debrisInstanceVbv.StrideInBytes = sizeof(TerrainDebrisInstanceGpu);
+    chunk.debrisVisibleInstanceVbv.BufferLocation =
+        chunk.debrisVisibleInstanceResource->GetGPUVirtualAddress();
+    chunk.debrisVisibleInstanceVbv.SizeInBytes =
+        UINT(sizeof(TerrainDebrisInstanceGpu) *
+            gpuInstances.size() *
+            TerrainRenderChunk::kDebrisLodBucketCount);
+    chunk.debrisVisibleInstanceVbv.StrideInBytes = sizeof(TerrainDebrisInstanceGpu);
+    chunk.debrisIbv.BufferLocation = chunk.debrisIndexResource->GetGPUVirtualAddress();
+    chunk.debrisIbv.SizeInBytes = UINT(sizeof(uint32_t) * debrisMesh.indices.size());
+    chunk.debrisIbv.Format = DXGI_FORMAT_R32_UINT;
+
+    Vector3 boundsMin{FLT_MAX, FLT_MAX, FLT_MAX};
+    Vector3 boundsMax{-FLT_MAX, -FLT_MAX, -FLT_MAX};
+    for (const TerrainDebrisInstance& debris : debugChunk.debrisInstances) {
+        const float extent = (std::max)({debris.radiusA, debris.radiusB, debris.radiusN}) * 1.35f;
+        boundsMin.x = (std::min)(boundsMin.x, debris.position.x - extent);
+        boundsMin.y = (std::min)(boundsMin.y, debris.position.y - extent);
+        boundsMin.z = (std::min)(boundsMin.z, debris.position.z - extent);
+        boundsMax.x = (std::max)(boundsMax.x, debris.position.x + extent);
+        boundsMax.y = (std::max)(boundsMax.y, debris.position.y + extent);
+        boundsMax.z = (std::max)(boundsMax.z, debris.position.z + extent);
+    }
+    chunk.debrisBoundsCenter = Scale(Add(boundsMin, boundsMax), 0.5f);
+    chunk.debrisBoundsRadius = Length(Subtract(boundsMax, chunk.debrisBoundsCenter));
+
+    if (srvHeap != nullptr) {
+        chunk.debrisInstanceSrv = srvHeap->Allocate();
+        if (chunk.debrisInstanceSrv.IsValid()) {
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+            srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Buffer.NumElements = chunk.debrisInstanceCount;
+            srvDesc.Buffer.StructureByteStride = sizeof(TerrainDebrisInstanceGpu);
+            srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+            device->CreateShaderResourceView(
+                chunk.debrisInstanceResource.Get(),
+                &srvDesc,
+                chunk.debrisInstanceSrv.cpu);
+        }
+
+        chunk.debrisVisibleInstanceUav = srvHeap->Allocate();
+        if (chunk.debrisVisibleInstanceUav.IsValid()) {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC visibleUavDesc{};
+            visibleUavDesc.Format = DXGI_FORMAT_UNKNOWN;
+            visibleUavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            visibleUavDesc.Buffer.NumElements =
+                chunk.debrisInstanceCount * TerrainRenderChunk::kDebrisLodBucketCount;
+            visibleUavDesc.Buffer.StructureByteStride = sizeof(TerrainDebrisInstanceGpu);
+            visibleUavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+            device->CreateUnorderedAccessView(
+                chunk.debrisVisibleInstanceResource.Get(),
+                nullptr,
+                &visibleUavDesc,
+                chunk.debrisVisibleInstanceUav.cpu);
+        }
+
+        chunk.debrisIndirectArgsUav = srvHeap->Allocate();
+        if (chunk.debrisIndirectArgsUav.IsValid()) {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+            uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+            uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            uavDesc.Buffer.NumElements = TerrainRenderChunk::kDebrisLodBucketCount;
+            uavDesc.Buffer.StructureByteStride = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+            uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+            device->CreateUnorderedAccessView(
+                chunk.debrisIndirectArgsResource.Get(),
+                nullptr,
+                &uavDesc,
+                chunk.debrisIndirectArgsUav.cpu);
+        }
+    }
+}
+
+void EnsureDebrisCommandSignature(
+    ID3D12Device* device,
+    Microsoft::WRL::ComPtr<ID3D12CommandSignature>& commandSignature) {
+    if (device == nullptr || commandSignature != nullptr) {
+        return;
+    }
+
+    D3D12_INDIRECT_ARGUMENT_DESC argumentDesc{};
+    argumentDesc.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
+
+    D3D12_COMMAND_SIGNATURE_DESC signatureDesc{};
+    signatureDesc.ByteStride = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+    signatureDesc.NumArgumentDescs = 1;
+    signatureDesc.pArgumentDescs = &argumentDesc;
+    device->CreateCommandSignature(
+        &signatureDesc,
+        nullptr,
+        IID_PPV_ARGS(&commandSignature));
+}
+
+Microsoft::WRL::ComPtr<ID3D12Resource> CreateHiZTexture(
+    ID3D12Device* device,
+    uint32_t width,
+    uint32_t height) {
+    if (device == nullptr || width == 0 || height == 0) {
+        return {};
+    }
+
+    D3D12_HEAP_PROPERTIES heapProps{};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = width;
+    desc.Height = height;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_R32_FLOAT;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+    if (FAILED(device->CreateCommittedResource(
+            &heapProps,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            nullptr,
+            IID_PPV_ARGS(&resource)))) {
+        return {};
+    }
+    return resource;
+}
+
+uint32_t HiZLevelWidth(uint32_t level) {
+    return (std::max)(1u, kTerrainHiZBaseWidth >> level);
+}
+
+uint32_t HiZLevelHeight(uint32_t level) {
+    return (std::max)(1u, kTerrainHiZBaseHeight >> level);
+}
+
 void AppendVolumeDebugDraw(
     ge3::debug::DebugDrawSystem& debugDraw,
     const RailPath& railPath,
@@ -2265,13 +2804,17 @@ void AppendVolumeDebugDraw(
 
 void TerrainChunkManager::Update(
     ID3D12Device* device,
+    ge3::core::DescriptorHeap* srvHeap,
     const RailPath& railPath,
     const TerrainGenerationSettings& settings,
     float focusDistance,
     const Matrix4x4& viewProjection) {
-    chunks_.clear();
     if (railPath.Length() <= 0.0f || settings.chunkLength <= 0.0f) {
         renderChunks_.clear();
+        chunks_.clear();
+        cachedFirstChunkIndex_ = -1;
+        cachedLastChunkIndex_ = -1;
+        cachedFocusBucket_ = -1;
         return;
     }
 
@@ -2283,6 +2826,22 @@ void TerrainChunkManager::Update(
     const int32_t lastIndex = (std::min)(
         maxChunkIndex,
         focusIndex + static_cast<int32_t>(settings.visibleAheadChunks));
+
+    const uint32_t settingsHash = SettingsHash(settings);
+    const float focusBucketLength = (std::max)(4.0f, settings.chunkLength * 0.125f);
+    const int32_t focusBucket = static_cast<int32_t>(std::floor(focusDistance / focusBucketLength));
+    if (settingsHash == chunkCacheSettingsHash_ &&
+        firstIndex == cachedFirstChunkIndex_ &&
+        lastIndex == cachedLastChunkIndex_ &&
+        focusBucket == cachedFocusBucket_ &&
+        !chunks_.empty() &&
+        HasMatchingRenderChunks()) {
+        EnsureHiZResources(device, srvHeap);
+        UpdateChunkTransforms(viewProjection);
+        return;
+    }
+
+    chunks_.clear();
     chunks_.reserve(static_cast<size_t>((std::max)(0, lastIndex - firstIndex + 1)));
     TerrainVolumeField volumeField(railPath, settings);
 
@@ -2293,6 +2852,8 @@ void TerrainChunkManager::Update(
         chunk.startDistance = startDistance;
         chunk.endDistance = endDistance;
         chunk.seed = Hash(settings.seed ^ static_cast<uint32_t>(chunkIndex * 747796405));
+        const float chunkMid = (startDistance + endDistance) * 0.5f;
+        chunk.lodTier = TerrainLodTierForDistance(std::abs(chunkMid - focusDistance), settings);
 
         const uint32_t candidateCount =
             1u + static_cast<uint32_t>(settings.rockPillarDensity * 4.0f) +
@@ -2327,6 +2888,8 @@ void TerrainChunkManager::Update(
             chunk.rockScatter.push_back(scatter);
         }
 
+        chunk.debrisInstances = BuildFloorDebrisInstances(chunk, railPath, settings);
+
         const uint32_t dustZoneCount =
             Hash01(chunk.seed + 503u) < settings.dustZoneDensity ? 1u : 0u;
         for (uint32_t i = 0; i < dustZoneCount; ++i) {
@@ -2349,11 +2912,15 @@ void TerrainChunkManager::Update(
         chunks_.push_back(std::move(chunk));
     }
 
-    const uint32_t settingsHash = SettingsHash(settings);
+    chunkCacheSettingsHash_ = settingsHash;
+    cachedFirstChunkIndex_ = firstIndex;
+    cachedLastChunkIndex_ = lastIndex;
+    cachedFocusBucket_ = focusBucket;
     if (settingsHash != renderSettingsHash_ || !HasMatchingRenderChunks()) {
         renderSettingsHash_ = settingsHash;
-        RebuildRenderChunks(device, railPath, settings);
+        RebuildRenderChunks(device, srvHeap, railPath, settings);
     }
+    EnsureHiZResources(device, srvHeap);
     UpdateChunkTransforms(viewProjection);
 }
 
@@ -2427,6 +2994,12 @@ void TerrainChunkManager::AppendDebugDraw(
                 debugDraw.AddPoint(scatter.position, (std::max)(0.35f, scatter.radius * 0.24f), color);
                 debugDraw.AddLine(scatter.position, Add(scatter.position, Scale(scatter.normal, scatter.radius)), color);
             }
+            for (const TerrainDebrisInstance& debris : chunk.debrisInstances) {
+                debugDraw.AddPoint(
+                    debris.position,
+                    (std::max)(0.12f, debris.radiusA * 0.55f),
+                    scatterDebrisColor);
+            }
         }
 
         if (authoring.showVfxZones) {
@@ -2441,12 +3014,14 @@ void TerrainChunkManager::AppendDebugDraw(
 
 void TerrainChunkManager::RebuildRenderChunks(
     ID3D12Device* device,
+    ge3::core::DescriptorHeap* srvHeap,
     const RailPath& railPath,
     const TerrainGenerationSettings& settings) {
     renderChunks_.clear();
     if (device == nullptr) {
         return;
     }
+    EnsureDebrisCommandSignature(device, debrisDrawCommandSignature_);
 
     renderChunks_.reserve(chunks_.size());
     for (const TerrainChunkDebugInfo& debugChunk : chunks_) {
@@ -2454,10 +3029,384 @@ void TerrainChunkManager::RebuildRenderChunks(
         renderChunk.startDistance = debugChunk.startDistance;
         renderChunk.endDistance = debugChunk.endDistance;
         renderChunk.seed = debugChunk.seed;
+        renderChunk.lodTier = debugChunk.lodTier;
         const TerrainCpuMesh mesh = BuildChunkMesh(debugChunk, railPath, settings);
         UploadMeshToChunk(device, renderChunk, mesh);
+        UploadDebrisInstancesToChunk(device, srvHeap, renderChunk, debugChunk);
         if (renderChunk.indexCount > 0) {
             renderChunks_.push_back(std::move(renderChunk));
+        }
+    }
+}
+
+bool TerrainChunkManager::EnsureHiZResources(
+    ID3D12Device* device,
+    ge3::core::DescriptorHeap* srvHeap) {
+    if (hiZResourcesReady_) {
+        return true;
+    }
+    if (device == nullptr || srvHeap == nullptr) {
+        return false;
+    }
+
+    for (uint32_t level = 0; level < kHiZMipCount; ++level) {
+        const uint32_t width = HiZLevelWidth(level);
+        const uint32_t height = HiZLevelHeight(level);
+        hiZResources_[level] = CreateHiZTexture(device, width, height);
+        hiZStates_[level] = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        if (hiZResources_[level] == nullptr) {
+            hiZResourcesReady_ = false;
+            return false;
+        }
+
+        hiZSrvs_[level] = srvHeap->Allocate();
+        hiZUavs_[level] = srvHeap->Allocate();
+        if (!hiZSrvs_[level].IsValid() || !hiZUavs_[level].IsValid()) {
+            hiZResourcesReady_ = false;
+            return false;
+        }
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+        device->CreateShaderResourceView(
+            hiZResources_[level].Get(),
+            &srvDesc,
+            hiZSrvs_[level].cpu);
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format = DXGI_FORMAT_R32_FLOAT;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        device->CreateUnorderedAccessView(
+            hiZResources_[level].Get(),
+            nullptr,
+            &uavDesc,
+            hiZUavs_[level].cpu);
+    }
+
+    hiZResourcesReady_ = true;
+    return true;
+}
+
+bool TerrainChunkManager::BuildHiZPyramid(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12Resource* sceneDepthResource,
+    D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrv,
+    ID3D12RootSignature* rootSignature,
+    ID3D12PipelineState* pipelineState) {
+    if (commandList == nullptr ||
+        sceneDepthResource == nullptr ||
+        sceneDepthSrv.ptr == 0 ||
+        rootSignature == nullptr ||
+        pipelineState == nullptr ||
+        !hiZResourcesReady_) {
+        return false;
+    }
+
+    commandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr);
+
+    const D3D12_RESOURCE_BARRIER depthToSrv = MakeTransition(
+        sceneDepthResource,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    commandList->ResourceBarrier(1, &depthToSrv);
+
+    commandList->SetComputeRootSignature(rootSignature);
+    commandList->SetPipelineState(pipelineState);
+
+    struct HiZBuildConstants {
+        uint32_t outputWidth = 0;
+        uint32_t outputHeight = 0;
+        uint32_t sourceWidth = 0;
+        uint32_t sourceHeight = 0;
+        uint32_t sourceIsSceneDepth = 0;
+        uint32_t pad0 = 0;
+        uint32_t pad1 = 0;
+        uint32_t pad2 = 0;
+    };
+
+    for (uint32_t level = 0; level < kHiZMipCount; ++level) {
+        if (hiZStates_[level] != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+            const D3D12_RESOURCE_BARRIER toUav = MakeTransition(
+                hiZResources_[level].Get(),
+                hiZStates_[level],
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            commandList->ResourceBarrier(1, &toUav);
+            hiZStates_[level] = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        }
+
+        HiZBuildConstants constants{};
+        constants.outputWidth = HiZLevelWidth(level);
+        constants.outputHeight = HiZLevelHeight(level);
+        constants.sourceWidth = level == 0 ? kHiZBaseWidth * 2u : HiZLevelWidth(level - 1u);
+        constants.sourceHeight = level == 0 ? kHiZBaseHeight * 2u : HiZLevelHeight(level - 1u);
+        constants.sourceIsSceneDepth = level == 0 ? 1u : 0u;
+        commandList->SetComputeRoot32BitConstants(
+            0,
+            sizeof(HiZBuildConstants) / sizeof(uint32_t),
+            &constants,
+            0);
+        commandList->SetComputeRootDescriptorTable(
+            1,
+            level == 0 ? sceneDepthSrv : hiZSrvs_[level - 1u].gpu);
+        commandList->SetComputeRootDescriptorTable(2, hiZUavs_[level].gpu);
+        commandList->Dispatch(
+            (constants.outputWidth + 7u) / 8u,
+            (constants.outputHeight + 7u) / 8u,
+            1u);
+        ++lastDebrisCullingStats_.hiZMipDispatchCount;
+
+        const D3D12_RESOURCE_BARRIER uavBarrier = MakeUavBarrier(hiZResources_[level].Get());
+        commandList->ResourceBarrier(1, &uavBarrier);
+        const D3D12_RESOURCE_BARRIER toSrv = MakeTransition(
+            hiZResources_[level].Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        commandList->ResourceBarrier(1, &toSrv);
+        hiZStates_[level] = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    }
+
+    const D3D12_RESOURCE_BARRIER depthToWrite = MakeTransition(
+        sceneDepthResource,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    commandList->ResourceBarrier(1, &depthToWrite);
+    ++lastDebrisCullingStats_.hiZBuildCount;
+    return true;
+}
+
+void TerrainChunkManager::DispatchDebrisCulling(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12DescriptorHeap* srvDescriptorHeap,
+    ID3D12Resource* sceneDepthResource,
+    D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrv,
+    ID3D12RootSignature* hiZRootSignature,
+    ID3D12PipelineState* hiZPipelineState,
+    ID3D12RootSignature* rootSignature,
+    ID3D12PipelineState* pipelineState,
+    const Vector3& cameraPosition,
+    const Matrix4x4& viewProjection,
+    float maxVisibleDistance,
+    int occlusionMip,
+    float occlusionStrength,
+    float occlusionDepthBias) {
+    lastDebrisCullingStats_ = {};
+    lastDebrisCullingStats_.renderChunkCount = static_cast<uint32_t>(renderChunks_.size());
+    for (const TerrainRenderChunk& chunk : renderChunks_) {
+        lastDebrisCullingStats_.debrisInstanceCount += chunk.debrisInstanceCount;
+    }
+
+    if (commandList == nullptr ||
+        rootSignature == nullptr ||
+        pipelineState == nullptr ||
+        renderChunks_.empty()) {
+        return;
+    }
+
+    if (srvDescriptorHeap != nullptr) {
+        ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap};
+        commandList->SetDescriptorHeaps(1, descriptorHeaps);
+    }
+
+    if (!BuildHiZPyramid(
+            commandList,
+            sceneDepthResource,
+            sceneDepthSrv,
+            hiZRootSignature,
+            hiZPipelineState)) {
+        return;
+    }
+
+    commandList->SetComputeRootSignature(rootSignature);
+    commandList->SetPipelineState(pipelineState);
+
+    struct DebrisCullConstants {
+        Vector4 boundsCenterRadius{};
+        Vector4 cameraMaxDistance{};
+        Vector4 bucketDistances{};
+        Vector4 occlusionParams{};
+        uint32_t indexCount = 0;
+        uint32_t instanceCount = 0;
+        uint32_t instanceCapacity = 0;
+        uint32_t bucketIndex = 0;
+        Matrix4x4 viewProjection{};
+    };
+
+    for (TerrainRenderChunk& chunk : renderChunks_) {
+        if (chunk.debrisIndexCount == 0 ||
+            chunk.debrisInstanceCount == 0 ||
+            chunk.debrisInstanceCapacityPerBucket == 0 ||
+            chunk.debrisVisibleInstanceResource == nullptr ||
+            chunk.debrisIndirectArgsResource == nullptr ||
+            !chunk.debrisInstanceSrv.IsValid() ||
+            !chunk.debrisVisibleInstanceUav.IsValid() ||
+            !chunk.debrisIndirectArgsUav.IsValid()) {
+            continue;
+        }
+        ++lastDebrisCullingStats_.eligibleChunkCount;
+
+        if (chunk.debrisVisibleInstanceState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+            const D3D12_RESOURCE_BARRIER toUav = MakeTransition(
+                chunk.debrisVisibleInstanceResource.Get(),
+                chunk.debrisVisibleInstanceState,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            commandList->ResourceBarrier(1, &toUav);
+            chunk.debrisVisibleInstanceState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        }
+        if (chunk.debrisIndirectArgsState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+            const D3D12_RESOURCE_BARRIER toUav = MakeTransition(
+                chunk.debrisIndirectArgsResource.Get(),
+                chunk.debrisIndirectArgsState,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            commandList->ResourceBarrier(1, &toUav);
+            chunk.debrisIndirectArgsState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        }
+
+        const float nearBucketEnd = (std::max)(maxVisibleDistance * 0.34f, 48.0f);
+        const float midBucketEnd = (std::max)(maxVisibleDistance * 0.68f, nearBucketEnd + 64.0f);
+        const float occlusionStart = (std::max)(nearBucketEnd * 1.15f, 72.0f);
+        const float embeddedCullStrength = 0.65f;
+
+        for (uint32_t bucket = 0; bucket < TerrainRenderChunk::kDebrisLodBucketCount; ++bucket) {
+            DebrisCullConstants constants{};
+            constants.boundsCenterRadius = {
+                chunk.debrisBoundsCenter.x,
+                chunk.debrisBoundsCenter.y,
+                chunk.debrisBoundsCenter.z,
+                chunk.debrisBoundsRadius,
+            };
+            constants.cameraMaxDistance = {
+                cameraPosition.x,
+                cameraPosition.y,
+                cameraPosition.z,
+                maxVisibleDistance + static_cast<float>(bucket) * 80.0f,
+            };
+            constants.bucketDistances = {
+                nearBucketEnd,
+                midBucketEnd,
+                occlusionStart,
+                embeddedCullStrength,
+            };
+            constants.occlusionParams = {
+                (std::clamp)(occlusionStrength, 0.0f, 2.0f),
+                (std::clamp)(occlusionDepthBias, 0.0f, 0.05f),
+                0.0f,
+                0.0f,
+            };
+            constants.indexCount = chunk.debrisIndexCount;
+            constants.instanceCount = chunk.debrisInstanceCount;
+            constants.instanceCapacity = chunk.debrisInstanceCapacityPerBucket;
+            constants.bucketIndex = bucket;
+            constants.viewProjection = viewProjection;
+            commandList->SetComputeRoot32BitConstants(
+                0,
+                sizeof(DebrisCullConstants) / sizeof(uint32_t),
+                &constants,
+                0);
+            commandList->SetComputeRootDescriptorTable(1, chunk.debrisInstanceSrv.gpu);
+            const uint32_t debrisOcclusionHiZLevel =
+                static_cast<uint32_t>((std::clamp)(occlusionMip, 0, static_cast<int>(kHiZMipCount - 1u)));
+            commandList->SetComputeRootDescriptorTable(2, hiZSrvs_[debrisOcclusionHiZLevel].gpu);
+            commandList->SetComputeRootDescriptorTable(3, chunk.debrisVisibleInstanceUav.gpu);
+            commandList->SetComputeRootDescriptorTable(4, chunk.debrisIndirectArgsUav.gpu);
+            commandList->Dispatch(1, 1, 1);
+            ++lastDebrisCullingStats_.debrisCullDispatchCount;
+        }
+
+        const D3D12_RESOURCE_BARRIER uavBarrier = MakeUavBarrier(chunk.debrisIndirectArgsResource.Get());
+        commandList->ResourceBarrier(1, &uavBarrier);
+        const D3D12_RESOURCE_BARRIER visibleUavBarrier = MakeUavBarrier(chunk.debrisVisibleInstanceResource.Get());
+        commandList->ResourceBarrier(1, &visibleUavBarrier);
+        const D3D12_RESOURCE_BARRIER visibleToVertex = MakeTransition(
+            chunk.debrisVisibleInstanceResource.Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        commandList->ResourceBarrier(1, &visibleToVertex);
+        chunk.debrisVisibleInstanceState = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+        const D3D12_RESOURCE_BARRIER toIndirect = MakeTransition(
+            chunk.debrisIndirectArgsResource.Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        commandList->ResourceBarrier(1, &toIndirect);
+        chunk.debrisIndirectArgsState = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+    }
+}
+
+void TerrainChunkManager::ResetDebrisCullingStats() {
+    lastDebrisCullingStats_ = {};
+    lastDebrisCullingStats_.renderChunkCount = static_cast<uint32_t>(renderChunks_.size());
+    for (const TerrainRenderChunk& chunk : renderChunks_) {
+        lastDebrisCullingStats_.debrisInstanceCount += chunk.debrisInstanceCount;
+    }
+}
+
+bool TerrainChunkManager::ShouldDispatchDebrisCulling(uint32_t frameInterval) {
+    frameInterval = (std::max)(1u, frameInterval);
+    const bool shouldDispatch = (debrisCullingFrameCounter_ % frameInterval) == 0;
+    ++debrisCullingFrameCounter_;
+    return shouldDispatch;
+}
+
+D3D12_GPU_DESCRIPTOR_HANDLE TerrainChunkManager::GetHiZDebugSrv(uint32_t level) const {
+    if (!hiZResourcesReady_) {
+        return {};
+    }
+
+    const uint32_t clampedLevel = (std::min)(level, kHiZMipCount - 1u);
+    if (!hiZSrvs_[clampedLevel].IsValid()) {
+        return {};
+    }
+    return hiZSrvs_[clampedLevel].gpu;
+}
+
+void TerrainChunkManager::DrawDebrisIndirect(ID3D12GraphicsCommandList* commandList) const {
+    if (commandList == nullptr) {
+        return;
+    }
+
+    for (const TerrainRenderChunk& chunk : renderChunks_) {
+        if (chunk.debrisIndexCount == 0 ||
+            chunk.debrisInstanceCount == 0 ||
+            chunk.transformResource == nullptr ||
+            chunk.debrisVbv.BufferLocation == 0 ||
+            chunk.debrisIbv.BufferLocation == 0) {
+            continue;
+        }
+
+        const bool useCompactedInstances =
+            debrisDrawCommandSignature_ != nullptr &&
+            chunk.debrisVisibleInstanceVbv.BufferLocation != 0 &&
+            chunk.debrisVisibleInstanceState == D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER &&
+            chunk.debrisIndirectArgsResource != nullptr &&
+            chunk.debrisIndirectArgsState == D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+        D3D12_VERTEX_BUFFER_VIEW debrisVertexBuffers[2] = {
+            chunk.debrisVbv,
+            useCompactedInstances ? chunk.debrisVisibleInstanceVbv : chunk.debrisInstanceVbv,
+        };
+        commandList->SetGraphicsRootConstantBufferView(
+            1,
+            chunk.transformResource->GetGPUVirtualAddress());
+        commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        commandList->IASetVertexBuffers(0, 2, debrisVertexBuffers);
+        commandList->IASetIndexBuffer(&chunk.debrisIbv);
+
+        if (useCompactedInstances) {
+            commandList->ExecuteIndirect(
+                debrisDrawCommandSignature_.Get(),
+                TerrainRenderChunk::kDebrisLodBucketCount,
+                chunk.debrisIndirectArgsResource.Get(),
+                0,
+                nullptr,
+                0);
+        } else {
+            commandList->DrawIndexedInstanced(
+                chunk.debrisIndexCount,
+                chunk.debrisInstanceCount,
+                0,
+                0,
+                0);
         }
     }
 }
@@ -2481,6 +3430,7 @@ bool TerrainChunkManager::HasMatchingRenderChunks() const {
         const TerrainChunkDebugInfo& chunk = chunks_[i];
         const TerrainRenderChunk& renderChunk = renderChunks_[i];
         if (chunk.seed != renderChunk.seed ||
+            chunk.lodTier != renderChunk.lodTier ||
             std::abs(chunk.startDistance - renderChunk.startDistance) > 0.001f ||
             std::abs(chunk.endDistance - renderChunk.endDistance) > 0.001f) {
             return false;

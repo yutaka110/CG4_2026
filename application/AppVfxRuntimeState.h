@@ -140,7 +140,7 @@ struct AppVfxRuntimeState {
     float autoPlayVfxTimer = 0.0f;
     float autoPlayVfxAngle = 0.0f;
     bool showcaseMode = false;
-    bool showcaseAutoRotate = true;
+    bool showcaseAutoRotate = false;
     bool showcaseHudVisible = true;
     bool showcaseTuningVisible = true;
     float showcaseAutoTimer = 0.0f;

@@ -134,4 +134,7 @@ private:
     EffectRuntimeFrame frameGraphEffectRuntimeFrame_{};
     uint64_t consumedParticlePoolResetSerial_ = 0;
     float beamTime_ = 0.0f;
+    float effectAssetReloadPollTimer_ = 0.0f;
+    bool effectHotReloadConfigured_ = false;
+    bool effectHotReloadEnabled_ = false;
 };
