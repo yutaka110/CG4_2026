@@ -945,20 +945,48 @@ void VfxEngine::RegisterGraphResources(
         });
 }
 
-void VfxEngine::CaptureFrameTelemetry(ID3D12GraphicsCommandList* commandList) {
-    gpuParticleSystem_.CaptureTrailMeshStreamTelemetry(commandList);
-    gpuParticleSystem_.CaptureParticlePoolTelemetry(commandList);
-    gpuParticleSystem_.CaptureParticleDedicatedReadbackTelemetry(commandList);
-    gpuParticleSystem_.CaptureDistortionDedicatedReadbackTelemetry(commandList);
-    gpuParticleSystem_.CaptureBeamDedicatedReadbackTelemetry(commandList);
+void VfxEngine::CaptureFrameTelemetry(
+    ID3D12GraphicsCommandList* commandList,
+    const VfxFrameTelemetryOptions& options) {
+    if (!options.AnyEnabled()) {
+        return;
+    }
+    if (options.trailMeshStream) {
+        gpuParticleSystem_.CaptureTrailMeshStreamTelemetry(commandList);
+    }
+    if (options.particlePool) {
+        gpuParticleSystem_.CaptureParticlePoolTelemetry(commandList);
+    }
+    if (options.particleDedicatedReadback) {
+        gpuParticleSystem_.CaptureParticleDedicatedReadbackTelemetry(commandList);
+    }
+    if (options.distortionDedicatedReadback) {
+        gpuParticleSystem_.CaptureDistortionDedicatedReadbackTelemetry(commandList);
+    }
+    if (options.beamDedicatedReadback) {
+        gpuParticleSystem_.CaptureBeamDedicatedReadbackTelemetry(commandList);
+    }
 }
 
-void VfxEngine::ResolveFrameTelemetry() {
-    gpuParticleSystem_.ResolveTrailMeshStreamTelemetry();
-    gpuParticleSystem_.ResolveParticlePoolTelemetry();
-    gpuParticleSystem_.ResolveParticleDedicatedReadbackTelemetry();
-    gpuParticleSystem_.ResolveDistortionDedicatedReadbackTelemetry();
-    gpuParticleSystem_.ResolveBeamDedicatedReadbackTelemetry();
+void VfxEngine::ResolveFrameTelemetry(const VfxFrameTelemetryOptions& options) {
+    if (!options.AnyEnabled()) {
+        return;
+    }
+    if (options.trailMeshStream) {
+        gpuParticleSystem_.ResolveTrailMeshStreamTelemetry();
+    }
+    if (options.particlePool) {
+        gpuParticleSystem_.ResolveParticlePoolTelemetry();
+    }
+    if (options.particleDedicatedReadback) {
+        gpuParticleSystem_.ResolveParticleDedicatedReadbackTelemetry();
+    }
+    if (options.distortionDedicatedReadback) {
+        gpuParticleSystem_.ResolveDistortionDedicatedReadbackTelemetry();
+    }
+    if (options.beamDedicatedReadback) {
+        gpuParticleSystem_.ResolveBeamDedicatedReadbackTelemetry();
+    }
 }
 
 EffectRuntimeFrame VfxEngine::BuildFrame() const {

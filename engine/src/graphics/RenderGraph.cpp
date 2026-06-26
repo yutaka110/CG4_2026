@@ -732,8 +732,12 @@ std::string RenderGraph::ResolveStateKey(std::string_view name) const {
 }
 
 std::string RenderGraph::Describe() const {
-    std::ostringstream stream;
     const std::vector<RenderPassDebugInfo> passDebugInfo = BuildPassDebugInfo();
+    return Describe(passDebugInfo);
+}
+
+std::string RenderGraph::Describe(const std::vector<RenderPassDebugInfo>& passDebugInfo) const {
+    std::ostringstream stream;
     for (const RenderPassDebugInfo& pass : passDebugInfo) {
         stream << (pass.executed ? "[ON]  " : "[OFF] ") <<
             ToString(pass.layer) << "." << pass.name;

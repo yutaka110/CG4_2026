@@ -39,6 +39,22 @@ struct VfxGraphResourceStats {
     uint32_t transientBufferStorageCount = 0;
 };
 
+struct VfxFrameTelemetryOptions {
+    bool trailMeshStream = false;
+    bool particlePool = false;
+    bool particleDedicatedReadback = false;
+    bool distortionDedicatedReadback = false;
+    bool beamDedicatedReadback = false;
+
+    bool AnyEnabled() const {
+        return trailMeshStream ||
+            particlePool ||
+            particleDedicatedReadback ||
+            distortionDedicatedReadback ||
+            beamDedicatedReadback;
+    }
+};
+
 class VfxEngine {
 public:
     VfxEngine();
@@ -80,8 +96,10 @@ public:
         ge3::graphics::RenderGraph& renderGraph,
         D3D12_CPU_DESCRIPTOR_HANDLE dsv,
         std::function<void(std::string_view, D3D12_RESOURCE_STATES)> onResourceStateChanged);
-    void CaptureFrameTelemetry(ID3D12GraphicsCommandList* commandList);
-    void ResolveFrameTelemetry();
+    void CaptureFrameTelemetry(
+        ID3D12GraphicsCommandList* commandList,
+        const VfxFrameTelemetryOptions& options);
+    void ResolveFrameTelemetry(const VfxFrameTelemetryOptions& options);
 
     EffectRuntimeFrame BuildFrame() const;
     ParticleRenderFallback FindPrimaryParticleFallback() const;

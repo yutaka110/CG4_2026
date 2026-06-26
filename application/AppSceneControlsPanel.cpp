@@ -341,17 +341,17 @@ void DrawMaterialSettingsControlsPanel(
     ImGui::SliderFloat("Cavity AO", &terrain.materialCavityAoStrength, 0.0f, 1.5f);
     ImGui::SliderFloat("Sky Fill", &terrain.materialSkyFillStrength, 0.0f, 1.2f);
     if (ImGui::Button("Reset Terrain Material")) {
-        terrain.materialBaseColor = {1.18f, 1.08f, 0.94f, 1.0f};
+        terrain.materialBaseColor = {1.02f, 0.96f, 0.90f, 1.0f};
         terrain.materialBrightness = 1.0f;
         terrain.materialNoiseStrength = 1.0f;
         terrain.materialStrataStrength = 1.0f;
         terrain.materialStrataBreakupStrength = 0.92f;
-        terrain.materialSpecularStrength = 0.055f;
-        terrain.materialRimLightStrength = 0.62f;
-        terrain.materialBacklightRimBoost = 0.42f;
+        terrain.materialSpecularStrength = 0.135f;
+        terrain.materialRimLightStrength = 0.84f;
+        terrain.materialBacklightRimBoost = 0.72f;
         terrain.materialFloorSandShadowStrength = 0.38f;
-        terrain.materialDetailNormalStrength = 1.05f;
-        terrain.materialMicroDetailStrength = 1.05f;
+        terrain.materialDetailNormalStrength = 1.18f;
+        terrain.materialMicroDetailStrength = 1.16f;
         terrain.useDetailTextureCache = true;
         terrain.materialDetailCacheScale = 1.35f;
         terrain.materialDetailTileWorldSize = 72.0f;
@@ -362,8 +362,8 @@ void DrawMaterialSettingsControlsPanel(
         terrain.materialDetailNormalMapStrength = 0.82f;
         terrain.materialDetailHybridBlend = 0.66f;
         terrain.invertDetailNormalY = false;
-        terrain.materialCavityAoStrength = 0.72f;
-        terrain.materialSkyFillStrength = 0.24f;
+        terrain.materialCavityAoStrength = 0.82f;
+        terrain.materialSkyFillStrength = 0.30f;
     }
     ImGui::SeparatorText("Cascaded Shadows");
     ImGui::Checkbox("CSM Enabled", &terrain.cascadeShadowEnabled);
@@ -403,12 +403,12 @@ void DrawMaterialSettingsControlsPanel(
             static_cast<uint32_t>(std::clamp(debrisOcclusionUpdateInterval, 1, 8));
     }
     if (ImGui::Button("Reset Debris Occlusion")) {
-        terrain.showHiZDebugPreview = true;
+        terrain.showHiZDebugPreview = false;
         terrain.hiZDebugMip = 3;
         terrain.debrisOcclusionMip = 2;
         terrain.debrisOcclusionStrength = 0.75f;
         terrain.debrisOcclusionDepthBias = 0.012f;
-        terrain.debrisOcclusionUpdateInterval = 2;
+        terrain.debrisOcclusionUpdateInterval = 4;
     }
     ImGui::SeparatorText("Canyon Sun / Sky");
     ImGui::Checkbox("Use Canyon Sun", &terrain.useCanyonSunLighting);
@@ -420,9 +420,9 @@ void DrawMaterialSettingsControlsPanel(
         terrain.canyonSunColor = {1.0f, 0.74f, 0.46f, 1.0f};
         terrain.canyonSunDirection = {-0.38f, -0.52f, 0.76f};
         terrain.canyonSunIntensity = 2.4f;
-        terrain.materialSkyFillStrength = 0.24f;
-        terrain.materialRimLightStrength = 0.62f;
-        terrain.materialBacklightRimBoost = 0.42f;
+        terrain.materialSkyFillStrength = 0.30f;
+        terrain.materialRimLightStrength = 0.84f;
+        terrain.materialBacklightRimBoost = 0.72f;
     }
     ImGui::SeparatorText("Terrain Generation");
     ImGui::Checkbox("Auto Advance Rail Preview", &terrain.autoAdvancePreview);

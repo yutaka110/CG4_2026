@@ -1267,7 +1267,7 @@ bool AppSceneResources::Initialize(
 
     terrainMaterialResource = CreateBufferResource(device, sizeof(Material));
     terrainMaterialResource->Map(0, nullptr, reinterpret_cast<void**>(&terrainMaterialData));
-    terrainMaterialData->color = Vector4(1.18f, 1.08f, 0.94f, 1.0f);
+    terrainMaterialData->color = Vector4(1.02f, 0.96f, 0.90f, 1.0f);
     terrainMaterialData->enableLighting = true;
     terrainMaterialData->shininess = 2.0f;
     terrainMaterialData->environmentCoefficient = 0.0f;

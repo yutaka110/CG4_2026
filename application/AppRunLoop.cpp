@@ -96,6 +96,33 @@ uint32_t ReadEnvironmentUInt(const char* name, uint32_t fallback) {
     return static_cast<uint32_t>(parsed);
 }
 
+VfxFrameTelemetryOptions BuildVfxTelemetryOptions(
+    const AppVfxRuntimeState& vfx,
+    uint32_t frameIndex) {
+    constexpr uint32_t kVfxHealthTelemetryInterval = 12;
+    const bool healthSampleFrame = (frameIndex % kVfxHealthTelemetryInterval) == 0;
+
+    VfxFrameTelemetryOptions options{};
+    options.trailMeshStream =
+        vfx.enableTrailMeshStreamStartupTelemetry ||
+        (healthSampleFrame && vfx.enableTrailMeshStreamAutoFallback);
+    options.particlePool =
+        vfx.enableParticleDedicatedProbeTelemetry ||
+        (healthSampleFrame && vfx.enableParticleDedicatedResourceProbe);
+    options.particleDedicatedReadback =
+        vfx.enableParticleDedicatedProbeTelemetry ||
+        (healthSampleFrame && vfx.enableParticleDedicatedResourceProbe);
+    options.distortionDedicatedReadback =
+        vfx.enableDistortionDedicatedTelemetry ||
+        (healthSampleFrame &&
+            vfx.enableDistortionDedicatedResources &&
+            vfx.enableDistortionDedicatedAutoFallback);
+    options.beamDedicatedReadback =
+        vfx.enableBeamDedicatedTelemetry ||
+        (healthSampleFrame && vfx.enableBeamDedicatedAutoFallback);
+    return options;
+}
+
 std::string CsvQuote(const std::string& value) {
     std::string escaped;
     escaped.reserve(value.size() + 2);
@@ -512,6 +539,21 @@ void AppRunLoop::RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList)
             ToMatrix4x4(lightView * lightProjection);
     }
 
+    std::array<float, AppSceneResources::kCascadeShadowCount> cascadeRangeStart{};
+    std::array<float, AppSceneResources::kCascadeShadowCount> cascadeRangeEnd{};
+    for (uint32_t cascade = 0; cascade < AppSceneResources::kCascadeShadowCount; ++cascade) {
+        const float previousSplit = cascade == 0 ? 0.0f : kSplits[cascade - 1];
+        const float split = kSplits[cascade];
+        const float guardBand =
+            (std::max)(terrain.settings.chunkLength * 1.20f, (split - previousSplit) * 0.30f);
+        cascadeRangeStart[cascade] = terrain.previewDistance + previousSplit - guardBand;
+        cascadeRangeEnd[cascade] = terrain.previewDistance + split + guardBand;
+    }
+    const auto chunkAffectsCascade = [&](const TerrainRenderChunk& chunk, uint32_t cascade) {
+        return chunk.endDistance >= cascadeRangeStart[cascade] &&
+            chunk.startDistance <= cascadeRangeEnd[cascade];
+    };
+
     for (uint32_t cascade = 0; cascade < AppSceneResources::kCascadeShadowCount; ++cascade) {
         if (scene_.mappedCascadeShadowDraw[cascade] == nullptr) {
             continue;
@@ -573,7 +615,9 @@ void AppRunLoop::RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList)
         }
 
         for (const TerrainRenderChunk& chunk : chunks) {
-            if (chunk.indexCount == 0 || chunk.transformResource == nullptr) {
+            if (chunk.indexCount == 0 ||
+                chunk.transformResource == nullptr ||
+                !chunkAffectsCascade(chunk, cascade)) {
                 continue;
             }
             commandList->SetGraphicsRootConstantBufferView(
@@ -592,7 +636,8 @@ void AppRunLoop::RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList)
                     chunk.transformResource == nullptr ||
                     chunk.debrisVbv.BufferLocation == 0 ||
                     chunk.debrisInstanceVbv.BufferLocation == 0 ||
-                    chunk.debrisIbv.BufferLocation == 0) {
+                    chunk.debrisIbv.BufferLocation == 0 ||
+                    !chunkAffectsCascade(chunk, cascade)) {
                     continue;
                 }
                 D3D12_VERTEX_BUFFER_VIEW debrisVertexBuffers[2] = {
@@ -697,7 +742,7 @@ void AppRunLoop::FireShowcaseIceProjectile() {
     runtimeState_.vfx.iceProjectileTimer = 0.0f;
 }
 
-void AppRunLoop::DumpRenderGraphDebugFrame() {
+void AppRunLoop::ConfigureRenderGraphDebugDump() {
     if (!renderGraphDumpConfigured_) {
         renderGraphDumpConfigured_ = true;
         renderGraphDumpFrameLimit_ = ReadEnvironmentUInt("GE3_RENDERGRAPH_DUMP_FRAMES", 0);
@@ -728,6 +773,10 @@ void AppRunLoop::DumpRenderGraphDebugFrame() {
             }
         }
     }
+}
+
+void AppRunLoop::DumpRenderGraphDebugFrame() {
+    ConfigureRenderGraphDebugDump();
     if (!renderGraphDumpEnabled_ ||
         renderGraphDumpFrameIndex_ >= renderGraphDumpFrameLimit_ ||
         !renderGraphDump_) {
@@ -1165,8 +1214,20 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         OutputDebugStringA(renderGraphError.c_str());
         OutputDebugStringA("\n");
     }
-    lastRenderPassDebugInfo_ = renderGraph_.BuildPassDebugInfo();
-    lastRenderGraphDescription_ = renderGraph_.Describe();
+    ConfigureRenderGraphDebugDump();
+    constexpr uint32_t kRenderGraphDebugBackgroundRefreshInterval = 30;
+    const bool renderGraphDumpCapturing =
+        renderGraphDumpEnabled_ &&
+        renderGraphDumpFrameIndex_ < renderGraphDumpFrameLimit_;
+    const bool refreshRenderGraphDebug =
+        renderGraphDumpCapturing ||
+        imguiLayer_.WantsDeveloperDiagnostics() ||
+        lastRenderPassDebugInfo_.empty() ||
+        ((renderGraphDebugRefreshFrame_++ % kRenderGraphDebugBackgroundRefreshInterval) == 0);
+    if (refreshRenderGraphDebug) {
+        lastRenderPassDebugInfo_ = renderGraph_.BuildPassDebugInfo();
+        lastRenderGraphDescription_ = renderGraph_.Describe(lastRenderPassDebugInfo_);
+    }
     lastRenderGraphError_ = renderGraphError;
     lastTransientTargetCount_ = vfxGraphResourceStats.transientTargetCount;
     lastTransientTargetStorageCount_ = vfxGraphResourceStats.transientTargetStorageCount;
@@ -1176,12 +1237,14 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     RenderCascadeShadowMaps(commandList.Get());
     renderGraph_.Execute(commandList.Get());
     DumpRenderGraphDebugFrame();
-    vfxEngine_.CaptureFrameTelemetry(commandList.Get());
+    const VfxFrameTelemetryOptions vfxTelemetryOptions =
+        BuildVfxTelemetryOptions(runtimeState_.vfx, vfxTelemetryFrameIndex_++);
+    vfxEngine_.CaptureFrameTelemetry(commandList.Get(), vfxTelemetryOptions);
     frameRenderer_.EndFrame(commandList.Get(), backBuffer);
 
     clPool_.EndAndExecute(dev_);
     swapChain_.Present(dev_, 1);
 
     SignalAndWaitGpu();
-    vfxEngine_.ResolveFrameTelemetry();
+    vfxEngine_.ResolveFrameTelemetry(vfxTelemetryOptions);
 }

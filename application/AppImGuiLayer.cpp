@@ -71,6 +71,23 @@ AppImGuiEditorLayout BuildAppImGuiEditorLayout() {
     return layout;
 }
 
+bool NeedsVfxRuntimeStatusTelemetry(
+    const AppVfxRuntimeState& vfx,
+    uint32_t hiddenFrameIndex) {
+    constexpr uint32_t kHiddenTelemetryHealthInterval = 12;
+    const bool healthSampleFrame = (hiddenFrameIndex % kHiddenTelemetryHealthInterval) == 0;
+    return vfx.enableTrailMeshStreamStartupTelemetry ||
+        vfx.enableParticleDedicatedResourceProbe ||
+        vfx.enableParticleDedicatedProbeTelemetry ||
+        vfx.enableDistortionDedicatedTelemetry ||
+        vfx.enableBeamDedicatedTelemetry ||
+        (healthSampleFrame &&
+            (vfx.enableTrailMeshStreamAutoFallback ||
+                vfx.enableParticleDedicatedAutoFallback ||
+                (vfx.enableDistortionDedicatedResources && vfx.enableDistortionDedicatedAutoFallback) ||
+                vfx.enableBeamDedicatedAutoFallback));
+}
+
 void DrawViewportFocusStatusBar(bool& viewportFocusMode) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const ImVec2 workPos = viewport ? viewport->WorkPos : ImVec2(0.0f, 0.0f);
@@ -623,7 +640,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     }
 
     if (viewportFocusMode_) {
-        UpdateVfxRuntimeStatusTelemetry(runtimeStatusInput);
+        if (NeedsVfxRuntimeStatusTelemetry(runtimeState.vfx, hiddenRuntimeTelemetryFrame_++)) {
+            UpdateVfxRuntimeStatusTelemetry(runtimeStatusInput);
+        }
         DrawViewportFocusStatusBar(viewportFocusMode_);
         return;
     }
@@ -635,7 +654,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         showDeveloperTools_,
         showcaseLoopCurrent_);
     if (!showDeveloperTools_) {
-        UpdateVfxRuntimeStatusTelemetry(runtimeStatusInput);
+        if (NeedsVfxRuntimeStatusTelemetry(runtimeState.vfx, hiddenRuntimeTelemetryFrame_++)) {
+            UpdateVfxRuntimeStatusTelemetry(runtimeStatusInput);
+        }
         return;
     }
 
@@ -778,6 +799,10 @@ bool AppImGuiLayer::IsEnabled() const {
     return initialized_;
 }
 
+bool AppImGuiLayer::WantsDeveloperDiagnostics() const {
+    return initialized_ && showDeveloperTools_ && !viewportFocusMode_;
+}
+
 #else
 
 bool AppImGuiLayer::Initialize(HWND hwnd,
@@ -809,6 +834,10 @@ void AppImGuiLayer::Render(ID3D12GraphicsCommandList* cmdList) {
 }
 
 bool AppImGuiLayer::IsEnabled() const {
+    return false;
+}
+
+bool AppImGuiLayer::WantsDeveloperDiagnostics() const {
     return false;
 }
 

@@ -59,6 +59,7 @@ public:
 
     void Render(ID3D12GraphicsCommandList* cmdList);
     bool IsEnabled() const;
+    bool WantsDeveloperDiagnostics() const;
 
     void Shutdown();
 
@@ -85,4 +86,5 @@ private:
     uint32_t beamDedicatedHealthFrames_ = 0;
     uint32_t beamDedicatedStableFrames_ = 0;
     uint32_t beamDedicatedActiveStableFrames_ = 0;
+    uint32_t hiddenRuntimeTelemetryFrame_ = 0;
 };

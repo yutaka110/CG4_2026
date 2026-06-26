@@ -101,6 +101,55 @@ static float3 SafeNormalize(float3 v)
     return v * rsqrt(len2);
 }
 
+static float Pow2(float v)
+{
+    return v * v;
+}
+
+static float Pow4(float v)
+{
+    float v2 = v * v;
+    return v2 * v2;
+}
+
+static float Pow8(float v)
+{
+    float v4 = Pow4(v);
+    return v4 * v4;
+}
+
+static float Pow16(float v)
+{
+    float v8 = Pow8(v);
+    return v8 * v8;
+}
+
+static float Pow32(float v)
+{
+    float v16 = Pow16(v);
+    return v16 * v16;
+}
+
+static float Pow64(float v)
+{
+    float v32 = Pow32(v);
+    return v32 * v32;
+}
+
+static float Pow128(float v)
+{
+    float v64 = Pow64(v);
+    return v64 * v64;
+}
+
+static float3 TriplanarBlendWeights(float3 normal)
+{
+    float3 n = abs(normal);
+    float3 n2 = n * n;
+    float3 n4 = n2 * n2;
+    return n4 / max(n4.x + n4.y + n4.z, 0.0001f);
+}
+
 static float Hash31(float3 p)
 {
     p = frac(p * 0.1031f);
@@ -419,8 +468,7 @@ static float4 SampleTerrainDetailCache(float3 worldPosition, float3 normal, floa
     float scale = max(detailCacheScale, 0.01f) * 0.055f;
     float tileWorldSize = max(detailTileWorldSize, 1.0f);
     float2 worldTileCoord = worldPosition.xz / tileWorldSize;
-    float3 blend = pow(abs(normal), 4.0f);
-    blend /= max(blend.x + blend.y + blend.z, 0.0001f);
+    float3 blend = TriplanarBlendWeights(normal);
     float2 uvX = worldPosition.zy * scale;
     float2 uvY = worldPosition.xz * scale;
     float2 uvZ = worldPosition.xy * scale;
@@ -435,8 +483,7 @@ static float3 SampleTerrainDetailNormalMap(float3 worldPosition, float3 normal, 
     float scale = max(detailMapScale, 0.01f) * 0.055f;
     float tileWorldSize = max(detailTileWorldSize, 1.0f);
     float2 worldTileCoord = worldPosition.xz / tileWorldSize;
-    float3 blend = pow(abs(normal), 4.0f);
-    blend /= max(blend.x + blend.y + blend.z, 0.0001f);
+    float3 blend = TriplanarBlendWeights(normal);
     float2 uvX = worldPosition.zy * scale;
     float2 uvY = worldPosition.xz * scale;
     float2 uvZ = worldPosition.xy * scale;
@@ -477,20 +524,14 @@ static float3 PerturbCachedDetailNormal(
     float farScale = max(detailFarScale, 0.01f);
     float nearStep = 0.42f;
     float farStep = 1.28f;
+    float sampleScale = detailCacheScale * lerp(farScale, nearScale, nearWeight);
+    float sampleStep = lerp(farStep, nearStep, nearWeight);
     float dhT =
-        lerp(
-            CachedDetailHeight(worldPosition + tangent * farStep, normal, detailCacheScale * farScale, detailTileWorldSize) -
-                CachedDetailHeight(worldPosition - tangent * farStep, normal, detailCacheScale * farScale, detailTileWorldSize),
-            CachedDetailHeight(worldPosition + tangent * nearStep, normal, detailCacheScale * nearScale, detailTileWorldSize) -
-                CachedDetailHeight(worldPosition - tangent * nearStep, normal, detailCacheScale * nearScale, detailTileWorldSize),
-            nearWeight);
+        CachedDetailHeight(worldPosition + tangent * sampleStep, normal, sampleScale, detailTileWorldSize) -
+        CachedDetailHeight(worldPosition - tangent * sampleStep, normal, sampleScale, detailTileWorldSize);
     float dhB =
-        lerp(
-            CachedDetailHeight(worldPosition + bitangent * farStep, normal, detailCacheScale * farScale, detailTileWorldSize) -
-                CachedDetailHeight(worldPosition - bitangent * farStep, normal, detailCacheScale * farScale, detailTileWorldSize),
-            CachedDetailHeight(worldPosition + bitangent * nearStep, normal, detailCacheScale * nearScale, detailTileWorldSize) -
-                CachedDetailHeight(worldPosition - bitangent * nearStep, normal, detailCacheScale * nearScale, detailTileWorldSize),
-            nearWeight);
+        CachedDetailHeight(worldPosition + bitangent * sampleStep, normal, sampleScale, detailTileWorldSize) -
+        CachedDetailHeight(worldPosition - bitangent * sampleStep, normal, sampleScale, detailTileWorldSize);
     float distanceStrength = lerp(0.58f, 1.0f, nearWeight);
     return SafeNormalize(normal - tangent * dhT * strength * distanceStrength - bitangent * dhB * strength * distanceStrength);
 }
@@ -517,9 +558,8 @@ static float3 PerturbMappedDetailNormal(
     float3 tangent = SafeNormalize(cross(reference, normal));
     float3 bitangent = SafeNormalize(cross(normal, tangent));
     float nearWeight = DetailNearWeight(worldPosition, detailDistanceBlend);
-    float3 nearMapped = SampleTerrainDetailNormalMap(worldPosition, normal, detailCacheScale * max(detailNearScale, 0.01f), detailTileWorldSize);
-    float3 farMapped = SampleTerrainDetailNormalMap(worldPosition, normal, detailCacheScale * max(detailFarScale, 0.01f), detailTileWorldSize);
-    float3 mapped = SafeNormalize(lerp(farMapped, nearMapped, nearWeight));
+    float sampleScale = detailCacheScale * lerp(max(detailFarScale, 0.01f), max(detailNearScale, 0.01f), nearWeight);
+    float3 mapped = SampleTerrainDetailNormalMap(worldPosition, normal, sampleScale, detailTileWorldSize);
     float2 detailSlope = mapped.xy;
     float distanceStrength = lerp(0.42f, 1.0f, nearWeight);
     return SafeNormalize(normal + tangent * detailSlope.x * strength * distanceStrength + bitangent * detailSlope.y * strength * distanceStrength);
@@ -637,7 +677,7 @@ PixelShaderOutput main(VertexShaderOutput input)
     float wallMaskBeforeDetail = WallDetailMask(normal);
     float distanceAir = smoothstep(180.0f, 760.0f, cameraDistance);
     float encodedFarWall = smoothstep(0.54f, 0.86f, contactAo);
-    float distantWallAtmosphere = saturate(pow(distanceAir, 0.92f) * encodedFarWall * wallMaskBeforeDetail);
+    float distantWallAtmosphere = saturate(distanceAir * encodedFarWall * wallMaskBeforeDetail);
     detailNormalStrength *= lerp(1.0f, 0.22f, distantWallAtmosphere);
     microDetailStrength *= lerp(1.0f, 0.16f, distantWallAtmosphere);
     strataAmount *= lerp(1.0f, 0.48f, distantWallAtmosphere);
@@ -664,7 +704,9 @@ PixelShaderOutput main(VertexShaderOutput input)
     float noise = TerrainNoise(input.worldPosition);
     float strataBreakupStrength = saturate(gMaterial.strataBreakupStrength);
     float strata = StrataMask(input.worldPosition, normal, strataBreakupStrength) * strataAmount;
-    normal = PerturbRockNormal(input.worldPosition, normal, detailNormalStrength, microDetailStrength);
+    float proceduralNormalStrength = detailNormalStrength *
+        (1.0f - saturate(useDetailCache * 0.70f + useDetailNormalMap * detailHybridBlend * 0.52f));
+    normal = PerturbRockNormal(input.worldPosition, normal, proceduralNormalStrength, microDetailStrength);
     float cacheNormalUse = useDetailCache * lerp(1.0f, 0.55f, detailHybridBlend * useDetailNormalMap);
     normal = PerturbCachedDetailNormal(
         input.worldPosition,
@@ -689,20 +731,34 @@ PixelShaderOutput main(VertexShaderOutput input)
         useDetailNormalMap);
     strata = StrataMask(input.worldPosition, normal, strataBreakupStrength) * strataAmount;
     float nearDetailWeight = DetailNearWeight(input.worldPosition, detailDistanceBlend);
-    float4 nearDetailCache = SampleTerrainDetailCache(input.worldPosition, normal, detailCacheScale * detailNearScale, detailTileWorldSize);
-    float4 farDetailCache = SampleTerrainDetailCache(input.worldPosition, normal, detailCacheScale * detailFarScale, detailTileWorldSize);
-    float4 detailCache = lerp(farDetailCache, nearDetailCache, nearDetailWeight);
+    float detailSampleScale = detailCacheScale * lerp(detailFarScale, detailNearScale, nearDetailWeight);
+    float4 detailCache = SampleTerrainDetailCache(input.worldPosition, normal, detailSampleScale, detailTileWorldSize);
     float erosionCracks = ErosionCrackMask(input.worldPosition, normal) * saturate(detailNormalStrength * 0.75f + cavityAoStrength * 0.35f);
-    float proceduralCracks = MicroVerticalCracks(input.worldPosition, normal);
-    float proceduralChipped = ChippedStrataEdge(input.worldPosition, normal);
-    float proceduralGrain = MicroGrain(input.worldPosition);
+    float proceduralCracks = 0.0f;
+    float proceduralChipped = 0.0f;
+    float proceduralGrain = 0.0f;
+    float proceduralHighFrequency = 0.0f;
+    float proceduralCavity = 0.0f;
+    [branch]
+    if (useDetailCache < 0.999f)
+    {
+        proceduralCracks = MicroVerticalCracks(input.worldPosition, normal);
+        proceduralChipped = ChippedStrataEdge(input.worldPosition, normal);
+        proceduralGrain = MicroGrain(input.worldPosition);
+        proceduralCavity = RockCavity(input.worldPosition, normal, strata);
+        proceduralHighFrequency = HighFrequencyRockDetail(input.worldPosition, normal, strata, microDetailStrength);
+    }
     float microCracks = lerp(proceduralCracks, detailCache.g, useDetailCache) * microDetailStrength;
     float chippedEdges = lerp(proceduralChipped, detailCache.b, useDetailCache) * microDetailStrength;
     float dryGrain = lerp(proceduralGrain, detailCache.r, useDetailCache) * microDetailStrength;
-    float cacheCavity = detailCache.a * useDetailCache;
-    float cavity = RockCavity(input.worldPosition, normal, strata) + cacheCavity * microDetailStrength * 0.38f;
     float wallDetailMask = WallDetailMask(normal);
-    float highFrequencyDetail = HighFrequencyRockDetail(input.worldPosition, normal, strata, microDetailStrength);
+    float cachedCavity = saturate(detailCache.a * microDetailStrength * 0.62f + strata * 0.36f + erosionCracks * 0.34f);
+    float cavity = lerp(proceduralCavity, cachedCavity, useDetailCache);
+    float cachedHighFrequency = saturate(
+        (detailCache.b * 0.58f + detailCache.g * 0.48f + detailCache.r * 0.22f + strata * 0.18f) *
+        wallDetailMask *
+        saturate(microDetailStrength));
+    float highFrequencyDetail = lerp(proceduralHighFrequency, cachedHighFrequency, useDetailCache);
     float ao = lerp(
         1.0f,
         0.42f,
@@ -736,6 +792,20 @@ PixelShaderOutput main(VertexShaderOutput input)
         rockColor,
         rockColor * float3(0.58f, 0.47f, 0.34f),
         floorSandShadow * (0.44f + dryGrain * 0.18f));
+    float wetDetailSignal = saturate(
+        cavity * 0.30f +
+        microCracks * 0.28f +
+        chippedEdges * 0.34f +
+        highFrequencyDetail * 0.54f);
+    float wallWetRidgeMask = wallDetailMask * smoothstep(0.46f, 0.92f, wetDetailSignal);
+    float floorWaterFilmMask = smoothstep(0.50f, 0.94f, normal.y) *
+        smoothstep(0.42f, 0.94f, floorSandShadow * 0.74f + dryGrain * 0.34f + rootContact * 0.16f);
+    wallWetRidgeMask *= 1.0f - distantWallAtmosphere * 0.70f;
+    floorWaterFilmMask *= 1.0f - distantWallAtmosphere * 0.55f;
+    float wetCanyonMask = saturate(wallWetRidgeMask + floorWaterFilmMask * 0.72f);
+    float wetDarkenMask = saturate(wallWetRidgeMask * 0.74f + floorWaterFilmMask * 0.24f);
+    float3 wetStoneTint = lerp(float3(0.42f, 0.38f, 0.34f), float3(0.55f, 0.53f, 0.47f), rockVariation);
+    rockColor = lerp(rockColor, rockColor * wetStoneTint, wetDarkenMask * 0.32f);
     float3 distantAirColor = lerp(float3(0.58f, 0.61f, 0.61f), float3(0.86f, 0.88f, 0.85f), distanceAir);
     rockColor = lerp(rockColor, distantAirColor * (0.70f + rockVariation * 0.08f), distantWallAtmosphere * 0.42f);
     ao = lerp(ao, 0.82f, distantWallAtmosphere * 0.48f);
@@ -751,7 +821,7 @@ PixelShaderOutput main(VertexShaderOutput input)
     float shadowVisibility = SampleCascadeShadow(input.worldPosition, normal, lightDir);
     float wrap = saturate(dot(normal, lightDir) * 0.5f + 0.5f);
     float3 sunColor = gDirectionalLight.color.rgb * gDirectionalLight.intensity;
-    float3 direct = sunColor * (nDotL * 0.92f + pow(wrap, 4.0f) * 0.10f) * shadowVisibility;
+    float3 direct = sunColor * (nDotL * 0.92f + Pow4(wrap) * 0.10f) * shadowVisibility;
     float upFacing = saturate(normal.y * 0.5f + 0.5f);
     float3 skyColor = float3(0.34f, 0.42f, 0.55f) * skyFillStrength * (0.35f + upFacing * 0.65f);
     float3 groundBounce = float3(0.34f, 0.20f, 0.10f) * (0.16f + (1.0f - upFacing) * 0.12f);
@@ -761,24 +831,41 @@ PixelShaderOutput main(VertexShaderOutput input)
 
     float3 viewDir = SafeNormalize(cameraWorldPosition - input.worldPosition);
     float3 halfDir = SafeNormalize(lightDir + viewDir);
-    float specPower = lerp(16.0f, 36.0f, rockVariation);
     float specVariation = lerp(0.50f, 1.18f, rockVariation) * lerp(1.0f, 0.72f + dryGrain * 0.18f, microDetailStrength);
-    float lowSpec = pow(saturate(dot(normal, halfDir)), specPower) * specularStrength * specVariation;
-    float facetSpec = pow(saturate(dot(normal, halfDir)), lerp(42.0f, 70.0f, rockVariation)) *
+    float halfN = saturate(dot(normal, halfDir));
+    float lowSpecShape = lerp(Pow16(halfN), Pow32(halfN), rockVariation);
+    float lowSpec = lowSpecShape * specularStrength * specVariation;
+    float facetSpec = Pow64(halfN) *
         specularStrength * highFrequencyDetail * wallDetailMask * 0.42f;
     lowSpec += facetSpec;
     lit += gDirectionalLight.color.rgb * lowSpec * shadowVisibility;
+    float wetHalf = halfN;
+    float wetGrazingBase = saturate(dot(normal, lightDir) * 0.5f + 0.5f);
+    float wetGrazing = Pow2(wetGrazingBase) * lerp(1.0f, wetGrazingBase, 0.18f);
+    float wetFloorSpec = lerp(Pow8(wetHalf), Pow16(wetHalf), rockVariation) *
+        specularStrength * floorWaterFilmMask * (1.20f + wetGrazing * 0.95f + backlightRimBoost * 0.42f);
+    float wetRidgeSpec = lerp(Pow32(wetHalf), Pow64(wetHalf), rockVariation) *
+        specularStrength * wallWetRidgeMask * (1.05f + highFrequencyDetail * 0.95f + microCracks * 0.35f);
+    float wetSparkleSpec = lerp(Pow64(wetHalf), Pow128(wetHalf), saturate(dryGrain)) *
+        specularStrength * wallWetRidgeMask * highFrequencyDetail * (1.65f + microCracks * 0.60f);
+    float3 wetSpecTint = lerp(float3(0.62f, 0.72f, 0.82f), float3(0.90f, 0.88f, 0.76f), nDotL);
+    lit += wetSpecTint * (wetFloorSpec + wetRidgeSpec + wetSparkleSpec) * shadowVisibility;
+    lit += float3(0.13f, 0.22f, 0.30f) * floorWaterFilmMask * (0.12f + skyFillStrength * 0.22f) * (0.45f + upFacing * 0.55f);
 
-    float silhouette = pow(1.0f - saturate(dot(normal, viewDir)), 2.35f);
-    float backLight = pow(saturate(dot(-viewDir, lightDir)), 3.0f);
-    float grazingLight = pow(saturate(dot(normal, lightDir)) * 0.5f + 0.5f, 3.0f);
+    float silhouetteBase = 1.0f - saturate(dot(normal, viewDir));
+    float silhouette = Pow2(silhouetteBase) * lerp(1.0f, silhouetteBase, 0.35f);
+    float backLightBase = saturate(dot(-viewDir, lightDir));
+    float backLight = Pow2(backLightBase) * backLightBase;
+    float grazingBase = saturate(dot(normal, lightDir)) * 0.5f + 0.5f;
+    float grazingLight = Pow2(grazingBase) * grazingBase;
     float wallRimMask = smoothstep(0.18f, 0.74f, 1.0f - abs(normal.y));
-    float edgeOnlyRim = pow(silhouette, 1.35f) * wallRimMask;
+    float edgeOnlyRim = silhouette * lerp(1.0f, silhouette, 0.35f) * wallRimMask;
     float boostedBackLight = backLight * (0.76f + backlightRimBoost * 1.05f * edgeOnlyRim);
     float rim = silhouette * (0.24f + boostedBackLight + grazingLight * (0.22f + backlightRimBoost * 0.16f * wallRimMask)) * rimStrength;
     rim *= lerp(1.0f, 1.34f, edgeOnlyRim * backlightRimBoost);
     rim *= 1.0f + highFrequencyDetail * wallRimMask * 0.28f;
-    lit += gDirectionalLight.color.rgb * float3(1.08f, 0.94f, 0.78f) * rim * gDirectionalLight.intensity;
+    float3 rimTint = lerp(float3(1.08f, 0.94f, 0.78f), float3(0.72f, 0.84f, 1.02f), saturate(wetCanyonMask * 0.72f + backlightRimBoost * 0.18f));
+    lit += gDirectionalLight.color.rgb * rimTint * rim * gDirectionalLight.intensity;
 
     output.color = float4(saturate(lit), texColor.a);
     return output;

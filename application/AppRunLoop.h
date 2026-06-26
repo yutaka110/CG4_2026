@@ -84,6 +84,7 @@ private:
     void UpdateShowcaseWindowTitle();
     void UpdateTerrainAuthoring(float deltaTime);
     void RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList);
+    void ConfigureRenderGraphDebugDump();
     void DumpRenderGraphDebugFrame();
     bool WasKeyPressed(int virtualKey);
 
@@ -125,6 +126,8 @@ private:
     uint32_t lastTransientTargetStorageCount_ = 0;
     uint32_t lastTransientBufferCount_ = 0;
     uint32_t lastTransientBufferStorageCount_ = 0;
+    uint32_t renderGraphDebugRefreshFrame_ = 0;
+    uint32_t vfxTelemetryFrameIndex_ = 0;
     bool renderGraphDumpConfigured_ = false;
     bool renderGraphDumpEnabled_ = false;
     uint32_t renderGraphDumpFrameLimit_ = 0;
