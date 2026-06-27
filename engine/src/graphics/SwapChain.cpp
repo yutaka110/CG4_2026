@@ -106,8 +106,8 @@ void SwapChain::Resize(core::Device& dev, UINT w, UINT h)
 }
 
 
-void SwapChain::Present(core::Device& dev, UINT syncInterval)
+HRESULT SwapChain::Present(core::Device& dev, UINT syncInterval)
 {
     UINT flags = (allowTearing_ && syncInterval == 0) ? DXGI_PRESENT_ALLOW_TEARING : 0;
-    swapChain_->Present(syncInterval, flags);
+    return swapChain_->Present(syncInterval, flags);
 }

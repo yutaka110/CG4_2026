@@ -14,7 +14,7 @@ namespace graphics {
     public:
         bool Create(core::Device& dev, HWND hwnd, UINT width, UINT height, UINT bufferCount = 2);
         void Resize(core::Device& dev, UINT width, UINT height);
-        void Present(core::Device& dev, UINT syncInterval = 1);
+        HRESULT Present(core::Device& dev, UINT syncInterval = 1);
 
         UINT CurrentIndex() const { return swapChain_->GetCurrentBackBufferIndex(); }
         UINT BufferCount()  const { return static_cast<UINT>(backBuffers_.size()); }

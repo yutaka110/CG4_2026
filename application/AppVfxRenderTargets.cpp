@@ -415,10 +415,8 @@ void AppVfxRenderTargets::BeginScene(
 
     Transition(commandList, *sceneColor, D3D12_RESOURCE_STATE_RENDER_TARGET);
     Transition(commandList, *vfxAccumulation, D3D12_RESOURCE_STATE_RENDER_TARGET);
-    const float clearScene[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-    const float clearVfx[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    commandList->ClearRenderTargetView(sceneColor->rtv.cpu, clearScene, 0, nullptr);
-    commandList->ClearRenderTargetView(vfxAccumulation->rtv.cpu, clearVfx, 0, nullptr);
+    commandList->ClearRenderTargetView(sceneColor->rtv.cpu, sceneColor->clearColor, 0, nullptr);
+    commandList->ClearRenderTargetView(vfxAccumulation->rtv.cpu, vfxAccumulation->clearColor, 0, nullptr);
     for (auto& [name, target] : targets_) {
         if (name == "SceneColor" || name == "VfxAccumulation") {
             continue;

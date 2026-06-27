@@ -16,8 +16,19 @@ namespace {
             dbg->EnableDebugLayer();
         }
     }
+
+    void EnableDredIfAvailable()
+    {
+        ComPtr<ID3D12DeviceRemovedExtendedDataSettings1> dredSettings;
+        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dredSettings)))) {
+            dredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+            dredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+            dredSettings->SetBreadcrumbContextEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+        }
+    }
 #else
     void EnableD3D12DebugLayerIfAvailable(bool) {}
+    void EnableDredIfAvailable() {}
 #endif
 
     // 簡易ログ（必要なら utils::Logger に置き換えてOK）
@@ -39,6 +50,7 @@ bool Device::Initialize(bool enableDebugLayer)
     Shutdown();
 
     EnableD3D12DebugLayerIfAvailable(enableDebugLayer);
+    EnableDredIfAvailable();
 
     if (!CreateFactory(enableDebugLayer)) {
         Log("[Device] CreateFactory failed.\n");

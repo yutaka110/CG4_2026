@@ -1,0 +1,105 @@
+#include "EnemyWaveAsset.h"
+
+#include "CourseAssetParsing.h"
+
+#include <cstdint>
+#include <fstream>
+#include <utility>
+
+using namespace course_asset_parsing;
+
+bool EnemyWaveAsset::LoadFromFile(const std::string& path, std::string* errorMessage) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Could not open enemy wave file: " + path;
+        }
+        return false;
+    }
+
+    EnemyWaveAsset loaded{};
+    std::string line;
+    uint32_t lineNumber = 0;
+    while (std::getline(file, line)) {
+        ++lineNumber;
+        line = Trim(line);
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+
+        const std::vector<std::string> parts = SplitPipe(line);
+        if (parts.empty()) {
+            continue;
+        }
+
+        if (parts[0] == "wave") {
+            if (parts.size() >= 2) {
+                loaded.id = parts[1];
+            }
+            if (parts.size() >= 3) {
+                loaded.displayName = parts[2];
+            }
+        } else if (parts[0] == "unit") {
+            if (parts.size() < 11) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid unit row at line " + std::to_string(lineNumber);
+                }
+                return false;
+            }
+            EnemyWaveUnit unit{};
+            unit.role = parts[1].empty() ? unit.role : parts[1];
+            unit.distanceOffset = ParseFloatOr(parts, 2, unit.distanceOffset);
+            unit.lateralOffset = ParseFloatOr(parts, 3, unit.lateralOffset);
+            unit.verticalOffset = ParseFloatOr(parts, 4, unit.verticalOffset);
+            unit.forwardSpeed = ParseFloatOr(parts, 5, unit.forwardSpeed);
+            unit.radius = ParseFloatOr(parts, 6, unit.radius);
+            unit.lifetime = ParseFloatOr(parts, 7, unit.lifetime);
+            unit.color.x = ParseFloatOr(parts, 8, unit.color.x);
+            unit.color.y = ParseFloatOr(parts, 9, unit.color.y);
+            unit.color.z = ParseFloatOr(parts, 10, unit.color.z);
+            unit.color.w = ParseFloatOr(parts, 11, unit.color.w);
+            loaded.units.push_back(unit);
+        } else if (parts[0] == "unitAsset") {
+            if (parts.size() < 13) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid unitAsset row at line " + std::to_string(lineNumber);
+                }
+                return false;
+            }
+            EnemyWaveUnit unit{};
+            unit.role = parts[1].empty() ? unit.role : parts[1];
+            unit.actorAssetId = parts[2];
+            unit.bulletPatternId = parts[3];
+            unit.distanceOffset = ParseFloatOr(parts, 4, unit.distanceOffset);
+            unit.lateralOffset = ParseFloatOr(parts, 5, unit.lateralOffset);
+            unit.verticalOffset = ParseFloatOr(parts, 6, unit.verticalOffset);
+            unit.forwardSpeed = ParseFloatOr(parts, 7, unit.forwardSpeed);
+            unit.radius = ParseFloatOr(parts, 8, unit.radius);
+            unit.lifetime = ParseFloatOr(parts, 9, unit.lifetime);
+            unit.color.x = ParseFloatOr(parts, 10, unit.color.x);
+            unit.color.y = ParseFloatOr(parts, 11, unit.color.y);
+            unit.color.z = ParseFloatOr(parts, 12, unit.color.z);
+            unit.color.w = ParseFloatOr(parts, 13, unit.color.w);
+            loaded.units.push_back(unit);
+        } else if (errorMessage != nullptr) {
+            *errorMessage = "Unknown enemy wave row at line " + std::to_string(lineNumber) + ": " + parts[0];
+            return false;
+        }
+    }
+
+    if (loaded.id.empty()) {
+        loaded.id = path;
+    }
+    if (loaded.displayName.empty()) {
+        loaded.displayName = loaded.id;
+    }
+    if (loaded.units.empty()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Enemy wave has no units: " + path;
+        }
+        return false;
+    }
+
+    *this = std::move(loaded);
+    return true;
+}

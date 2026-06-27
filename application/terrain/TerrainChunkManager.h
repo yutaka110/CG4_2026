@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <array>
+#include <deque>
+#include <future>
 #include <vector>
 
 #include <d3d12.h>
@@ -62,6 +64,38 @@ struct TerrainDebrisInstanceGpu {
     Vector4 attributes{};
 };
 
+struct TerrainChunkCpuBuild {
+    float startDistance = 0.0f;
+    float endDistance = 0.0f;
+    uint32_t seed = 0;
+    uint32_t lodTier = 0;
+    std::vector<VertexData> vertices;
+    std::vector<uint32_t> indices;
+    std::vector<TerrainDebrisInstanceGpu> debrisInstances;
+    Microsoft::WRL::ComPtr<ID3D12Resource> terrainPackedResource;
+    TransformationMatrix* terrainMappedTransform = nullptr;
+    size_t terrainIndexOffset = 0;
+    size_t terrainTransformOffset = 0;
+    size_t terrainVertexBytes = 0;
+    size_t terrainIndexBytes = 0;
+    Microsoft::WRL::ComPtr<ID3D12Resource> debrisPackedUploadResource;
+    Microsoft::WRL::ComPtr<ID3D12Resource> debrisVisibleInstanceResource;
+    Microsoft::WRL::ComPtr<ID3D12Resource> debrisIndirectArgsResource;
+    size_t debrisIndexOffset = 0;
+    size_t debrisInstanceOffset = 0;
+    size_t debrisVertexBytes = 0;
+    size_t debrisIndexBytes = 0;
+    size_t debrisInstanceBytes = 0;
+};
+
+struct TerrainChunkBuildJob {
+    float startDistance = 0.0f;
+    float endDistance = 0.0f;
+    uint32_t seed = 0;
+    uint32_t lodTier = 0;
+    std::future<TerrainChunkCpuBuild> future;
+};
+
 struct TerrainChunkDebugInfo {
     float startDistance = 0.0f;
     float endDistance = 0.0f;
@@ -84,6 +118,7 @@ struct TerrainRenderChunk {
     Microsoft::WRL::ComPtr<ID3D12Resource> indexResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> transformResource;
     TransformationMatrix* mappedTransform = nullptr;
+    D3D12_GPU_VIRTUAL_ADDRESS transformGpuAddress = 0;
     D3D12_VERTEX_BUFFER_VIEW vbv{};
     D3D12_INDEX_BUFFER_VIEW ibv{};
     Microsoft::WRL::ComPtr<ID3D12Resource> debrisVertexResource;
@@ -100,8 +135,8 @@ struct TerrainRenderChunk {
     D3D12_INDEX_BUFFER_VIEW debrisIbv{};
     Vector3 debrisBoundsCenter{};
     float debrisBoundsRadius = 0.0f;
-    D3D12_RESOURCE_STATES debrisVisibleInstanceState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    D3D12_RESOURCE_STATES debrisIndirectArgsState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    D3D12_RESOURCE_STATES debrisVisibleInstanceState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES debrisIndirectArgsState = D3D12_RESOURCE_STATE_COMMON;
     uint32_t vertexCount = 0;
     uint32_t indexCount = 0;
     uint32_t debrisVertexCount = 0;
@@ -117,6 +152,11 @@ struct TerrainDebrisCullingStats {
     uint32_t hiZBuildCount = 0;
     uint32_t hiZMipDispatchCount = 0;
     uint32_t debrisCullDispatchCount = 0;
+};
+
+struct RetiredTerrainRenderChunks {
+    uint64_t retireFrame = 0;
+    std::vector<TerrainRenderChunk> chunks;
 };
 
 class TerrainChunkManager {
@@ -165,6 +205,8 @@ private:
         ge3::core::DescriptorHeap* srvHeap,
         const RailPath& railPath,
         const TerrainGenerationSettings& settings);
+    void RetireRenderChunks(std::vector<TerrainRenderChunk>&& chunks);
+    void TrimRetiredRenderChunks();
     void UpdateChunkTransforms(const Matrix4x4& viewProjection);
     bool HasMatchingRenderChunks() const;
     bool EnsureHiZResources(ID3D12Device* device, ge3::core::DescriptorHeap* srvHeap);
@@ -177,6 +219,9 @@ private:
 
     std::vector<TerrainChunkDebugInfo> chunks_;
     std::vector<TerrainRenderChunk> renderChunks_;
+    std::deque<RetiredTerrainRenderChunks> retiredRenderChunks_;
+    std::deque<TerrainChunkBuildJob> pendingBuildJobs_;
+    uint64_t frameSerial_ = 0;
     uint32_t renderSettingsHash_ = 0;
     uint32_t chunkCacheSettingsHash_ = 0;
     int32_t cachedFirstChunkIndex_ = -1;

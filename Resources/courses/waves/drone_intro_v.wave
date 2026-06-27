@@ -1,0 +1,8 @@
+# wave|id|displayName
+# unitAsset|role|actorAssetId|bulletPatternId|distanceOffset|lateralOffset|verticalOffset|forwardSpeed|radius|lifetime|r|g|b|a
+wave|drone_intro_v|Intro V Formation
+unitAsset|drone_lead|drone_basic|single_red|36|0|5|2|1.3|9|1.0|0.24|0.16|1.0
+unitAsset|drone_left_1|drone_basic|single_red|42|-7|4|2|1.2|9|1.0|0.34|0.20|1.0
+unitAsset|drone_right_1|drone_basic|single_red|42|7|4|2|1.2|9|1.0|0.34|0.20|1.0
+unitAsset|drone_left_2|drone_basic|single_red|50|-13|2|2|1.1|9|1.0|0.48|0.24|1.0
+unitAsset|drone_right_2|drone_basic|single_red|50|13|2|2|1.1|9|1.0|0.48|0.24|1.0

@@ -922,9 +922,9 @@ AppFrameRenderer frameRenderer;
 	//**************************
 	//**************************
 
-	engineContext.Shutdown();
-
 	runLoop.Shutdown();
+
+	engineContext.Shutdown();
 
 #if defined(_DEBUG) || defined(DEVELOP)
 	ComPtr<ID3D12Debug1> debugController = nullptr;

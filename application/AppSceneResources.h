@@ -10,6 +10,7 @@
 #include "../../externals/DirectXTex/DirectXTex.h"
 #include "AppRuntimeState.h"
 #include "AnimationClip.h"
+#include "course/CourseMeshRenderQueue.h"
 #include "diagnostics/DebugDrawSystem.h"
 #include "Skeleton.h"
 #include "utils/math/MathUtils.h"
@@ -87,7 +88,7 @@ struct SkinCluster {
     Microsoft::WRL::ComPtr<ID3D12Resource> influenceResource;
     D3D12_VERTEX_BUFFER_VIEW influenceBufferView{};
     Microsoft::WRL::ComPtr<ID3D12Resource> paletteResource;
-    D3D12_RESOURCE_STATES paletteState = D3D12_RESOURCE_STATE_COPY_DEST;
+    D3D12_RESOURCE_STATES paletteState = D3D12_RESOURCE_STATE_COMMON;
     std::vector<JointPaletteEntry> paletteEntries;
     Microsoft::WRL::ComPtr<ID3D12Resource> paletteUploadResource;
     JointPaletteEntry* mappedPaletteUpload = nullptr;
@@ -197,6 +198,12 @@ public:
     const AppManagedModelResource* FindManagedModel(uint32_t modelIndex) const;
     const std::vector<AppManagedModelResource>& ManagedModelLibrary() const { return vfxModelLibrary; }
     const std::vector<AppModelObjectInstance>& ModelObjectInstances() const { return vfxModelObjects; }
+    const CourseMeshRenderQueue& CourseMeshes() const { return courseMeshRenderQueue; }
+    void SyncCourseMeshRenderQueue(
+        const CourseSpawnRuntime& courseRuntime,
+        const RailPath& railPath,
+        const Matrix4x4& viewMatrix,
+        const Matrix4x4& projMatrix);
 
 public:
     // Sprite
@@ -277,6 +284,7 @@ public:
     std::vector<AppManagedTextureResource> vfxTextureLibrary;
     std::vector<AppManagedModelResource> vfxModelLibrary;
     std::vector<AppModelObjectInstance> vfxModelObjects;
+    CourseMeshRenderQueue courseMeshRenderQueue;
 
     // Sphere
     SphereMeshData sphere{};

@@ -1,0 +1,3 @@
+wave|drone_chase_pair|Rear Chase Pair
+unitAsset|chaser_left|drone_chaser|twin_chase|-24|-8|4|12|1.3|10|1.0|0.72|0.18|1.0
+unitAsset|chaser_right|drone_chaser|twin_chase|-24|8|4|12|1.3|10|1.0|0.72|0.18|1.0

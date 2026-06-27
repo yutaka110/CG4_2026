@@ -83,19 +83,17 @@ ID3D12GraphicsCommandList* CommandListPool::Begin(UINT frameIndex, ID3D12Pipelin
 }
 
 // EndAndExecute: Close→Execute（QueueはDeviceから取得）
-void CommandListPool::EndAndExecute(Device& dev)
+bool CommandListPool::EndAndExecute(Device& dev)
 {
     HRESULT hr = list_->Close();
     if (FAILED(hr)) {
         std::ostringstream oss;
         oss << "[CommandListPool] CommandList Close() failed: " << HexHR(hr) << "\n";
         Logger::Error(oss.str());
-        return;
+        return false;
     }
 
     ID3D12CommandList* lists[] = { list_.Get() };
     dev.GetCommandQueue()->ExecuteCommandLists(1, lists);
-
-    // Trace が無いようなので Info に落とす or 削除
-    Logger::Info("[CommandListPool] CommandList executed.\n");
+    return true;
 }

@@ -3,6 +3,7 @@
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
 
 #include "AppDebugViewsPanel.h"
+#include "AppCourseTimelineDebugPanel.h"
 #include "AppEffectAssetEditorPanel.h"
 #include "AppEffectInstancePanel.h"
 #include "AppPostProcessPanel.h"
@@ -745,6 +746,23 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         context.transientTargetStorageCount,
                         context.transientBufferCount,
                         context.transientBufferStorageCount});
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Course Timeline")) {
+                DrawCourseTimelineDebugPanel(
+                    CourseTimelineDebugPanelInput{
+                        context.course,
+                        context.courseSpawnRuntime,
+                        context.courseCollisionSystem,
+                        context.courseLoadStatus,
+                        context.coursePath,
+                        context.courseDistance,
+                        context.courseRailLength,
+                        context.onSaveCourse,
+                        context.onApplyCourse,
+                        context.onReloadCourse,
+                        context.onTeleportCourseToDistance});
                 ImGui::EndTabItem();
             }
 

@@ -728,6 +728,35 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     model->mesh.indexCount);
             }
 
+            for (const CourseMeshRenderItem& item : ctx.scene->CourseMeshes().Items()) {
+                const AppManagedModelResource* model =
+                    ctx.scene->FindManagedModel(item.modelIndex);
+                if (!item.visible ||
+                    model == nullptr ||
+                    !item.transformResource ||
+                    model->textureGpu.ptr == 0 ||
+                    model->mesh.indexCount == 0 ||
+                    !prepareMainPass()) {
+                    continue;
+                }
+
+                ctx.frameRenderer->DrawMainModel(
+                    passContext.commandList,
+                    model->mesh.vbv,
+                    model->mesh.ibv,
+                    ctx.scene->materialResource->GetGPUVirtualAddress(),
+                    item.transformResource->GetGPUVirtualAddress(),
+                    model->textureGpu,
+                    ctx.scene->textureSrvHandleGPU2,
+                    ctx.scene->textureSrvHandleGPU2,
+                    ctx.scene->skyboxTextureSrvHandleGPU,
+                    ctx.scene->directionalLightResource->GetGPUVirtualAddress(),
+                    ctx.scene->cameraResource->GetGPUVirtualAddress(),
+                    ctx.scene->pointLightResource->GetGPUVirtualAddress(),
+                    ctx.scene->spotLightResource->GetGPUVirtualAddress(),
+                    model->mesh.indexCount);
+            }
+
             if (ctx.runtimeState->showSkinnedModel) {
                 if (SkinnedModelInstance* activeSkinnedModel =
                         ctx.scene->GetActiveSkinnedModel()) {
@@ -813,7 +842,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     ctx.scene->cascadeShadowSrvTableGpu);
             }
             for (const TerrainRenderChunk& chunk : chunks) {
-                if (chunk.indexCount == 0 || chunk.transformResource == nullptr) {
+                if (chunk.indexCount == 0 || chunk.transformResource == nullptr || chunk.transformGpuAddress == 0) {
                     continue;
                 }
                 ctx.frameRenderer->DrawMainModel(
@@ -821,7 +850,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     chunk.vbv,
                     chunk.ibv,
                     ctx.scene->terrainMaterialResource->GetGPUVirtualAddress(),
-                    chunk.transformResource->GetGPUVirtualAddress(),
+                    chunk.transformGpuAddress,
                     terrainTexture,
                     terrainDetailCache,
                     terrainDetailNormalMap,

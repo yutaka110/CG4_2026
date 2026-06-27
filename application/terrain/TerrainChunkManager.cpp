@@ -1,9 +1,11 @@
 #include "TerrainChunkManager.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cfloat>
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <utility>
 #include <vector>
 
@@ -14,11 +16,99 @@ namespace {
 constexpr uint32_t kTerrainHiZMipCount = 5;
 constexpr uint32_t kTerrainHiZBaseWidth = 256;
 constexpr uint32_t kTerrainHiZBaseHeight = 144;
+constexpr uint32_t kTerrainStreamingJobSubmitBudget = 2;
+constexpr uint32_t kTerrainStreamingMaxPendingJobs = 2;
+constexpr uint32_t kTerrainStreamingUploadBudget = 1;
+constexpr uint64_t kTerrainStreamingRetiredChunkFrames = 4;
+constexpr double kTerrainStreamingHitchLogMs = 4.0;
 
 struct TerrainCpuMesh {
     std::vector<VertexData> vertices;
     std::vector<uint32_t> indices;
 };
+
+bool SameChunkIdentity(const TerrainRenderChunk& renderChunk, const TerrainChunkDebugInfo& debugChunk) {
+    return renderChunk.seed == debugChunk.seed &&
+        std::abs(renderChunk.startDistance - debugChunk.startDistance) <= 0.001f &&
+        std::abs(renderChunk.endDistance - debugChunk.endDistance) <= 0.001f;
+}
+
+bool SameJobIdentity(const TerrainChunkBuildJob& job, const TerrainChunkDebugInfo& debugChunk) {
+    return job.seed == debugChunk.seed &&
+        job.lodTier == debugChunk.lodTier &&
+        std::abs(job.startDistance - debugChunk.startDistance) <= 0.001f &&
+        std::abs(job.endDistance - debugChunk.endDistance) <= 0.001f;
+}
+
+bool SameBuildIdentity(const TerrainChunkCpuBuild& build, const TerrainChunkDebugInfo& debugChunk) {
+    return build.seed == debugChunk.seed &&
+        build.lodTier == debugChunk.lodTier &&
+        std::abs(build.startDistance - debugChunk.startDistance) <= 0.001f &&
+        std::abs(build.endDistance - debugChunk.endDistance) <= 0.001f;
+}
+
+bool IsBuildJobReady(const TerrainChunkBuildJob& job) {
+    return job.future.valid() &&
+        job.future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+}
+
+bool TerrainStreamingVerboseLogEnabled() {
+    char value[16]{};
+    const DWORD length = GetEnvironmentVariableA(
+        "GE3_TERRAIN_STREAMING_LOG",
+        value,
+        static_cast<DWORD>(sizeof(value)));
+    return length > 0 && value[0] == '1';
+}
+
+void LogTerrainStreamingEvent(
+    int32_t firstIndex,
+    int32_t lastIndex,
+    uint32_t reusedExact,
+    uint32_t reusedPending,
+    uint32_t built,
+    uint32_t submitted,
+    uint32_t skipped,
+    uint32_t pending,
+    double elapsedMs,
+    double futureGetMs,
+    double uploadMeshMs,
+    double uploadDebrisMs,
+    uint32_t uploadedVertices,
+    uint32_t uploadedIndices,
+    uint32_t uploadedDebris) {
+    const bool verbose = TerrainStreamingVerboseLogEnabled();
+    if (!verbose && elapsedMs < kTerrainStreamingHitchLogMs) {
+        return;
+    }
+
+    char message[512]{};
+    std::snprintf(
+        message,
+        sizeof(message),
+        "[TerrainStreaming] chunks=%d..%d reusedExact=%u reusedPending=%u uploaded=%u submitted=%u skipped=%u pending=%u cpuMs=%.3f futureMs=%.3f meshMs=%.3f debrisMs=%.3f vertices=%u indices=%u debris=%u\n",
+        firstIndex,
+        lastIndex,
+        reusedExact,
+        reusedPending,
+        built,
+        submitted,
+        skipped,
+        pending,
+        elapsedMs,
+        futureGetMs,
+        uploadMeshMs,
+        uploadDebrisMs,
+        uploadedVertices,
+        uploadedIndices,
+        uploadedDebris);
+    OutputDebugStringA(message);
+
+    std::ofstream log("logs/terrain_streaming.log", std::ios::app);
+    if (log) {
+        log << message;
+    }
+}
 
 struct RockScatterPlacement {
     float distance = 0.0f;
@@ -120,6 +210,10 @@ float RockVariationFromSeed(uint32_t seed, const TerrainGenerationSettings& sett
     return (std::clamp)(0.5f + (Hash01(seed + 3607u) - 0.5f) * strength, 0.0f, 1.0f);
 }
 
+size_t AlignUpSize(size_t value, size_t alignment) {
+    return (value + alignment - 1u) & ~(alignment - 1u);
+}
+
 Microsoft::WRL::ComPtr<ID3D12Resource> CreateUploadBuffer(
     ID3D12Device* device,
     size_t sizeInBytes) {
@@ -158,6 +252,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> CreateDefaultBuffer(
     size_t sizeInBytes,
     D3D12_RESOURCE_FLAGS flags,
     D3D12_RESOURCE_STATES initialState) {
+    (void)initialState;
     if (device == nullptr || sizeInBytes == 0) {
         return {};
     }
@@ -181,7 +276,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> CreateDefaultBuffer(
             &heapProps,
             D3D12_HEAP_FLAG_NONE,
             &resourceDesc,
-            initialState,
+            D3D12_RESOURCE_STATE_COMMON,
             nullptr,
             IID_PPV_ARGS(&resource)))) {
         return {};
@@ -3823,30 +3918,33 @@ void UploadMeshToChunk(
 
     chunk.vertexCount = static_cast<uint32_t>(mesh.vertices.size());
     chunk.indexCount = static_cast<uint32_t>(mesh.indices.size());
-    chunk.vertexResource = CreateUploadBuffer(device, sizeof(VertexData) * mesh.vertices.size());
-    chunk.indexResource = CreateUploadBuffer(device, sizeof(uint32_t) * mesh.indices.size());
-    chunk.transformResource = CreateUploadBuffer(device, sizeof(TransformationMatrix));
-    if (chunk.vertexResource == nullptr || chunk.indexResource == nullptr || chunk.transformResource == nullptr) {
+    const size_t vertexBytes = sizeof(VertexData) * mesh.vertices.size();
+    const size_t indexOffset = AlignUpSize(vertexBytes, alignof(uint32_t));
+    const size_t indexBytes = sizeof(uint32_t) * mesh.indices.size();
+    const size_t transformOffset = AlignUpSize(indexOffset + indexBytes, 256u);
+    const size_t totalBytes = transformOffset + sizeof(TransformationMatrix);
+    Microsoft::WRL::ComPtr<ID3D12Resource> packedResource = CreateUploadBuffer(device, totalBytes);
+    if (packedResource == nullptr) {
         return;
     }
+    chunk.vertexResource = packedResource;
+    chunk.indexResource = packedResource;
+    chunk.transformResource = packedResource;
 
-    VertexData* mappedVertices = nullptr;
-    uint32_t* mappedIndices = nullptr;
-    chunk.vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&mappedVertices));
-    chunk.indexResource->Map(0, nullptr, reinterpret_cast<void**>(&mappedIndices));
-    chunk.transformResource->Map(0, nullptr, reinterpret_cast<void**>(&chunk.mappedTransform));
-    if (mappedVertices != nullptr) {
-        std::memcpy(mappedVertices, mesh.vertices.data(), sizeof(VertexData) * mesh.vertices.size());
+    uint8_t* mapped = nullptr;
+    packedResource->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
+    if (mapped != nullptr) {
+        std::memcpy(mapped, mesh.vertices.data(), vertexBytes);
+        std::memcpy(mapped + indexOffset, mesh.indices.data(), indexBytes);
+        chunk.mappedTransform = reinterpret_cast<TransformationMatrix*>(mapped + transformOffset);
     }
-    if (mappedIndices != nullptr) {
-        std::memcpy(mappedIndices, mesh.indices.data(), sizeof(uint32_t) * mesh.indices.size());
-    }
+    chunk.transformGpuAddress = chunk.transformResource->GetGPUVirtualAddress() + transformOffset;
 
     chunk.vbv.BufferLocation = chunk.vertexResource->GetGPUVirtualAddress();
-    chunk.vbv.SizeInBytes = UINT(sizeof(VertexData) * mesh.vertices.size());
+    chunk.vbv.SizeInBytes = UINT(vertexBytes);
     chunk.vbv.StrideInBytes = sizeof(VertexData);
-    chunk.ibv.BufferLocation = chunk.indexResource->GetGPUVirtualAddress();
-    chunk.ibv.SizeInBytes = UINT(sizeof(uint32_t) * mesh.indices.size());
+    chunk.ibv.BufferLocation = chunk.indexResource->GetGPUVirtualAddress() + indexOffset;
+    chunk.ibv.SizeInBytes = UINT(indexBytes);
     chunk.ibv.Format = DXGI_FORMAT_R32_UINT;
 
     if (chunk.mappedTransform != nullptr) {
@@ -3904,6 +4002,230 @@ std::vector<TerrainDebrisInstanceGpu> BuildDebrisGpuInstances(
     return gpuInstances;
 }
 
+void PrepareTerrainChunkGpuResources(ID3D12Device* device, TerrainChunkCpuBuild& build) {
+    if (device == nullptr || build.vertices.empty() || build.indices.empty()) {
+        return;
+    }
+
+    build.terrainVertexBytes = sizeof(VertexData) * build.vertices.size();
+    build.terrainIndexOffset = AlignUpSize(build.terrainVertexBytes, alignof(uint32_t));
+    build.terrainIndexBytes = sizeof(uint32_t) * build.indices.size();
+    build.terrainTransformOffset = AlignUpSize(build.terrainIndexOffset + build.terrainIndexBytes, 256u);
+    build.terrainPackedResource =
+        CreateUploadBuffer(device, build.terrainTransformOffset + sizeof(TransformationMatrix));
+    if (build.terrainPackedResource != nullptr) {
+        uint8_t* mapped = nullptr;
+        build.terrainPackedResource->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
+        if (mapped != nullptr) {
+            std::memcpy(mapped, build.vertices.data(), build.terrainVertexBytes);
+            std::memcpy(mapped + build.terrainIndexOffset, build.indices.data(), build.terrainIndexBytes);
+            build.terrainMappedTransform =
+                reinterpret_cast<TransformationMatrix*>(mapped + build.terrainTransformOffset);
+            *build.terrainMappedTransform = {};
+            build.terrainMappedTransform->World = MakeIdentity4x4();
+            build.terrainMappedTransform->WVP = MakeIdentity4x4();
+            build.terrainMappedTransform->WorldInverseTranspose = MakeIdentity4x4();
+        }
+    }
+
+    if (build.debrisInstances.empty()) {
+        return;
+    }
+
+    const TerrainCpuMesh debrisMesh = BuildDebrisBaseMesh();
+    if (debrisMesh.vertices.empty() || debrisMesh.indices.empty()) {
+        return;
+    }
+
+    build.debrisVertexBytes = sizeof(VertexData) * debrisMesh.vertices.size();
+    build.debrisIndexOffset = AlignUpSize(build.debrisVertexBytes, alignof(uint32_t));
+    build.debrisIndexBytes = sizeof(uint32_t) * debrisMesh.indices.size();
+    build.debrisInstanceOffset =
+        AlignUpSize(build.debrisIndexOffset + build.debrisIndexBytes, alignof(TerrainDebrisInstanceGpu));
+    build.debrisInstanceBytes = sizeof(TerrainDebrisInstanceGpu) * build.debrisInstances.size();
+    build.debrisPackedUploadResource =
+        CreateUploadBuffer(device, build.debrisInstanceOffset + build.debrisInstanceBytes);
+    if (build.debrisPackedUploadResource != nullptr) {
+        uint8_t* mapped = nullptr;
+        build.debrisPackedUploadResource->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
+        if (mapped != nullptr) {
+            std::memcpy(mapped, debrisMesh.vertices.data(), build.debrisVertexBytes);
+            std::memcpy(mapped + build.debrisIndexOffset, debrisMesh.indices.data(), build.debrisIndexBytes);
+            std::memcpy(mapped + build.debrisInstanceOffset, build.debrisInstances.data(), build.debrisInstanceBytes);
+        }
+    }
+    build.debrisVisibleInstanceResource = CreateDefaultBuffer(
+        device,
+        sizeof(TerrainDebrisInstanceGpu) *
+            build.debrisInstances.size() *
+            TerrainRenderChunk::kDebrisLodBucketCount,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_COMMON);
+    build.debrisIndirectArgsResource = CreateDefaultBuffer(
+        device,
+        sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) * TerrainRenderChunk::kDebrisLodBucketCount,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_COMMON);
+}
+
+TerrainChunkCpuBuild BuildTerrainChunkCpu(
+    ID3D12Device* device,
+    TerrainChunkDebugInfo debugChunk,
+    RailPath railPath,
+    TerrainGenerationSettings settings) {
+    TerrainChunkCpuBuild build{};
+    build.startDistance = debugChunk.startDistance;
+    build.endDistance = debugChunk.endDistance;
+    build.seed = debugChunk.seed;
+    build.lodTier = debugChunk.lodTier;
+
+    TerrainCpuMesh mesh = BuildChunkMesh(debugChunk, railPath, settings);
+    build.vertices = std::move(mesh.vertices);
+    build.indices = std::move(mesh.indices);
+    build.debrisInstances = BuildDebrisGpuInstances(debugChunk);
+    PrepareTerrainChunkGpuResources(device, build);
+    return build;
+}
+
+void UploadDebrisGpuInstancesToChunk(
+    ID3D12Device* device,
+    ge3::core::DescriptorHeap* srvHeap,
+    TerrainRenderChunk& chunk,
+    const std::vector<TerrainDebrisInstanceGpu>& gpuInstances) {
+    if (device == nullptr || gpuInstances.empty()) {
+        return;
+    }
+
+    const TerrainCpuMesh debrisMesh = BuildDebrisBaseMesh();
+    if (debrisMesh.vertices.empty() || debrisMesh.indices.empty()) {
+        return;
+    }
+
+    chunk.debrisVertexCount = static_cast<uint32_t>(debrisMesh.vertices.size());
+    chunk.debrisIndexCount = static_cast<uint32_t>(debrisMesh.indices.size());
+    chunk.debrisInstanceCount = static_cast<uint32_t>(gpuInstances.size());
+    chunk.debrisInstanceCapacityPerBucket = chunk.debrisInstanceCount;
+    const size_t vertexBytes = sizeof(VertexData) * debrisMesh.vertices.size();
+    const size_t indexOffset = AlignUpSize(vertexBytes, alignof(uint32_t));
+    const size_t indexBytes = sizeof(uint32_t) * debrisMesh.indices.size();
+    const size_t instanceOffset = AlignUpSize(indexOffset + indexBytes, alignof(TerrainDebrisInstanceGpu));
+    const size_t instanceBytes = sizeof(TerrainDebrisInstanceGpu) * gpuInstances.size();
+    Microsoft::WRL::ComPtr<ID3D12Resource> packedUploadResource =
+        CreateUploadBuffer(device, instanceOffset + instanceBytes);
+    chunk.debrisVertexResource = packedUploadResource;
+    chunk.debrisIndexResource = packedUploadResource;
+    chunk.debrisInstanceResource = packedUploadResource;
+    chunk.debrisVisibleInstanceResource = CreateDefaultBuffer(
+        device,
+        sizeof(TerrainDebrisInstanceGpu) *
+            static_cast<size_t>(chunk.debrisInstanceCapacityPerBucket) *
+            TerrainRenderChunk::kDebrisLodBucketCount,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_COMMON);
+    chunk.debrisIndirectArgsResource = CreateDefaultBuffer(
+        device,
+        sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) * TerrainRenderChunk::kDebrisLodBucketCount,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_COMMON);
+
+    if (chunk.debrisVertexResource == nullptr) {
+        return;
+    }
+
+    uint8_t* mapped = nullptr;
+    packedUploadResource->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
+    if (mapped != nullptr) {
+        std::memcpy(mapped, debrisMesh.vertices.data(), vertexBytes);
+        std::memcpy(mapped + indexOffset, debrisMesh.indices.data(), indexBytes);
+        std::memcpy(mapped + instanceOffset, gpuInstances.data(), instanceBytes);
+    }
+
+    chunk.debrisVbv.BufferLocation = chunk.debrisVertexResource->GetGPUVirtualAddress();
+    chunk.debrisVbv.SizeInBytes = UINT(vertexBytes);
+    chunk.debrisVbv.StrideInBytes = sizeof(VertexData);
+    chunk.debrisIbv.BufferLocation = chunk.debrisIndexResource->GetGPUVirtualAddress() + indexOffset;
+    chunk.debrisIbv.SizeInBytes = UINT(indexBytes);
+    chunk.debrisIbv.Format = DXGI_FORMAT_R32_UINT;
+    chunk.debrisInstanceVbv.BufferLocation =
+        chunk.debrisInstanceResource->GetGPUVirtualAddress() + instanceOffset;
+    chunk.debrisInstanceVbv.SizeInBytes = UINT(instanceBytes);
+    chunk.debrisInstanceVbv.StrideInBytes = sizeof(TerrainDebrisInstanceGpu);
+
+    if (chunk.debrisVisibleInstanceResource != nullptr) {
+        chunk.debrisVisibleInstanceVbv.BufferLocation =
+            chunk.debrisVisibleInstanceResource->GetGPUVirtualAddress();
+        chunk.debrisVisibleInstanceVbv.SizeInBytes =
+            UINT(sizeof(TerrainDebrisInstanceGpu) *
+                static_cast<size_t>(chunk.debrisInstanceCapacityPerBucket) *
+                TerrainRenderChunk::kDebrisLodBucketCount);
+        chunk.debrisVisibleInstanceVbv.StrideInBytes = sizeof(TerrainDebrisInstanceGpu);
+        chunk.debrisVisibleInstanceState = D3D12_RESOURCE_STATE_COMMON;
+    }
+    if (chunk.debrisIndirectArgsResource != nullptr) {
+        chunk.debrisIndirectArgsState = D3D12_RESOURCE_STATE_COMMON;
+    }
+
+    if (srvHeap != nullptr) {
+        chunk.debrisInstanceSrv = srvHeap->Allocate();
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Buffer.FirstElement = 0;
+        srvDesc.Buffer.NumElements = chunk.debrisInstanceCount;
+        srvDesc.Buffer.StructureByteStride = sizeof(TerrainDebrisInstanceGpu);
+        device->CreateShaderResourceView(
+            chunk.debrisInstanceResource.Get(),
+            &srvDesc,
+            chunk.debrisInstanceSrv.cpu);
+        if (chunk.debrisVisibleInstanceResource != nullptr) {
+            chunk.debrisVisibleInstanceUav = srvHeap->Allocate();
+            D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+            uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+            uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            uavDesc.Buffer.FirstElement = 0;
+            uavDesc.Buffer.NumElements =
+                chunk.debrisInstanceCapacityPerBucket * TerrainRenderChunk::kDebrisLodBucketCount;
+            uavDesc.Buffer.StructureByteStride = sizeof(TerrainDebrisInstanceGpu);
+            device->CreateUnorderedAccessView(
+                chunk.debrisVisibleInstanceResource.Get(),
+                nullptr,
+                &uavDesc,
+                chunk.debrisVisibleInstanceUav.cpu);
+        }
+        if (chunk.debrisIndirectArgsResource != nullptr) {
+            chunk.debrisIndirectArgsUav = srvHeap->Allocate();
+            D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+            uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+            uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            uavDesc.Buffer.FirstElement = 0;
+            uavDesc.Buffer.NumElements = TerrainRenderChunk::kDebrisLodBucketCount;
+            uavDesc.Buffer.StructureByteStride = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+            device->CreateUnorderedAccessView(
+                chunk.debrisIndirectArgsResource.Get(),
+                nullptr,
+                &uavDesc,
+                chunk.debrisIndirectArgsUav.cpu);
+        }
+    }
+
+    Vector3 minBounds{FLT_MAX, FLT_MAX, FLT_MAX};
+    Vector3 maxBounds{-FLT_MAX, -FLT_MAX, -FLT_MAX};
+    for (const TerrainDebrisInstanceGpu& instance : gpuInstances) {
+        const Vector3 center{instance.positionLod.x, instance.positionLod.y, instance.positionLod.z};
+        const float radius =
+            (std::max)(instance.tangentRadiusA.w, (std::max)(instance.rightRadiusB.w, instance.upRadiusN.w));
+        minBounds.x = (std::min)(minBounds.x, center.x - radius);
+        minBounds.y = (std::min)(minBounds.y, center.y - radius);
+        minBounds.z = (std::min)(minBounds.z, center.z - radius);
+        maxBounds.x = (std::max)(maxBounds.x, center.x + radius);
+        maxBounds.y = (std::max)(maxBounds.y, center.y + radius);
+        maxBounds.z = (std::max)(maxBounds.z, center.z + radius);
+    }
+    chunk.debrisBoundsCenter = Scale(Add(minBounds, maxBounds), 0.5f);
+    chunk.debrisBoundsRadius = Length(Subtract(maxBounds, minBounds)) * 0.5f;
+}
+
 void UploadDebrisInstancesToChunk(
     ID3D12Device* device,
     ge3::core::DescriptorHeap* srvHeap,
@@ -3932,15 +4254,15 @@ void UploadDebrisInstancesToChunk(
             gpuInstances.size() *
             TerrainRenderChunk::kDebrisLodBucketCount,
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        D3D12_RESOURCE_STATE_COMMON);
     chunk.debrisIndirectArgsResource = CreateDefaultBuffer(
         device,
         sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) *
             TerrainRenderChunk::kDebrisLodBucketCount,
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    chunk.debrisVisibleInstanceState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    chunk.debrisIndirectArgsState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        D3D12_RESOURCE_STATE_COMMON);
+    chunk.debrisVisibleInstanceState = D3D12_RESOURCE_STATE_COMMON;
+    chunk.debrisIndirectArgsState = D3D12_RESOURCE_STATE_COMMON;
     if (chunk.debrisVertexResource == nullptr ||
         chunk.debrisIndexResource == nullptr ||
         chunk.debrisInstanceResource == nullptr ||
@@ -4183,8 +4505,11 @@ void TerrainChunkManager::Update(
     const TerrainGenerationSettings& settings,
     float focusDistance,
     const Matrix4x4& viewProjection) {
+    ++frameSerial_;
+    TrimRetiredRenderChunks();
+
     if (railPath.Length() <= 0.0f || settings.chunkLength <= 0.0f) {
-        renderChunks_.clear();
+        RetireRenderChunks(std::move(renderChunks_));
         chunks_.clear();
         cachedFirstChunkIndex_ = -1;
         cachedLastChunkIndex_ = -1;
@@ -4202,7 +4527,7 @@ void TerrainChunkManager::Update(
         focusIndex + static_cast<int32_t>(settings.visibleAheadChunks));
 
     const uint32_t settingsHash = SettingsHash(settings);
-    const float focusBucketLength = (std::max)(4.0f, settings.chunkLength * 0.125f);
+    const float focusBucketLength = (std::max)(32.0f, settings.chunkLength);
     const int32_t focusBucket = static_cast<int32_t>(std::floor(focusDistance / focusBucketLength));
     if (settingsHash == chunkCacheSettingsHash_ &&
         firstIndex == cachedFirstChunkIndex_ &&
@@ -4391,25 +4716,299 @@ void TerrainChunkManager::RebuildRenderChunks(
     ge3::core::DescriptorHeap* srvHeap,
     const RailPath& railPath,
     const TerrainGenerationSettings& settings) {
+    const auto rebuildStart = std::chrono::steady_clock::now();
+    std::vector<TerrainRenderChunk> reusableChunks = std::move(renderChunks_);
+    std::vector<bool> reused(reusableChunks.size(), false);
     renderChunks_.clear();
     if (device == nullptr) {
+        RetireRenderChunks(std::move(reusableChunks));
         return;
     }
     EnsureDebrisCommandSignature(device, debrisDrawCommandSignature_);
 
+    uint32_t uploadedCount = 0;
+    uint32_t submittedCount = 0;
+    uint32_t reusedExactCount = 0;
+    uint32_t reusedPendingCount = 0;
+    uint32_t skippedCount = 0;
+    double futureGetMs = 0.0;
+    double uploadMeshMs = 0.0;
+    double uploadDebrisMs = 0.0;
+    uint32_t uploadedVertices = 0;
+    uint32_t uploadedIndices = 0;
+    uint32_t uploadedDebris = 0;
+
+    for (auto it = pendingBuildJobs_.begin(); it != pendingBuildJobs_.end();) {
+        if (uploadedCount >= kTerrainStreamingUploadBudget || !IsBuildJobReady(*it)) {
+            ++it;
+            continue;
+        }
+
+        const auto futureStart = std::chrono::steady_clock::now();
+        TerrainChunkCpuBuild build = it->future.get();
+        const auto futureEnd = std::chrono::steady_clock::now();
+        futureGetMs += std::chrono::duration<double, std::milli>(futureEnd - futureStart).count();
+        TerrainRenderChunk renderChunk{};
+        renderChunk.startDistance = build.startDistance;
+        renderChunk.endDistance = build.endDistance;
+        renderChunk.seed = build.seed;
+        renderChunk.lodTier = build.lodTier;
+        uploadedVertices += static_cast<uint32_t>((std::min)(build.vertices.size(), static_cast<size_t>(UINT32_MAX)));
+        uploadedIndices += static_cast<uint32_t>((std::min)(build.indices.size(), static_cast<size_t>(UINT32_MAX)));
+        uploadedDebris += static_cast<uint32_t>((std::min)(build.debrisInstances.size(), static_cast<size_t>(UINT32_MAX)));
+        const auto meshStart = std::chrono::steady_clock::now();
+        if (build.terrainPackedResource != nullptr) {
+            renderChunk.vertexCount = static_cast<uint32_t>(build.vertices.size());
+            renderChunk.indexCount = static_cast<uint32_t>(build.indices.size());
+            renderChunk.vertexResource = build.terrainPackedResource;
+            renderChunk.indexResource = build.terrainPackedResource;
+            renderChunk.transformResource = build.terrainPackedResource;
+            renderChunk.mappedTransform = build.terrainMappedTransform;
+            renderChunk.transformGpuAddress =
+                build.terrainPackedResource->GetGPUVirtualAddress() + build.terrainTransformOffset;
+            renderChunk.vbv.BufferLocation = build.terrainPackedResource->GetGPUVirtualAddress();
+            renderChunk.vbv.SizeInBytes = UINT(build.terrainVertexBytes);
+            renderChunk.vbv.StrideInBytes = sizeof(VertexData);
+            renderChunk.ibv.BufferLocation =
+                build.terrainPackedResource->GetGPUVirtualAddress() + build.terrainIndexOffset;
+            renderChunk.ibv.SizeInBytes = UINT(build.terrainIndexBytes);
+            renderChunk.ibv.Format = DXGI_FORMAT_R32_UINT;
+        } else {
+            TerrainCpuMesh mesh{};
+            mesh.vertices = std::move(build.vertices);
+            mesh.indices = std::move(build.indices);
+            UploadMeshToChunk(device, renderChunk, mesh);
+        }
+        const auto meshEnd = std::chrono::steady_clock::now();
+        uploadMeshMs += std::chrono::duration<double, std::milli>(meshEnd - meshStart).count();
+        const auto debrisStart = std::chrono::steady_clock::now();
+        if (build.debrisPackedUploadResource != nullptr &&
+            build.debrisVisibleInstanceResource != nullptr &&
+            build.debrisIndirectArgsResource != nullptr &&
+            !build.debrisInstances.empty()) {
+            renderChunk.debrisVertexCount = static_cast<uint32_t>(build.debrisVertexBytes / sizeof(VertexData));
+            renderChunk.debrisIndexCount = static_cast<uint32_t>(build.debrisIndexBytes / sizeof(uint32_t));
+            renderChunk.debrisInstanceCount = static_cast<uint32_t>(build.debrisInstances.size());
+            renderChunk.debrisInstanceCapacityPerBucket = renderChunk.debrisInstanceCount;
+            renderChunk.debrisVertexResource = build.debrisPackedUploadResource;
+            renderChunk.debrisIndexResource = build.debrisPackedUploadResource;
+            renderChunk.debrisInstanceResource = build.debrisPackedUploadResource;
+            renderChunk.debrisVisibleInstanceResource = build.debrisVisibleInstanceResource;
+            renderChunk.debrisIndirectArgsResource = build.debrisIndirectArgsResource;
+            renderChunk.debrisVisibleInstanceState = D3D12_RESOURCE_STATE_COMMON;
+            renderChunk.debrisIndirectArgsState = D3D12_RESOURCE_STATE_COMMON;
+            renderChunk.debrisVbv.BufferLocation = build.debrisPackedUploadResource->GetGPUVirtualAddress();
+            renderChunk.debrisVbv.SizeInBytes = UINT(build.debrisVertexBytes);
+            renderChunk.debrisVbv.StrideInBytes = sizeof(VertexData);
+            renderChunk.debrisIbv.BufferLocation =
+                build.debrisPackedUploadResource->GetGPUVirtualAddress() + build.debrisIndexOffset;
+            renderChunk.debrisIbv.SizeInBytes = UINT(build.debrisIndexBytes);
+            renderChunk.debrisIbv.Format = DXGI_FORMAT_R32_UINT;
+            renderChunk.debrisInstanceVbv.BufferLocation =
+                build.debrisPackedUploadResource->GetGPUVirtualAddress() + build.debrisInstanceOffset;
+            renderChunk.debrisInstanceVbv.SizeInBytes = UINT(build.debrisInstanceBytes);
+            renderChunk.debrisInstanceVbv.StrideInBytes = sizeof(TerrainDebrisInstanceGpu);
+            renderChunk.debrisVisibleInstanceVbv.BufferLocation =
+                build.debrisVisibleInstanceResource->GetGPUVirtualAddress();
+            renderChunk.debrisVisibleInstanceVbv.SizeInBytes =
+                UINT(sizeof(TerrainDebrisInstanceGpu) *
+                    static_cast<size_t>(renderChunk.debrisInstanceCapacityPerBucket) *
+                    TerrainRenderChunk::kDebrisLodBucketCount);
+            renderChunk.debrisVisibleInstanceVbv.StrideInBytes = sizeof(TerrainDebrisInstanceGpu);
+
+            if (srvHeap != nullptr) {
+                renderChunk.debrisInstanceSrv = srvHeap->Allocate();
+                D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+                srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+                srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+                srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                srvDesc.Buffer.FirstElement = 0;
+                srvDesc.Buffer.NumElements = renderChunk.debrisInstanceCount;
+                srvDesc.Buffer.StructureByteStride = sizeof(TerrainDebrisInstanceGpu);
+                device->CreateShaderResourceView(
+                    renderChunk.debrisInstanceResource.Get(),
+                    &srvDesc,
+                    renderChunk.debrisInstanceSrv.cpu);
+
+                renderChunk.debrisVisibleInstanceUav = srvHeap->Allocate();
+                D3D12_UNORDERED_ACCESS_VIEW_DESC visibleUavDesc{};
+                visibleUavDesc.Format = DXGI_FORMAT_UNKNOWN;
+                visibleUavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+                visibleUavDesc.Buffer.NumElements =
+                    renderChunk.debrisInstanceCapacityPerBucket * TerrainRenderChunk::kDebrisLodBucketCount;
+                visibleUavDesc.Buffer.StructureByteStride = sizeof(TerrainDebrisInstanceGpu);
+                device->CreateUnorderedAccessView(
+                    renderChunk.debrisVisibleInstanceResource.Get(),
+                    nullptr,
+                    &visibleUavDesc,
+                    renderChunk.debrisVisibleInstanceUav.cpu);
+
+                renderChunk.debrisIndirectArgsUav = srvHeap->Allocate();
+                D3D12_UNORDERED_ACCESS_VIEW_DESC argsUavDesc{};
+                argsUavDesc.Format = DXGI_FORMAT_UNKNOWN;
+                argsUavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+                argsUavDesc.Buffer.NumElements = TerrainRenderChunk::kDebrisLodBucketCount;
+                argsUavDesc.Buffer.StructureByteStride = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+                device->CreateUnorderedAccessView(
+                    renderChunk.debrisIndirectArgsResource.Get(),
+                    nullptr,
+                    &argsUavDesc,
+                    renderChunk.debrisIndirectArgsUav.cpu);
+            }
+
+            Vector3 minBounds{FLT_MAX, FLT_MAX, FLT_MAX};
+            Vector3 maxBounds{-FLT_MAX, -FLT_MAX, -FLT_MAX};
+            for (const TerrainDebrisInstanceGpu& instance : build.debrisInstances) {
+                const Vector3 center{instance.positionLod.x, instance.positionLod.y, instance.positionLod.z};
+                const float radius = (std::max)(
+                    instance.tangentRadiusA.w,
+                    (std::max)(instance.rightRadiusB.w, instance.upRadiusN.w));
+                minBounds.x = (std::min)(minBounds.x, center.x - radius);
+                minBounds.y = (std::min)(minBounds.y, center.y - radius);
+                minBounds.z = (std::min)(minBounds.z, center.z - radius);
+                maxBounds.x = (std::max)(maxBounds.x, center.x + radius);
+                maxBounds.y = (std::max)(maxBounds.y, center.y + radius);
+                maxBounds.z = (std::max)(maxBounds.z, center.z + radius);
+            }
+            renderChunk.debrisBoundsCenter = Scale(Add(minBounds, maxBounds), 0.5f);
+            renderChunk.debrisBoundsRadius = Length(Subtract(maxBounds, minBounds)) * 0.5f;
+        } else {
+            UploadDebrisGpuInstancesToChunk(device, srvHeap, renderChunk, build.debrisInstances);
+        }
+        const auto debrisEnd = std::chrono::steady_clock::now();
+        uploadDebrisMs += std::chrono::duration<double, std::milli>(debrisEnd - debrisStart).count();
+        if (renderChunk.indexCount > 0) {
+            reusableChunks.push_back(std::move(renderChunk));
+            reused.push_back(false);
+            ++uploadedCount;
+        } else {
+            ++skippedCount;
+        }
+        it = pendingBuildJobs_.erase(it);
+    }
+
     renderChunks_.reserve(chunks_.size());
     for (const TerrainChunkDebugInfo& debugChunk : chunks_) {
-        TerrainRenderChunk renderChunk{};
-        renderChunk.startDistance = debugChunk.startDistance;
-        renderChunk.endDistance = debugChunk.endDistance;
-        renderChunk.seed = debugChunk.seed;
-        renderChunk.lodTier = debugChunk.lodTier;
-        const TerrainCpuMesh mesh = BuildChunkMesh(debugChunk, railPath, settings);
-        UploadMeshToChunk(device, renderChunk, mesh);
-        UploadDebrisInstancesToChunk(device, srvHeap, renderChunk, debugChunk);
-        if (renderChunk.indexCount > 0) {
-            renderChunks_.push_back(std::move(renderChunk));
+        size_t staleReuseIndex = reusableChunks.size();
+        for (size_t index = 0; index < reusableChunks.size(); ++index) {
+            if (reused[index]) {
+                continue;
+            }
+            TerrainRenderChunk& candidate = reusableChunks[index];
+            if (!SameChunkIdentity(candidate, debugChunk)) {
+                continue;
+            }
+            if (candidate.lodTier == debugChunk.lodTier) {
+                renderChunks_.push_back(std::move(candidate));
+                reused[index] = true;
+                ++reusedExactCount;
+                staleReuseIndex = reusableChunks.size();
+                break;
+            }
+            if (staleReuseIndex == reusableChunks.size()) {
+                staleReuseIndex = index;
+            }
         }
+        if (!renderChunks_.empty()) {
+            const TerrainRenderChunk& lastChunk = renderChunks_.back();
+            if (SameChunkIdentity(lastChunk, debugChunk) && lastChunk.lodTier == debugChunk.lodTier) {
+                continue;
+            }
+        }
+
+        const bool alreadyPending = std::any_of(
+            pendingBuildJobs_.begin(),
+            pendingBuildJobs_.end(),
+            [&](const TerrainChunkBuildJob& job) {
+                return SameJobIdentity(job, debugChunk);
+            });
+        if (!alreadyPending &&
+            submittedCount < kTerrainStreamingJobSubmitBudget &&
+            pendingBuildJobs_.size() < kTerrainStreamingMaxPendingJobs) {
+            TerrainChunkBuildJob job{};
+            job.startDistance = debugChunk.startDistance;
+            job.endDistance = debugChunk.endDistance;
+            job.seed = debugChunk.seed;
+            job.lodTier = debugChunk.lodTier;
+            TerrainChunkDebugInfo debugCopy = debugChunk;
+            RailPath railPathCopy = railPath;
+            TerrainGenerationSettings settingsCopy = settings;
+            ID3D12Device* deviceForJob = device;
+            job.future = std::async(
+                std::launch::async,
+                [debugCopy = std::move(debugCopy),
+                 railPathCopy = std::move(railPathCopy),
+                 settingsCopy,
+                 deviceForJob]() mutable {
+                    return BuildTerrainChunkCpu(
+                        deviceForJob,
+                        std::move(debugCopy),
+                        std::move(railPathCopy),
+                        settingsCopy);
+                });
+            pendingBuildJobs_.push_back(std::move(job));
+            ++submittedCount;
+        }
+
+        if (staleReuseIndex < reusableChunks.size()) {
+            renderChunks_.push_back(std::move(reusableChunks[staleReuseIndex]));
+            reused[staleReuseIndex] = true;
+            ++reusedPendingCount;
+        } else {
+            ++skippedCount;
+        }
+    }
+
+    const auto rebuildEnd = std::chrono::steady_clock::now();
+    const double elapsedMs =
+        std::chrono::duration<double, std::milli>(rebuildEnd - rebuildStart).count();
+    const int32_t firstIndex = cachedFirstChunkIndex_;
+    const int32_t lastIndex = cachedLastChunkIndex_;
+    LogTerrainStreamingEvent(
+        firstIndex,
+        lastIndex,
+        reusedExactCount,
+        reusedPendingCount,
+        uploadedCount,
+        submittedCount,
+        skippedCount,
+        static_cast<uint32_t>(pendingBuildJobs_.size()),
+        elapsedMs,
+        futureGetMs,
+        uploadMeshMs,
+        uploadDebrisMs,
+        uploadedVertices,
+        uploadedIndices,
+        uploadedDebris);
+
+    for (size_t index = 0; index < reusableChunks.size(); ++index) {
+        if (!reused[index]) {
+            std::vector<TerrainRenderChunk> retired;
+            retired.push_back(std::move(reusableChunks[index]));
+            RetireRenderChunks(std::move(retired));
+        }
+    }
+    TrimRetiredRenderChunks();
+}
+
+void TerrainChunkManager::RetireRenderChunks(std::vector<TerrainRenderChunk>&& chunks) {
+    if (chunks.empty()) {
+        return;
+    }
+
+    RetiredTerrainRenderChunks retired{};
+    retired.retireFrame = frameSerial_;
+    retired.chunks = std::move(chunks);
+    retiredRenderChunks_.push_back(std::move(retired));
+}
+
+void TerrainChunkManager::TrimRetiredRenderChunks() {
+    while (!retiredRenderChunks_.empty()) {
+        const RetiredTerrainRenderChunks& retired = retiredRenderChunks_.front();
+        if (frameSerial_ < retired.retireFrame + kTerrainStreamingRetiredChunkFrames) {
+            break;
+        }
+        retiredRenderChunks_.pop_front();
     }
 }
 
@@ -4478,8 +5077,6 @@ bool TerrainChunkManager::BuildHiZPyramid(
         !hiZResourcesReady_) {
         return false;
     }
-
-    commandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr);
 
     const D3D12_RESOURCE_BARRIER depthToSrv = MakeTransition(
         sceneDepthResource,
@@ -4766,6 +5363,7 @@ void TerrainChunkManager::DrawDebrisIndirect(ID3D12GraphicsCommandList* commandL
         if (chunk.debrisIndexCount == 0 ||
             chunk.debrisInstanceCount == 0 ||
             chunk.transformResource == nullptr ||
+            chunk.transformGpuAddress == 0 ||
             chunk.debrisVbv.BufferLocation == 0 ||
             chunk.debrisIbv.BufferLocation == 0) {
             continue;
@@ -4783,7 +5381,7 @@ void TerrainChunkManager::DrawDebrisIndirect(ID3D12GraphicsCommandList* commandL
         };
         commandList->SetGraphicsRootConstantBufferView(
             1,
-            chunk.transformResource->GetGPUVirtualAddress());
+            chunk.transformGpuAddress);
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         commandList->IASetVertexBuffers(0, 2, debrisVertexBuffers);
         commandList->IASetIndexBuffer(&chunk.debrisIbv);

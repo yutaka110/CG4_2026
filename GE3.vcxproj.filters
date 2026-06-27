@@ -76,11 +76,17 @@
     <Filter Include="ソース ファイル\application\terrain">
       <UniqueIdentifier>{5a2c8cf4-3a19-4b91-a4cc-4a1f7dbb7f5a}</UniqueIdentifier>
     </Filter>
+    <Filter Include="ソース ファイル\application\course">
+      <UniqueIdentifier>{95b2e906-94f7-4d75-9d51-b011d2a6c4f1}</UniqueIdentifier>
+    </Filter>
     <Filter Include="ヘッダー ファイル\application\diagnostics">
       <UniqueIdentifier>{a35ef5d2-5188-4f91-9f73-3b332d19c465}</UniqueIdentifier>
     </Filter>
     <Filter Include="ヘッダー ファイル\application\terrain">
       <UniqueIdentifier>{828f6d1a-8a7e-4975-8e9c-465f580e9f4c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ヘッダー ファイル\application\course">
+      <UniqueIdentifier>{66918596-f9d6-463a-95b7-4e3984f10d31}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -276,6 +282,9 @@
     <ClCompile Include="application\AppCommandLineRunner.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\AppCourseTimelineDebugPanel.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
     <ClCompile Include="application\AppFrameGraphBuilder.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -302,6 +311,36 @@
     </ClCompile>
     <ClCompile Include="application\TechniqueRegistry.cpp">
       <Filter>ソース ファイル</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\BulletPatternAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseActorAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseCollisionSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseEventDispatcher.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseMeshRenderQueue.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseSpawnRuntime.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseValidation.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyWaveAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\ObstacleAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\EffectRuntime.cpp">
       <Filter>ソース ファイル</Filter>
@@ -678,6 +717,9 @@
     <ClInclude Include="application\AppCommandLineRunner.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
+    <ClInclude Include="application\AppCourseTimelineDebugPanel.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
     <ClInclude Include="application\AppFrameGraphBuilder.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
@@ -704,6 +746,39 @@
     </ClInclude>
     <ClInclude Include="application\TechniqueRegistry.h">
       <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\BulletPatternAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseActorAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseAssetParsing.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseCollisionSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseEventDispatcher.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseMeshRenderQueue.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseSpawnRuntime.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseValidation.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyWaveAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\ObstacleAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\EffectComponentViews.h">
       <Filter>ヘッダー ファイル</Filter>

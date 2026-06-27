@@ -666,6 +666,7 @@ namespace {
         ComPtr<ID3D12Device> device,
         size_t sizeInBytes,
         D3D12_RESOURCE_STATES initialState) {
+        (void)initialState;
         D3D12_HEAP_PROPERTIES heapProps{};
         heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
@@ -685,7 +686,7 @@ namespace {
             &heapProps,
             D3D12_HEAP_FLAG_NONE,
             &resourceDesc,
-            initialState,
+            D3D12_RESOURCE_STATE_COMMON,
             nullptr,
             IID_PPV_ARGS(&resource));
         assert(SUCCEEDED(hr));
@@ -696,6 +697,7 @@ namespace {
         ComPtr<ID3D12Device> device,
         size_t sizeInBytes,
         D3D12_RESOURCE_STATES initialState) {
+        (void)initialState;
         D3D12_HEAP_PROPERTIES heapProps{};
         heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
@@ -714,7 +716,7 @@ namespace {
             &heapProps,
             D3D12_HEAP_FLAG_NONE,
             &resourceDesc,
-            initialState,
+            D3D12_RESOURCE_STATE_COMMON,
             nullptr,
             IID_PPV_ARGS(&resource));
         assert(SUCCEEDED(hr));
@@ -739,6 +741,14 @@ namespace {
         uploadResource->Map(0, nullptr, &mappedData);
         std::memcpy(mappedData, source, sizeInBytes);
         uploadResource->Unmap(0, nullptr);
+
+        D3D12_RESOURCE_BARRIER copyBarrier{};
+        copyBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        copyBarrier.Transition.pResource = destination;
+        copyBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+        copyBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+        copyBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &copyBarrier);
 
         commandList->CopyBufferRegion(
             destination,
@@ -778,7 +788,7 @@ namespace {
             CreateDefaultBufferResource(
                 device,
                 sizeof(VertexData) * modelData.vertices.size(),
-                D3D12_RESOURCE_STATE_COPY_DEST);
+                D3D12_RESOURCE_STATE_COMMON);
         UploadStaticBufferData(
             device,
             uploadCommandList,
@@ -796,7 +806,7 @@ namespace {
             CreateDefaultBufferResource(
                 device,
                 sizeof(uint32_t) * modelData.indices.size(),
-                D3D12_RESOURCE_STATE_COPY_DEST);
+                D3D12_RESOURCE_STATE_COMMON);
         UploadStaticBufferData(
             device,
             uploadCommandList,
@@ -845,8 +855,8 @@ namespace {
             CreateDefaultBufferResource(
                 device,
                 sizeof(JointPaletteEntry) * jointCount,
-                D3D12_RESOURCE_STATE_COPY_DEST);
-        skinCluster.paletteState = D3D12_RESOURCE_STATE_COPY_DEST;
+                D3D12_RESOURCE_STATE_COMMON);
+        skinCluster.paletteState = D3D12_RESOURCE_STATE_COMMON;
         skinCluster.paletteUploadResource =
             CreateBufferResource(device, sizeof(JointPaletteEntry) * jointCount);
         skinCluster.paletteUploadResource->Map(
@@ -911,7 +921,7 @@ namespace {
             CreateDefaultBufferResource(
                 device,
                 sizeof(VertexInfluence) * vertexCount,
-                D3D12_RESOURCE_STATE_COPY_DEST);
+                D3D12_RESOURCE_STATE_COMMON);
         skinCluster.influenceBufferView.BufferLocation =
             skinCluster.influenceResource->GetGPUVirtualAddress();
         skinCluster.influenceBufferView.SizeInBytes =
@@ -945,8 +955,8 @@ namespace {
         skinCluster.skinnedVertexResource = CreateUavBufferResource(
             device,
             sizeof(VertexData) * vertexCount,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        skinCluster.skinnedVertexState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            D3D12_RESOURCE_STATE_COMMON);
+        skinCluster.skinnedVertexState = D3D12_RESOURCE_STATE_COMMON;
         skinCluster.skinnedVertexBufferView.BufferLocation =
             skinCluster.skinnedVertexResource->GetGPUVirtualAddress();
         skinCluster.skinnedVertexBufferView.SizeInBytes =
@@ -2111,6 +2121,10 @@ bool AppSceneResources::Initialize(
     if (!debugDraw.Initialize(device, 65536)) {
         OutputDebugStringA("[AppSceneResources] DebugDraw initialization failed.\n");
     }
+    if (!courseMeshRenderQueue.Initialize(device, 128)) {
+        OutputDebugStringA("[AppSceneResources] CourseMeshRenderQueue initialization failed.\n");
+        return false;
+    }
 
     return true;
 }
@@ -2149,6 +2163,32 @@ const AppManagedModelResource* AppSceneResources::FindManagedModel(uint32_t mode
     }
     const AppManagedModelResource& model = vfxModelLibrary[modelIndex];
     return model.loaded ? &model : nullptr;
+}
+
+void AppSceneResources::SyncCourseMeshRenderQueue(
+    const CourseSpawnRuntime& courseRuntime,
+    const RailPath& railPath,
+    const Matrix4x4& viewMatrix,
+    const Matrix4x4& projMatrix) {
+    std::vector<CourseMeshModelBinding> bindings;
+    bindings.reserve(vfxModelLibrary.size());
+    for (const AppManagedModelResource& model : vfxModelLibrary) {
+        CourseMeshModelBinding binding{};
+        binding.name = model.name;
+        binding.rootLocal = model.model.rootNode.localMatrix;
+        binding.loaded =
+            model.loaded &&
+            model.mesh.indexCount > 0 &&
+            model.textureGpu.ptr != 0;
+        bindings.push_back(binding);
+    }
+
+    courseMeshRenderQueue.SyncFromCourseRuntime(
+        courseRuntime,
+        railPath,
+        bindings,
+        viewMatrix,
+        projMatrix);
 }
 
 void AppSceneResources::UpdateTransforms(

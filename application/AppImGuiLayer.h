@@ -17,6 +17,9 @@ class EffectRuntime;
 class EffectAuthoringRegistry;
 struct LoadedEffectAsset;
 class PostProcessStack;
+class CourseCollisionSystem;
+class CourseSpawnRuntime;
+struct CourseAsset;
 
 struct AppImGuiFrameContext {
     AppRuntimeState* runtimeState = nullptr;
@@ -45,6 +48,17 @@ struct AppImGuiFrameContext {
     ID3D12DescriptorHeap* srvDescriptorHeap = nullptr;
     D3D12_GPU_DESCRIPTOR_HANDLE vfxTextureHandle{};
     D3D12_GPU_DESCRIPTOR_HANDLE depthTextureHandle{};
+    CourseAsset* course = nullptr;
+    const CourseSpawnRuntime* courseSpawnRuntime = nullptr;
+    const CourseCollisionSystem* courseCollisionSystem = nullptr;
+    const std::string* courseLoadStatus = nullptr;
+    const std::string* coursePath = nullptr;
+    float courseDistance = 0.0f;
+    float courseRailLength = 0.0f;
+    std::function<bool(std::string*)> onSaveCourse;
+    std::function<void()> onApplyCourse;
+    std::function<void()> onReloadCourse;
+    std::function<void(float)> onTeleportCourseToDistance;
     std::function<void()> onAddParticle;
 };
 

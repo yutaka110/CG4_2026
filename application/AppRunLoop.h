@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <fstream>
 #include <string>
+#include <vector>
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -18,6 +19,9 @@
 #include "graphics/RenderGraph.h"
 #include "graphics/SwapChain.h"
 #include "resources/ResourceRegistry.h"
+#include "course/CourseAsset.h"
+#include "course/CourseCollisionSystem.h"
+#include "course/CourseEventDispatcher.h"
 #include "terrain/RailPath.h"
 #include "terrain/TerrainChunkManager.h"
 #include "terrain/TerrainPresetStore.h"
@@ -71,10 +75,15 @@ public:
     void Shutdown();
 
 private:
+    void EnterRailShooterScene() override;
+    void UpdateRailShooterFrame() override;
+    void RenderRailShooterFrame() override;
     void UpdateVfxPreviewFrame() override;
     void RenderVfxPreviewFrame() override;
     void BeginFrameSystems();
-    void SignalAndWaitGpu();
+    bool WaitForFrameSlot(uint32_t frameIndex);
+    bool SignalFrame(uint32_t frameIndex);
+    bool FlushGpu();
     void ProcessIceProjectileMouseLaunch();
     void ProcessReleaseShowcaseControls(float deltaTime);
     void PlayShowcaseEffect(AppVfxRuntimeState::ShowcaseEffect effect, bool resetAutoTimer);
@@ -86,6 +95,11 @@ private:
     void RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList);
     void ConfigureRenderGraphDebugDump();
     void DumpRenderGraphDebugFrame();
+    void LoadRailShooterCourse();
+    void ApplyRailShooterCourse();
+    bool SaveRailShooterCourse(std::string* errorMessage = nullptr);
+    void TeleportRailShooterCourse(float distance);
+    void LogCourseEvents(const std::vector<CourseEventMarker>& events);
     bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
@@ -113,6 +127,13 @@ private:
     AppSceneStateManager sceneStateManager_;
     VfxEngine vfxEngine_;
     AppFrameGraphBuilder frameGraphBuilder_;
+    CourseAsset railShooterCourse_;
+    CourseRuntime railShooterCourseRuntime_;
+    CourseCollisionSystem railShooterCollisionSystem_;
+    CourseEventDispatcher railShooterEventDispatcher_;
+    CourseSpawnRuntime railShooterSpawnRuntime_;
+    std::string railShooterCoursePath_ = "Resources/courses/CanyonAssaultRoute01.course";
+    std::string railShooterCourseLoadStatus_;
     RailPath railPath_;
     TerrainChunkManager terrainChunkManager_;
     TerrainPresetStore terrainPresetStore_;
@@ -126,14 +147,18 @@ private:
     uint32_t lastTransientTargetStorageCount_ = 0;
     uint32_t lastTransientBufferCount_ = 0;
     uint32_t lastTransientBufferStorageCount_ = 0;
-    uint32_t renderGraphDebugRefreshFrame_ = 0;
     uint32_t vfxTelemetryFrameIndex_ = 0;
+    std::vector<uint64_t> frameFenceValues_;
+    uint64_t nextFrameFenceValue_ = 1;
     bool renderGraphDumpConfigured_ = false;
     bool renderGraphDumpEnabled_ = false;
     uint32_t renderGraphDumpFrameLimit_ = 0;
     uint32_t renderGraphDumpFrameIndex_ = 0;
     std::ofstream renderGraphDump_;
     D3D12_RESOURCE_STATES sceneDepthState_ = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    float railShooterDistance_ = 0.0f;
+    bool railShooterInitialized_ = false;
+    bool gpuDeviceLost_ = false;
     bool previousLeftMouseDown_ = false;
     bool releaseShowcaseInitialized_ = false;
     bool releaseShowcaseTitleDirty_ = true;

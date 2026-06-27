@@ -1,0 +1,2 @@
+# pattern|id|displayName|type|bulletCount|lateralSpreadSpeed|verticalSpreadSpeed|bulletRadius|bulletLifetime|damage|r|g|b|a
+pattern|single_red|Single Red Shot|single|1|0|0|0.30|4.0|8|1.0|0.30|0.08|1.0

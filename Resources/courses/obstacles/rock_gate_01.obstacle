@@ -1,0 +1,7 @@
+# obstacle|id|displayName|meshId|lifetime|halfX|halfY|halfZ|r|g|b|a
+# placement|distanceOffset|lateralOffset|verticalOffset|forwardSpeed
+# breakable|enabled|hitPoints
+obstacle|rock_gate_01|Breakable Rock Gate 01|animated_cube|12|4.2|4.8|2.4|1.0|0.62|0.12|1.0
+placement|22|0|0|0
+breakable|true|120
+vfx|rock_break_dust

@@ -15,3 +15,19 @@ void VfxPreviewSceneState::Update(AppSceneHost& host) {
 void VfxPreviewSceneState::Render(AppSceneHost& host) {
     host.RenderVfxPreviewFrame();
 }
+
+const char* RailShooterSceneState::Name() const {
+    return "RailShooter";
+}
+
+void RailShooterSceneState::OnEnter(AppSceneHost& host) {
+    host.EnterRailShooterScene();
+}
+
+void RailShooterSceneState::Update(AppSceneHost& host) {
+    host.UpdateRailShooterFrame();
+}
+
+void RailShooterSceneState::Render(AppSceneHost& host) {
+    host.RenderRailShooterFrame();
+}

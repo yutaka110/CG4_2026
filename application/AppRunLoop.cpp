@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <sstream>
 
@@ -27,6 +28,8 @@ using namespace DirectX;
 using namespace Microsoft::WRL;
 
 namespace {
+constexpr DWORD kGpuFenceWaitTimeoutMs = 2000;
+
 Vector3 NormalizeOr(const Vector3& value, const Vector3& fallback) {
     const float len2 = value.x * value.x + value.y * value.y + value.z * value.z;
     if (len2 <= 0.000001f) {
@@ -34,6 +37,39 @@ Vector3 NormalizeOr(const Vector3& value, const Vector3& fallback) {
     }
     const float invLen = 1.0f / std::sqrt(len2);
     return {value.x * invLen, value.y * invLen, value.z * invLen};
+}
+
+Vector3 Add(const Vector3& a, const Vector3& b) {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
+Vector3 Subtract(const Vector3& a, const Vector3& b) {
+    return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+
+Vector3 Scale(const Vector3& value, float scale) {
+    return {value.x * scale, value.y * scale, value.z * scale};
+}
+
+float Dot(const Vector3& a, const Vector3& b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+Vector3 Cross(const Vector3& a, const Vector3& b) {
+    return {
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x,
+    };
+}
+
+Vector3 RotateAroundAxis(const Vector3& value, const Vector3& axis, float radians) {
+    const Vector3 n = NormalizeOr(axis, {0.0f, 0.0f, 1.0f});
+    const float c = std::cos(radians);
+    const float s = std::sin(radians);
+    return Add(
+        Add(Scale(value, c), Scale(Cross(n, value), s)),
+        Scale(n, Dot(n, value) * (1.0f - c)));
 }
 
 void TransitionSceneDepthIfNeeded(
@@ -82,6 +118,32 @@ Matrix4x4 ToMatrix4x4(FXMMATRIX matrix) {
     return result;
 }
 
+Matrix4x4 MakeLookAtMatrix(
+    const Vector3& eye,
+    const Vector3& target,
+    const Vector3& up) {
+    const XMVECTOR eyeVector = XMVectorSet(eye.x, eye.y, eye.z, 1.0f);
+    const XMVECTOR targetVector = XMVectorSet(target.x, target.y, target.z, 1.0f);
+    const XMVECTOR upVector = XMVectorSet(up.x, up.y, up.z, 0.0f);
+    return ToMatrix4x4(XMMatrixLookAtLH(eyeVector, targetVector, upVector));
+}
+
+void ConfigureViewportAndScissor(
+    AppRuntimeState& runtimeState,
+    uint32_t windowWidth,
+    uint32_t windowHeight) {
+    runtimeState.viewport.Width = static_cast<float>(windowWidth);
+    runtimeState.viewport.Height = static_cast<float>(windowHeight);
+    runtimeState.viewport.TopLeftX = 0.0f;
+    runtimeState.viewport.TopLeftY = 0.0f;
+    runtimeState.viewport.MinDepth = 0.0f;
+    runtimeState.viewport.MaxDepth = 1.0f;
+    runtimeState.scissorRect.left = 0;
+    runtimeState.scissorRect.top = 0;
+    runtimeState.scissorRect.right = static_cast<LONG>(windowWidth);
+    runtimeState.scissorRect.bottom = static_cast<LONG>(windowHeight);
+}
+
 uint32_t ReadEnvironmentUInt(const char* name, uint32_t fallback) {
     char value[32]{};
     const DWORD length = GetEnvironmentVariableA(name, value, static_cast<DWORD>(sizeof(value)));
@@ -96,11 +158,139 @@ uint32_t ReadEnvironmentUInt(const char* name, uint32_t fallback) {
     return static_cast<uint32_t>(parsed);
 }
 
+const char* WaitResultName(DWORD waitResult) {
+    switch (waitResult) {
+    case WAIT_OBJECT_0:
+        return "WAIT_OBJECT_0";
+    case WAIT_TIMEOUT:
+        return "WAIT_TIMEOUT";
+    case WAIT_FAILED:
+        return "WAIT_FAILED";
+    default:
+        return "WAIT_ABANDONED_OR_UNKNOWN";
+    }
+}
+
+void WriteGpuDiagnosticLine(const char* message) {
+    OutputDebugStringA(message);
+    std::ofstream log("logs/gpu_fence_wait.log", std::ios::app);
+    if (log) {
+        log << message;
+    }
+}
+
+void LogFenceWaitFailure(
+    const char* context,
+    uint32_t slot,
+    uint64_t fenceValue,
+    uint64_t completedValue,
+    HRESULT deviceRemovedReason,
+    DWORD waitResult) {
+    char message[512]{};
+    std::snprintf(
+        message,
+        sizeof(message),
+        "[AppRunLoop] %s fence wait failed: slot=%u target=%llu completed=%llu wait=%s deviceRemoved=0x%08X\n",
+        context,
+        slot,
+        static_cast<unsigned long long>(fenceValue),
+        static_cast<unsigned long long>(completedValue),
+        WaitResultName(waitResult),
+        static_cast<unsigned int>(deviceRemovedReason));
+    WriteGpuDiagnosticLine(message);
+}
+
+void LogGpuFailure(const char* context, HRESULT hr, HRESULT deviceRemovedReason) {
+    char message[384]{};
+    std::snprintf(
+        message,
+        sizeof(message),
+        "[AppRunLoop] %s failed: hr=0x%08X deviceRemoved=0x%08X\n",
+        context,
+        static_cast<unsigned int>(hr),
+        static_cast<unsigned int>(deviceRemovedReason));
+    WriteGpuDiagnosticLine(message);
+}
+
+void DumpDredBreadcrumbs(ID3D12Device* device) {
+    if (device == nullptr) {
+        return;
+    }
+
+    ComPtr<ID3D12DeviceRemovedExtendedData1> dred;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&dred)))) {
+        WriteGpuDiagnosticLine("[DRED] ID3D12DeviceRemovedExtendedData1 unavailable.\n");
+        return;
+    }
+
+    D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 breadcrumbs{};
+    if (SUCCEEDED(dred->GetAutoBreadcrumbsOutput1(&breadcrumbs))) {
+        WriteGpuDiagnosticLine("[DRED] AutoBreadcrumbs:\n");
+        uint32_t nodeIndex = 0;
+        for (const D3D12_AUTO_BREADCRUMB_NODE1* node = breadcrumbs.pHeadAutoBreadcrumbNode;
+             node != nullptr && nodeIndex < 16;
+             node = node->pNext, ++nodeIndex) {
+            const UINT lastValue = node->pLastBreadcrumbValue != nullptr ? *node->pLastBreadcrumbValue : 0;
+            char message[512]{};
+            std::snprintf(
+                message,
+                sizeof(message),
+                "[DRED] node=%u list=%s queue=%s breadcrumbs=%u last=%u contexts=%u\n",
+                nodeIndex,
+                node->pCommandListDebugNameA != nullptr ? node->pCommandListDebugNameA : "(unnamed)",
+                node->pCommandQueueDebugNameA != nullptr ? node->pCommandQueueDebugNameA : "(unnamed)",
+                node->BreadcrumbCount,
+                lastValue,
+                node->BreadcrumbContextsCount);
+            WriteGpuDiagnosticLine(message);
+
+            const UINT begin = lastValue > 8 ? lastValue - 8 : 0;
+            const UINT end = (std::min)(node->BreadcrumbCount, lastValue + 8);
+            for (UINT i = begin; i < end; ++i) {
+                std::snprintf(
+                    message,
+                    sizeof(message),
+                    "[DRED]   op[%u]=%u%s\n",
+                    i,
+                    node->pCommandHistory != nullptr ? static_cast<unsigned int>(node->pCommandHistory[i]) : 0u,
+                    i == lastValue ? " <last>" : "");
+                WriteGpuDiagnosticLine(message);
+            }
+
+            for (UINT i = 0; i < node->BreadcrumbContextsCount && i < 16; ++i) {
+                const D3D12_DRED_BREADCRUMB_CONTEXT& context = node->pBreadcrumbContexts[i];
+                char contextMessage[384]{};
+                std::snprintf(
+                    contextMessage,
+                    sizeof(contextMessage),
+                    "[DRED]   context[%u] breadcrumb=%u\n",
+                    i,
+                    context.BreadcrumbIndex);
+                WriteGpuDiagnosticLine(contextMessage);
+            }
+        }
+    }
+
+    D3D12_DRED_PAGE_FAULT_OUTPUT1 pageFault{};
+    if (SUCCEEDED(dred->GetPageFaultAllocationOutput1(&pageFault))) {
+        char message[256]{};
+        std::snprintf(
+            message,
+            sizeof(message),
+            "[DRED] PageFaultVA=0x%llX\n",
+            static_cast<unsigned long long>(pageFault.PageFaultVA));
+        WriteGpuDiagnosticLine(message);
+    }
+}
+
 VfxFrameTelemetryOptions BuildVfxTelemetryOptions(
     const AppVfxRuntimeState& vfx,
-    uint32_t frameIndex) {
+    uint32_t frameIndex,
+    bool developerDiagnosticsVisible) {
     constexpr uint32_t kVfxHealthTelemetryInterval = 12;
-    const bool healthSampleFrame = (frameIndex % kVfxHealthTelemetryInterval) == 0;
+    const bool healthSampleFrame =
+        developerDiagnosticsVisible &&
+        (frameIndex % kVfxHealthTelemetryInterval) == 0;
 
     VfxFrameTelemetryOptions options{};
     options.trailMeshStream =
@@ -256,11 +446,13 @@ AppRunLoop::AppRunLoop(
       commandQueue_(commandQueue),
       fence_(fence),
       fenceEvent_(fenceEvent) {
-    sceneStateManager_.Initialize(std::make_unique<VfxPreviewSceneState>(), *this);
-    railPath_.BuildDefaultCanyonPath(runtimeState_.terrain.settings.corridorRadius);
+    sceneStateManager_.Initialize(std::make_unique<RailShooterSceneState>(), *this);
     std::string presetError;
     terrainPresetStore_.Load(runtimeState_.terrain, &presetError);
-    railPath_.BuildDefaultCanyonPath(runtimeState_.terrain.settings.corridorRadius);
+    LoadRailShooterCourse();
+    ApplyRailShooterCourse();
+    frameFenceValues_.assign((std::max)(1u, swapChain_.BufferCount()), engineContext_.GetFenceValue());
+    nextFrameFenceValue_ = engineContext_.GetFenceValue() + 1;
 }
 
 void AppRunLoop::InitializeBeam(
@@ -279,23 +471,207 @@ void AppRunLoop::InitializeBeam(
         dsvFormat);
 }
 
+void AppRunLoop::LoadRailShooterCourse() {
+    std::string error;
+    if (railShooterCourse_.LoadFromFile(railShooterCoursePath_, &error)) {
+        railShooterCourseLoadStatus_ =
+            "Loaded course \"" + railShooterCourse_.name + "\" from " + railShooterCoursePath_;
+        OutputDebugStringA(("[Course] " + railShooterCourseLoadStatus_ + "\n").c_str());
+        return;
+    }
+
+    railShooterCourse_.BuildFallbackCanyon(runtimeState_.terrain.settings.corridorRadius);
+    railShooterCourseLoadStatus_ = "Fallback course active. " + error;
+    OutputDebugStringA(("[Course] " + railShooterCourseLoadStatus_ + "\n").c_str());
+}
+
+void AppRunLoop::ApplyRailShooterCourse() {
+    if (!railShooterCourse_.IsValid()) {
+        railShooterCourse_.BuildFallbackCanyon(runtimeState_.terrain.settings.corridorRadius);
+    }
+    railShooterCourse_.ApplyToRailPath(railPath_);
+    railShooterCourseRuntime_.Bind(&railShooterCourse_);
+    railShooterCourseRuntime_.Reset(runtimeState_.terrain.previewDistance);
+    railShooterSpawnRuntime_.Reset();
+    railShooterCollisionSystem_.Reset();
+}
+
+bool AppRunLoop::SaveRailShooterCourse(std::string* errorMessage) {
+    std::string error;
+    railShooterCourse_.SortForRuntime();
+    if (!railShooterCourse_.SaveToFile(railShooterCoursePath_, &error)) {
+        railShooterCourseLoadStatus_ = "Save failed. " + error;
+        OutputDebugStringA(("[Course] " + railShooterCourseLoadStatus_ + "\n").c_str());
+        if (errorMessage != nullptr) {
+            *errorMessage = error;
+        }
+        return false;
+    }
+
+    railShooterCourseLoadStatus_ =
+        "Saved course \"" + railShooterCourse_.name + "\" to " + railShooterCoursePath_;
+    OutputDebugStringA(("[Course] " + railShooterCourseLoadStatus_ + "\n").c_str());
+    ApplyRailShooterCourse();
+    return true;
+}
+
+void AppRunLoop::TeleportRailShooterCourse(float distance) {
+    const float railLength = railPath_.Length();
+    const float clampedDistance = railLength > 0.0f
+        ? (std::clamp)(distance, 0.0f, railLength)
+        : (std::max)(0.0f, distance);
+    runtimeState_.terrain.previewDistance = clampedDistance;
+    railShooterCourseRuntime_.Reset(clampedDistance);
+    railShooterDistance_ = railShooterCourseRuntime_.Distance();
+    railShooterSpawnRuntime_.Reset();
+    railShooterCollisionSystem_.Reset();
+
+    std::ostringstream line;
+    line << "[Course] Teleported authoring preview to distance=" << railShooterDistance_ << "\n";
+    OutputDebugStringA(line.str().c_str());
+}
+
+void AppRunLoop::LogCourseEvents(const std::vector<CourseEventMarker>& events) {
+    if (events.empty()) {
+        return;
+    }
+
+    std::ofstream log("logs/course_events.log", std::ios::app);
+    for (const CourseEventMarker& event : events) {
+        std::ostringstream line;
+        line << "[CourseEvent] distance=" << event.distance
+             << " type=" << event.type
+             << " id=" << event.id;
+        if (!event.payload.empty()) {
+            line << " payload=\"" << event.payload << "\"";
+        }
+        line << "\n";
+        OutputDebugStringA(line.str().c_str());
+        if (log) {
+            log << line.str();
+        }
+    }
+}
+
 void AppRunLoop::Shutdown() {
+    FlushGpu();
     sceneStateManager_.Shutdown(*this);
     vfxEngine_.Shutdown();
 }
 
+void AppRunLoop::EnterRailShooterScene() {
+    if (railPath_.Length() <= 0.0f) {
+        ApplyRailShooterCourse();
+    }
+    railShooterCourseRuntime_.Reset(runtimeState_.terrain.previewDistance);
+    railShooterDistance_ = railShooterCourseRuntime_.Distance();
+    railShooterInitialized_ = true;
+
+    runtimeState_.terrain.enabled = true;
+    runtimeState_.terrain.autoAdvancePreview = false;
+    runtimeState_.camera.enableDebugInput = false;
+    runtimeState_.camera.fovY = 0.30f * 3.14159265358979323846f;
+    runtimeState_.camera.nearZ = 0.1f;
+    runtimeState_.camera.farZ = 5000.0f;
+
+    runtimeState_.useMonsterBall = false;
+    runtimeState_.showAnimatedCube = false;
+    runtimeState_.showSkinnedModel = false;
+    runtimeState_.showSkeletonDebug = false;
+    runtimeState_.showSkybox = false;
+    runtimeState_.showProceduralBackdrop = true;
+    runtimeState_.showVfxModelObjects = false;
+}
+
+void AppRunLoop::UpdateRailShooterFrame() {
+    appPipelines_.HotReloadIfNeeded(dev_.GetDevice());
+    ConfigureViewportAndScissor(runtimeState_, windowWidth_, windowHeight_);
+
+    constexpr float kFixedGameplayDeltaTime = 0.016f;
+    if (!railShooterInitialized_) {
+        EnterRailShooterScene();
+    }
+    if (railPath_.Length() <= 0.0f) {
+        ApplyRailShooterCourse();
+    }
+
+    const std::vector<CourseEventMarker> triggeredEvents =
+        railShooterCourseRuntime_.Advance(kFixedGameplayDeltaTime, railPath_);
+    LogCourseEvents(triggeredEvents);
+    railShooterDistance_ = railShooterCourseRuntime_.Distance();
+    railShooterEventDispatcher_.Dispatch(
+        triggeredEvents,
+        railShooterSpawnRuntime_,
+        railShooterDistance_);
+    railShooterSpawnRuntime_.Update(kFixedGameplayDeltaTime);
+    CourseCollisionFrameInput collisionInput{};
+    collisionInput.deltaTime = kFixedGameplayDeltaTime;
+    collisionInput.player.distance = railShooterDistance_;
+    collisionInput.player.lateralOffset = 0.0f;
+    collisionInput.player.verticalOffset = 4.0f;
+    collisionInput.player.radius = 1.6f;
+    collisionInput.player.hitPoints = 100.0f;
+    collisionInput.weapon.enabled = true;
+    collisionInput.weapon.shotInterval = 0.12f;
+    collisionInput.weapon.range = 96.0f;
+    collisionInput.weapon.radius = 2.2f;
+    collisionInput.weapon.damage = 18.0f;
+    railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput);
+    railShooterSpawnRuntime_.SubmitPendingVfx(vfxEngine_.Runtime(), railPath_);
+    runtimeState_.terrain.previewDistance = railShooterDistance_;
+
+    const CourseCameraKey cameraRig = railShooterCourse_.EvaluateCamera(railShooterDistance_);
+    const RailPathSample cameraSample = railPath_.Evaluate(railShooterDistance_);
+    const RailPathSample lookSample = railPath_.Evaluate(railShooterDistance_ + cameraRig.lookAheadDistance);
+    const Vector3 cameraPosition = Add(
+        Add(
+            Add(cameraSample.position, Scale(cameraSample.up, cameraRig.verticalOffset)),
+            Scale(cameraSample.right, cameraRig.lateralOffset)),
+        Scale(cameraSample.tangent, -cameraRig.backDistance));
+    const Vector3 lookTarget = Add(
+        Add(lookSample.position, Scale(lookSample.up, cameraRig.lookUpOffset)),
+        Scale(lookSample.tangent, cameraRig.lookForwardOffset));
+    const Vector3 forward = NormalizeOr(Subtract(lookTarget, cameraPosition), cameraSample.tangent);
+    const Vector3 cameraUp = RotateAroundAxis(cameraSample.up, forward, cameraRig.roll);
+
+    const float aspectRatio = windowHeight_ > 0
+        ? static_cast<float>(windowWidth_) / static_cast<float>(windowHeight_)
+        : 16.0f / 9.0f;
+    runtimeState_.camera.fovY = cameraRig.fovY;
+    frameState_.viewMatrix = MakeLookAtMatrix(cameraPosition, lookTarget, cameraUp);
+    frameState_.projMatrix = MakePerspectiveFovMatrix(
+        runtimeState_.camera.fovY,
+        aspectRatio,
+        runtimeState_.camera.nearZ,
+        runtimeState_.camera.farZ);
+    frameState_.viewProjectionMatrix = Multiply(frameState_.viewMatrix, frameState_.projMatrix);
+    frameState_.cameraWorldPosition = cameraPosition;
+    frameState_.deltaTime = kFixedGameplayDeltaTime;
+
+    runtimeState_.camera.transform.scale = {1.0f, 1.0f, 1.0f};
+    runtimeState_.camera.transform.translate = cameraPosition;
+    runtimeState_.camera.transform.rotate = {
+        std::asin((std::clamp)(-forward.y, -1.0f, 1.0f)),
+        std::atan2(forward.x, forward.z),
+        cameraRig.roll,
+    };
+    runtimeState_.cameraWorldPosition = cameraPosition;
+    scene_.UpdateCameraWorldPosition(cameraPosition);
+
+    vfxEngine_.Update(runtimeState_.vfx, kFixedGameplayDeltaTime);
+    UpdateTerrainAuthoring(kFixedGameplayDeltaTime);
+    frameState_.drawCount = particleSystem_.UpdateInstances(
+        frameState_.viewProjectionMatrix,
+        frameState_.deltaTime);
+}
+
+void AppRunLoop::RenderRailShooterFrame() {
+    RenderVfxPreviewFrame();
+}
+
 void AppRunLoop::UpdateVfxPreviewFrame() {
     appPipelines_.HotReloadIfNeeded(dev_.GetDevice());
-    runtimeState_.viewport.Width = static_cast<float>(windowWidth_);
-    runtimeState_.viewport.Height = static_cast<float>(windowHeight_);
-    runtimeState_.viewport.TopLeftX = 0.0f;
-    runtimeState_.viewport.TopLeftY = 0.0f;
-    runtimeState_.viewport.MinDepth = 0.0f;
-    runtimeState_.viewport.MaxDepth = 1.0f;
-    runtimeState_.scissorRect.left = 0;
-    runtimeState_.scissorRect.top = 0;
-    runtimeState_.scissorRect.right = static_cast<LONG>(windowWidth_);
-    runtimeState_.scissorRect.bottom = static_cast<LONG>(windowHeight_);
+    ConfigureViewportAndScissor(runtimeState_, windowWidth_, windowHeight_);
 
     const float aspectRatio = windowHeight_ > 0
         ? static_cast<float>(windowWidth_) / static_cast<float>(windowHeight_)
@@ -344,17 +720,107 @@ void AppRunLoop::BeginFrameSystems() {
     renderGraph_.ClearResources();
 }
 
-void AppRunLoop::SignalAndWaitGpu() {
-    uint64_t fenceValue = engineContext_.GetFenceValue() + 1;
-    engineContext_.SetFenceValue(fenceValue);
-    commandQueue_->Signal(fence_, fenceValue);
-    if (fence_->GetCompletedValue() < fenceValue) {
-        fence_->SetEventOnCompletion(fenceValue, fenceEvent_);
-        WaitForSingleObject(fenceEvent_, INFINITE);
+bool AppRunLoop::WaitForFrameSlot(uint32_t frameIndex) {
+    if (fence_ == nullptr || fenceEvent_ == nullptr || frameFenceValues_.empty()) {
+        return true;
     }
+
+    const uint32_t slot = frameIndex % static_cast<uint32_t>(frameFenceValues_.size());
+    const uint64_t fenceValue = frameFenceValues_[slot];
+    if (fenceValue == 0 || fence_->GetCompletedValue() >= fenceValue) {
+        return true;
+    }
+
+    if (FAILED(fence_->SetEventOnCompletion(fenceValue, fenceEvent_))) {
+        LogFenceWaitFailure(
+            "SetEventOnCompletion",
+            slot,
+            fenceValue,
+            fence_->GetCompletedValue(),
+            dev_.GetDevice() != nullptr ? dev_.GetDevice()->GetDeviceRemovedReason() : E_FAIL,
+            WAIT_FAILED);
+        return false;
+    }
+
+    const DWORD waitResult = WaitForSingleObject(fenceEvent_, kGpuFenceWaitTimeoutMs);
+    if (waitResult == WAIT_OBJECT_0) {
+        return true;
+    }
+
+    LogFenceWaitFailure(
+        "WaitForFrameSlot",
+        slot,
+        fenceValue,
+        fence_->GetCompletedValue(),
+        dev_.GetDevice() != nullptr ? dev_.GetDevice()->GetDeviceRemovedReason() : E_FAIL,
+        waitResult);
+    return false;
+}
+
+bool AppRunLoop::SignalFrame(uint32_t frameIndex) {
+    if (commandQueue_ == nullptr || fence_ == nullptr || frameFenceValues_.empty()) {
+        return false;
+    }
+
+    const uint32_t slot = frameIndex % static_cast<uint32_t>(frameFenceValues_.size());
+    const uint64_t fenceValue = nextFrameFenceValue_++;
+    const HRESULT signalHr = commandQueue_->Signal(fence_, fenceValue);
+    if (FAILED(signalHr)) {
+        LogFenceWaitFailure(
+            "SignalFrame",
+            slot,
+            fenceValue,
+            fence_->GetCompletedValue(),
+            dev_.GetDevice() != nullptr ? dev_.GetDevice()->GetDeviceRemovedReason() : signalHr,
+            WAIT_FAILED);
+        return false;
+    }
+
+    frameFenceValues_[slot] = fenceValue;
+    engineContext_.SetFenceValue(fenceValue);
+    return true;
+}
+
+bool AppRunLoop::FlushGpu() {
+    if (commandQueue_ == nullptr || fence_ == nullptr || fenceEvent_ == nullptr) {
+        return true;
+    }
+
+    const uint64_t fenceValue = nextFrameFenceValue_++;
+    if (FAILED(commandQueue_->Signal(fence_, fenceValue))) {
+        LogFenceWaitFailure(
+            "FlushGpu.Signal",
+            0,
+            fenceValue,
+            fence_->GetCompletedValue(),
+            dev_.GetDevice() != nullptr ? dev_.GetDevice()->GetDeviceRemovedReason() : E_FAIL,
+            WAIT_FAILED);
+        return false;
+    }
+
+    engineContext_.SetFenceValue(fenceValue);
+    if (fence_->GetCompletedValue() < fenceValue &&
+        SUCCEEDED(fence_->SetEventOnCompletion(fenceValue, fenceEvent_))) {
+        const DWORD waitResult = WaitForSingleObject(fenceEvent_, kGpuFenceWaitTimeoutMs);
+        if (waitResult != WAIT_OBJECT_0) {
+            LogFenceWaitFailure(
+                "FlushGpu.Wait",
+                0,
+                fenceValue,
+                fence_->GetCompletedValue(),
+                dev_.GetDevice() != nullptr ? dev_.GetDevice()->GetDeviceRemovedReason() : E_FAIL,
+                waitResult);
+            return false;
+        }
+    }
+    std::fill(frameFenceValues_.begin(), frameFenceValues_.end(), fenceValue);
+    return true;
 }
 
 void AppRunLoop::RenderFrame() {
+    if (gpuDeviceLost_) {
+        return;
+    }
     sceneStateManager_.Update(*this);
     sceneStateManager_.Render(*this);
 }
@@ -383,7 +849,7 @@ void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
             terrainPresetStore_.ReloadIfChanged(terrain, &presetError) || settingsChanged;
     }
     if (settingsChanged) {
-        railPath_.BuildDefaultCanyonPath(terrain.settings.corridorRadius);
+        ApplyRailShooterCourse();
     }
 
     if (terrain.useCanyonSunLighting) {
@@ -410,6 +876,8 @@ void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
         frameState_.viewProjectionMatrix);
 
     scene_.debugDraw.BeginFrame();
+    railShooterSpawnRuntime_.AppendDebugDraw(scene_.debugDraw, railPath_);
+    railShooterCollisionSystem_.AppendDebugDraw(scene_.debugDraw, railPath_);
     const bool debugDrawEnabled =
         terrain.showDebugDraw ||
         terrain.displayMode == TerrainDisplayMode::Debug ||
@@ -617,12 +1085,13 @@ void AppRunLoop::RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList)
         for (const TerrainRenderChunk& chunk : chunks) {
             if (chunk.indexCount == 0 ||
                 chunk.transformResource == nullptr ||
+                chunk.transformGpuAddress == 0 ||
                 !chunkAffectsCascade(chunk, cascade)) {
                 continue;
             }
             commandList->SetGraphicsRootConstantBufferView(
                 1,
-                chunk.transformResource->GetGPUVirtualAddress());
+                chunk.transformGpuAddress);
             commandList->IASetVertexBuffers(0, 1, &chunk.vbv);
             commandList->IASetIndexBuffer(&chunk.ibv);
             commandList->DrawIndexedInstanced(chunk.indexCount, 1, 0, 0, 0);
@@ -634,6 +1103,7 @@ void AppRunLoop::RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList)
                 if (chunk.debrisIndexCount == 0 ||
                     chunk.debrisInstanceCount == 0 ||
                     chunk.transformResource == nullptr ||
+                    chunk.transformGpuAddress == 0 ||
                     chunk.debrisVbv.BufferLocation == 0 ||
                     chunk.debrisInstanceVbv.BufferLocation == 0 ||
                     chunk.debrisIbv.BufferLocation == 0 ||
@@ -646,7 +1116,7 @@ void AppRunLoop::RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList)
                 };
                 commandList->SetGraphicsRootConstantBufferView(
                     1,
-                    chunk.transformResource->GetGPUVirtualAddress());
+                    chunk.transformGpuAddress);
                 commandList->IASetVertexBuffers(0, 2, debrisVertexBuffers);
                 commandList->IASetIndexBuffer(&chunk.debrisIbv);
                 commandList->DrawIndexedInstanced(
@@ -1065,8 +1535,14 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     BeginFrameSystems();
 
     UINT backBufferIndex = swapChain_.CurrentIndex();
+    if (!WaitForFrameSlot(backBufferIndex)) {
+        return;
+    }
     ComPtr<ID3D12GraphicsCommandList> commandList =
         clPool_.Begin(backBufferIndex, appPipelines_.GetMainPSO());
+    if (commandList == nullptr) {
+        return;
+    }
     vfxEngine_.InitializeGpuParticles(
         dev_.GetDevice(),
         commandList.Get(),
@@ -1085,6 +1561,11 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         frameState_.projMatrix,
         windowWidth_,
         windowHeight_);
+    scene_.SyncCourseMeshRenderQueue(
+        railShooterSpawnRuntime_,
+        railPath_,
+        frameState_.viewMatrix,
+        frameState_.projMatrix);
 
     const PostProcessExecutionPlan postExecutionPlan = vfxEngine_.PostProcess().BuildExecutionPlan();
     const D3D12_GPU_DESCRIPTOR_HANDLE spriteTextureHandle =
@@ -1120,6 +1601,27 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             srvDescriptorHeap_.Get(),
             spriteTextureHandle,
             engineContext_.GetDepthSrvGpuHandle(),
+            &railShooterCourse_,
+            &railShooterSpawnRuntime_,
+            &railShooterCollisionSystem_,
+            &railShooterCourseLoadStatus_,
+            &railShooterCoursePath_,
+            railShooterDistance_,
+            railPath_.Length(),
+            [&](std::string* errorMessage) {
+                return SaveRailShooterCourse(errorMessage);
+            },
+            [&]() {
+                railShooterCourse_.SortForRuntime();
+                ApplyRailShooterCourse();
+            },
+            [&]() {
+                LoadRailShooterCourse();
+                ApplyRailShooterCourse();
+            },
+            [&](float distance) {
+                TeleportRailShooterCourse(distance);
+            },
             [&]() {
                 Emitter emitterState{};
                 emitterState.transform = runtimeState_.emitter.transform;
@@ -1215,15 +1717,14 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         OutputDebugStringA("\n");
     }
     ConfigureRenderGraphDebugDump();
-    constexpr uint32_t kRenderGraphDebugBackgroundRefreshInterval = 30;
     const bool renderGraphDumpCapturing =
         renderGraphDumpEnabled_ &&
         renderGraphDumpFrameIndex_ < renderGraphDumpFrameLimit_;
+    const bool developerDiagnosticsVisible = imguiLayer_.WantsDeveloperDiagnostics();
     const bool refreshRenderGraphDebug =
         renderGraphDumpCapturing ||
-        imguiLayer_.WantsDeveloperDiagnostics() ||
-        lastRenderPassDebugInfo_.empty() ||
-        ((renderGraphDebugRefreshFrame_++ % kRenderGraphDebugBackgroundRefreshInterval) == 0);
+        developerDiagnosticsVisible ||
+        lastRenderPassDebugInfo_.empty();
     if (refreshRenderGraphDebug) {
         lastRenderPassDebugInfo_ = renderGraph_.BuildPassDebugInfo();
         lastRenderGraphDescription_ = renderGraph_.Describe(lastRenderPassDebugInfo_);
@@ -1238,13 +1739,37 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     renderGraph_.Execute(commandList.Get());
     DumpRenderGraphDebugFrame();
     const VfxFrameTelemetryOptions vfxTelemetryOptions =
-        BuildVfxTelemetryOptions(runtimeState_.vfx, vfxTelemetryFrameIndex_++);
+        BuildVfxTelemetryOptions(
+            runtimeState_.vfx,
+            vfxTelemetryFrameIndex_++,
+            developerDiagnosticsVisible);
     vfxEngine_.CaptureFrameTelemetry(commandList.Get(), vfxTelemetryOptions);
     frameRenderer_.EndFrame(commandList.Get(), backBuffer);
 
-    clPool_.EndAndExecute(dev_);
-    swapChain_.Present(dev_, 1);
+    if (!clPool_.EndAndExecute(dev_)) {
+        return;
+    }
+    if (!SignalFrame(backBufferIndex)) {
+        return;
+    }
+    const HRESULT presentHr = swapChain_.Present(dev_, 1);
+    if (FAILED(presentHr)) {
+        if (!gpuDeviceLost_) {
+            gpuDeviceLost_ = true;
+            LogGpuFailure(
+                "Present",
+                presentHr,
+                dev_.GetDevice() != nullptr ? dev_.GetDevice()->GetDeviceRemovedReason() : presentHr);
+            DumpDredBreadcrumbs(dev_.GetDevice());
+            PostMessage(hwnd_, WM_CLOSE, 0, 0);
+        }
+        return;
+    }
 
-    SignalAndWaitGpu();
+    if (vfxTelemetryOptions.AnyEnabled()) {
+        if (!WaitForFrameSlot(backBufferIndex)) {
+            return;
+        }
+    }
     vfxEngine_.ResolveFrameTelemetry(vfxTelemetryOptions);
 }

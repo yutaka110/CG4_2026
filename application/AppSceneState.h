@@ -4,6 +4,9 @@ class AppSceneHost {
 public:
     virtual ~AppSceneHost() = default;
 
+    virtual void EnterRailShooterScene() = 0;
+    virtual void UpdateRailShooterFrame() = 0;
+    virtual void RenderRailShooterFrame() = 0;
     virtual void UpdateVfxPreviewFrame() = 0;
     virtual void RenderVfxPreviewFrame() = 0;
 };
@@ -22,6 +25,14 @@ public:
 class VfxPreviewSceneState final : public IAppSceneState {
 public:
     const char* Name() const override;
+    void Update(AppSceneHost& host) override;
+    void Render(AppSceneHost& host) override;
+};
+
+class RailShooterSceneState final : public IAppSceneState {
+public:
+    const char* Name() const override;
+    void OnEnter(AppSceneHost& host) override;
     void Update(AppSceneHost& host) override;
     void Render(AppSceneHost& host) override;
 };

@@ -96,6 +96,21 @@ bool ReadEnvFlag(const wchar_t* name) {
         std::wcscmp(value, L"on") == 0;
 }
 
+bool IsAuthoringSampleEffectPath(const std::filesystem::path& path) {
+    const std::string stem = path.stem().string();
+    return stem.rfind("Authoring", 0) == 0;
+}
+
+bool IsAuthoringSampleEffectAsset(const LoadedEffectAsset& loaded) {
+    return loaded.asset.name.rfind("authoring_", 0) == 0 ||
+        IsAuthoringSampleEffectPath(loaded.path);
+}
+
+bool ShouldLoadAuthoringSamples() {
+    static const bool enabled = ReadEnvFlag(L"GE3_LOAD_AUTHORING_SAMPLES");
+    return enabled;
+}
+
 void ApplyLiveTuningToComponent(
     const ParticleComponentAssetView& source,
     EffectParticleSettings& destination) {
@@ -533,11 +548,34 @@ void VfxEngine::RegisterBuiltInAssets() {
 }
 
 void VfxEngine::LoadEffectDirectory(const char* directory) {
-    loadedEffectAssets_ = effectAssetLoader_.LoadDirectory(
-        directory,
-        effectAuthoringRegistry_);
-    for (const LoadedEffectAsset& loaded : loadedEffectAssets_) {
-        effectSystem_.RegisterAsset(loaded.asset, effectAuthoringRegistry_);
+    loadedEffectAssets_.clear();
+
+    const std::filesystem::path effectDirectory{directory};
+    if (!std::filesystem::exists(effectDirectory)) {
+        return;
+    }
+
+    const bool loadAuthoringSamples = ShouldLoadAuthoringSamples();
+    for (const std::filesystem::directory_entry& entry :
+         std::filesystem::directory_iterator(effectDirectory)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".effect") {
+            continue;
+        }
+        if (!loadAuthoringSamples && IsAuthoringSampleEffectPath(entry.path())) {
+            continue;
+        }
+
+        LoadedEffectAsset loaded{};
+        if (effectAssetLoader_.LoadFile(
+                entry.path(),
+                loaded,
+                effectAuthoringRegistry_)) {
+            if (!loadAuthoringSamples && IsAuthoringSampleEffectAsset(loaded)) {
+                continue;
+            }
+            effectSystem_.RegisterAsset(loaded.asset, effectAuthoringRegistry_);
+            loadedEffectAssets_.push_back(std::move(loaded));
+        }
     }
 }
 
@@ -689,6 +727,9 @@ void VfxEngine::ReloadChangedEffectAssets() {
         if (!entry.is_regular_file() || entry.path().extension() != ".effect") {
             continue;
         }
+        if (!ShouldLoadAuthoringSamples() && IsAuthoringSampleEffectPath(entry.path())) {
+            continue;
+        }
         if (IsLoadedEffectPath(loadedEffectAssets_, entry.path())) {
             continue;
         }
@@ -698,6 +739,9 @@ void VfxEngine::ReloadChangedEffectAssets() {
                 entry.path(),
                 loaded,
                 effectAuthoringRegistry_)) {
+            if (!ShouldLoadAuthoringSamples() && IsAuthoringSampleEffectAsset(loaded)) {
+                continue;
+            }
             effectSystem_.RegisterAsset(loaded.asset, effectAuthoringRegistry_);
             loadedEffectAssets_.push_back(std::move(loaded));
         }
