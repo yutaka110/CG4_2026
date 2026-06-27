@@ -1,10 +1,14 @@
 #include "AppPipelines.h"
 
 #include <cassert>
+#include <cstdint>
 #include <cstdio>
 #include <cwchar>
 #include <cwctype>
+#include <fstream>
 #include <filesystem>
+#include <string>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 
@@ -78,6 +82,116 @@ bool ReadEnvFlag(const wchar_t* name) {
         std::wcscmp(value, L"on") == 0;
 }
 
+uint64_t HashAppend(uint64_t hash, const void* data, size_t size) {
+    constexpr uint64_t kFnvPrime = 1099511628211ull;
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= bytes[i];
+        hash *= kFnvPrime;
+    }
+    return hash;
+}
+
+uint64_t HashAppendString(uint64_t hash, const std::wstring& value) {
+    return HashAppend(hash, value.data(), value.size() * sizeof(wchar_t));
+}
+
+uint64_t HashAppendString(uint64_t hash, const std::string& value) {
+    return HashAppend(hash, value.data(), value.size());
+}
+
+std::filesystem::path ShaderBytecodeCachePath(
+    const std::filesystem::path& resolvedPath,
+    const wchar_t* profile) {
+    constexpr uint64_t kFnvOffset = 1469598103934665603ull;
+    std::error_code error;
+    const std::filesystem::path normalized =
+        std::filesystem::weakly_canonical(resolvedPath, error).lexically_normal();
+    const auto writeTime = std::filesystem::last_write_time(resolvedPath, error);
+    const uint64_t writeTimeTicks = error
+        ? 0ull
+        : static_cast<uint64_t>(writeTime.time_since_epoch().count());
+    error.clear();
+    const uint64_t sourceSize = std::filesystem::file_size(resolvedPath, error);
+
+    uint64_t hash = kFnvOffset;
+    hash = HashAppendString(hash, normalized.wstring());
+    hash = HashAppendString(hash, std::wstring(profile != nullptr ? profile : L""));
+#if _DEBUG
+    hash = HashAppendString(hash, std::string("Debug"));
+#else
+    hash = HashAppendString(hash, std::string("Release"));
+#endif
+    hash = HashAppend(hash, &writeTimeTicks, sizeof(writeTimeTicks));
+    hash = HashAppend(hash, &sourceSize, sizeof(sourceSize));
+
+    char fileName[48]{};
+    std::snprintf(fileName, sizeof(fileName), "%016llx.dxil", static_cast<unsigned long long>(hash));
+    return std::filesystem::path("cache") / "shaders" / fileName;
+}
+
+ComPtr<IDxcBlob> LoadCachedShaderBytecode(const std::filesystem::path& cachePath) {
+    std::error_code error;
+    const uint64_t byteCount = std::filesystem::file_size(cachePath, error);
+    if (error || byteCount == 0 || byteCount > 64ull * 1024ull * 1024ull) {
+        return nullptr;
+    }
+
+    std::ifstream input(cachePath, std::ios::binary);
+    if (!input) {
+        return nullptr;
+    }
+
+    std::vector<uint8_t> bytes(static_cast<size_t>(byteCount));
+    input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (input.gcount() != static_cast<std::streamsize>(bytes.size())) {
+        return nullptr;
+    }
+
+    ComPtr<IDxcUtils> utils;
+    if (FAILED(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils))) || utils == nullptr) {
+        return nullptr;
+    }
+
+    ComPtr<IDxcBlobEncoding> encoded;
+    if (FAILED(utils->CreateBlob(
+            bytes.data(),
+            static_cast<UINT32>(bytes.size()),
+            DXC_CP_ACP,
+            &encoded)) ||
+        encoded == nullptr) {
+        return nullptr;
+    }
+
+    ComPtr<IDxcBlob> blob;
+    if (FAILED(encoded.As(&blob))) {
+        return nullptr;
+    }
+    return blob;
+}
+
+void StoreCachedShaderBytecode(
+    const std::filesystem::path& cachePath,
+    const ComPtr<IDxcBlob>& blob) {
+    if (blob == nullptr || blob->GetBufferPointer() == nullptr || blob->GetBufferSize() == 0) {
+        return;
+    }
+
+    std::error_code error;
+    std::filesystem::create_directories(cachePath.parent_path(), error);
+    if (error) {
+        return;
+    }
+
+    std::ofstream output(cachePath, std::ios::binary | std::ios::trunc);
+    if (!output) {
+        return;
+    }
+    output.write(
+        static_cast<const char*>(blob->GetBufferPointer()),
+        static_cast<std::streamsize>(blob->GetBufferSize()));
+}
+
 } // namespace
 
 ComPtr<IDxcBlob> AppPipelines::Compile_(const std::wstring& filePath, const wchar_t* profile) {
@@ -94,6 +208,11 @@ ComPtr<IDxcBlob> AppPipelines::Compile_(const std::wstring& filePath, const wcha
         OutputDebugStringW(L"\n");
     }
 
+    const std::filesystem::path cachePath = ShaderBytecodeCachePath(resolvedPath, profile);
+    if (ComPtr<IDxcBlob> cached = LoadCachedShaderBytecode(cachePath)) {
+        return cached;
+    }
+
     auto blob = shaderCompiler_.CompileFromFile(resolvedPath.wstring(), entryPoint, profile);
     if (!blob) {
         OutputDebugStringW(L"[AppPipelines] Shader compile failed: ");
@@ -101,6 +220,7 @@ ComPtr<IDxcBlob> AppPipelines::Compile_(const std::wstring& filePath, const wcha
         OutputDebugStringW(L"\n");
         return nullptr;
     }
+    StoreCachedShaderBytecode(cachePath, blob);
     return blob;
 }
 

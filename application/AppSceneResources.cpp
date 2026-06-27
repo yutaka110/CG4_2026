@@ -1437,15 +1437,8 @@ bool AppSceneResources::Initialize(
         mipImages,
         initialUploadResources_);
 
-    DirectX::ScratchImage mipImages2 = AppRenderResources::LoadTexture("resources/monsterBall.png");
-    const DirectX::TexMetadata& metadata2 = mipImages2.GetMetadata();
-    textureResource2 = AppRenderResources::CreateTextureResource(device, metadata2);
-    AppRenderResources::UploadTextureData(
-        device,
-        uploadCommandList,
-        textureResource2,
-        mipImages2,
-        initialUploadResources_);
+    textureResource2 = textureResource;
+    const DirectX::TexMetadata& metadata2 = metadata;
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
     srvDesc.Format = metadata.format;
