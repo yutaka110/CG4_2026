@@ -171,6 +171,65 @@ CourseValidationReport ValidateCourseAsset(
         previousSectionEnd = (std::max)(previousSectionEnd, section.endDistance);
     }
 
+    uint32_t gameplayTerrainCount = 0;
+    uint32_t heroTerrainCount = 0;
+    uint32_t vistaTerrainCount = 0;
+    for (size_t index = 0; index < course.terrainPlacements.size(); ++index) {
+        const CourseTerrainPlacement& placement = course.terrainPlacements[index];
+        const std::string subject = "terrain[" + std::to_string(index) + "]";
+        if (placement.id.empty()) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Terrain placement id is empty.", placement.distance);
+        }
+        if (placement.meshId.empty()) {
+            AddIssue(report, CourseValidationSeverity::Error, subject, "Terrain placement mesh id is empty.", placement.distance);
+        }
+        if (placement.distance < 0.0f || (railLength > 0.0f && placement.distance > railLength + 0.01f)) {
+            AddIssue(report, CourseValidationSeverity::Error, subject, "Terrain placement is outside rail length.", placement.distance);
+        }
+        if (placement.scale.x <= 0.0f || placement.scale.y <= 0.0f || placement.scale.z <= 0.0f) {
+            AddIssue(report, CourseValidationSeverity::Error, subject, "Terrain placement scale must be positive.", placement.distance);
+        }
+        if (index > 0 && placement.distance < course.terrainPlacements[index - 1].distance) {
+            AddIssue(report, CourseValidationSeverity::Info, subject, "Terrain placements will be sorted on save.", placement.distance);
+        }
+
+        if (placement.layer == CourseTerrainLayer::GameplayCollision) {
+            ++gameplayTerrainCount;
+            if (placement.collisionMode == CourseTerrainCollisionMode::None) {
+                AddIssue(
+                    report,
+                    CourseValidationSeverity::Warning,
+                    subject,
+                    "Gameplay terrain should use proxy or solid collision.",
+                    placement.distance);
+            }
+        } else if (placement.layer == CourseTerrainLayer::HeroLandmark) {
+            ++heroTerrainCount;
+        } else {
+            ++vistaTerrainCount;
+            if (placement.collisionMode != CourseTerrainCollisionMode::None) {
+                AddIssue(
+                    report,
+                    CourseValidationSeverity::Warning,
+                    subject,
+                    "Vista background terrain should not use collision.",
+                    placement.distance);
+            }
+        }
+    }
+
+    if (!course.terrainPlacements.empty()) {
+        if (gameplayTerrainCount == 0) {
+            AddIssue(report, CourseValidationSeverity::Info, "terrain", "No gameplay collision terrain placements authored.");
+        }
+        if (heroTerrainCount == 0) {
+            AddIssue(report, CourseValidationSeverity::Info, "terrain", "No hero landmark terrain placements authored.");
+        }
+        if (vistaTerrainCount == 0) {
+            AddIssue(report, CourseValidationSeverity::Info, "terrain", "No vista background terrain placements authored.");
+        }
+    }
+
     std::unordered_set<std::string> eventKeys;
     for (size_t index = 0; index < course.events.size(); ++index) {
         const CourseEventMarker& event = course.events[index];

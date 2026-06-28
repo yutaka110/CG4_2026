@@ -8,6 +8,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
+#include "CourseAsset.h"
 #include "../terrain/RailPath.h"
 #include "utils/math/MathUtils.h"
 #include "utils/math/Vector.h"
@@ -23,12 +24,17 @@ struct CourseMeshModelBinding {
 enum class CourseMeshRenderKind {
     Enemy,
     Obstacle,
+    GameplayTerrain,
+    HeroLandmark,
+    VistaBackground,
 };
 
 struct CourseMeshRenderItem {
     CourseMeshRenderKind kind = CourseMeshRenderKind::Obstacle;
     std::string name;
     std::string meshId;
+    CourseTerrainLayer terrainLayer = CourseTerrainLayer::HeroLandmark;
+    CourseTerrainCollisionMode collisionMode = CourseTerrainCollisionMode::None;
     uint32_t sourceActorId = 0;
     uint32_t modelIndex = 0;
     float sortDistance = 0.0f;
@@ -43,6 +49,8 @@ public:
     void Reset();
     void SyncFromCourseRuntime(
         const CourseSpawnRuntime& runtime,
+        const CourseAsset* course,
+        float currentDistance,
         const RailPath& railPath,
         std::span<const CourseMeshModelBinding> models,
         const Matrix4x4& viewMatrix,

@@ -185,8 +185,12 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\course\CourseMeshRenderQueue.cpp" />
     <ClCompile Include="application\course\CourseSpawnRuntime.cpp" />
     <ClCompile Include="application\course\CourseValidation.cpp" />
+    <ClCompile Include="application\course\EncounterDirector.cpp" />
     <ClCompile Include="application\course\EnemyWaveAsset.cpp" />
     <ClCompile Include="application\course\ObstacleAsset.cpp" />
+    <ClCompile Include="application\course\PlayerCombatFeelSystem.cpp" />
+    <ClCompile Include="application\course\RailCameraDirector.cpp" />
+    <ClCompile Include="application\course\SectionCheckpointSystem.cpp" />
     <ClCompile Include="application\terrain\RailPath.cpp" />
     <ClCompile Include="application\terrain\TerrainChunkManager.cpp" />
     <ClCompile Include="application\terrain\TerrainPresetStore.cpp" />
@@ -690,8 +694,12 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\course\CourseMeshRenderQueue.h" />
     <ClInclude Include="application\course\CourseSpawnRuntime.h" />
     <ClInclude Include="application\course\CourseValidation.h" />
+    <ClInclude Include="application\course\EncounterDirector.h" />
     <ClInclude Include="application\course\EnemyWaveAsset.h" />
     <ClInclude Include="application\course\ObstacleAsset.h" />
+    <ClInclude Include="application\course\PlayerCombatFeelSystem.h" />
+    <ClInclude Include="application\course\RailCameraDirector.h" />
+    <ClInclude Include="application\course\SectionCheckpointSystem.h" />
     <ClInclude Include="application\terrain\RailPath.h" />
     <ClInclude Include="application\terrain\TerrainChunkManager.h" />
     <ClInclude Include="application\terrain\TerrainGenerationSettings.h" />

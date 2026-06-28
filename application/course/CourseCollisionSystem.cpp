@@ -51,6 +51,20 @@ bool PlayerOverlapsObstacle(
         Abs(player.verticalOffset - obstacle.desc.verticalOffset) <= obstacle.desc.halfExtents.y + player.radius;
 }
 
+bool PlayerOverlapsTerrainPlacement(
+    const CourseCollisionPlayerState& player,
+    const CourseTerrainPlacement& placement) {
+    if (placement.layer != CourseTerrainLayer::GameplayCollision ||
+        placement.collisionMode == CourseTerrainCollisionMode::None) {
+        return false;
+    }
+
+    const float distance = placement.distance + placement.forwardOffset;
+    return Abs(player.distance - distance) <= placement.scale.z + player.radius &&
+        Abs(player.lateralOffset - placement.lateralOffset) <= placement.scale.x + player.radius &&
+        Abs(player.verticalOffset - placement.verticalOffset) <= placement.scale.y + player.radius;
+}
+
 void SpawnImpactCue(
     CourseSpawnRuntime& runtime,
     const char* id,
@@ -106,6 +120,9 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     weapon_.range = (std::max)(1.0f, input.weapon.range);
     weapon_.radius = (std::max)(0.1f, input.weapon.radius);
     weapon_.damage = (std::max)(0.0f, input.weapon.damage);
+    weapon_.assistEnabled = input.weapon.assistEnabled;
+    weapon_.assistLateralOffset = input.weapon.assistLateralOffset;
+    weapon_.assistVerticalOffset = input.weapon.assistVerticalOffset;
     weapon_.shotTimer -= dt;
 
     for (CourseBulletActor& bullet : runtime.MutableBullets()) {
@@ -162,6 +179,31 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         break;
     }
 
+    if (input.course != nullptr) {
+        for (const CourseTerrainPlacement& placement : input.course->terrainPlacements) {
+            if (player_.invulnerabilityTime > 0.0f ||
+                !PlayerOverlapsTerrainPlacement(player_, placement)) {
+                continue;
+            }
+
+            constexpr float kTerrainContactDamage = 20.0f;
+            player_.hitPoints = (std::max)(0.0f, player_.hitPoints - kTerrainContactDamage);
+            player_.invulnerabilityTime = 0.80f;
+            lastFrameStats_.obstacleHits++;
+            lastFrameStats_.playerDamage += kTerrainContactDamage;
+            SpawnImpactCue(
+                runtime,
+                "player_terrain_hit",
+                "hit_ring",
+                player_.distance,
+                player_.lateralOffset,
+                player_.verticalOffset,
+                2.0f,
+                {1.0f, 0.54f, 0.18f, 1.0f});
+            break;
+        }
+    }
+
     while (weapon_.enabled && weapon_.shotTimer <= 0.0f) {
         lastFrameStats_.playerShotsFired++;
         FirePlayerShot(runtime, input);
@@ -179,6 +221,12 @@ void CourseCollisionSystem::FirePlayerShot(
     const CourseCollisionFrameInput& input) {
     const float minDistance = input.player.distance + 4.0f;
     const float maxDistance = input.player.distance + weapon_.range;
+    const float aimLateral = input.weapon.assistEnabled
+        ? input.weapon.assistLateralOffset
+        : input.player.lateralOffset;
+    const float aimVertical = input.weapon.assistEnabled
+        ? input.weapon.assistVerticalOffset
+        : input.player.verticalOffset;
     float bestDistance = (std::numeric_limits<float>::max)();
     CourseEnemyActor* bestEnemy = nullptr;
     CourseObstacleActor* bestObstacle = nullptr;
@@ -189,8 +237,8 @@ void CourseCollisionSystem::FirePlayerShot(
             continue;
         }
         const float allowed = weapon_.radius + enemy.desc.radius;
-        if (Abs(enemy.desc.lateralOffset - input.player.lateralOffset) > allowed ||
-            Abs(enemy.desc.verticalOffset - input.player.verticalOffset) > allowed) {
+        if (Abs(enemy.desc.lateralOffset - aimLateral) > allowed ||
+            Abs(enemy.desc.verticalOffset - aimVertical) > allowed) {
             continue;
         }
         if (distance < bestDistance) {
@@ -208,9 +256,9 @@ void CourseCollisionSystem::FirePlayerShot(
         if (distance < minDistance || distance > maxDistance) {
             continue;
         }
-        if (Abs(obstacle.desc.lateralOffset - input.player.lateralOffset) >
+        if (Abs(obstacle.desc.lateralOffset - aimLateral) >
                 obstacle.desc.halfExtents.x + weapon_.radius ||
-            Abs(obstacle.desc.verticalOffset - input.player.verticalOffset) >
+            Abs(obstacle.desc.verticalOffset - aimVertical) >
                 obstacle.desc.halfExtents.y + weapon_.radius) {
             continue;
         }

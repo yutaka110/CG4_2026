@@ -336,10 +336,22 @@
     <ClCompile Include="application\course\CourseValidation.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\EncounterDirector.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\EnemyWaveAsset.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\ObstacleAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\PlayerCombatFeelSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailCameraDirector.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\SectionCheckpointSystem.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\EffectRuntime.cpp">
@@ -774,10 +786,22 @@
     <ClInclude Include="application\course\CourseValidation.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\EncounterDirector.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\EnemyWaveAsset.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\ObstacleAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\PlayerCombatFeelSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailCameraDirector.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\SectionCheckpointSystem.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\EffectComponentViews.h">

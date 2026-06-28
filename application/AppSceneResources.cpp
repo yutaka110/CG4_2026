@@ -2018,6 +2018,39 @@ bool AppSceneResources::Initialize(
             animatedCubeTextureSrvHandleGPU.ptr != 0,
         });
     }
+    auto registerCourseMesh = [&](const char* name, const char* directory, const char* filename) {
+        ModelData courseMeshData = LoadObjFile_Assimp(directory, filename);
+        if (courseMeshData.vertices.empty() || courseMeshData.indices.empty()) {
+            OutputDebugStringA(("[AppSceneResources] Course mesh has no indexed data: " + std::string(name) + "\n").c_str());
+            return;
+        }
+
+        GpuMeshResource courseMesh = CreateGpuMeshResource(
+            device,
+            uploadCommandList,
+            courseMeshData,
+            initialUploadResources_);
+        if (courseMesh.indexCount == 0) {
+            OutputDebugStringA(("[AppSceneResources] Course mesh GPU upload failed: " + std::string(name) + "\n").c_str());
+            return;
+        }
+
+        vfxModelLibrary.push_back({
+            name,
+            directory,
+            filename,
+            std::move(courseMeshData),
+            courseMesh,
+            terrainAlbedoTextureSrvHandleGPU.ptr != 0 ? terrainAlbedoTextureSrvHandleGPU : textureSrvHandleGPU2,
+            true,
+        });
+    };
+    registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj");
+    registerCourseMesh("rib_tunnel_wall", "Resources/course_meshes/RibTunnelWall", "RibTunnelWall.obj");
+    registerCourseMesh("root_spire_column", "Resources/course_meshes/RootSpireColumn", "RootSpireColumn.obj");
+    registerCourseMesh("curved_canyon_wall", "Resources/course_meshes/CurvedCanyonWall", "CurvedCanyonWall.obj");
+    registerCourseMesh("vista_hole_wall", "Resources/course_meshes/VistaHoleWall", "VistaHoleWall.obj");
+    registerCourseMesh("spire_broken_bridge_arc", "Resources/course_meshes/SpireBrokenBridgeArc", "SpireBrokenBridgeArc.obj");
 
     vfxModelObjects.clear();
     vfxModelObjects.resize(kRuntimeVfxModelObjectCount);
@@ -2121,7 +2154,7 @@ bool AppSceneResources::Initialize(
     if (!debugDraw.Initialize(device, 65536)) {
         OutputDebugStringA("[AppSceneResources] DebugDraw initialization failed.\n");
     }
-    if (!courseMeshRenderQueue.Initialize(device, 128)) {
+    if (!courseMeshRenderQueue.Initialize(device, 256)) {
         OutputDebugStringA("[AppSceneResources] CourseMeshRenderQueue initialization failed.\n");
         return false;
     }
@@ -2167,6 +2200,8 @@ const AppManagedModelResource* AppSceneResources::FindManagedModel(uint32_t mode
 
 void AppSceneResources::SyncCourseMeshRenderQueue(
     const CourseSpawnRuntime& courseRuntime,
+    const CourseAsset* course,
+    float currentDistance,
     const RailPath& railPath,
     const Matrix4x4& viewMatrix,
     const Matrix4x4& projMatrix) {
@@ -2185,6 +2220,8 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
 
     courseMeshRenderQueue.SyncFromCourseRuntime(
         courseRuntime,
+        course,
+        currentDistance,
         railPath,
         bindings,
         viewMatrix,

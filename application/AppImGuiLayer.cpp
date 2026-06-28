@@ -755,6 +755,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         context.course,
                         context.courseSpawnRuntime,
                         context.courseCollisionSystem,
+                        context.courseCheckpointSystem,
+                        context.playerCombatFeelSystem,
                         context.courseLoadStatus,
                         context.coursePath,
                         context.courseDistance,

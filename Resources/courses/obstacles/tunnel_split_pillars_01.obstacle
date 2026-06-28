@@ -1,0 +1,7 @@
+# obstacle|id|displayName|meshId|lifetime|halfX|halfY|halfZ|r|g|b|a
+# placement|distanceOffset|lateralOffset|verticalOffset|forwardSpeed
+# breakable|enabled|hitPoints
+obstacle|tunnel_split_pillars_01|Tunnel Split Pillars 01|animated_cube|11|3.2|6.5|2.4|0.80|0.46|0.18|1.0
+placement|32|0|1|0
+breakable|true|150
+vfx|pillar_break_dust

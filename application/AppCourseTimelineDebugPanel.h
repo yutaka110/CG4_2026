@@ -5,12 +5,16 @@
 
 class CourseCollisionSystem;
 class CourseSpawnRuntime;
+class PlayerCombatFeelSystem;
+class SectionCheckpointSystem;
 struct CourseAsset;
 
 struct CourseTimelineDebugPanelInput {
     CourseAsset* course = nullptr;
     const CourseSpawnRuntime* spawnRuntime = nullptr;
     const CourseCollisionSystem* collisionSystem = nullptr;
+    const SectionCheckpointSystem* checkpointSystem = nullptr;
+    const PlayerCombatFeelSystem* combatFeelSystem = nullptr;
     const std::string* loadStatus = nullptr;
     const std::string* coursePath = nullptr;
     float currentDistance = 0.0f;

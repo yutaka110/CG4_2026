@@ -1,0 +1,7 @@
+# obstacle|id|displayName|meshId|lifetime|halfX|halfY|halfZ|r|g|b|a
+# placement|distanceOffset|lateralOffset|verticalOffset|forwardSpeed
+# breakable|enabled|hitPoints
+obstacle|spire_core_fragment|Spire Core Fragment|animated_cube|12|6.8|5.2|3.8|1.0|0.52|0.16|1.0
+placement|38|0|3|-2
+breakable|true|220
+vfx|core_fragment_burst

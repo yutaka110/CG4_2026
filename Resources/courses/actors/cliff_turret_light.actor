@@ -1,0 +1,3 @@
+actor|cliff_turret_light|Light Cliff Turret|animated_cube|1.55|58|10|1.0|0.26|0.10|1.0|soft_spread
+combat|0.86|0.48|40|soft_spread
+movement|0

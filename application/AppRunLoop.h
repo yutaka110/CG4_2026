@@ -22,6 +22,10 @@
 #include "course/CourseAsset.h"
 #include "course/CourseCollisionSystem.h"
 #include "course/CourseEventDispatcher.h"
+#include "course/EncounterDirector.h"
+#include "course/PlayerCombatFeelSystem.h"
+#include "course/RailCameraDirector.h"
+#include "course/SectionCheckpointSystem.h"
 #include "terrain/RailPath.h"
 #include "terrain/TerrainChunkManager.h"
 #include "terrain/TerrainPresetStore.h"
@@ -130,7 +134,11 @@ private:
     CourseAsset railShooterCourse_;
     CourseRuntime railShooterCourseRuntime_;
     CourseCollisionSystem railShooterCollisionSystem_;
+    SectionCheckpointSystem railShooterCheckpointSystem_;
+    PlayerCombatFeelSystem railShooterCombatFeelSystem_;
     CourseEventDispatcher railShooterEventDispatcher_;
+    EncounterDirector railShooterEncounterDirector_;
+    RailCameraDirector railShooterCameraDirector_;
     CourseSpawnRuntime railShooterSpawnRuntime_;
     std::string railShooterCoursePath_ = "Resources/courses/CanyonAssaultRoute01.course";
     std::string railShooterCourseLoadStatus_;

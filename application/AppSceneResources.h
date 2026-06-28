@@ -201,6 +201,8 @@ public:
     const CourseMeshRenderQueue& CourseMeshes() const { return courseMeshRenderQueue; }
     void SyncCourseMeshRenderQueue(
         const CourseSpawnRuntime& courseRuntime,
+        const CourseAsset* course,
+        float currentDistance,
         const RailPath& railPath,
         const Matrix4x4& viewMatrix,
         const Matrix4x4& projMatrix);

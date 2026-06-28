@@ -1,0 +1,7 @@
+# obstacle|id|displayName|meshId|lifetime|halfX|halfY|halfZ|r|g|b|a
+# placement|distanceOffset|lateralOffset|verticalOffset|forwardSpeed
+# breakable|enabled|hitPoints
+obstacle|tunnel_right_rib_01|Tunnel Right Rib 01|animated_cube|10|2.4|5.8|2.2|0.72|0.42|0.18|1.0
+placement|28|8|1|0
+breakable|true|95
+vfx|tunnel_rock_chips

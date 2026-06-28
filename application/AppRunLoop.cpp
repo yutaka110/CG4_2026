@@ -10,6 +10,7 @@
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include <utility>
 
 #include "AppFrameRenderer.h"
 #include "AppImGuiLayer.h"
@@ -494,6 +495,10 @@ void AppRunLoop::ApplyRailShooterCourse() {
     railShooterCourseRuntime_.Reset(runtimeState_.terrain.previewDistance);
     railShooterSpawnRuntime_.Reset();
     railShooterCollisionSystem_.Reset();
+    railShooterCheckpointSystem_.Reset(&railShooterCourse_, runtimeState_.terrain.previewDistance);
+    railShooterCombatFeelSystem_.Reset();
+    railShooterEncounterDirector_.Reset();
+    railShooterCameraDirector_.Reset();
 }
 
 bool AppRunLoop::SaveRailShooterCourse(std::string* errorMessage) {
@@ -525,6 +530,10 @@ void AppRunLoop::TeleportRailShooterCourse(float distance) {
     railShooterDistance_ = railShooterCourseRuntime_.Distance();
     railShooterSpawnRuntime_.Reset();
     railShooterCollisionSystem_.Reset();
+    railShooterCheckpointSystem_.NotifyTeleport(&railShooterCourse_, railShooterDistance_);
+    railShooterCombatFeelSystem_.Reset();
+    railShooterEncounterDirector_.Reset();
+    railShooterCameraDirector_.Reset();
 
     std::ostringstream line;
     line << "[Course] Teleported authoring preview to distance=" << railShooterDistance_ << "\n";
@@ -597,47 +606,74 @@ void AppRunLoop::UpdateRailShooterFrame() {
 
     const std::vector<CourseEventMarker> triggeredEvents =
         railShooterCourseRuntime_.Advance(kFixedGameplayDeltaTime, railPath_);
-    LogCourseEvents(triggeredEvents);
     railShooterDistance_ = railShooterCourseRuntime_.Distance();
+    EncounterDirectorFrameInput encounterInput{};
+    encounterInput.deltaTime = kFixedGameplayDeltaTime;
+    encounterInput.currentDistance = railShooterDistance_;
+    encounterInput.triggeredEvents = triggeredEvents;
+    encounterInput.spawnRuntime = &railShooterSpawnRuntime_;
+    const EncounterDirectorFrameOutput encounterOutput =
+        railShooterEncounterDirector_.Update(std::move(encounterInput));
+    LogCourseEvents(encounterOutput.dispatchEvents);
+    railShooterCameraDirector_.NotifyCourseEvents(encounterOutput.dispatchEvents);
+    railShooterCheckpointSystem_.Update(&railShooterCourse_, railShooterDistance_);
     railShooterEventDispatcher_.Dispatch(
-        triggeredEvents,
+        encounterOutput.dispatchEvents,
         railShooterSpawnRuntime_,
         railShooterDistance_);
     railShooterSpawnRuntime_.Update(kFixedGameplayDeltaTime);
     CourseCollisionFrameInput collisionInput{};
     collisionInput.deltaTime = kFixedGameplayDeltaTime;
+    collisionInput.course = &railShooterCourse_;
     collisionInput.player.distance = railShooterDistance_;
     collisionInput.player.lateralOffset = 0.0f;
     collisionInput.player.verticalOffset = 4.0f;
     collisionInput.player.radius = 1.6f;
     collisionInput.player.hitPoints = 100.0f;
-    collisionInput.weapon.enabled = true;
-    collisionInput.weapon.shotInterval = 0.12f;
-    collisionInput.weapon.range = 96.0f;
-    collisionInput.weapon.radius = 2.2f;
-    collisionInput.weapon.damage = 18.0f;
-    railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput);
+    CourseCollisionWeaponState baseWeapon{};
+    baseWeapon.enabled = true;
+    baseWeapon.shotInterval = 0.12f;
+    baseWeapon.range = 96.0f;
+    baseWeapon.radius = 2.2f;
+    baseWeapon.damage = 18.0f;
+    PlayerCombatFeelFrameInput combatFeelInput{};
+    combatFeelInput.deltaTime = kFixedGameplayDeltaTime;
+    combatFeelInput.playerDistance = railShooterDistance_;
+    combatFeelInput.playerLateralOffset = collisionInput.player.lateralOffset;
+    combatFeelInput.playerVerticalOffset = collisionInput.player.verticalOffset;
+    combatFeelInput.baseWeapon = baseWeapon;
+    combatFeelInput.spawnRuntime = &railShooterSpawnRuntime_;
+    collisionInput.weapon = railShooterCombatFeelSystem_.BuildWeaponState(combatFeelInput);
+    const CourseCollisionFrameStats collisionStats =
+        railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput);
+    railShooterCombatFeelSystem_.ApplyCollisionStats(collisionStats);
+    railShooterCombatFeelSystem_.Update(kFixedGameplayDeltaTime);
+    if (collisionStats.playerShotEnemyHits > 0 || collisionStats.playerShotObstacleHits > 0) {
+        railShooterCameraDirector_.AddFeedbackImpulse(0.28f, -0.004f, 0.002f);
+    }
+    if (collisionStats.playerDamage > 0.0f) {
+        railShooterCameraDirector_.AddFeedbackImpulse(0.95f, 0.010f, -0.006f);
+    }
     railShooterSpawnRuntime_.SubmitPendingVfx(vfxEngine_.Runtime(), railPath_);
     runtimeState_.terrain.previewDistance = railShooterDistance_;
 
-    const CourseCameraKey cameraRig = railShooterCourse_.EvaluateCamera(railShooterDistance_);
-    const RailPathSample cameraSample = railPath_.Evaluate(railShooterDistance_);
-    const RailPathSample lookSample = railPath_.Evaluate(railShooterDistance_ + cameraRig.lookAheadDistance);
-    const Vector3 cameraPosition = Add(
-        Add(
-            Add(cameraSample.position, Scale(cameraSample.up, cameraRig.verticalOffset)),
-            Scale(cameraSample.right, cameraRig.lateralOffset)),
-        Scale(cameraSample.tangent, -cameraRig.backDistance));
-    const Vector3 lookTarget = Add(
-        Add(lookSample.position, Scale(lookSample.up, cameraRig.lookUpOffset)),
-        Scale(lookSample.tangent, cameraRig.lookForwardOffset));
-    const Vector3 forward = NormalizeOr(Subtract(lookTarget, cameraPosition), cameraSample.tangent);
-    const Vector3 cameraUp = RotateAroundAxis(cameraSample.up, forward, cameraRig.roll);
+    RailCameraDirectorFrameInput cameraInput{};
+    cameraInput.course = &railShooterCourse_;
+    cameraInput.railPath = &railPath_;
+    cameraInput.section = railShooterCourseRuntime_.CurrentSection();
+    cameraInput.distance = railShooterDistance_;
+    cameraInput.deltaTime = kFixedGameplayDeltaTime;
+    const RailCameraDirectorFrame directedCamera =
+        railShooterCameraDirector_.Evaluate(cameraInput);
+    const Vector3& cameraPosition = directedCamera.position;
+    const Vector3& lookTarget = directedCamera.target;
+    const Vector3& forward = directedCamera.forward;
+    const Vector3& cameraUp = directedCamera.up;
 
     const float aspectRatio = windowHeight_ > 0
         ? static_cast<float>(windowWidth_) / static_cast<float>(windowHeight_)
         : 16.0f / 9.0f;
-    runtimeState_.camera.fovY = cameraRig.fovY;
+    runtimeState_.camera.fovY = directedCamera.fovY;
     frameState_.viewMatrix = MakeLookAtMatrix(cameraPosition, lookTarget, cameraUp);
     frameState_.projMatrix = MakePerspectiveFovMatrix(
         runtimeState_.camera.fovY,
@@ -653,7 +689,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     runtimeState_.camera.transform.rotate = {
         std::asin((std::clamp)(-forward.y, -1.0f, 1.0f)),
         std::atan2(forward.x, forward.z),
-        cameraRig.roll,
+        directedCamera.rig.roll,
     };
     runtimeState_.cameraWorldPosition = cameraPosition;
     scene_.UpdateCameraWorldPosition(cameraPosition);
@@ -1563,6 +1599,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         windowHeight_);
     scene_.SyncCourseMeshRenderQueue(
         railShooterSpawnRuntime_,
+        &railShooterCourse_,
+        railShooterCourseRuntime_.Distance(),
         railPath_,
         frameState_.viewMatrix,
         frameState_.projMatrix);
@@ -1604,6 +1642,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             &railShooterCourse_,
             &railShooterSpawnRuntime_,
             &railShooterCollisionSystem_,
+            &railShooterCheckpointSystem_,
+            &railShooterCombatFeelSystem_,
             &railShooterCourseLoadStatus_,
             &railShooterCoursePath_,
             railShooterDistance_,

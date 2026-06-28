@@ -47,6 +47,10 @@ float DegreesToRadians(float degrees) {
     return degrees * kPi / 180.0f;
 }
 
+float RadiansToDegrees(float radians) {
+    return radians * 180.0f / kPi;
+}
+
 float Lerp(float a, float b, float t) {
     return a + (b - a) * t;
 }
@@ -84,8 +88,61 @@ void SortCourseData(CourseAsset& asset) {
         [](const CourseEventMarker& a, const CourseEventMarker& b) {
             return a.distance < b.distance;
         });
+    std::sort(
+        asset.terrainPlacements.begin(),
+        asset.terrainPlacements.end(),
+        [](const CourseTerrainPlacement& a, const CourseTerrainPlacement& b) {
+            if (a.distance != b.distance) {
+                return a.distance < b.distance;
+            }
+            return a.renderPriority < b.renderPriority;
+        });
 }
 } // namespace
+
+const char* ToCourseTerrainLayerString(CourseTerrainLayer layer) {
+    switch (layer) {
+    case CourseTerrainLayer::GameplayCollision:
+        return "gameplay_collision";
+    case CourseTerrainLayer::HeroLandmark:
+        return "hero_landmark";
+    case CourseTerrainLayer::VistaBackground:
+        return "vista_background";
+    }
+    return "hero_landmark";
+}
+
+const char* ToCourseTerrainCollisionModeString(CourseTerrainCollisionMode mode) {
+    switch (mode) {
+    case CourseTerrainCollisionMode::None:
+        return "none";
+    case CourseTerrainCollisionMode::Proxy:
+        return "proxy";
+    case CourseTerrainCollisionMode::Solid:
+        return "solid";
+    }
+    return "none";
+}
+
+CourseTerrainLayer ParseCourseTerrainLayer(const std::string& text) {
+    if (text == "gameplay_collision" || text == "gameplay" || text == "collision") {
+        return CourseTerrainLayer::GameplayCollision;
+    }
+    if (text == "vista_background" || text == "vista" || text == "background") {
+        return CourseTerrainLayer::VistaBackground;
+    }
+    return CourseTerrainLayer::HeroLandmark;
+}
+
+CourseTerrainCollisionMode ParseCourseTerrainCollisionMode(const std::string& text) {
+    if (text == "solid") {
+        return CourseTerrainCollisionMode::Solid;
+    }
+    if (text == "proxy") {
+        return CourseTerrainCollisionMode::Proxy;
+    }
+    return CourseTerrainCollisionMode::None;
+}
 
 bool CourseAsset::LoadFromFile(const std::string& path, std::string* errorMessage) {
     std::ifstream file(path);
@@ -174,6 +231,32 @@ bool CourseAsset::LoadFromFile(const std::string& path, std::string* errorMessag
             event.id = parts[3];
             event.payload = parts.size() >= 5 ? parts[4] : std::string{};
             loaded.events.push_back(event);
+        } else if (kind == "terrain") {
+            if (parts.size() < 15) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid terrain row at line " + std::to_string(lineNumber);
+                }
+                return false;
+            }
+            CourseTerrainPlacement placement{};
+            placement.distance = ParseFloatOr(parts, 1, 0.0f);
+            placement.layer = ParseCourseTerrainLayer(parts[2]);
+            placement.id = parts[3];
+            placement.meshId = parts[4].empty() ? placement.meshId : parts[4];
+            placement.lateralOffset = ParseFloatOr(parts, 5, 0.0f);
+            placement.verticalOffset = ParseFloatOr(parts, 6, 0.0f);
+            placement.forwardOffset = ParseFloatOr(parts, 7, 0.0f);
+            placement.scale.x = ParseFloatOr(parts, 8, 1.0f);
+            placement.scale.y = ParseFloatOr(parts, 9, 1.0f);
+            placement.scale.z = ParseFloatOr(parts, 10, 1.0f);
+            placement.rotation.x = DegreesToRadians(ParseFloatOr(parts, 11, 0.0f));
+            placement.rotation.y = DegreesToRadians(ParseFloatOr(parts, 12, 0.0f));
+            placement.rotation.z = DegreesToRadians(ParseFloatOr(parts, 13, 0.0f));
+            placement.collisionMode = ParseCourseTerrainCollisionMode(parts[14]);
+            placement.renderPriority = static_cast<int>(ParseFloatOr(parts, 15, 0.0f));
+            placement.cullBehindDistance = ParseFloatOr(parts, 16, -1.0f);
+            placement.cullAheadDistance = ParseFloatOr(parts, 17, -1.0f);
+            loaded.terrainPlacements.push_back(placement);
         } else if (errorMessage != nullptr) {
             *errorMessage = "Unknown course row kind at line " + std::to_string(lineNumber) + ": " + kind;
             return false;
@@ -213,6 +296,7 @@ bool CourseAsset::SaveToFile(const std::string& path, std::string* errorMessage)
     file << "# rail|x|y|z|corridorRadius|speed\n";
     file << "# camera|distance|backDistance|verticalOffset|lateralOffset|lookAheadDistance|lookUpOffset|lookForwardOffset|fovDeg|rollDeg\n";
     file << "# section|start|end|name|category\n";
+    file << "# terrain|distance|layer|id|meshId|lateralOffset|verticalOffset|forwardOffset|scaleX|scaleY|scaleZ|pitchDeg|yawDeg|rollDeg|collisionMode|renderPriority|cullBehind|cullAhead\n";
     file << "# event|distance|type|id|payload\n\n";
 
     file << std::fixed << std::setprecision(3);
@@ -251,6 +335,28 @@ bool CourseAsset::SaveToFile(const std::string& path, std::string* errorMessage)
              << section.category << "\n";
     }
 
+    file << "\n# Layered course terrain: gameplay collision, hero landmarks, and vista background.\n";
+    for (const CourseTerrainPlacement& placement : saved.terrainPlacements) {
+        file << "terrain|"
+             << placement.distance << '|'
+             << ToCourseTerrainLayerString(placement.layer) << '|'
+             << placement.id << '|'
+             << placement.meshId << '|'
+             << placement.lateralOffset << '|'
+             << placement.verticalOffset << '|'
+             << placement.forwardOffset << '|'
+             << placement.scale.x << '|'
+             << placement.scale.y << '|'
+             << placement.scale.z << '|'
+             << RadiansToDegrees(placement.rotation.x) << '|'
+             << RadiansToDegrees(placement.rotation.y) << '|'
+             << RadiansToDegrees(placement.rotation.z) << '|'
+             << ToCourseTerrainCollisionModeString(placement.collisionMode) << '|'
+             << placement.renderPriority << '|'
+             << placement.cullBehindDistance << '|'
+             << placement.cullAheadDistance << "\n";
+    }
+
     file << "\n";
     for (const CourseEventMarker& event : saved.events) {
         file << "event|"
@@ -275,6 +381,7 @@ void CourseAsset::BuildFallbackCanyon(float corridorRadius) {
     cameraKeys.clear();
     sections.clear();
     events.clear();
+    terrainPlacements.clear();
 
     RailPath path;
     path.BuildDefaultCanyonPath(corridorRadius);

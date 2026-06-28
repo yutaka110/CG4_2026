@@ -6,6 +6,8 @@
 #include "course/CourseCollisionSystem.h"
 #include "course/CourseSpawnRuntime.h"
 #include "course/CourseValidation.h"
+#include "course/PlayerCombatFeelSystem.h"
+#include "course/SectionCheckpointSystem.h"
 
 #include "../../externals/imgui/imgui.h"
 
@@ -358,6 +360,59 @@ void DrawEventTable(const CourseAsset& course, float currentDistance) {
         ImGui::TextUnformatted(event.id.c_str());
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(event.payload.empty() ? "-" : event.payload.c_str());
+    }
+
+    ImGui::EndTable();
+}
+
+void DrawTerrainPlacementTable(const CourseAsset& course, float currentDistance) {
+    if (!ImGui::BeginTable(
+            "CourseTerrainPlacementTable",
+            8,
+            ImGuiTableFlags_Borders |
+                ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_ScrollY |
+                ImGuiTableFlags_Resizable,
+            ImVec2(0.0f, 240.0f))) {
+        return;
+    }
+
+    ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 58.0f);
+    ImGui::TableSetupColumn("Layer", ImGuiTableColumnFlags_WidthFixed, 135.0f);
+    ImGui::TableSetupColumn("Dist", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+    ImGui::TableSetupColumn("Id", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Mesh", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+    ImGui::TableSetupColumn("Collision", ImGuiTableColumnFlags_WidthFixed, 86.0f);
+    ImGui::TableSetupColumn("Scale", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+    ImGui::TableSetupColumn("Offset");
+    ImGui::TableHeadersRow();
+
+    for (const CourseTerrainPlacement& placement : course.terrainPlacements) {
+        const bool passed = placement.distance < currentDistance;
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextColored(
+            passed ? ImVec4(0.55f, 0.65f, 0.72f, 1.0f) : ImVec4(0.45f, 0.85f, 1.0f, 1.0f),
+            "%s",
+            passed ? "seen" : "ahead");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(ToCourseTerrainLayerString(placement.layer));
+        ImGui::TableNextColumn();
+        ImGui::Text("%.0f", placement.distance);
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(placement.id.c_str());
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(placement.meshId.c_str());
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(ToCourseTerrainCollisionModeString(placement.collisionMode));
+        ImGui::TableNextColumn();
+        ImGui::Text("%.1f %.1f %.1f", placement.scale.x, placement.scale.y, placement.scale.z);
+        ImGui::TableNextColumn();
+        ImGui::Text(
+            "side %.1f up %.1f fwd %.1f",
+            placement.lateralOffset,
+            placement.verticalOffset,
+            placement.forwardOffset);
     }
 
     ImGui::EndTable();
@@ -848,6 +903,7 @@ void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input) {
         nextEvent != nullptr ? nextEvent->type.c_str() : "-",
         nextEvent != nullptr ? nextEvent->id.c_str() : "-",
         nextEvent != nullptr ? nextEvent->distance - input.currentDistance : 0.0f);
+    ImGui::Text("Terrain placements: %zu", course.terrainPlacements.size());
 
     DrawTimelineBar(input, course);
 
@@ -877,6 +933,31 @@ void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input) {
             stats.playerShotObstacleHits);
     }
 
+    if (input.checkpointSystem != nullptr) {
+        const SectionCheckpointStats& stats = input.checkpointSystem->LastStats();
+        ImGui::Text(
+            "Checkpoint: #%d %s / %s  start %.1f  transitions %u  teleports %u",
+            stats.currentSectionIndex,
+            stats.currentSectionName.empty() ? "-" : stats.currentSectionName.c_str(),
+            stats.currentSectionCategory.empty() ? "-" : stats.currentSectionCategory.c_str(),
+            stats.checkpointDistance,
+            stats.sectionTransitions,
+            stats.authoringTeleports);
+    }
+
+    if (input.combatFeelSystem != nullptr) {
+        const PlayerCombatFeelStats& stats = input.combatFeelSystem->LastStats();
+        ImGui::Text(
+            "Combat Feel: score %u  combo %u/%u  hit %.2f  damage %.2f  lock %s %.1fm",
+            stats.score,
+            stats.combo,
+            stats.maxCombo,
+            stats.hitFlash,
+            stats.damageFlash,
+            stats.lockOnActive ? stats.lockOnTarget.c_str() : "-",
+            stats.lockOnDistance);
+    }
+
     if (ImGui::BeginTabBar("CourseTimelineTabs")) {
         if (ImGui::BeginTabItem("Authoring")) {
             DrawCourseAuthoring(
@@ -890,6 +971,10 @@ void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input) {
         }
         if (ImGui::BeginTabItem("Events")) {
             DrawEventTable(course, input.currentDistance);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Terrain")) {
+            DrawTerrainPlacementTable(course, input.currentDistance);
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Enemies")) {

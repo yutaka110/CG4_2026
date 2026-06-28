@@ -1,0 +1,6 @@
+wave|crossfire_pincer|Crossfire Pincer
+unitAsset|left_light_turret|cliff_turret_light|soft_spread|18|-26|9|0|1.5|10|1.0|0.26|0.10|1.0
+unitAsset|right_light_turret|cliff_turret_light|soft_spread|24|26|9|0|1.5|10|1.0|0.26|0.10|1.0
+unitAsset|pincer_left_drone|drone_basic|single_red|44|-13|5|5.0|1.15|9|1.0|0.34|0.20|1.0
+unitAsset|pincer_right_drone|drone_basic|single_red|44|13|5|5.0|1.15|9|1.0|0.34|0.20|1.0
+unitAsset|pincer_center_leader|drone_leader|soft_spread|66|0|8|1.0|1.35|10|1.0|0.48|0.16|1.0

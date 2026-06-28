@@ -1,0 +1,5 @@
+wave|tunnel_exit_pinwheel|Tunnel Exit Pinwheel
+unitAsset|pinwheel_top|tunnel_probe|tunnel_snap|28|0|8|2.0|0.95|8|0.72|0.86|1.0|1.0
+unitAsset|pinwheel_left|drone_scout|single_tutorial|40|-8|4|2.5|1.0|8|0.62|0.82|1.0|1.0
+unitAsset|pinwheel_right|drone_scout|single_tutorial|40|8|4|2.5|1.0|8|0.62|0.82|1.0|1.0
+unitAsset|pinwheel_anchor|drone_leader|soft_spread|64|0|5|1.0|1.25|9|1.0|0.48|0.16|1.0

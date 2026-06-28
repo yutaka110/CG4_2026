@@ -33,12 +33,41 @@ struct CourseEventMarker {
     std::string payload;
 };
 
+enum class CourseTerrainLayer {
+    GameplayCollision,
+    HeroLandmark,
+    VistaBackground,
+};
+
+enum class CourseTerrainCollisionMode {
+    None,
+    Proxy,
+    Solid,
+};
+
+struct CourseTerrainPlacement {
+    float distance = 0.0f;
+    CourseTerrainLayer layer = CourseTerrainLayer::HeroLandmark;
+    std::string id;
+    std::string meshId = "animated_cube";
+    float lateralOffset = 0.0f;
+    float verticalOffset = 0.0f;
+    float forwardOffset = 0.0f;
+    Vector3 scale = {1.0f, 1.0f, 1.0f};
+    Vector3 rotation = {0.0f, 0.0f, 0.0f};
+    CourseTerrainCollisionMode collisionMode = CourseTerrainCollisionMode::None;
+    int renderPriority = 0;
+    float cullBehindDistance = -1.0f;
+    float cullAheadDistance = -1.0f;
+};
+
 struct CourseAsset {
     std::string name = "Untitled Course";
     std::vector<RailPathControlPoint> railPoints;
     std::vector<CourseCameraKey> cameraKeys;
     std::vector<CourseSection> sections;
     std::vector<CourseEventMarker> events;
+    std::vector<CourseTerrainPlacement> terrainPlacements;
 
     bool LoadFromFile(const std::string& path, std::string* errorMessage = nullptr);
     bool SaveToFile(const std::string& path, std::string* errorMessage = nullptr) const;
@@ -49,6 +78,11 @@ struct CourseAsset {
     const CourseSection* FindSection(float distance) const;
     bool IsValid() const { return railPoints.size() >= 2; }
 };
+
+const char* ToCourseTerrainLayerString(CourseTerrainLayer layer);
+const char* ToCourseTerrainCollisionModeString(CourseTerrainCollisionMode mode);
+CourseTerrainLayer ParseCourseTerrainLayer(const std::string& text);
+CourseTerrainCollisionMode ParseCourseTerrainCollisionMode(const std::string& text);
 
 class CourseRuntime {
 public:

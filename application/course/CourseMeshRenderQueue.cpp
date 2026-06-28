@@ -32,6 +32,53 @@ Vector3 RotationFromRailTangent(const Vector3& tangent) {
     const float pitch = std::asin((std::clamp)(-tangent.y, -1.0f, 1.0f));
     return {pitch, yaw, 0.0f};
 }
+
+CourseMeshRenderKind RenderKindForTerrainLayer(CourseTerrainLayer layer) {
+    switch (layer) {
+    case CourseTerrainLayer::GameplayCollision:
+        return CourseMeshRenderKind::GameplayTerrain;
+    case CourseTerrainLayer::HeroLandmark:
+        return CourseMeshRenderKind::HeroLandmark;
+    case CourseTerrainLayer::VistaBackground:
+        return CourseMeshRenderKind::VistaBackground;
+    }
+    return CourseMeshRenderKind::HeroLandmark;
+}
+
+float DefaultCullBehind(CourseTerrainLayer layer) {
+    switch (layer) {
+    case CourseTerrainLayer::GameplayCollision:
+        return 90.0f;
+    case CourseTerrainLayer::HeroLandmark:
+        return 260.0f;
+    case CourseTerrainLayer::VistaBackground:
+        return 760.0f;
+    }
+    return 260.0f;
+}
+
+float DefaultCullAhead(CourseTerrainLayer layer) {
+    switch (layer) {
+    case CourseTerrainLayer::GameplayCollision:
+        return 320.0f;
+    case CourseTerrainLayer::HeroLandmark:
+        return 760.0f;
+    case CourseTerrainLayer::VistaBackground:
+        return 1900.0f;
+    }
+    return 760.0f;
+}
+
+bool ShouldDrawTerrainPlacement(const CourseTerrainPlacement& placement, float currentDistance) {
+    const float behind = placement.cullBehindDistance >= 0.0f
+        ? placement.cullBehindDistance
+        : DefaultCullBehind(placement.layer);
+    const float ahead = placement.cullAheadDistance >= 0.0f
+        ? placement.cullAheadDistance
+        : DefaultCullAhead(placement.layer);
+    const float delta = placement.distance - currentDistance;
+    return delta >= -behind && delta <= ahead;
+}
 } // namespace
 
 bool CourseMeshRenderQueue::Initialize(
@@ -73,12 +120,16 @@ void CourseMeshRenderQueue::Reset() {
         item.sourceActorId = 0;
         item.name.clear();
         item.meshId.clear();
+        item.terrainLayer = CourseTerrainLayer::HeroLandmark;
+        item.collisionMode = CourseTerrainCollisionMode::None;
         item.sortDistance = 0.0f;
     }
 }
 
 void CourseMeshRenderQueue::SyncFromCourseRuntime(
     const CourseSpawnRuntime& runtime,
+    const CourseAsset* course,
+    float currentDistance,
     const RailPath& railPath,
     std::span<const CourseMeshModelBinding> models,
     const Matrix4x4& viewMatrix,
@@ -89,6 +140,51 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
     }
 
     const Matrix4x4 viewProjection = Multiply(viewMatrix, projMatrix);
+
+    if (course != nullptr) {
+        for (const CourseTerrainPlacement& placement : course->terrainPlacements) {
+            if (!ShouldDrawTerrainPlacement(placement, currentDistance)) {
+                continue;
+            }
+
+            CourseMeshRenderItem* item = AllocateItem();
+            if (item == nullptr) {
+                break;
+            }
+
+            const RailPathSample sample =
+                railPath.Evaluate(placement.distance + placement.forwardOffset);
+            const uint32_t modelIndex =
+                ResolveModelIndex(models, placement.meshId, "animated_cube");
+            const CourseMeshModelBinding& model = models[modelIndex];
+            item->kind = RenderKindForTerrainLayer(placement.layer);
+            item->terrainLayer = placement.layer;
+            item->collisionMode = placement.collisionMode;
+            item->name = placement.id;
+            item->meshId = placement.meshId;
+            item->sourceActorId = 0;
+            item->modelIndex = modelIndex;
+            item->sortDistance = sample.distance;
+            item->visible = model.loaded && item->transformData != nullptr;
+            if (!item->visible) {
+                continue;
+            }
+
+            const Vector3 center = ResolveRailLocal(
+                railPath,
+                placement.distance,
+                placement.forwardOffset,
+                placement.lateralOffset,
+                placement.verticalOffset);
+            WriteItemTransform(
+                *item,
+                model.rootLocal,
+                placement.scale,
+                Add(RotationFromRailTangent(sample.tangent), placement.rotation),
+                center,
+                viewProjection);
+        }
+    }
 
     for (const CourseObstacleActor& obstacle : runtime.Obstacles()) {
         CourseMeshRenderItem* item = AllocateItem();

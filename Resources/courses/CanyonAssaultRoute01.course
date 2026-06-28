@@ -4,35 +4,38 @@
 # rail|x|y|z|corridorRadius|speed
 # camera|distance|backDistance|verticalOffset|lateralOffset|lookAheadDistance|lookUpOffset|lookForwardOffset|fovDeg|rollDeg
 # section|start|end|name|category
+# terrain|distance|layer|id|meshId|lateralOffset|verticalOffset|forwardOffset|scaleX|scaleY|scaleZ|pitchDeg|yawDeg|rollDeg|collisionMode|renderPriority|cullBehind|cullAhead
 # event|distance|type|id|payload
 
 course|Canyon Assault Route 01
 
 # Main camera/terrain rail. Distances are arc-length evaluated by RailPath.
-rail|-18|4|-120|20|32
-rail|-8|7|-40|18|34
-rail|20|12|45|16|38
-rail|5|5|130|15|36
-rail|-34|16|220|17|42
-rail|-6|28|320|21|46
-rail|40|18|430|18|42
-rail|18|8|540|16|40
-rail|-22|14|650|19|44
-rail|0|18|760|22|48
-rail|36|26|910|20|54
-rail|-18|10|1060|14|60
-rail|-54|8|1210|15|58
-rail|-10|34|1390|24|44
-rail|48|20|1560|21|50
-rail|8|12|1740|16|64
-rail|-26|18|1940|18|68
-rail|18|30|2160|24|54
-rail|0|22|2380|28|38
+rail|-18|4|-120|20|12
+rail|-8|7|-40|18|12
+rail|20|12|45|16|13
+rail|5|5|130|15|13
+rail|-34|16|220|17|14
+rail|-6|28|320|21|15
+rail|40|18|430|18|16
+rail|18|8|540|16|16
+rail|-22|14|650|19|17
+rail|0|18|760|22|18
+rail|36|26|910|20|18
+rail|-18|10|1060|14|19
+rail|-54|8|1210|15|18
+rail|-10|34|1390|24|16
+rail|48|20|1560|21|17
+rail|8|12|1740|16|22
+rail|-26|18|1940|18|24
+rail|18|30|2160|24|18
+rail|0|22|2380|28|14
 
 # Camera keys define the cinematic rail rig.
-camera|0|22|7|0|60|2|8|54|0
-camera|180|20|6|-2|58|2|10|50|-3
-camera|420|18|5|3|52|1|12|48|4
+camera|0|24|7|0|64|2|8|54|0
+camera|120|22|6|0|60|2|10|52|0
+camera|240|20|6|-2|58|2|10|50|-3
+camera|420|18|5|4|54|1|12|49|4
+camera|610|17|5|-4|56|1|12|51|-5
 camera|720|14|3|0|44|0|14|58|0
 camera|980|26|9|-5|78|5|18|62|-7
 camera|1280|24|7|4|64|3|10|50|5
@@ -49,15 +52,52 @@ section|1280|1680|Mid Boss Gatekeeper|Boss
 section|1680|2100|Escape Run|High Speed
 section|2100|2380|Final Gate|Finale
 
-event|90|vfx|dust_wake_intro|soft canyon dust and small debris trails
-event|190|enemy_wave|drone_intro_v|five drones fan from center
-event|310|enemy_wave|drone_chase_pair|two rear-entry chasers
-event|445|enemy_wave|cliff_crossfire_left|left cliff turrets and crossing drones
-event|560|enemy_wave|cliff_crossfire_right|right cliff mirror wave
+# Layered course terrain. Gameplay is near/proxy collision, hero is cinematic silhouette, vista is no-collision background.
+terrain|40|vista_background|intro_far_hole_wall_left|vista_hole_wall|-70|38|520|36|28|4|0|18|4|none|0|500|1650
+terrain|90|hero_landmark|intro_organic_arch_gate|organic_arch_large|0|22|180|18|30|5|0|0|0|none|10|220|760
+terrain|145|vista_background|intro_mist_spire_stack|root_spire_column|58|34|620|20|36|4|0|-14|-5|none|0|520|1700
+terrain|430|hero_landmark|crossfire_left_curved_wall|curved_canyon_wall|-32|10|70|7|18|18|0|12|-8|none|10|240|680
+terrain|520|hero_landmark|crossfire_right_curved_wall|curved_canyon_wall|34|12|80|7|20|20|0|-10|8|none|10|240|680
+terrain|735|hero_landmark|tunnel_mouth_rib_crown|rib_tunnel_wall|0|13|84|16|12|6|0|0|0|none|20|260|600
+terrain|776|gameplay_collision|tunnel_left_collision_wall|animated_cube|-12|2|18|2|7|8|0|6|0|proxy|30|100|360
+terrain|828|gameplay_collision|tunnel_right_collision_wall|animated_cube|12|2|18|2|7|8|0|-6|0|proxy|30|100|360
+terrain|875|hero_landmark|rib_tunnel_interior_sweep|rib_tunnel_wall|0|4|130|22|7|12|0|0|0|none|20|260|620
+terrain|980|vista_background|spire_far_hole_wall|vista_hole_wall|64|42|760|32|34|5|0|-18|0|none|0|620|1800
+terrain|1010|hero_landmark|falling_spire_root_column|root_spire_column|-6|30|160|13|42|8|0|4|0|none|20|320|840
+terrain|1085|gameplay_collision|spire_debris_collision_lane|animated_cube|0|4|30|5|3|8|0|0|0|proxy|30|120|420
+terrain|1160|hero_landmark|spire_broken_bridge_arc|spire_broken_bridge_arc|20|18|120|18|5|5|0|-28|10|none|20|320|840
+terrain|1265|vista_background|gatekeeper_shadow_wall|vista_hole_wall|0|36|520|40|32|5|0|0|0|none|0|640|1800
+
+event|35|vfx|sun_glint_intro|wide canyon reveal and first dust glints
+event|75|enemy_wave|intro_scout_pair|two slow scouts teach lock-on magnetism
+event|125|enemy_wave|intro_lockon_line|three drones line up for first combo
+event|205|enemy_wave|drone_intro_v|five drones fan from center
+event|270|enemy_wave|first_contact_split|front split wave asks for left-right tracking
+event|350|enemy_wave|first_contact_combo_ladder|staggered ladder keeps the combo alive
+event|430|vfx|crossfire_warning_flare|left cliff muzzle flashes announce pressure shift
+event|465|enemy_wave|cliff_crossfire_left|left cliff turrets and crossing drones
+event|535|enemy_wave|crossfire_low_high_mix|low drones pull aim while high drones punish tunnel vision
+event|615|enemy_wave|cliff_crossfire_right|right cliff mirror wave
+event|680|enemy_wave|crossfire_pincer|final first-minute pincer before tunnel compression
 event|735|setpiece|tunnel_entry|camera compresses and tunnel light drops
-event|820|obstacle|rock_gate_01|breakable rock ribs
+event|758|vfx|tunnel_light_drop|blue daylight cuts to warm slit lights
+event|776|obstacle|tunnel_left_rib_01|left wall rib teaches narrow clearance
+event|805|enemy_wave|tunnel_probe_slalom|slow probes mark the safe weave path
+event|828|obstacle|tunnel_right_rib_01|right wall rib forces lateral correction
+event|860|obstacle|tunnel_ceiling_teeth_01|ceiling teeth press the player low
+event|895|enemy_wave|tunnel_exit_pinwheel|exit drones rotate around the tunnel mouth
+event|925|obstacle|tunnel_split_pillars_01|center pillars split the aiming lane
+event|955|vfx|tunnel_exit_bloom|hard sunlight bloom before the canyon opens
 event|990|setpiece|spire_collapse_start|large silhouette collapse begins
+event|1015|vfx|spire_dust_wall|dust wall reveals falling debris silhouettes
+event|1045|obstacle|spire_falling_slab_left|foreground slab drops across left lane
+event|1075|enemy_wave|spire_guard_line|spire guards appear between debris beats
+event|1108|obstacle|spire_falling_slab_right|right slab falls after guard line
 event|1130|vfx|spire_shockwave|shockwave dust and falling shards
+event|1160|enemy_wave|spire_shard_crossfire|turrets and drones fire through the dust
+event|1195|obstacle|spire_core_fragment|large core fragment blocks center briefly
+event|1235|enemy_wave|spire_escape_chasers|fast chasers bridge into the boss approach
+event|1265|setpiece|gatekeeper_shadow_pass|boss shadow crosses the canyon wall
 event|1290|boss|gatekeeper_intro|mid boss enters from upper canyon
 event|1470|boss_phase|gatekeeper_weakpoints|side pods open
 event|1690|setpiece|escape_alarm|speed ramp and rear explosions

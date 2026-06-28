@@ -19,6 +19,8 @@ struct LoadedEffectAsset;
 class PostProcessStack;
 class CourseCollisionSystem;
 class CourseSpawnRuntime;
+class PlayerCombatFeelSystem;
+class SectionCheckpointSystem;
 struct CourseAsset;
 
 struct AppImGuiFrameContext {
@@ -51,6 +53,8 @@ struct AppImGuiFrameContext {
     CourseAsset* course = nullptr;
     const CourseSpawnRuntime* courseSpawnRuntime = nullptr;
     const CourseCollisionSystem* courseCollisionSystem = nullptr;
+    const SectionCheckpointSystem* courseCheckpointSystem = nullptr;
+    const PlayerCombatFeelSystem* playerCombatFeelSystem = nullptr;
     const std::string* courseLoadStatus = nullptr;
     const std::string* coursePath = nullptr;
     float courseDistance = 0.0f;

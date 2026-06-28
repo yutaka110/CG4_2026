@@ -1,0 +1,5 @@
+wave|first_contact_split|First Contact Split
+unitAsset|split_leader|drone_leader|soft_spread|40|0|6|1.0|1.3|10|1.0|0.48|0.16|1.0
+unitAsset|split_left_scout|drone_scout|single_tutorial|52|-9|4|2.0|1.05|8|0.65|0.85|1.0|1.0
+unitAsset|split_right_scout|drone_scout|single_tutorial|52|9|4|2.0|1.05|8|0.65|0.85|1.0|1.0
+unitAsset|split_high_scout|drone_scout|single_tutorial|68|0|9|1.0|1.05|8|0.65|0.85|1.0|1.0

@@ -4,6 +4,7 @@
 
 #include "../diagnostics/DebugDrawSystem.h"
 #include "../terrain/RailPath.h"
+#include "CourseAsset.h"
 #include "CourseSpawnRuntime.h"
 
 struct CourseCollisionPlayerState {
@@ -22,10 +23,14 @@ struct CourseCollisionWeaponState {
     float range = 96.0f;
     float radius = 2.2f;
     float damage = 18.0f;
+    bool assistEnabled = false;
+    float assistLateralOffset = 0.0f;
+    float assistVerticalOffset = 4.0f;
 };
 
 struct CourseCollisionFrameInput {
     float deltaTime = 0.016f;
+    const CourseAsset* course = nullptr;
     CourseCollisionPlayerState player;
     CourseCollisionWeaponState weapon;
 };

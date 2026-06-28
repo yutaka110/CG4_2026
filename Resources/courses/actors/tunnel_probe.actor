@@ -1,0 +1,3 @@
+actor|tunnel_probe|Tunnel Probe Drone|ball|0.95|22|8|0.72|0.86|1.0|1.0|tunnel_snap
+combat|0.92|0.34|38|tunnel_snap
+movement|1.8
