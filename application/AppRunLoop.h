@@ -13,6 +13,7 @@
 #include "core/CommandListPool.h"
 #include "core/DescriptorHeap.h"
 #include "core/Device.h"
+#include "diagnostics/DebugDrawSystem.h"
 #include "AppFrameState.h"
 #include "AppFrameGraphBuilder.h"
 #include "AppVfxRuntimeState.h"
@@ -117,8 +118,13 @@ private:
     void ApplyRailShooterVisualPresets(float distance);
     void DrawRailLockOnHud();
     void DrawRailLockOnDebugPanel();
+    bool BuildRailLockOnHudDraw();
+    bool EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList);
+    bool BuildRailLockOnHudAtlasQuads();
+    void RegisterRailLockOnHudPass(ID3D12GraphicsCommandList* commandList);
     int ProcessRailLockOnRelease(const Vector3& muzzlePosition);
     void QueueRailLockIceProjectile(const Vector3& start, const Vector3& target, int shotIndex);
+    bool IsRailShooterSceneActive() const;
     void LogRailShooterRuntimeDiagnostics(const char* reason);
     void LogRailShooterPerfSpike();
     bool EnsureRailGpuTimingResources();
@@ -163,6 +169,20 @@ private:
     RailCameraDirector railShooterCameraDirector_;
     CourseSpawnRuntime railShooterSpawnRuntime_;
     RailLockOnSystem railShooterLockOnSystem_;
+    ge3::debug::DebugDrawSystem railLockOnHudDraw_;
+    struct RailHudAtlasVertex {
+        Vector4 position;
+        Vector2 texcoord;
+        Vector4 color;
+    };
+    Microsoft::WRL::ComPtr<ID3D12Resource> railLockOnHudAtlasTexture_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> railLockOnHudAtlasVertexResource_;
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> railLockOnHudAtlasUploadResources_;
+    RailHudAtlasVertex* railLockOnHudAtlasMappedVertices_ = nullptr;
+    D3D12_GPU_DESCRIPTOR_HANDLE railLockOnHudAtlasSrvGpu_{};
+    D3D12_VERTEX_BUFFER_VIEW railLockOnHudAtlasVertexBufferView_{};
+    uint32_t railLockOnHudAtlasVertexCount_ = 0;
+    bool railLockOnHudAtlasReady_ = false;
     std::string railShooterCoursePath_ = "Resources/courses/CanyonAssaultRoute01.course";
     std::string railShooterCourseLoadStatus_;
     RailPath railPath_;
@@ -209,6 +229,23 @@ private:
     bool railShooterInitialized_ = false;
     bool gpuDeviceLost_ = false;
     bool previousLeftMouseDown_ = false;
+    struct RailInputRouteDebugState {
+        bool railSceneActive = false;
+        bool lockHeld = false;
+        bool lockPressed = false;
+        bool lockReleased = false;
+        bool normalShotEnabled = true;
+        bool aimAssistEnabled = true;
+        bool releaseFireTriggered = false;
+        uint32_t releaseTokenCount = 0;
+        int releaseHitCount = 0;
+        bool showcaseClickToFireEnabled = false;
+        bool showcaseClickBlockedInRail = false;
+        bool showcaseClickFired = false;
+        bool showcaseClickIgnoredByImgui = false;
+        bool leftMouseDown = false;
+    };
+    RailInputRouteDebugState railInputRouteDebug_{};
     struct CourseObjectEditSnapshot {
         std::vector<CourseTerrainPlacement> terrainPlacements;
         std::vector<CourseRockCluster> rockClusters;

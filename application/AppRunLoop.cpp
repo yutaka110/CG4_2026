@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -23,6 +24,7 @@
 #include "AppRuntimeState.h"
 #include "AppSceneResources.h"
 #include "EngineContext.h"
+#include "utils/dx12/BufferHelper.h"
 
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
 #include "../externals/imgui/imgui.h"
@@ -1495,6 +1497,475 @@ void AppRunLoop::DrawRailLockOnHud() {
 #endif
 }
 
+bool AppRunLoop::BuildRailLockOnHudDraw() {
+    if (!railLockOnHudDraw_.IsReady() &&
+        !railLockOnHudDraw_.Initialize(dev_.GetDevice(), 8192)) {
+        return false;
+    }
+
+    railLockOnHudDraw_.BeginFrame();
+    if (!railShooterInitialized_ || windowWidth_ == 0 || windowHeight_ == 0) {
+        railLockOnHudDraw_.Upload(MakeIdentity4x4());
+        return false;
+    }
+
+    const RailLockDebugFrame& debug = railShooterLockOnSystem_.DebugFrame();
+    const RailReticleState& reticle = debug.reticle;
+    const int maxLocks = (std::max)(1, railShooterLockOnSystem_.Settings().maxLocks);
+    const int tokenCount = static_cast<int>(debug.tokens.size());
+    const bool maxLock = tokenCount >= maxLocks;
+    const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(railShooterFrameIndex_) * 0.18f);
+    const float acquirePulse = debug.acceptedThisFrame > 0 ? 1.0f : 0.0f;
+
+    const auto validPoint = [](const Vector2& p) {
+        return std::isfinite(p.x) && std::isfinite(p.y);
+    };
+    const auto point = [](const Vector2& p) {
+        return Vector3{p.x, p.y, 0.0f};
+    };
+    const auto addLine = [&](const Vector2& a, const Vector2& b, const Vector4& color) {
+        if (!validPoint(a) || !validPoint(b)) {
+            return;
+        }
+        railLockOnHudDraw_.AddLine(point(a), point(b), color);
+    };
+    const auto addCircle = [&](const Vector2& center, float radius, const Vector4& color, uint32_t segments) {
+        if (!validPoint(center) || radius <= 0.0f) {
+            return;
+        }
+        railLockOnHudDraw_.AddCircle(
+            point(center),
+            {1.0f, 0.0f, 0.0f},
+            {0.0f, 1.0f, 0.0f},
+            radius,
+            color,
+            segments);
+    };
+    const auto addCross = [&](const Vector2& center, float radius, const Vector4& color) {
+        addLine({center.x - radius, center.y}, {center.x + radius, center.y}, color);
+        addLine({center.x, center.y - radius}, {center.x, center.y + radius}, color);
+    };
+    const auto addTickedRing = [&](const Vector2& center, float radius, int ticks, const Vector4& color) {
+        addCircle(center, radius, color, 36);
+        constexpr float kTau = 6.28318530717958647692f;
+        const int safeTicks = (std::clamp)(ticks, 1, 8);
+        for (int index = 0; index < safeTicks; ++index) {
+            const float t = kTau * static_cast<float>(index) / static_cast<float>(safeTicks);
+            const float c = std::cos(t);
+            const float s = std::sin(t);
+            addLine(
+                {center.x + c * (radius - 4.0f), center.y + s * (radius - 4.0f)},
+                {center.x + c * (radius + 4.0f), center.y + s * (radius + 4.0f)},
+                color);
+        }
+    };
+
+    const Vector4 lockColor = maxLock ? Vector4{1.0f, 0.86f, 0.30f, 1.0f}
+                                      : Vector4{0.28f, 0.92f, 1.0f, 1.0f};
+    const Vector4 softColor = maxLock ? Vector4{1.0f, 0.60f, 0.16f, 1.0f}
+                                      : Vector4{0.18f, 0.72f, 0.92f, 1.0f};
+    const Vector4 candidateColor = Vector4{0.25f, 0.74f, 0.95f, 1.0f};
+    const Vector4 blockedColor = Vector4{0.85f, 0.45f, 0.18f, 1.0f};
+
+    for (const RailLockCandidate& candidate : debug.candidates) {
+        const bool visible =
+            candidate.lockable ||
+            candidate.rejectReason == RailLockRejectReason::AlreadyLocked ||
+            candidate.rejectReason == RailLockRejectReason::StackLimit;
+        if (!visible || !validPoint(candidate.anchor.screenPosition)) {
+            continue;
+        }
+        const float radius = (std::clamp)(candidate.anchor.screenRadius, 12.0f, 48.0f);
+        addCircle(
+            candidate.anchor.screenPosition,
+            radius,
+            candidate.lockable ? candidateColor : blockedColor,
+            28);
+        addCross(candidate.anchor.screenPosition, radius * 0.34f, candidate.lockable ? candidateColor : blockedColor);
+    }
+
+    for (int index = 0; index < tokenCount; ++index) {
+        const RailLockToken& token = debug.tokens[static_cast<size_t>(index)];
+        if (!validPoint(token.acquiredScreenPosition)) {
+            continue;
+        }
+        const float age = (std::max)(0.0f, debug.elapsedTime - token.acquiredTime);
+        const float acquireFlash = (std::max)(0.0f, 1.0f - age / 0.22f);
+        const float radius = 23.0f + acquireFlash * 11.0f;
+        addLine(reticle.currentScreenPosition, token.acquiredScreenPosition, lockColor);
+        addTickedRing(token.acquiredScreenPosition, radius, index + 1, lockColor);
+        addCircle(token.acquiredScreenPosition, radius + 5.0f + pulse * 2.0f, softColor, 36);
+    }
+
+    for (const RailLockToken& token : debug.acquiredTokens) {
+        if (!validPoint(token.acquiredScreenPosition)) {
+            continue;
+        }
+        const float age = (std::max)(0.0f, debug.elapsedTime - token.acquiredTime);
+        const float flash = (std::max)(0.0f, 1.0f - age / 0.18f);
+        if (flash > 0.0f) {
+            addCircle(token.acquiredScreenPosition, 35.0f + flash * 18.0f, Vector4{1.0f, 1.0f, 1.0f, 1.0f}, 40);
+        }
+    }
+
+    const float reticleRadius = reticle.lockHeld
+        ? 27.0f + pulse * 3.0f + acquirePulse * 5.0f
+        : 21.0f;
+    const Vector4 reticleColor = reticle.lockHeld ? lockColor : Vector4{0.76f, 0.86f, 0.92f, 1.0f};
+    addCircle(reticle.currentScreenPosition, reticleRadius, reticleColor, 40);
+    addCircle(reticle.currentScreenPosition, reticleRadius * 0.60f, reticleColor, 32);
+    addCross(reticle.currentScreenPosition, reticleRadius * 0.86f, reticleColor);
+
+    const float meterY = static_cast<float>(windowHeight_) - 74.0f;
+    const float meterStartX =
+        static_cast<float>(windowWidth_) * 0.5f - (static_cast<float>(maxLocks - 1) * 9.0f);
+    for (int index = 0; index < maxLocks; ++index) {
+        const bool filled = index < tokenCount;
+        const float x = meterStartX + static_cast<float>(index) * 18.0f;
+        const float radius = filled ? 7.5f + acquirePulse * 1.8f : 7.0f;
+        addCircle(
+            {x, meterY},
+            radius,
+            filled ? lockColor : Vector4{0.42f, 0.50f, 0.54f, 1.0f},
+            20);
+        if (filled) {
+            addCross({x, meterY}, 3.0f, lockColor);
+        }
+    }
+
+    Matrix4x4 projection = MakeOrthographicMatrix(
+        0.0f,
+        0.0f,
+        static_cast<float>(windowWidth_),
+        static_cast<float>(windowHeight_),
+        0.0f,
+        100.0f);
+    railLockOnHudDraw_.Upload(projection);
+    return railLockOnHudDraw_.VertexCount() > 0;
+}
+
+bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList) {
+    constexpr uint32_t kAtlasWidth = 256;
+    constexpr uint32_t kAtlasHeight = 128;
+    constexpr uint32_t kDescriptorIndex = 18;
+    constexpr uint32_t kMaxAtlasVertices = 4096;
+    ComPtr<ID3D12Device> device = dev_.GetDevice();
+
+    if (railLockOnHudAtlasVertexResource_ == nullptr) {
+        railLockOnHudAtlasVertexResource_ = CreateBufferResource(
+            device,
+            sizeof(RailHudAtlasVertex) * kMaxAtlasVertices);
+        if (railLockOnHudAtlasVertexResource_ == nullptr) {
+            return false;
+        }
+        if (FAILED(railLockOnHudAtlasVertexResource_->Map(
+                0,
+                nullptr,
+                reinterpret_cast<void**>(&railLockOnHudAtlasMappedVertices_))) ||
+            railLockOnHudAtlasMappedVertices_ == nullptr) {
+            return false;
+        }
+        railLockOnHudAtlasVertexBufferView_.BufferLocation =
+            railLockOnHudAtlasVertexResource_->GetGPUVirtualAddress();
+        railLockOnHudAtlasVertexBufferView_.SizeInBytes =
+            sizeof(RailHudAtlasVertex) * kMaxAtlasVertices;
+        railLockOnHudAtlasVertexBufferView_.StrideInBytes = sizeof(RailHudAtlasVertex);
+    }
+
+    if (railLockOnHudAtlasReady_) {
+        return true;
+    }
+    if (commandList == nullptr || srvDescriptorHeap_ == nullptr || device == nullptr) {
+        return false;
+    }
+
+    DirectX::ScratchImage atlasImage;
+    if (FAILED(atlasImage.Initialize2D(
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            kAtlasWidth,
+            kAtlasHeight,
+            1,
+            1))) {
+        return false;
+    }
+    const DirectX::Image* image = atlasImage.GetImage(0, 0, 0);
+    if (image == nullptr || image->pixels == nullptr) {
+        return false;
+    }
+    std::memset(image->pixels, 0, image->slicePitch);
+
+    auto writePixel = [&](int x, int y, uint8_t alpha) {
+        if (x < 0 || y < 0 || x >= static_cast<int>(kAtlasWidth) || y >= static_cast<int>(kAtlasHeight)) {
+            return;
+        }
+        uint8_t* p = image->pixels + static_cast<size_t>(y) * image->rowPitch + static_cast<size_t>(x) * 4u;
+        p[0] = 255;
+        p[1] = 255;
+        p[2] = 255;
+        p[3] = alpha;
+    };
+    auto fillRect = [&](int x, int y, int w, int h, uint8_t alpha) {
+        for (int yy = y; yy < y + h; ++yy) {
+            for (int xx = x; xx < x + w; ++xx) {
+                writePixel(xx, yy, alpha);
+            }
+        }
+    };
+    auto fillCircle = [&](int cx, int cy, int radius) {
+        const float r = static_cast<float>((std::max)(radius, 1));
+        for (int y = cy - radius; y <= cy + radius; ++y) {
+            for (int x = cx - radius; x <= cx + radius; ++x) {
+                const float dx = static_cast<float>(x - cx);
+                const float dy = static_cast<float>(y - cy);
+                const float d = std::sqrt(dx * dx + dy * dy);
+                const float edge = (std::clamp)((r - d) / 3.0f, 0.0f, 1.0f);
+                const float body = d <= r ? 1.0f : 0.0f;
+                writePixel(x, y, static_cast<uint8_t>(255.0f * body * edge));
+            }
+        }
+    };
+    auto drawSegmentDigit = [&](int digit, int x, int y) {
+        static constexpr bool kSegments[10][7] = {
+            {true, true, true, false, true, true, true},
+            {false, false, true, false, false, true, false},
+            {true, false, true, true, true, false, true},
+            {true, false, true, true, false, true, true},
+            {false, true, true, true, false, true, false},
+            {true, true, false, true, false, true, true},
+            {true, true, false, true, true, true, true},
+            {true, false, true, false, false, true, false},
+            {true, true, true, true, true, true, true},
+            {true, true, true, true, false, true, true},
+        };
+        const bool* s = kSegments[(std::clamp)(digit, 0, 9)];
+        if (s[0]) fillRect(x + 2, y + 1, 7, 2, 255);
+        if (s[1]) fillRect(x + 1, y + 3, 2, 5, 255);
+        if (s[2]) fillRect(x + 8, y + 3, 2, 5, 255);
+        if (s[3]) fillRect(x + 2, y + 8, 7, 2, 255);
+        if (s[4]) fillRect(x + 1, y + 10, 2, 5, 255);
+        if (s[5]) fillRect(x + 8, y + 10, 2, 5, 255);
+        if (s[6]) fillRect(x + 2, y + 15, 7, 2, 255);
+    };
+    fillRect(0, 112, 8, 8, 255);
+    fillCircle(32, 104, 15);
+    fillCircle(72, 104, 15);
+    fillCircle(112, 104, 11);
+    for (int digit = 0; digit < 10; ++digit) {
+        drawSegmentDigit(digit, digit * 12, 0);
+    }
+
+    railLockOnHudAtlasTexture_ =
+        AppRenderResources::CreateTextureResource(device, atlasImage.GetMetadata());
+    if (railLockOnHudAtlasTexture_ == nullptr) {
+        return false;
+    }
+    AppRenderResources::UploadTextureData(
+        device,
+        commandList,
+        railLockOnHudAtlasTexture_,
+        atlasImage,
+        railLockOnHudAtlasUploadResources_);
+
+    const uint32_t descriptorSize = device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+    const D3D12_CPU_DESCRIPTOR_HANDLE cpu =
+        AppRenderResources::GetCPUDescriptorHandle(srvDescriptorHeap_, descriptorSize, kDescriptorIndex);
+    railLockOnHudAtlasSrvGpu_ =
+        AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap_, descriptorSize, kDescriptorIndex);
+    device->CreateShaderResourceView(railLockOnHudAtlasTexture_.Get(), &srvDesc, cpu);
+    railLockOnHudAtlasReady_ = railLockOnHudAtlasSrvGpu_.ptr != 0;
+    return railLockOnHudAtlasReady_;
+}
+
+bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
+    constexpr uint32_t kMaxAtlasVertices = 4096;
+    constexpr float kAtlasW = 256.0f;
+    constexpr float kAtlasH = 128.0f;
+    railLockOnHudAtlasVertexCount_ = 0;
+    if (railLockOnHudAtlasMappedVertices_ == nullptr || windowWidth_ == 0 || windowHeight_ == 0) {
+        return false;
+    }
+
+    const auto uv = [](float x, float y, float w, float h) {
+        return Vector4{x / kAtlasW, y / kAtlasH, (x + w) / kAtlasW, (y + h) / kAtlasH};
+    };
+    const Vector4 uvWhite = uv(0.0f, 112.0f, 8.0f, 8.0f);
+    const Vector4 uvCircle = uv(16.0f, 88.0f, 32.0f, 32.0f);
+    const Vector4 uvGlow = uv(56.0f, 88.0f, 32.0f, 32.0f);
+    const Vector4 uvPip = uv(101.0f, 93.0f, 22.0f, 22.0f);
+
+    const auto clip = [&](float x, float y) {
+        return Vector4{
+            x / static_cast<float>(windowWidth_) * 2.0f - 1.0f,
+            1.0f - y / static_cast<float>(windowHeight_) * 2.0f,
+            0.0f,
+            1.0f};
+    };
+    auto push = [&](float x, float y, float u, float v, const Vector4& color) {
+        if (railLockOnHudAtlasVertexCount_ >= kMaxAtlasVertices) {
+            return;
+        }
+        railLockOnHudAtlasMappedVertices_[railLockOnHudAtlasVertexCount_++] = {
+            clip(x, y),
+            {u, v},
+            color};
+    };
+    auto addQuad = [&](float x, float y, float w, float h, const Vector4& rect, const Vector4& color) {
+        if (w <= 0.0f || h <= 0.0f || railLockOnHudAtlasVertexCount_ + 6 > kMaxAtlasVertices) {
+            return;
+        }
+        const float x0 = x;
+        const float y0 = y;
+        const float x1 = x + w;
+        const float y1 = y + h;
+        push(x0, y0, rect.x, rect.y, color);
+        push(x1, y0, rect.z, rect.y, color);
+        push(x0, y1, rect.x, rect.w, color);
+        push(x0, y1, rect.x, rect.w, color);
+        push(x1, y0, rect.z, rect.y, color);
+        push(x1, y1, rect.z, rect.w, color);
+    };
+    auto addCentered = [&](const Vector2& center, float size, const Vector4& rect, const Vector4& color) {
+        addQuad(center.x - size * 0.5f, center.y - size * 0.5f, size, size, rect, color);
+    };
+    auto addGlyph = [&](char c, float x, float y, float scale, const Vector4& color) {
+        if (c < '0' || c > '9') {
+            return;
+        }
+        const Vector4 rect = uv(static_cast<float>(c - '0') * 12.0f, 0.0f, 11.0f, 18.0f);
+        addQuad(x, y, 11.0f * scale, 18.0f * scale, rect, color);
+    };
+    auto addNumber = [&](int value, const Vector2& center, float scale, const Vector4& color) {
+        const int clamped = (std::clamp)(value, 0, 99);
+        char text[3] = {};
+        if (clamped >= 10) {
+            text[0] = static_cast<char>('0' + clamped / 10);
+            text[1] = static_cast<char>('0' + clamped % 10);
+        } else {
+            text[0] = static_cast<char>('0' + clamped);
+        }
+        const float width = static_cast<float>(std::strlen(text)) * 12.0f * scale;
+        float cursor = center.x - width * 0.5f;
+        for (const char* ch = text; *ch != '\0'; ++ch) {
+            addGlyph(*ch, cursor, center.y - 9.0f * scale, scale, color);
+            cursor += 12.0f * scale;
+        }
+    };
+
+    if (!railShooterInitialized_) {
+        return false;
+    }
+
+    const RailLockDebugFrame& debug = railShooterLockOnSystem_.DebugFrame();
+    const RailReticleState& reticle = debug.reticle;
+    const int maxLocks = (std::max)(1, railShooterLockOnSystem_.Settings().maxLocks);
+    const int tokenCount = static_cast<int>(debug.tokens.size());
+    const bool maxLock = tokenCount >= maxLocks;
+    const float acquirePulse = debug.acceptedThisFrame > 0 ? 1.0f : 0.0f;
+    const Vector4 cyan = maxLock ? Vector4{1.0f, 0.78f, 0.26f, 0.95f} : Vector4{0.25f, 0.92f, 1.0f, 0.95f};
+    const Vector4 cyanSoft = maxLock ? Vector4{1.0f, 0.66f, 0.20f, 0.26f} : Vector4{0.16f, 0.78f, 1.0f, 0.24f};
+    const Vector4 panel = Vector4{0.02f, 0.04f, 0.05f, 0.54f};
+
+    addCentered(reticle.currentScreenPosition, reticle.lockHeld ? 88.0f : 68.0f, uvGlow, cyanSoft);
+
+    for (int index = 0; index < tokenCount; ++index) {
+        const RailLockToken& token = debug.tokens[static_cast<size_t>(index)];
+        const float age = (std::max)(0.0f, debug.elapsedTime - token.acquiredTime);
+        const float flash = (std::max)(0.0f, 1.0f - age / 0.22f);
+        addCentered(token.acquiredScreenPosition, 54.0f + flash * 18.0f, uvGlow, cyanSoft);
+        addCentered(token.acquiredScreenPosition, 39.0f, uvCircle, Vector4{0.16f, 0.34f, 0.38f, 0.78f});
+        addNumber(index + 1, token.acquiredScreenPosition, 0.82f, Vector4{0.78f, 0.98f, 1.0f, 0.95f});
+    }
+
+    const float meterWidth = static_cast<float>(maxLocks) * 18.0f + 26.0f;
+    const float meterHeight = 46.0f;
+    const float meterX = static_cast<float>(windowWidth_) * 0.5f - meterWidth * 0.5f;
+    const float meterY = static_cast<float>(windowHeight_) - 96.0f;
+    addQuad(meterX, meterY, meterWidth, meterHeight, uvWhite, panel);
+    for (int index = 0; index < maxLocks; ++index) {
+        const bool filled = index < tokenCount;
+        const Vector2 center{
+            meterX + 13.0f + static_cast<float>(index) * 18.0f,
+            meterY + 23.0f};
+        addCentered(
+            center,
+            filled ? 16.0f + acquirePulse * 3.0f : 14.0f,
+            uvPip,
+            filled ? cyan : Vector4{0.38f, 0.46f, 0.50f, 0.58f});
+    }
+
+    return railLockOnHudAtlasVertexCount_ > 0;
+}
+
+void AppRunLoop::RegisterRailLockOnHudPass(ID3D12GraphicsCommandList* commandList) {
+    const bool atlasReady =
+        EnsureRailLockOnHudAtlas(commandList) &&
+        BuildRailLockOnHudAtlasQuads() &&
+        railLockOnHudAtlasVertexCount_ > 0;
+    if (atlasReady) {
+        renderGraph_.AddPass({
+            "UI.RailLockOnHud.Atlas",
+            ge3::graphics::RenderPassLayer::Ui,
+            {
+                {"BackBuffer", ge3::graphics::RenderResourceAccessType::WriteRtv},
+            },
+            "",
+            [this](ge3::graphics::RenderPassContext& passContext) {
+                if (railLockOnHudAtlasVertexCount_ == 0 ||
+                    railLockOnHudAtlasSrvGpu_.ptr == 0 ||
+                    railLockOnHudAtlasVertexBufferView_.BufferLocation == 0) {
+                    return;
+                }
+                passContext.commandList->RSSetViewports(1, &runtimeState_.viewport);
+                passContext.commandList->RSSetScissorRects(1, &runtimeState_.scissorRect);
+                passContext.commandList->SetGraphicsRootSignature(appPipelines_.GetRailHudAtlasRootSignature());
+                passContext.commandList->SetPipelineState(appPipelines_.GetRailHudAtlasPSO());
+                ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap_.Get()};
+                passContext.commandList->SetDescriptorHeaps(1, descriptorHeaps);
+                passContext.commandList->SetGraphicsRootDescriptorTable(0, railLockOnHudAtlasSrvGpu_);
+                passContext.commandList->IASetVertexBuffers(0, 1, &railLockOnHudAtlasVertexBufferView_);
+                passContext.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                passContext.commandList->DrawInstanced(railLockOnHudAtlasVertexCount_, 1, 0, 0);
+            }});
+    }
+
+    if (!BuildRailLockOnHudDraw() || railLockOnHudDraw_.VertexCount() == 0) {
+        return;
+    }
+
+    renderGraph_.AddPass({
+        "UI.RailLockOnHud",
+        ge3::graphics::RenderPassLayer::Ui,
+        {
+            {"BackBuffer", ge3::graphics::RenderResourceAccessType::WriteRtv},
+        },
+        "",
+        [this](ge3::graphics::RenderPassContext& passContext) {
+            if (!railLockOnHudDraw_.IsReady() || railLockOnHudDraw_.VertexCount() == 0) {
+                return;
+            }
+            const bool ready = frameRenderer_.PrepareMainPass(
+                passContext.commandList,
+                runtimeState_.viewport,
+                runtimeState_.scissorRect,
+                appPipelines_.GetSkeletonDebugRootSignature(),
+                appPipelines_.GetSkeletonDebugPSO());
+            if (!ready) {
+                return;
+            }
+            frameRenderer_.DrawSkeletonDebugLines(
+                passContext.commandList,
+                railLockOnHudDraw_.VertexBufferView(),
+                railLockOnHudDraw_.TransformBufferAddress(),
+                railLockOnHudDraw_.VertexCount());
+        }});
+}
+
 void AppRunLoop::DrawRailLockOnDebugPanel() {
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
     const auto reasonLabel = [](RailLockRejectReason reason) {
@@ -1517,7 +1988,9 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
     const RailReticleState& reticle = debug.reticle;
     const PlayerCombatFeelStats& combatStats = railShooterCombatFeelSystem_.LastStats();
     RailLockSettings& settings = railShooterLockOnSystem_.MutableSettings();
-    ImGui::Begin("Rail Lock-On P0-C");
+    const IAppSceneState* currentScene = sceneStateManager_.CurrentState();
+    const char* currentSceneName = currentScene != nullptr ? currentScene->Name() : "-";
+    ImGui::Begin("Rail Lock-On P0-D-4");
     ImGui::Text(
         "Reticle prev=(%.1f, %.1f) current=(%.1f, %.1f)",
         reticle.previousScreenPosition.x,
@@ -1551,6 +2024,46 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
         settings.maxLocks,
         settings.releaseDamage,
         settings.releaseDamage * 1.25f);
+
+    if (ImGui::CollapsingHeader("Input Routes P0-D-4", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Text(
+            "Scene=%s railInput=%s",
+            currentSceneName,
+            railInputRouteDebug_.railSceneActive ? "active" : "inactive");
+        ImGui::Text(
+            "HUD Renderer=RenderGraph UI pass vertices=%u imguiOverlay=%s",
+            railLockOnHudDraw_.VertexCount(),
+            "debug panel only");
+        ImGui::Text(
+            "Normal Shot=%s  Aim Assist=%s",
+            railInputRouteDebug_.normalShotEnabled ? "active" : "suppressed by lock hold",
+            railInputRouteDebug_.aimAssistEnabled ? "active" : "disabled by lock hold");
+        ImGui::Text(
+            "Lock Input held=%s pressed=%s released=%s",
+            railInputRouteDebug_.lockHeld ? "true" : "false",
+            railInputRouteDebug_.lockPressed ? "true" : "false",
+            railInputRouteDebug_.lockReleased ? "true" : "false");
+        ImGui::Text(
+            "Release Fire=%s tokens=%u hits=%d",
+            railInputRouteDebug_.releaseFireTriggered ? "fired" : "idle",
+            railInputRouteDebug_.releaseTokenCount,
+            railInputRouteDebug_.releaseHitCount);
+        const char* showcaseRoute =
+            railInputRouteDebug_.showcaseClickBlockedInRail
+                ? "blocked in RailShooter"
+                : (railInputRouteDebug_.showcaseClickToFireEnabled ? "allowed in VFX preview" : "disabled");
+        ImGui::Text(
+            "Showcase Ice LeftClick=%s leftMouse=%s fired=%s imguiCapture=%s",
+            showcaseRoute,
+            railInputRouteDebug_.leftMouseDown ? "down" : "up",
+            railInputRouteDebug_.showcaseClickFired ? "true" : "false",
+            railInputRouteDebug_.showcaseClickIgnoredByImgui ? "true" : "false");
+        if (railInputRouteDebug_.showcaseClickBlockedInRail) {
+            ImGui::TextColored(
+                ImVec4(1.0f, 0.78f, 0.25f, 1.0f),
+                "RailShooter validation uses lock release VFX only; showcase left-click is isolated.");
+        }
+    }
 
     if (ImGui::CollapsingHeader("Lock-On VFX Tuning", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::DragFloat("Travel Min", &settings.lockVfxTravelDurationMin, 0.01f, 0.03f, 2.0f, "%.2f");
@@ -1700,6 +2213,12 @@ void AppRunLoop::QueueRailLockIceProjectile(const Vector3& start, const Vector3&
         distance * (std::max)(0.0f, settings.lockVfxImpactScalePerDistance),
         impactMin,
         impactMax);
+}
+
+bool AppRunLoop::IsRailShooterSceneActive() const {
+    const IAppSceneState* currentState = sceneStateManager_.CurrentState();
+    const char* sceneName = currentState != nullptr ? currentState->Name() : nullptr;
+    return sceneName != nullptr && std::strcmp(sceneName, "RailShooter") == 0;
 }
 
 int AppRunLoop::ProcessRailLockOnRelease(const Vector3& muzzlePosition) {
@@ -1946,6 +2465,11 @@ void AppRunLoop::EnterRailShooterScene() {
 
 void AppRunLoop::UpdateRailShooterFrame() {
     const auto updateStart = RailPerfClock::now();
+    railInputRouteDebug_.railSceneActive = true;
+    railInputRouteDebug_.releaseFireTriggered = false;
+    railInputRouteDebug_.releaseTokenCount = 0;
+    railInputRouteDebug_.releaseHitCount = 0;
+    railInputRouteDebug_.showcaseClickToFireEnabled = runtimeState_.vfx.iceProjectileClickToFire;
     if (RailShaderHotReloadEnabled() || imguiLayer_.WantsDeveloperDiagnostics()) {
         appPipelines_.HotReloadIfNeeded(dev_.GetDevice());
     }
@@ -2049,6 +2573,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const int lockReleaseHits = ProcessRailLockOnRelease(railLockMuzzle);
     const uint32_t lockReleaseTokenCount =
         static_cast<uint32_t>(railShooterLockOnSystem_.LastRelease().tokens.size());
+    railInputRouteDebug_.releaseFireTriggered = lockReleaseTokenCount > 0;
+    railInputRouteDebug_.releaseTokenCount = lockReleaseTokenCount;
+    railInputRouteDebug_.releaseHitCount = lockReleaseHits;
     if (lockReleaseTokenCount > 0) {
         railShooterCombatFeelSystem_.ApplyLockOnRelease(
             lockReleaseTokenCount,
@@ -2060,7 +2587,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
 
     const bool lockModeActive = railShooterLockOnSystem_.Reticle().lockHeld;
+    railInputRouteDebug_.lockHeld = lockModeActive;
+    railInputRouteDebug_.lockPressed = railShooterLockOnSystem_.Reticle().lockPressed;
+    railInputRouteDebug_.lockReleased = railShooterLockOnSystem_.Reticle().lockReleased;
     baseWeapon.enabled = !lockModeActive;
+    railInputRouteDebug_.normalShotEnabled = baseWeapon.enabled;
     PlayerCombatFeelFrameInput combatFeelInput{};
     combatFeelInput.deltaTime = kFixedGameplayDeltaTime;
     combatFeelInput.playerDistance = railShooterDistance_;
@@ -2069,6 +2600,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     combatFeelInput.baseWeapon = baseWeapon;
     combatFeelInput.spawnRuntime = &railShooterSpawnRuntime_;
     combatFeelInput.allowAimAssist = !lockModeActive;
+    railInputRouteDebug_.aimAssistEnabled = combatFeelInput.allowAimAssist;
     collisionInput.weapon = railShooterCombatFeelSystem_.BuildWeaponState(combatFeelInput);
     const auto collisionStart = RailPerfClock::now();
     const CourseCollisionFrameStats collisionStats =
@@ -3473,12 +4005,24 @@ void AppRunLoop::ProcessReleaseShowcaseControls(float deltaTime) {
 }
 
 void AppRunLoop::ProcessIceProjectileMouseLaunch() {
+    const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    railInputRouteDebug_.leftMouseDown = leftMouseDown;
+    railInputRouteDebug_.railSceneActive = IsRailShooterSceneActive();
+    railInputRouteDebug_.showcaseClickToFireEnabled = runtimeState_.vfx.iceProjectileClickToFire;
+    railInputRouteDebug_.showcaseClickBlockedInRail = false;
+    railInputRouteDebug_.showcaseClickFired = false;
+    railInputRouteDebug_.showcaseClickIgnoredByImgui = false;
+
     if (!runtimeState_.vfx.iceProjectileClickToFire || hwnd_ == nullptr) {
-        previousLeftMouseDown_ = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        previousLeftMouseDown_ = leftMouseDown;
+        return;
+    }
+    if (railInputRouteDebug_.railSceneActive) {
+        railInputRouteDebug_.showcaseClickBlockedInRail = true;
+        previousLeftMouseDown_ = leftMouseDown;
         return;
     }
 
-    const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
     const bool clicked = leftMouseDown && !previousLeftMouseDown_;
     previousLeftMouseDown_ = leftMouseDown;
     if (!clicked) {
@@ -3486,6 +4030,7 @@ void AppRunLoop::ProcessIceProjectileMouseLaunch() {
     }
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
     if (ImGui::GetIO().WantCaptureMouse) {
+        railInputRouteDebug_.showcaseClickIgnoredByImgui = true;
         return;
     }
 #endif
@@ -3579,6 +4124,7 @@ void AppRunLoop::ProcessIceProjectileMouseLaunch() {
     slot->rotationZ = std::atan2(cursorNdcY - launchNdc.y, cursorNdcX - launchNdc.x);
     slot->start = shotStart;
     slot->target = shotTarget;
+    railInputRouteDebug_.showcaseClickFired = true;
 }
 
 void AppRunLoop::RenderVfxPreviewFrame() {
@@ -3708,7 +4254,6 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 emitterState.frequencyTime = runtimeState_.emitter.frequencyTime;
                 particleSystem_.Emit(emitterState);
             }});
-    DrawRailLockOnHud();
     DrawRailLockOnDebugPanel();
     imguiLayer_.EndFrame();
     gRailPerfFrame.imguiMs = ElapsedMs(imguiStart, RailPerfClock::now());
@@ -3749,6 +4294,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         commandList.Get(),
         scene_,
         spriteTextureHandle);
+    RegisterRailLockOnHudPass(commandList.Get());
     gRailPerfFrame.registerPassesMs = ElapsedMs(registerPassesStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterRegisterPasses");
     const auto prepareGraphStart = RailPerfClock::now();

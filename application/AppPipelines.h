@@ -19,6 +19,7 @@ public:
     ID3D12RootSignature* GetMainRootSignature() const { return mainRootSignature_.Get(); }
     ID3D12RootSignature* GetSkinnedRootSignature() const { return skinnedRootSignature_.Get(); }
     ID3D12RootSignature* GetSpriteRootSignature() const { return spriteRootSignature_.Get(); }
+    ID3D12RootSignature* GetRailHudAtlasRootSignature() const { return railHudAtlasRootSignature_.Get(); }
     ID3D12RootSignature* GetSkyboxRootSignature() const { return skyboxRootSignature_.Get(); }
     ID3D12RootSignature* GetParticleRootSignature() const { return particleRootSignature_.Get(); }
     ID3D12RootSignature* GetRingRootSignature() const { return ringRootSignature_.Get(); }
@@ -40,6 +41,7 @@ public:
     ID3D12PipelineState* GetMainOpaquePSO() const { return mainOpaquePso_.Get(); }
     ID3D12PipelineState* GetMainAlphaPSO() const { return mainAlphaPso_.Get(); }
     ID3D12PipelineState* GetSpritePSO() const { return spritePso_.Get(); }
+    ID3D12PipelineState* GetRailHudAtlasPSO() const { return railHudAtlasPso_.Get(); }
     ID3D12PipelineState* GetSkyboxPSO() const { return skyboxPso_.Get(); }
 
     ID3D12PipelineState* GetComputePSO() const { return computePso_.Get(); }
@@ -101,6 +103,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> mainRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> skinnedRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> spriteRootSignature_;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> railHudAtlasRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> skyboxRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> particleRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> ringRootSignature_;
@@ -127,6 +130,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainOpaquePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainAlphaPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> spritePso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> railHudAtlasPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> skyboxPso_;
 
     Microsoft::WRL::ComPtr<ID3D12PipelineState> computePso_;
@@ -192,6 +196,8 @@ private:
     Microsoft::WRL::ComPtr<IDxcBlob> terrainDebrisCullCs_;
     Microsoft::WRL::ComPtr<IDxcBlob> spriteVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> spritePs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> railHudAtlasVs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> railHudAtlasPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> skyboxVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> skyboxPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> cs_;
