@@ -1275,6 +1275,492 @@ void AppRunLoop::ApplyRailShooterVisualPresets(float distance) {
     runtimeState_.materialData.specularMode = 1;
 }
 
+void AppRunLoop::DrawRailLockOnHud() {
+#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
+    if (!railShooterInitialized_ || windowWidth_ == 0 || windowHeight_ == 0) {
+        return;
+    }
+
+    const RailLockDebugFrame& debug = railShooterLockOnSystem_.DebugFrame();
+    const RailReticleState& reticle = debug.reticle;
+    if (!reticle.initialized) {
+        return;
+    }
+
+    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    if (drawList == nullptr) {
+        return;
+    }
+
+    const auto toImVec2 = [](const Vector2& value) {
+        return ImVec2(value.x, value.y);
+    };
+    const auto screenVisible = [this](const Vector2& value, float margin) {
+        return value.x >= -margin &&
+            value.y >= -margin &&
+            value.x <= static_cast<float>(windowWidth_) + margin &&
+            value.y <= static_cast<float>(windowHeight_) + margin;
+    };
+
+    const ImVec2 reticlePos = toImVec2(reticle.currentScreenPosition);
+    const float pulse =
+        0.5f + 0.5f * std::sin(static_cast<float>(railShooterFrameIndex_) * 0.18f);
+    const int tokenCount = static_cast<int>(debug.tokens.size());
+    const int maxLocks = (std::max)(1, railShooterLockOnSystem_.Settings().maxLocks);
+    const bool maxLock = tokenCount >= maxLocks;
+    const bool releaseReady = tokenCount > 0;
+    const float acquireHudPulse = debug.acceptedThisFrame > 0 ? 1.0f : 0.0f;
+
+    const ImU32 candidateColor = IM_COL32(80, 218, 255, 170);
+    const ImU32 candidateHotColor = IM_COL32(110, 255, 190, 230);
+    const ImU32 lockedColor = maxLock ? IM_COL32(255, 218, 80, 255) : IM_COL32(80, 236, 255, 255);
+    const ImU32 lockedSoftColor = maxLock ? IM_COL32(255, 184, 70, 95) : IM_COL32(80, 210, 255, 95);
+    const ImU32 reticleColor = reticle.lockHeld
+        ? (maxLock ? IM_COL32(255, 214, 74, 255) : IM_COL32(96, 230, 255, 255))
+        : IM_COL32(220, 238, 246, 190);
+
+    int shownCandidates = 0;
+    for (const RailLockCandidate& candidate : debug.candidates) {
+        if (!candidate.lockable ||
+            candidate.rejectReason == RailLockRejectReason::AlreadyLocked ||
+            !screenVisible(candidate.anchor.screenPosition, 64.0f)) {
+            continue;
+        }
+        if (shownCandidates++ >= 10) {
+            break;
+        }
+
+        const ImVec2 pos = toImVec2(candidate.anchor.screenPosition);
+        const float radius = (std::clamp)(candidate.anchor.screenRadius, 18.0f, 58.0f);
+        const float hot = 1.0f - (std::clamp)(
+            candidate.distanceToReticle /
+                (railShooterLockOnSystem_.Settings().assistRadius + radius),
+            0.0f,
+            1.0f);
+        const ImU32 color = hot > 0.35f ? candidateHotColor : candidateColor;
+        const float thickness = 1.2f + hot * 1.8f;
+        drawList->AddCircle(pos, radius + 2.0f + pulse * 2.0f, color, 40, thickness);
+        drawList->AddCircle(pos, radius * 0.56f, IM_COL32(120, 245, 255, 95), 32, 1.0f);
+        drawList->AddLine(
+            ImVec2(pos.x - radius * 0.34f, pos.y),
+            ImVec2(pos.x - radius * 0.12f, pos.y),
+            color,
+            thickness);
+        drawList->AddLine(
+            ImVec2(pos.x + radius * 0.12f, pos.y),
+            ImVec2(pos.x + radius * 0.34f, pos.y),
+            color,
+            thickness);
+        drawList->AddLine(
+            ImVec2(pos.x, pos.y - radius * 0.34f),
+            ImVec2(pos.x, pos.y - radius * 0.12f),
+            color,
+            thickness);
+        drawList->AddLine(
+            ImVec2(pos.x, pos.y + radius * 0.12f),
+            ImVec2(pos.x, pos.y + radius * 0.34f),
+            color,
+            thickness);
+    }
+
+    for (int index = 0; index < tokenCount; ++index) {
+        const RailLockToken& token = debug.tokens[static_cast<size_t>(index)];
+        if (!screenVisible(token.acquiredScreenPosition, 72.0f)) {
+            continue;
+        }
+
+        const ImVec2 pos = toImVec2(token.acquiredScreenPosition);
+        const float acquiredAge = (std::max)(0.0f, debug.elapsedTime - token.acquiredTime);
+        const float acquirePulse = 1.0f - (std::clamp)(acquiredAge / 0.36f, 0.0f, 1.0f);
+        const float radius = 23.0f + pulse * 2.0f + acquirePulse * 13.0f;
+        const ImU32 tokenSoftColor = maxLock
+            ? IM_COL32(255, 184, 70, static_cast<int>(95.0f + acquirePulse * 92.0f))
+            : IM_COL32(80, 210, 255, static_cast<int>(95.0f + acquirePulse * 100.0f));
+        const ImU32 flashColor = maxLock
+            ? IM_COL32(255, 245, 160, static_cast<int>(acquirePulse * 220.0f))
+            : IM_COL32(190, 252, 255, static_cast<int>(acquirePulse * 220.0f));
+
+        drawList->AddLine(reticlePos, pos, tokenSoftColor, 1.3f + acquirePulse * 2.6f);
+        drawList->AddCircleFilled(pos, radius + 5.0f, tokenSoftColor, 36);
+        if (acquirePulse > 0.0f) {
+            drawList->AddCircleFilled(pos, radius + 17.0f * acquirePulse, flashColor, 44);
+            drawList->AddCircle(pos, radius + 22.0f * acquirePulse, flashColor, 44, 3.0f * acquirePulse);
+        }
+        drawList->AddCircle(pos, radius + 6.0f, lockedColor, 36, maxLock ? 3.0f : 2.0f);
+        drawList->AddCircle(pos, radius, IM_COL32(12, 24, 32, 180), 36, 2.0f);
+
+        const char numberText[8] = {
+            static_cast<char>('0' + ((index + 1) / 10)),
+            static_cast<char>('0' + ((index + 1) % 10)),
+            '\0',
+        };
+        const char* label = index + 1 >= 10 ? numberText : numberText + 1;
+        const ImVec2 textSize = ImGui::CalcTextSize(label);
+        drawList->AddText(
+            ImVec2(pos.x - textSize.x * 0.5f, pos.y - textSize.y * 0.5f),
+            IM_COL32(245, 252, 255, 255),
+            label);
+    }
+
+    for (const RailLockToken& token : debug.acquiredTokens) {
+        if (!screenVisible(token.acquiredScreenPosition, 72.0f)) {
+            continue;
+        }
+        const float acquiredAge = (std::max)(0.0f, debug.elapsedTime - token.acquiredTime);
+        const float tracerT = (std::clamp)(acquiredAge / 0.16f, 0.0f, 1.0f);
+        const float tracerAlpha = 1.0f - (std::clamp)(acquiredAge / 0.24f, 0.0f, 1.0f);
+        if (tracerAlpha <= 0.0f) {
+            continue;
+        }
+
+        const ImVec2 targetPos = toImVec2(token.acquiredScreenPosition);
+        const ImVec2 head(
+            reticlePos.x + (targetPos.x - reticlePos.x) * tracerT,
+            reticlePos.y + (targetPos.y - reticlePos.y) * tracerT);
+        const ImVec2 tail(
+            reticlePos.x + (targetPos.x - reticlePos.x) * (std::max)(0.0f, tracerT - 0.22f),
+            reticlePos.y + (targetPos.y - reticlePos.y) * (std::max)(0.0f, tracerT - 0.22f));
+        const ImU32 tracerColor = IM_COL32(
+            210,
+            255,
+            255,
+            static_cast<int>(tracerAlpha * 235.0f));
+        drawList->AddLine(tail, head, tracerColor, 4.0f);
+        drawList->AddCircleFilled(head, 4.5f + tracerAlpha * 3.5f, tracerColor, 18);
+    }
+
+    if (screenVisible(reticle.currentScreenPosition, 96.0f)) {
+        const float radius = reticle.lockHeld ? 27.0f + pulse * 3.0f + acquireHudPulse * 5.0f : 21.0f;
+        drawList->AddCircle(reticlePos, radius + 10.0f, IM_COL32(20, 32, 40, 145), 48, 3.0f);
+        drawList->AddCircle(reticlePos, radius, reticleColor, 48, reticle.lockHeld ? 2.6f : 1.8f);
+        drawList->AddLine(
+            ImVec2(reticlePos.x - radius - 14.0f, reticlePos.y),
+            ImVec2(reticlePos.x - radius * 0.44f, reticlePos.y),
+            reticleColor,
+            2.0f);
+        drawList->AddLine(
+            ImVec2(reticlePos.x + radius * 0.44f, reticlePos.y),
+            ImVec2(reticlePos.x + radius + 14.0f, reticlePos.y),
+            reticleColor,
+            2.0f);
+        drawList->AddLine(
+            ImVec2(reticlePos.x, reticlePos.y - radius - 14.0f),
+            ImVec2(reticlePos.x, reticlePos.y - radius * 0.44f),
+            reticleColor,
+            2.0f);
+        drawList->AddLine(
+            ImVec2(reticlePos.x, reticlePos.y + radius * 0.44f),
+            ImVec2(reticlePos.x, reticlePos.y + radius + 14.0f),
+            reticleColor,
+            2.0f);
+
+        if (releaseReady) {
+            const char* stateLabel = maxLock ? "MAX" : "LOCK";
+            const ImVec2 labelSize = ImGui::CalcTextSize(stateLabel);
+            drawList->AddText(
+                ImVec2(reticlePos.x - labelSize.x * 0.5f, reticlePos.y + radius + 15.0f),
+                reticleColor,
+                stateLabel);
+        }
+    }
+
+    const float meterWidth = static_cast<float>(maxLocks) * 18.0f + 18.0f;
+    const ImVec2 meterOrigin(
+        static_cast<float>(windowWidth_) * 0.5f - meterWidth * 0.5f,
+        static_cast<float>(windowHeight_) - 78.0f);
+    drawList->AddRectFilled(
+        ImVec2(meterOrigin.x - 14.0f, meterOrigin.y - 12.0f),
+        ImVec2(meterOrigin.x + meterWidth + 14.0f, meterOrigin.y + 26.0f),
+        IM_COL32(5, 12, 18, 126),
+        6.0f);
+    for (int index = 0; index < maxLocks; ++index) {
+        const bool filled = index < tokenCount;
+        float meterPulse = 0.0f;
+        if (filled && index == tokenCount - 1 && debug.acceptedThisFrame > 0) {
+            meterPulse = 1.0f;
+        }
+        const ImVec2 center(meterOrigin.x + 16.0f + static_cast<float>(index) * 18.0f, meterOrigin.y + 7.0f);
+        drawList->AddCircleFilled(
+            center,
+            filled ? 6.0f + meterPulse * 4.0f : 4.0f,
+            filled ? lockedColor : IM_COL32(96, 116, 128, 135),
+            18);
+        drawList->AddCircle(
+            center,
+            8.0f + meterPulse * 6.0f,
+            IM_COL32(190, 230, 245, filled ? 180 + static_cast<int>(meterPulse * 55.0f) : 70),
+            18,
+            1.0f + meterPulse * 1.6f);
+    }
+#endif
+}
+
+void AppRunLoop::DrawRailLockOnDebugPanel() {
+#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
+    const auto reasonLabel = [](RailLockRejectReason reason) {
+        switch (reason) {
+        case RailLockRejectReason::None: return "None";
+        case RailLockRejectReason::BehindCamera: return "BehindCamera";
+        case RailLockRejectReason::Offscreen: return "Offscreen";
+        case RailLockRejectReason::OutOfDepth: return "OutOfDepth";
+        case RailLockRejectReason::OutOfForwardRange: return "OutOfForwardRange";
+        case RailLockRejectReason::NotSwept: return "NotSwept";
+        case RailLockRejectReason::AlreadyLocked: return "AlreadyLocked";
+        case RailLockRejectReason::StackLimit: return "StackLimit";
+        case RailLockRejectReason::LockModeInactive: return "LockModeInactive";
+        case RailLockRejectReason::LockContainerFull: return "LockContainerFull";
+        }
+        return "Unknown";
+    };
+
+    const RailLockDebugFrame& debug = railShooterLockOnSystem_.DebugFrame();
+    const RailReticleState& reticle = debug.reticle;
+    const PlayerCombatFeelStats& combatStats = railShooterCombatFeelSystem_.LastStats();
+    RailLockSettings& settings = railShooterLockOnSystem_.MutableSettings();
+    ImGui::Begin("Rail Lock-On P0-C");
+    ImGui::Text(
+        "Reticle prev=(%.1f, %.1f) current=(%.1f, %.1f)",
+        reticle.previousScreenPosition.x,
+        reticle.previousScreenPosition.y,
+        reticle.currentScreenPosition.x,
+        reticle.currentScreenPosition.y);
+    ImGui::Text(
+        "Lock held=%s pressed=%s released=%s accepted=%d fired=%d",
+        reticle.lockHeld ? "true" : "false",
+        reticle.lockPressed ? "true" : "false",
+        reticle.lockReleased ? "true" : "false",
+        debug.acceptedThisFrame,
+        debug.releasedThisFrame);
+    ImGui::Text(
+        "Anchors=%d Candidates=%d Tokens=%d",
+        debug.anchorCount,
+        static_cast<int>(debug.candidates.size()),
+        static_cast<int>(debug.tokens.size()));
+    ImGui::Text(
+        "Combat score=%u combo=%u max=%u lastLockScore=%u tokens=%u hits=%u timing=%s",
+        combatStats.score,
+        combatStats.combo,
+        combatStats.maxCombo,
+        combatStats.lastLockScore,
+        combatStats.lastLockTokenCount,
+        combatStats.lastLockHitCount,
+        combatStats.lastLockWasMax ? "MAX" : (combatStats.lastLockWasEarly ? "EARLY" : "-"));
+    ImGui::Text(
+        "Role split: normalShot=%s lockMax=%d lockDamage=%.1f maxLockDamage=%.1f",
+        reticle.lockHeld ? "suppressed while locking" : "active",
+        settings.maxLocks,
+        settings.releaseDamage,
+        settings.releaseDamage * 1.25f);
+
+    if (ImGui::CollapsingHeader("Lock-On VFX Tuning", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::DragFloat("Travel Min", &settings.lockVfxTravelDurationMin, 0.01f, 0.03f, 2.0f, "%.2f");
+        ImGui::DragFloat("Travel Max", &settings.lockVfxTravelDurationMax, 0.01f, 0.03f, 2.0f, "%.2f");
+        ImGui::DragFloat("Travel Distance Divisor", &settings.lockVfxTravelDistanceDivisor, 1.0f, 1.0f, 600.0f, "%.1f");
+        ImGui::DragFloat("Visual Scale Min", &settings.lockVfxVisualScaleMin, 0.05f, 0.1f, 30.0f, "%.2f");
+        ImGui::DragFloat("Visual Scale Max", &settings.lockVfxVisualScaleMax, 0.05f, 0.1f, 30.0f, "%.2f");
+        ImGui::DragFloat("Visual Scale Per Distance", &settings.lockVfxVisualScalePerDistance, 0.001f, 0.0f, 0.25f, "%.3f");
+        ImGui::DragFloat("Impact Scale Min", &settings.lockVfxImpactScaleMin, 0.05f, 0.1f, 20.0f, "%.2f");
+        ImGui::DragFloat("Impact Scale Max", &settings.lockVfxImpactScaleMax, 0.05f, 0.1f, 20.0f, "%.2f");
+        ImGui::DragFloat("Impact Scale Per Distance", &settings.lockVfxImpactScalePerDistance, 0.001f, 0.0f, 0.25f, "%.3f");
+        ImGui::DragFloat("Release Shot Interval", &settings.lockVfxReleaseShotInterval, 0.005f, 0.0f, 0.35f, "%.3f");
+        ImGui::DragFloat("Muzzle Forward Offset", &settings.lockVfxMuzzleForwardOffset, 0.05f, -8.0f, 18.0f, "%.2f");
+        ImGui::InputInt("Max Concurrent Shots", &settings.lockVfxMaxConcurrentShots);
+
+        settings.lockVfxTravelDurationMin = (std::max)(0.03f, settings.lockVfxTravelDurationMin);
+        settings.lockVfxTravelDurationMax =
+            (std::max)(settings.lockVfxTravelDurationMin, settings.lockVfxTravelDurationMax);
+        settings.lockVfxTravelDistanceDivisor = (std::max)(1.0f, settings.lockVfxTravelDistanceDivisor);
+        settings.lockVfxVisualScaleMin = (std::max)(0.1f, settings.lockVfxVisualScaleMin);
+        settings.lockVfxVisualScaleMax = (std::max)(settings.lockVfxVisualScaleMin, settings.lockVfxVisualScaleMax);
+        settings.lockVfxVisualScalePerDistance = (std::max)(0.0f, settings.lockVfxVisualScalePerDistance);
+        settings.lockVfxImpactScaleMin = (std::max)(0.1f, settings.lockVfxImpactScaleMin);
+        settings.lockVfxImpactScaleMax = (std::max)(settings.lockVfxImpactScaleMin, settings.lockVfxImpactScaleMax);
+        settings.lockVfxImpactScalePerDistance = (std::max)(0.0f, settings.lockVfxImpactScalePerDistance);
+        settings.lockVfxReleaseShotInterval = (std::max)(0.0f, settings.lockVfxReleaseShotInterval);
+        settings.lockVfxMaxConcurrentShots = (std::clamp)(
+            settings.lockVfxMaxConcurrentShots,
+            1,
+            static_cast<int>(runtimeState_.vfx.iceProjectileShots.size()));
+    }
+
+    if (ImGui::CollapsingHeader("Tokens", ImGuiTreeNodeFlags_DefaultOpen)) {
+        for (const RailLockToken& token : debug.tokens) {
+            ImGui::BulletText(
+                "%s actor=%u anchor=%u stack=%d screen=(%.1f, %.1f) dist=%.1f",
+                token.label.c_str(),
+                token.target.actorId,
+                token.anchorId,
+                token.stackIndex,
+                token.acquiredScreenPosition.x,
+                token.acquiredScreenPosition.y,
+                token.acquiredScreenDistance);
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Released This Frame")) {
+        for (const RailLockToken& token : debug.releasedTokens) {
+            ImGui::BulletText(
+                "%s actor=%u anchor=%u screen=(%.1f, %.1f)",
+                token.label.c_str(),
+                token.target.actorId,
+                token.anchorId,
+                token.acquiredScreenPosition.x,
+                token.acquiredScreenPosition.y);
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Acquired This Frame")) {
+        for (const RailLockToken& token : debug.acquiredTokens) {
+            ImGui::BulletText(
+                "%s actor=%u anchor=%u age=%.2f screen=(%.1f, %.1f)",
+                token.label.c_str(),
+                token.target.actorId,
+                token.anchorId,
+                debug.elapsedTime - token.acquiredTime,
+                token.acquiredScreenPosition.x,
+                token.acquiredScreenPosition.y);
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Candidates")) {
+        int shown = 0;
+        for (const RailLockCandidate& candidate : debug.candidates) {
+            if (shown++ >= 32) {
+                ImGui::TextUnformatted("...");
+                break;
+            }
+            ImGui::BulletText(
+                "%s actor=%u lockable=%s reason=%s forward=%.1f screen=(%.1f, %.1f) dist=%.1f radius=%.1f",
+                candidate.anchor.label.c_str(),
+                candidate.anchor.target.actorId,
+                candidate.lockable ? "true" : "false",
+                reasonLabel(candidate.rejectReason),
+                candidate.anchor.forwardDistance,
+                candidate.anchor.screenPosition.x,
+                candidate.anchor.screenPosition.y,
+                candidate.distanceToReticle,
+                candidate.anchor.screenRadius);
+        }
+    }
+    ImGui::End();
+#endif
+}
+
+void AppRunLoop::QueueRailLockIceProjectile(const Vector3& start, const Vector3& target, int shotIndex) {
+    const RailLockSettings& settings = railShooterLockOnSystem_.Settings();
+    const size_t shotLimit = static_cast<size_t>((std::clamp)(
+        settings.lockVfxMaxConcurrentShots,
+        1,
+        static_cast<int>(runtimeState_.vfx.iceProjectileShots.size())));
+    AppVfxRuntimeState::IceProjectileShotState* slot = nullptr;
+    for (size_t index = 0; index < shotLimit; ++index) {
+        AppVfxRuntimeState::IceProjectileShotState& shot = runtimeState_.vfx.iceProjectileShots[index];
+        if (!shot.active) {
+            slot = &shot;
+            break;
+        }
+    }
+    if (slot == nullptr) {
+        slot = &runtimeState_.vfx.iceProjectileShots.front();
+        for (size_t index = 0; index < shotLimit; ++index) {
+            AppVfxRuntimeState::IceProjectileShotState& shot = runtimeState_.vfx.iceProjectileShots[index];
+            if (shot.timer > slot->timer) {
+                slot = &shot;
+            }
+        }
+        if (slot->instanceId != 0) {
+            vfxEngine_.Runtime().StopEffect(slot->instanceId);
+        }
+    }
+
+    *slot = {};
+    slot->active = true;
+    slot->useWorldSpace = true;
+    slot->start = start;
+    slot->target = target;
+    slot->launchDelay = (std::max)(0.0f, settings.lockVfxReleaseShotInterval) *
+        static_cast<float>((std::max)(0, shotIndex));
+
+    const Vector3 delta = Subtract(target, start);
+    const float distance = std::sqrt((std::max)(0.0f, Dot(delta, delta)));
+    const float durationDivisor = (std::max)(1.0f, settings.lockVfxTravelDistanceDivisor);
+    const float durationMin = (std::max)(0.03f, settings.lockVfxTravelDurationMin);
+    const float durationMax = (std::max)(durationMin, settings.lockVfxTravelDurationMax);
+    const float visualMin = (std::max)(0.1f, settings.lockVfxVisualScaleMin);
+    const float visualMax = (std::max)(visualMin, settings.lockVfxVisualScaleMax);
+    const float impactMin = (std::max)(0.1f, settings.lockVfxImpactScaleMin);
+    const float impactMax = (std::max)(impactMin, settings.lockVfxImpactScaleMax);
+    slot->travelDuration = (std::clamp)(distance / durationDivisor, durationMin, durationMax);
+    slot->cleanupDelay = slot->travelDuration + 0.72f;
+    slot->visualScale = (std::clamp)(
+        distance * (std::max)(0.0f, settings.lockVfxVisualScalePerDistance),
+        visualMin,
+        visualMax);
+    slot->impactScale = (std::clamp)(
+        distance * (std::max)(0.0f, settings.lockVfxImpactScalePerDistance),
+        impactMin,
+        impactMax);
+}
+
+int AppRunLoop::ProcessRailLockOnRelease(const Vector3& muzzlePosition) {
+    const RailLockRelease& release = railShooterLockOnSystem_.LastRelease();
+    if (release.tokens.empty() || railPath_.Length() <= 0.0f) {
+        return 0;
+    }
+
+    int hitCount = 0;
+    const bool maxLockRelease =
+        static_cast<int>(release.tokens.size()) >= railShooterLockOnSystem_.Settings().maxLocks;
+    const float damage = railShooterLockOnSystem_.Settings().releaseDamage *
+        (maxLockRelease ? 1.25f : 1.0f);
+    for (const RailLockToken& token : release.tokens) {
+        bool resolved = false;
+        Vector3 targetPosition{};
+        if (token.target.kind == RailLockTargetKind::Enemy) {
+            for (CourseEnemyActor& enemy : railShooterSpawnRuntime_.MutableEnemies()) {
+                if (enemy.actorId != token.target.actorId) {
+                    continue;
+                }
+                targetPosition = RailLocalPoint(
+                    railPath_,
+                    enemy.desc.spawnDistance + enemy.desc.distanceOffset,
+                    enemy.desc.lateralOffset,
+                    enemy.desc.verticalOffset,
+                    0.0f);
+                enemy.desc.hitPoints -= damage;
+                resolved = true;
+                break;
+            }
+        } else {
+            for (CourseObstacleActor& obstacle : railShooterSpawnRuntime_.MutableObstacles()) {
+                if (obstacle.actorId != token.target.actorId || !obstacle.desc.breakable) {
+                    continue;
+                }
+                targetPosition = RailLocalPoint(
+                    railPath_,
+                    obstacle.desc.spawnDistance + obstacle.desc.distanceOffset,
+                    obstacle.desc.lateralOffset,
+                    obstacle.desc.verticalOffset,
+                    0.0f);
+                obstacle.desc.hitPoints -= damage;
+                resolved = true;
+                break;
+            }
+        }
+
+        if (!resolved) {
+            continue;
+        }
+        QueueRailLockIceProjectile(muzzlePosition, targetPosition, hitCount);
+        ++hitCount;
+    }
+
+    if (hitCount > 0) {
+        railShooterSpawnRuntime_.PruneDestroyedActors();
+    }
+    return hitCount;
+}
+
 void AppRunLoop::LogRailShooterRuntimeDiagnostics(const char* reason) {
     const CourseSection* section = railShooterCourse_.FindSection(railShooterDistance_);
     const CourseCinematicShotSet* shotSet = railShooterCourse_.FindCinematicShotSet(railShooterDistance_);
@@ -1409,6 +1895,7 @@ void AppRunLoop::EnterRailShooterScene() {
     railShooterDistance_ = railShooterCourseRuntime_.Distance();
     railShooterFrameIndex_ = 0;
     railShooterInitialized_ = true;
+    railShooterLockOnSystem_.Reset();
 
     runtimeState_.terrain.enabled = true;
     runtimeState_.terrain.autoAdvancePreview = false;
@@ -1507,28 +1994,6 @@ void AppRunLoop::UpdateRailShooterFrame() {
     baseWeapon.range = 96.0f;
     baseWeapon.radius = 2.2f;
     baseWeapon.damage = 18.0f;
-    PlayerCombatFeelFrameInput combatFeelInput{};
-    combatFeelInput.deltaTime = kFixedGameplayDeltaTime;
-    combatFeelInput.playerDistance = railShooterDistance_;
-    combatFeelInput.playerLateralOffset = collisionInput.player.lateralOffset;
-    combatFeelInput.playerVerticalOffset = collisionInput.player.verticalOffset;
-    combatFeelInput.baseWeapon = baseWeapon;
-    combatFeelInput.spawnRuntime = &railShooterSpawnRuntime_;
-    collisionInput.weapon = railShooterCombatFeelSystem_.BuildWeaponState(combatFeelInput);
-    const auto collisionStart = RailPerfClock::now();
-    const CourseCollisionFrameStats collisionStats =
-        railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput);
-    railShooterCombatFeelSystem_.ApplyCollisionStats(collisionStats);
-    railShooterCombatFeelSystem_.Update(kFixedGameplayDeltaTime);
-    gRailPerfFrame.collisionMs = ElapsedMs(collisionStart, RailPerfClock::now());
-    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterCollision");
-    if (collisionStats.playerShotEnemyHits > 0 || collisionStats.playerShotObstacleHits > 0) {
-        railShooterCameraDirector_.AddFeedbackImpulse(0.28f, -0.004f, 0.002f);
-    }
-    if (collisionStats.playerDamage > 0.0f) {
-        railShooterCameraDirector_.AddFeedbackImpulse(0.95f, 0.010f, -0.006f);
-    }
-    railShooterSpawnRuntime_.SubmitPendingVfx(vfxEngine_.Runtime(), railPath_);
     runtimeState_.terrain.previewDistance = railShooterDistance_;
     const auto visualPresetStart = RailPerfClock::now();
     ApplyRailShooterVisualPresets(railShooterDistance_);
@@ -1561,6 +2026,64 @@ void AppRunLoop::UpdateRailShooterFrame() {
     frameState_.viewProjectionMatrix = Multiply(frameState_.viewMatrix, frameState_.projMatrix);
     frameState_.cameraWorldPosition = cameraPosition;
     frameState_.deltaTime = kFixedGameplayDeltaTime;
+
+    RailLockOnFrameInput lockOnInput{};
+    lockOnInput.hwnd = hwnd_;
+    lockOnInput.deltaTime = kFixedGameplayDeltaTime;
+    lockOnInput.playerDistance = railShooterDistance_;
+    lockOnInput.viewportWidth = windowWidth_;
+    lockOnInput.viewportHeight = windowHeight_;
+    lockOnInput.viewProjection = &frameState_.viewProjectionMatrix;
+    lockOnInput.railPath = &railPath_;
+    lockOnInput.spawnRuntime = &railShooterSpawnRuntime_;
+    railShooterLockOnSystem_.Update(lockOnInput);
+    if (railShooterLockOnSystem_.DebugFrame().acceptedThisFrame > 0) {
+        railShooterCameraDirector_.AddFeedbackImpulse(0.075f, -0.0012f, 0.0007f);
+    }
+    const Vector3 railLockMuzzle = RailLocalPoint(
+        railPath_,
+        railShooterDistance_,
+        collisionInput.player.lateralOffset,
+        collisionInput.player.verticalOffset,
+        railShooterLockOnSystem_.Settings().lockVfxMuzzleForwardOffset);
+    const int lockReleaseHits = ProcessRailLockOnRelease(railLockMuzzle);
+    const uint32_t lockReleaseTokenCount =
+        static_cast<uint32_t>(railShooterLockOnSystem_.LastRelease().tokens.size());
+    if (lockReleaseTokenCount > 0) {
+        railShooterCombatFeelSystem_.ApplyLockOnRelease(
+            lockReleaseTokenCount,
+            static_cast<uint32_t>((std::max)(lockReleaseHits, 0)),
+            static_cast<uint32_t>((std::max)(railShooterLockOnSystem_.Settings().maxLocks, 0)));
+    }
+    if (lockReleaseHits > 0) {
+        railShooterCameraDirector_.AddFeedbackImpulse(0.20f, -0.003f, 0.0015f);
+    }
+
+    const bool lockModeActive = railShooterLockOnSystem_.Reticle().lockHeld;
+    baseWeapon.enabled = !lockModeActive;
+    PlayerCombatFeelFrameInput combatFeelInput{};
+    combatFeelInput.deltaTime = kFixedGameplayDeltaTime;
+    combatFeelInput.playerDistance = railShooterDistance_;
+    combatFeelInput.playerLateralOffset = collisionInput.player.lateralOffset;
+    combatFeelInput.playerVerticalOffset = collisionInput.player.verticalOffset;
+    combatFeelInput.baseWeapon = baseWeapon;
+    combatFeelInput.spawnRuntime = &railShooterSpawnRuntime_;
+    combatFeelInput.allowAimAssist = !lockModeActive;
+    collisionInput.weapon = railShooterCombatFeelSystem_.BuildWeaponState(combatFeelInput);
+    const auto collisionStart = RailPerfClock::now();
+    const CourseCollisionFrameStats collisionStats =
+        railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput);
+    railShooterCombatFeelSystem_.ApplyCollisionStats(collisionStats);
+    railShooterCombatFeelSystem_.Update(kFixedGameplayDeltaTime);
+    gRailPerfFrame.collisionMs = ElapsedMs(collisionStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterCollision");
+    if (collisionStats.playerShotEnemyHits > 0 || collisionStats.playerShotObstacleHits > 0) {
+        railShooterCameraDirector_.AddFeedbackImpulse(0.28f, -0.004f, 0.002f);
+    }
+    if (collisionStats.playerDamage > 0.0f) {
+        railShooterCameraDirector_.AddFeedbackImpulse(0.95f, 0.010f, -0.006f);
+    }
+    railShooterSpawnRuntime_.SubmitPendingVfx(vfxEngine_.Runtime(), railPath_);
 
     runtimeState_.camera.transform.scale = {1.0f, 1.0f, 1.0f};
     runtimeState_.camera.transform.translate = cameraPosition;
@@ -1988,6 +2511,7 @@ void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
         terrain);
     railShooterSpawnRuntime_.AppendDebugDraw(scene_.debugDraw, railPath_);
     railShooterCollisionSystem_.AppendDebugDraw(scene_.debugDraw, railPath_);
+    railShooterLockOnSystem_.AppendDebugDraw(scene_.debugDraw);
     const bool debugDrawEnabled =
         terrain.showDebugDraw ||
         terrain.displayMode == TerrainDisplayMode::Debug ||
@@ -3184,6 +3708,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 emitterState.frequencyTime = runtimeState_.emitter.frequencyTime;
                 particleSystem_.Emit(emitterState);
             }});
+    DrawRailLockOnHud();
+    DrawRailLockOnDebugPanel();
     imguiLayer_.EndFrame();
     gRailPerfFrame.imguiMs = ElapsedMs(imguiStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterImgui");

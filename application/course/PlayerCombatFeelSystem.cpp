@@ -35,7 +35,8 @@ CourseCollisionWeaponState PlayerCombatFeelSystem::BuildWeaponState(
     float targetVertical = input.playerVerticalOffset;
     float targetDistance = 0.0f;
     std::string targetName;
-    if (TryResolveLockOn(input, targetLateral, targetVertical, targetDistance, targetName)) {
+    if (input.allowAimAssist &&
+        TryResolveLockOn(input, targetLateral, targetVertical, targetDistance, targetName)) {
         weapon.assistEnabled = true;
         weapon.assistLateralOffset = targetLateral;
         weapon.assistVerticalOffset = targetVertical;
@@ -75,6 +76,32 @@ void PlayerCombatFeelSystem::ApplyCollisionStats(const CourseCollisionFrameStats
         stats_.hitStopTime = (std::max)(stats_.hitStopTime, 0.06f);
         stats_.cameraShake = (std::max)(stats_.cameraShake, 0.75f);
     }
+}
+
+void PlayerCombatFeelSystem::ApplyLockOnRelease(
+    uint32_t tokenCount,
+    uint32_t hitCount,
+    uint32_t maxLockCount) {
+    stats_.lastLockTokenCount = tokenCount;
+    stats_.lastLockHitCount = hitCount;
+    stats_.lastLockScore = 0;
+    stats_.lastLockWasMax = tokenCount >= maxLockCount && maxLockCount > 0;
+    stats_.lastLockWasEarly = tokenCount > 0 && !stats_.lastLockWasMax;
+    if (tokenCount == 0 || hitCount == 0) {
+        return;
+    }
+
+    const uint32_t chainBonus = tokenCount * hitCount * 45u;
+    const uint32_t maxBonus = stats_.lastLockWasMax ? 800u + tokenCount * 40u : 0u;
+    const uint32_t timingBonus = stats_.lastLockWasEarly ? hitCount * 35u : 0u;
+    stats_.lastLockScore = hitCount * 160u + chainBonus + maxBonus + timingBonus;
+    stats_.score += stats_.lastLockScore;
+    stats_.combo += tokenCount;
+    stats_.maxCombo = (std::max)(stats_.maxCombo, stats_.combo);
+    stats_.comboTimer = 3.2f;
+    stats_.hitFlash = 1.0f;
+    stats_.hitStopTime = (std::min)(0.12f, stats_.hitStopTime + 0.018f * static_cast<float>(tokenCount));
+    stats_.cameraShake = (std::max)(stats_.cameraShake, stats_.lastLockWasMax ? 0.72f : 0.36f);
 }
 
 void PlayerCombatFeelSystem::Update(float deltaTime) {

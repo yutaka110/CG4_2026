@@ -343,9 +343,6 @@ void UpdateIceProjectilePreview(
     runtimeState.enableCylinders = true;
     runtimeState.enableTrails = true;
 
-    constexpr float kTravelDuration = 1.08f;
-    constexpr float kCleanupDelay = 2.08f;
-
     if (runtimeState.iceProjectilePreviewActive) {
         EnqueueIceProjectileShot(
             effectRuntime,
@@ -365,13 +362,21 @@ void UpdateIceProjectilePreview(
 
         Vector3 start = shot.start;
         Vector3 end = shot.target;
-        if (std::abs(start.z - end.z) < 0.05f || start.z > -1.4f) {
+        if (!shot.useWorldSpace && (std::abs(start.z - end.z) < 0.05f || start.z > -1.4f)) {
             start.z = -3.05f;
             end.z = 0.42f;
         }
+        const float travelDuration = (std::max)(0.05f, shot.travelDuration);
+        const float cleanupDelay = (std::max)(travelDuration, shot.cleanupDelay);
+
+        shot.timer += (std::max)(0.0f, deltaTime);
+        const float localTimer = shot.timer - (std::max)(0.0f, shot.launchDelay);
+        if (localTimer < 0.0f) {
+            continue;
+        }
 
         EffectInstance* projectile = effectRuntime.FindInstance(shot.instanceId);
-        if (projectile == nullptr && shot.timer <= 0.0f) {
+        if (projectile == nullptr && localTimer <= (std::max)(0.0f, deltaTime)) {
             shot.instanceId = effectRuntime.PlayEffectWithParams(
                 "ice_projectile",
                 start,
@@ -380,8 +385,7 @@ void UpdateIceProjectilePreview(
             projectile = effectRuntime.FindInstance(shot.instanceId);
         }
 
-        shot.timer += (std::max)(0.0f, deltaTime);
-        const float travelT = (std::clamp)(shot.timer / kTravelDuration, 0.0f, 1.0f);
+        const float travelT = (std::clamp)(localTimer / travelDuration, 0.0f, 1.0f);
         const float easedT = travelT * travelT * (2.15f - 1.15f * travelT);
         Vector3 position = LerpVector3(start, end, easedT);
         position.y += std::sin(travelT * 3.14159265f) * 0.05f;
@@ -392,7 +396,9 @@ void UpdateIceProjectilePreview(
                 ? shot.rotationZ
                 : std::atan2(end.y - start.y, end.x - start.x);
             projectile->transform.rotate.y = -0.34f;
-            const float depthScale = 2.05f + (0.58f - 2.05f) * easedT;
+            const float depthScale = shot.useWorldSpace
+                ? (std::max)(0.1f, shot.visualScale)
+                : 2.05f + (0.58f - 2.05f) * easedT;
             const Vector3 assetScale = projectile->asset != nullptr
                 ? projectile->asset->size
                 : Vector3{1.0f, 1.0f, 1.0f};
@@ -410,7 +416,11 @@ void UpdateIceProjectilePreview(
                 "ice_impact",
                 impactPosition,
                 {0.72f, 0.92f, 1.0f, 1.0f},
-                {1.0f, 1.0f, 1.0f});
+                {
+                    (std::max)(0.1f, shot.impactScale),
+                    (std::max)(0.1f, shot.impactScale),
+                    (std::max)(0.1f, shot.impactScale),
+                });
             if (shot.instanceId != 0) {
                 effectRuntime.StopEffect(shot.instanceId);
                 shot.instanceId = 0;
@@ -418,7 +428,7 @@ void UpdateIceProjectilePreview(
             shot.impactSpawned = true;
         }
 
-        if (shot.timer >= kCleanupDelay) {
+        if (localTimer >= cleanupDelay) {
             if (shot.instanceId != 0) {
                 effectRuntime.StopEffect(shot.instanceId);
             }

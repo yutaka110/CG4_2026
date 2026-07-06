@@ -191,6 +191,10 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\course\ObstacleAsset.cpp" />
     <ClCompile Include="application\course\PlayerCombatFeelSystem.cpp" />
     <ClCompile Include="application\course\RailCameraDirector.cpp" />
+    <ClCompile Include="application\course\RailLockOnSystem.cpp" />
+    <ClCompile Include="application\course\RailLockResolver.cpp" />
+    <ClCompile Include="application\course\RailReticleController.cpp" />
+    <ClCompile Include="application\course\RailTargetRegistry.cpp" />
     <ClCompile Include="application\course\SectionCheckpointSystem.cpp" />
     <ClCompile Include="application\terrain\RailPath.cpp" />
     <ClCompile Include="application\terrain\TerrainChunkManager.cpp" />
@@ -701,6 +705,11 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\course\ObstacleAsset.h" />
     <ClInclude Include="application\course\PlayerCombatFeelSystem.h" />
     <ClInclude Include="application\course\RailCameraDirector.h" />
+    <ClInclude Include="application\course\RailLockOnSystem.h" />
+    <ClInclude Include="application\course\RailLockOnTypes.h" />
+    <ClInclude Include="application\course\RailLockResolver.h" />
+    <ClInclude Include="application\course\RailReticleController.h" />
+    <ClInclude Include="application\course\RailTargetRegistry.h" />
     <ClInclude Include="application\course\SectionCheckpointSystem.h" />
     <ClInclude Include="application\terrain\RailPath.h" />
     <ClInclude Include="application\terrain\TerrainChunkManager.h" />

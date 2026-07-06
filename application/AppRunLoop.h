@@ -25,6 +25,7 @@
 #include "course/EncounterDirector.h"
 #include "course/PlayerCombatFeelSystem.h"
 #include "course/RailCameraDirector.h"
+#include "course/RailLockOnSystem.h"
 #include "course/SectionCheckpointSystem.h"
 #include "terrain/RailPath.h"
 #include "terrain/TerrainChunkManager.h"
@@ -114,6 +115,10 @@ private:
     void TeleportRailShooterCourse(float distance);
     void LogCourseEvents(const std::vector<CourseEventMarker>& events);
     void ApplyRailShooterVisualPresets(float distance);
+    void DrawRailLockOnHud();
+    void DrawRailLockOnDebugPanel();
+    int ProcessRailLockOnRelease(const Vector3& muzzlePosition);
+    void QueueRailLockIceProjectile(const Vector3& start, const Vector3& target, int shotIndex);
     void LogRailShooterRuntimeDiagnostics(const char* reason);
     void LogRailShooterPerfSpike();
     bool EnsureRailGpuTimingResources();
@@ -157,6 +162,7 @@ private:
     EncounterDirector railShooterEncounterDirector_;
     RailCameraDirector railShooterCameraDirector_;
     CourseSpawnRuntime railShooterSpawnRuntime_;
+    RailLockOnSystem railShooterLockOnSystem_;
     std::string railShooterCoursePath_ = "Resources/courses/CanyonAssaultRoute01.course";
     std::string railShooterCourseLoadStatus_;
     RailPath railPath_;
