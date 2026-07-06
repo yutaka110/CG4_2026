@@ -48,7 +48,7 @@ bool EngineContext::Initialize(HWND hwnd, UINT width, UINT height, bool enableDe
     assert(device != nullptr);
 
     // SwapChain
-    if (!swapChain_.Create(dev_, hwnd, width, height, /*buffers*/ 2)) {
+    if (!swapChain_.Create(dev_, hwnd, width, height, /*buffers*/ 3)) {
         return false;
     }
 
@@ -56,7 +56,7 @@ bool EngineContext::Initialize(HWND hwnd, UINT width, UINT height, bool enableDe
     clPool_.Initialize(dev_, /*frameCount*/ swapChain_.BufferCount());
 
     // Descriptor heaps（AppMain の static g_descHeaps をここへ移す）
-    heaps_.Initialize(device, /*rtv*/ 8, /*dsv*/ 8, /*srv*/ 1024);
+    heaps_.Initialize(device, /*rtv*/ 128, /*dsv*/ 32, /*srv*/ 4096);
 
     // DepthStencil + DSV
     depthStencil_ = CreateDepthStencilTextureResource(device, (int32_t)width, (int32_t)height);

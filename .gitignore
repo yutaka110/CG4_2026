@@ -364,6 +364,7 @@ FodyWeavers.xsd
 
 # Project-local capture and Codex working files
 capture/
+cache/
 .codex/
 .codex_tmp/
 .agents/

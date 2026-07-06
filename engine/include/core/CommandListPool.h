@@ -16,7 +16,7 @@ namespace core {
         ID3D12GraphicsCommandList* Begin(UINT frameIndex, ID3D12PipelineState* pInitialPSO = nullptr);
 
         // EndAndExecute: Close→Execute（QueueはDeviceから取得）
-        void EndAndExecute(Device& dev);
+        bool EndAndExecute(Device& dev);
 
         // 必要なら外からAllocator参照
         ID3D12CommandAllocator* Allocator(UINT frameIndex) { return allocators_[frameIndex].Get(); }

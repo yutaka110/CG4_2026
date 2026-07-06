@@ -1,0 +1,7 @@
+wave|pursuit_swarm|Escape Pursuit Swarm
+unitAsset|pursuit_drone|drone_chaser|twin_chase|-34|-18|5|18|1.1|9|1.0|0.82|0.16|1.0
+unitAsset|pursuit_drone|drone_chaser|twin_chase|-30|-9|7|18|1.1|9|1.0|0.82|0.16|1.0
+unitAsset|pursuit_drone|drone_chaser|twin_chase|-28|0|8|18|1.1|9|1.0|0.82|0.16|1.0
+unitAsset|pursuit_drone|drone_chaser|twin_chase|-30|9|7|18|1.1|9|1.0|0.82|0.16|1.0
+unitAsset|pursuit_drone|drone_chaser|twin_chase|-34|18|5|18|1.1|9|1.0|0.82|0.16|1.0
+unitAsset|pursuit_elite|drone_chaser|twin_chase|-42|0|12|22|1.6|11|1.0|0.35|0.10|1.0

@@ -3,11 +3,13 @@
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
 
 #include "AppDebugViewsPanel.h"
+#include "AppCourseTimelineDebugPanel.h"
 #include "AppEffectAssetEditorPanel.h"
 #include "AppEffectInstancePanel.h"
 #include "AppPostProcessPanel.h"
 #include "AppRenderGraphDebugPanel.h"
 #include "AppRuntimeState.h"
+#include "AppSceneResources.h"
 #include "AppSceneControlsPanel.h"
 #include "AppVfxDebugDataBuilder.h"
 #include "AppVfxRuntimeQueuesPanel.h"
@@ -28,6 +30,7 @@
 #include "../../externals/imgui/imgui_impl_dx12.h"
 #include "../../externals/imgui/imgui_impl_win32.h"
 
+#include <array>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -67,6 +70,23 @@ AppImGuiEditorLayout BuildAppImGuiEditorLayout() {
     layout.diagnosticsPos = ImVec2(workPos.x, workPos.y + workSize.y - diagnosticsHeight);
     layout.diagnosticsSize = ImVec2(workSize.x - inspectorWidth, diagnosticsHeight);
     return layout;
+}
+
+bool NeedsVfxRuntimeStatusTelemetry(
+    const AppVfxRuntimeState& vfx,
+    uint32_t hiddenFrameIndex) {
+    constexpr uint32_t kHiddenTelemetryHealthInterval = 12;
+    const bool healthSampleFrame = (hiddenFrameIndex % kHiddenTelemetryHealthInterval) == 0;
+    return vfx.enableTrailMeshStreamStartupTelemetry ||
+        vfx.enableParticleDedicatedResourceProbe ||
+        vfx.enableParticleDedicatedProbeTelemetry ||
+        vfx.enableDistortionDedicatedTelemetry ||
+        vfx.enableBeamDedicatedTelemetry ||
+        (healthSampleFrame &&
+            (vfx.enableTrailMeshStreamAutoFallback ||
+                vfx.enableParticleDedicatedAutoFallback ||
+                (vfx.enableDistortionDedicatedResources && vfx.enableDistortionDedicatedAutoFallback) ||
+                vfx.enableBeamDedicatedAutoFallback));
 }
 
 void DrawViewportFocusStatusBar(bool& viewportFocusMode) {
@@ -207,9 +227,9 @@ float ShowcaseDuration(AppVfxRuntimeState::ShowcaseEffect effect) {
 }
 
 void ApplyShowcaseSceneDefaults(AppRuntimeState& runtimeState) {
-    runtimeState.clearColor[0] = 0.015f;
-    runtimeState.clearColor[1] = 0.018f;
-    runtimeState.clearColor[2] = 0.028f;
+    runtimeState.clearColor[0] = 0.78f;
+    runtimeState.clearColor[1] = 0.76f;
+    runtimeState.clearColor[2] = 0.74f;
     runtimeState.clearColor[3] = 1.0f;
 
     runtimeState.useMonsterBall = false;
@@ -217,6 +237,7 @@ void ApplyShowcaseSceneDefaults(AppRuntimeState& runtimeState) {
     runtimeState.showSkinnedModel = false;
     runtimeState.showSkeletonDebug = false;
     runtimeState.showSkybox = false;
+    runtimeState.showProceduralBackdrop = true;
     runtimeState.showVfxModelObjects = false;
 
     runtimeState.directionalLightData.color = {0.55f, 0.7f, 1.0f, 1.0f};
@@ -246,9 +267,17 @@ void ResetShowcaseIceProjectiles(AppVfxRuntimeState& vfxState) {
 }
 
 void ClearShowcaseEffectState(AppRuntimeState& runtimeState, EffectRuntime& effectRuntime) {
+    runtimeState.vfx.enableParticles = false;
+    runtimeState.vfx.enableTrails = false;
+    runtimeState.vfx.enableBeams = false;
+    runtimeState.vfx.enableDistortions = false;
+    runtimeState.vfx.enableRings = false;
+    runtimeState.vfx.enableCylinders = false;
+    runtimeState.vfx.enableElectricOrbStrike = false;
     runtimeState.vfx.electricOrbStrikeActive = false;
     runtimeState.vfx.electricOrbStrikeLoop = false;
     runtimeState.vfx.electricOrbStrikeTimer = 0.0f;
+    runtimeState.vfx.showcaseAutoTimer = 0.0f;
     ResetShowcaseIceProjectiles(runtimeState.vfx);
     effectRuntime.ClearInstances();
 }
@@ -317,20 +346,13 @@ void PlayShowcasePresentationEffect(
         runtimeState.vfx.iceProjectilePreviewActive = true;
         break;
     case AppVfxRuntimeState::ShowcaseEffect::BlackHole: {
-        runtimeState.vfx.enableParticles = true;
-        runtimeState.vfx.enableTrails = true;
+        runtimeState.vfx.enableParticles = false;
+        runtimeState.vfx.enableTrails = false;
         runtimeState.vfx.enableBeams = false;
         runtimeState.vfx.enableDistortions = true;
         runtimeState.vfx.enableRings = false;
         runtimeState.vfx.enableCylinders = false;
         runtimeState.vfx.enableElectricOrbStrike = false;
-        const AppVfxRuntimeState::ShowcaseTuning& tuning =
-            runtimeState.vfx.showcaseTuning[ShowcaseIndex(effect)];
-        effectRuntime.PlayEffectWithParams(
-            "warp_core",
-            {0.0f, -0.08f, -1.15f},
-            {0.88f, 0.54f + tuning.param4 * 0.18f, 1.0f, 1.0f},
-            {1.0f + tuning.param2 * 0.25f, 1.0f + tuning.param2 * 0.25f, 1.0f});
         break;
     }
     default:
@@ -611,18 +633,17 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
 
     if (!showcasePresentationInitialized_) {
         showcasePresentationInitialized_ = true;
-        runtimeState.vfx.showcaseAutoRotate = true;
+        runtimeState.vfx.showcaseAutoRotate = false;
         runtimeState.vfx.showcaseHudVisible = true;
         runtimeState.vfx.showcaseTuningVisible = false;
-        PlayShowcasePresentationEffect(
-            runtimeState,
-            effectRuntime,
-            postProcessStack,
-            AppVfxRuntimeState::ShowcaseEffect::ElectricOrbStrike);
+        ClearShowcaseEffectState(runtimeState, effectRuntime);
+        ConfigureShowcasePostProcess(postProcessStack, runtimeState.vfx);
     }
 
     if (viewportFocusMode_) {
-        UpdateVfxRuntimeStatusTelemetry(runtimeStatusInput);
+        if (NeedsVfxRuntimeStatusTelemetry(runtimeState.vfx, hiddenRuntimeTelemetryFrame_++)) {
+            UpdateVfxRuntimeStatusTelemetry(runtimeStatusInput);
+        }
         DrawViewportFocusStatusBar(viewportFocusMode_);
         return;
     }
@@ -634,7 +655,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         showDeveloperTools_,
         showcaseLoopCurrent_);
     if (!showDeveloperTools_) {
-        UpdateVfxRuntimeStatusTelemetry(runtimeStatusInput);
+        if (NeedsVfxRuntimeStatusTelemetry(runtimeState.vfx, hiddenRuntimeTelemetryFrame_++)) {
+            UpdateVfxRuntimeStatusTelemetry(runtimeStatusInput);
+        }
         return;
     }
 
@@ -726,6 +749,26 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 ImGui::EndTabItem();
             }
 
+            if (ImGui::BeginTabItem("Course Timeline")) {
+                DrawCourseTimelineDebugPanel(
+                    CourseTimelineDebugPanelInput{
+                        context.course,
+                        context.courseSpawnRuntime,
+                        context.courseCollisionSystem,
+                        context.courseCheckpointSystem,
+                        context.playerCombatFeelSystem,
+                        context.runtimeState,
+                        context.courseLoadStatus,
+                        context.coursePath,
+                        context.courseDistance,
+                        context.courseRailLength,
+                        context.onSaveCourse,
+                        context.onApplyCourse,
+                        context.onReloadCourse,
+                        context.onTeleportCourseToDistance});
+                ImGui::EndTabItem();
+            }
+
             if (ImGui::BeginTabItem("Render Targets")) {
                 DrawRenderTargetPreviewPanel(
                     RenderTargetPreviewPanelInput{
@@ -733,7 +776,11 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         context.vfxAccumulationPreview,
                         context.postColorPreview,
                         context.depthPreview,
-                        context.emissivePreview});
+                        context.emissivePreview,
+                        context.terrainHiZPreview,
+                        context.scene != nullptr ? context.scene->cascadeShadowSrvGpuHandles : std::array<D3D12_GPU_DESCRIPTOR_HANDLE, 4>{},
+                        runtimeState.terrain.shadowDebugCascade,
+                        runtimeState.terrain.showShadowDebugView});
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();
@@ -773,6 +820,10 @@ bool AppImGuiLayer::IsEnabled() const {
     return initialized_;
 }
 
+bool AppImGuiLayer::WantsDeveloperDiagnostics() const {
+    return initialized_ && showDeveloperTools_ && !viewportFocusMode_;
+}
+
 #else
 
 bool AppImGuiLayer::Initialize(HWND hwnd,
@@ -804,6 +855,10 @@ void AppImGuiLayer::Render(ID3D12GraphicsCommandList* cmdList) {
 }
 
 bool AppImGuiLayer::IsEnabled() const {
+    return false;
+}
+
+bool AppImGuiLayer::WantsDeveloperDiagnostics() const {
     return false;
 }
 

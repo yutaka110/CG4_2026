@@ -146,6 +146,7 @@ public:
     std::vector<TransientBufferDesc> BuildTransientBufferPlan() const;
     std::vector<RenderPassDebugInfo> BuildPassDebugInfo() const;
     std::string Describe() const;
+    std::string Describe(const std::vector<RenderPassDebugInfo>& passDebugInfo) const;
     bool Validate(std::string* error) const;
     void SetBackBufferResource(std::string_view name);
     void SetPassCullingEnabled(bool enabled) { passCullingEnabled_ = enabled; }

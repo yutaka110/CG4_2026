@@ -1,0 +1,7 @@
+# obstacle|id|displayName|meshId|lifetime|halfX|halfY|halfZ|r|g|b|a
+# placement|distanceOffset|lateralOffset|verticalOffset|forwardSpeed
+# breakable|enabled|hitPoints
+obstacle|spire_falling_slab_left|Spire Falling Slab Left|animated_cube|9|5.8|1.4|3.0|0.95|0.58|0.22|1.0
+placement|34|-9|5|-3
+breakable|true|140
+vfx|spire_debris_sparks

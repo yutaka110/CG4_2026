@@ -66,7 +66,7 @@ struct Material
     float shininess;
     float environmentCoefficient;
     int32_t specularMode; // 0: Phong, 1: Blinn-Phong
-    float padding2[1];
+    float padding2[16];
 };
 
 struct DirectionalLight

@@ -2,6 +2,8 @@
 #include "AppRuntimeUtils.h"
 #include "TechniqueRegistry.h"
 
+#include <Windows.h>
+
 #include <algorithm>
 #include <cctype>
 #include <fstream>
@@ -522,6 +524,12 @@ const char* DiagnosticSeverityLabel(EffectAssetDiagnosticSeverity severity) {
     return "warning";
 }
 
+bool IsEffectAssetLoaderVerbose() {
+    static const bool verbose =
+        GetEnvironmentVariableA("GE3_EFFECT_LOADER_VERBOSE", nullptr, 0) > 0;
+    return verbose;
+}
+
 void AddDiagnostic(
     std::vector<EffectAssetDiagnostic>& diagnostics,
     EffectAssetDiagnostic diagnostic) {
@@ -530,8 +538,13 @@ void AddDiagnostic(
     }
     const std::string logMessage =
         std::string(DiagnosticSeverityLabel(diagnostic.severity)) + ": " + diagnostic.message;
+    const bool shouldLog =
+        diagnostic.severity != EffectAssetDiagnosticSeverity::Info ||
+        IsEffectAssetLoaderVerbose();
     diagnostics.push_back(std::move(diagnostic));
-    Log("[EffectAssetLoader] " + logMessage + "\n");
+    if (shouldLog) {
+        Log("[EffectAssetLoader] " + logMessage + "\n");
+    }
 }
 
 void AddDiagnostic(

@@ -10,6 +10,8 @@
 #include "../../externals/DirectXTex/DirectXTex.h"
 #include "AppRuntimeState.h"
 #include "AnimationClip.h"
+#include "course/CourseMeshRenderQueue.h"
+#include "diagnostics/DebugDrawSystem.h"
 #include "Skeleton.h"
 #include "utils/math/MathUtils.h"
 #include "utils/math/Vector.h"
@@ -86,7 +88,7 @@ struct SkinCluster {
     Microsoft::WRL::ComPtr<ID3D12Resource> influenceResource;
     D3D12_VERTEX_BUFFER_VIEW influenceBufferView{};
     Microsoft::WRL::ComPtr<ID3D12Resource> paletteResource;
-    D3D12_RESOURCE_STATES paletteState = D3D12_RESOURCE_STATE_COPY_DEST;
+    D3D12_RESOURCE_STATES paletteState = D3D12_RESOURCE_STATE_COMMON;
     std::vector<JointPaletteEntry> paletteEntries;
     Microsoft::WRL::ComPtr<ID3D12Resource> paletteUploadResource;
     JointPaletteEntry* mappedPaletteUpload = nullptr;
@@ -133,6 +135,12 @@ struct CameraForGPU {
     float padding;
 };
 
+struct CascadeShadowData {
+    Matrix4x4 lightViewProjection[4]{};
+    Vector4 cascadeSplits{};
+    Vector4 parameters{}; // x: depth bias, y: strength, z: enabled, w: texel size
+};
+
 struct AppManagedTextureResource {
     std::string name;
     std::string path;
@@ -165,6 +173,10 @@ struct AppModelObjectInstance {
 
 class AppSceneResources {
 public:
+    static constexpr uint32_t kCascadeShadowCount = 4;
+    static constexpr uint32_t kCascadeShadowMapSize = 2048;
+    static constexpr uint32_t kCascadeShadowSrvBaseIndex = 12;
+
     bool Initialize(
         Microsoft::WRL::ComPtr<ID3D12Device> device,
         ID3D12GraphicsCommandList* uploadCommandList,
@@ -186,6 +198,14 @@ public:
     const AppManagedModelResource* FindManagedModel(uint32_t modelIndex) const;
     const std::vector<AppManagedModelResource>& ManagedModelLibrary() const { return vfxModelLibrary; }
     const std::vector<AppModelObjectInstance>& ModelObjectInstances() const { return vfxModelObjects; }
+    const CourseMeshRenderQueue& CourseMeshes() const { return courseMeshRenderQueue; }
+    void SyncCourseMeshRenderQueue(
+        const CourseSpawnRuntime& courseRuntime,
+        const CourseAsset* course,
+        float currentDistance,
+        const RailPath& railPath,
+        const Matrix4x4& viewMatrix,
+        const Matrix4x4& projMatrix);
 
 public:
     // Sprite
@@ -199,6 +219,8 @@ public:
     // Material
     Microsoft::WRL::ComPtr<ID3D12Resource> materialResource;
     Material* materialData = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12Resource> terrainMaterialResource;
+    Material* terrainMaterialData = nullptr;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> materialResourceSprite;
     Material* materialDataSprite = nullptr;
@@ -220,21 +242,43 @@ public:
     Microsoft::WRL::ComPtr<ID3D12Resource> cameraResource;
     CameraForGPU* mappedCamera = nullptr;
 
+    // Cascaded shadow maps
+    Microsoft::WRL::ComPtr<ID3D12Resource> cascadeShadowResource;
+    CascadeShadowData* mappedCascadeShadow = nullptr;
+    std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, kCascadeShadowCount> cascadeShadowDrawResources{};
+    std::array<CascadeShadowData*, kCascadeShadowCount> mappedCascadeShadowDraw{};
+    std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, kCascadeShadowCount> cascadeShadowMaps{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kCascadeShadowCount> cascadeShadowDsvCpu{};
+    std::array<D3D12_GPU_DESCRIPTOR_HANDLE, kCascadeShadowCount> cascadeShadowSrvGpuHandles{};
+    D3D12_GPU_DESCRIPTOR_HANDLE cascadeShadowSrvGpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE cascadeShadowSrvTableGpu{};
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cascadeShadowDsvHeap;
+    std::array<D3D12_RESOURCE_STATES, kCascadeShadowCount> cascadeShadowStates{};
+
     // Texture
     Microsoft::WRL::ComPtr<ID3D12Resource> textureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> textureResource2;
+    Microsoft::WRL::ComPtr<ID3D12Resource> terrainAlbedoTextureResource;
+    Microsoft::WRL::ComPtr<ID3D12Resource> terrainDetailCacheTextureResource;
+    Microsoft::WRL::ComPtr<ID3D12Resource> terrainDetailNormalMapTextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> circle2TextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> gradationLineTextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> skyboxTextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> animatedCubeTextureResource;
     D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU2{};
+    D3D12_GPU_DESCRIPTOR_HANDLE terrainAlbedoTextureSrvHandleGPU{};
+    D3D12_GPU_DESCRIPTOR_HANDLE terrainDetailCacheTextureSrvHandleGPU{};
+    D3D12_GPU_DESCRIPTOR_HANDLE terrainDetailNormalMapTextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE circle2TextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE gradationLineTextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE animatedCubeTextureSrvHandleGPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU2{};
+    D3D12_CPU_DESCRIPTOR_HANDLE terrainAlbedoTextureSrvHandleCPU{};
+    D3D12_CPU_DESCRIPTOR_HANDLE terrainDetailCacheTextureSrvHandleCPU{};
+    D3D12_CPU_DESCRIPTOR_HANDLE terrainDetailNormalMapTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE circle2TextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE gradationLineTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleCPU{};
@@ -242,6 +286,7 @@ public:
     std::vector<AppManagedTextureResource> vfxTextureLibrary;
     std::vector<AppManagedModelResource> vfxModelLibrary;
     std::vector<AppModelObjectInstance> vfxModelObjects;
+    CourseMeshRenderQueue courseMeshRenderQueue;
 
     // Sphere
     SphereMeshData sphere{};
@@ -276,6 +321,7 @@ public:
     TransformationMatrix* skeletonDebugTransformData = nullptr;
     UINT skeletonDebugVertexCapacity = 0;
     UINT skeletonDebugVertexCount = 0;
+    ge3::debug::DebugDrawSystem debugDraw;
 
 private:
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> initialUploadResources_;

@@ -4,18 +4,97 @@
 #include "AppSceneResources.h"
 #include "AppVfxRenderPipeline.h"
 #include "AppPipelines.h"
+#include "terrain/TerrainChunkManager.h"
 #include "vfx/VfxRenderInputs.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cwchar>
+#include <cwctype>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 
 namespace {
 constexpr float kElectricOrbStrikeMinimumDuration = 4.10f;
+constexpr float kEffectAssetReloadPollInterval = 1.0f;
+constexpr DWORD kVfxPrepareWatchdogStallMs = 3000;
+constexpr double kVfxPrepareSpikeLogThresholdMs = 3.0;
+
+std::atomic<bool> gVfxPrepareWatchdogStarted{false};
+std::atomic<DWORD> gVfxPrepareStageTick{0};
+std::atomic<const char*> gVfxPrepareStageName{nullptr};
+
+using VfxPreparePerfClock = std::chrono::steady_clock;
+
+double VfxPrepareElapsedMs(
+    VfxPreparePerfClock::time_point begin,
+    VfxPreparePerfClock::time_point end) {
+    return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+
+void WriteVfxPrepareWatchdogLine(const char* message) {
+    OutputDebugStringA(message);
+    std::ofstream log("logs/vfx_prepare_watchdog.log", std::ios::app);
+    if (log) {
+        log << message;
+    }
+}
+
+void WriteVfxPrepareSpikeLine(const std::string& message) {
+    OutputDebugStringA(message.c_str());
+    std::filesystem::create_directories("logs");
+    std::ofstream log("logs/vfx_prepare_spikes.log", std::ios::app);
+    if (log) {
+        log << message;
+    }
+}
+
+void StartVfxPrepareWatchdogOnce() {
+    bool expected = false;
+    if (!gVfxPrepareWatchdogStarted.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    std::thread([]() {
+        const char* lastLoggedStage = nullptr;
+        for (;;) {
+            Sleep(1000);
+            const DWORD tick = gVfxPrepareStageTick.load(std::memory_order_relaxed);
+            if (tick == 0u) {
+                continue;
+            }
+            const DWORD idleMs = GetTickCount() - tick;
+            if (idleMs < kVfxPrepareWatchdogStallMs) {
+                continue;
+            }
+            const char* stage = gVfxPrepareStageName.load(std::memory_order_relaxed);
+            if (stage == lastLoggedStage) {
+                continue;
+            }
+            lastLoggedStage = stage;
+            char message[256]{};
+            std::snprintf(
+                message,
+                sizeof(message),
+                "[VfxPrepareWatchdog] stalled idleMs=%lu stage=%s\n",
+                static_cast<unsigned long>(idleMs),
+                stage != nullptr ? stage : "unknown");
+            WriteVfxPrepareWatchdogLine(message);
+        }
+    }).detach();
+}
+
+void RecordVfxPrepareStage(const char* stage) {
+    StartVfxPrepareWatchdogOnce();
+    gVfxPrepareStageName.store(stage != nullptr ? stage : "unknown", std::memory_order_relaxed);
+    gVfxPrepareStageTick.store(GetTickCount(), std::memory_order_relaxed);
+}
 
 size_t ShowcaseIndex(AppVfxRuntimeState::ShowcaseEffect effect) {
     return static_cast<size_t>(effect);
@@ -31,6 +110,80 @@ bool IsSameAuthoredComponent(
         return true;
     }
     return source->name == destination->name && source->type == destination->type;
+}
+
+bool HasTerrainDustEmitters(const AppFrameGraphBuildContext& graphContext) {
+    if (graphContext.runtimeState == nullptr ||
+        graphContext.terrainChunkManager == nullptr ||
+        !graphContext.runtimeState->terrain.enabled ||
+        graphContext.runtimeState->terrain.settings.dustZoneDensity <= 0.0f) {
+        return false;
+    }
+
+    for (const TerrainChunkDebugInfo& chunk : graphContext.terrainChunkManager->Chunks()) {
+        if (!chunk.vfxZones.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool HasVfxParticleWork(
+    const AppFrameGraphBuildContext& graphContext,
+    const EffectRuntimeFrame& runtimeFrame) {
+    return graphContext.runtimeState != nullptr &&
+        graphContext.runtimeState->vfx.enableParticles &&
+        (!runtimeFrame.particleQueue.empty() || HasTerrainDustEmitters(graphContext));
+}
+
+bool HasAnyVfxWork(
+    const AppFrameGraphBuildContext& graphContext,
+    const EffectRuntimeFrame& runtimeFrame) {
+    if (graphContext.runtimeState == nullptr) {
+        return false;
+    }
+    const AppVfxRuntimeState& runtimeState = graphContext.runtimeState->vfx;
+    if (HasVfxParticleWork(graphContext, runtimeFrame)) {
+        return true;
+    }
+    return (runtimeState.enableTrails && !runtimeFrame.trailQueue.empty()) ||
+        (runtimeState.enableBeams && !runtimeFrame.beamQueue.empty()) ||
+        (runtimeState.enableRings && !runtimeFrame.ringQueue.empty()) ||
+        (runtimeState.enableCylinders && !runtimeFrame.cylinderQueue.empty()) ||
+        (runtimeState.enableElectricOrbStrike && runtimeState.electricOrbStrikeActive) ||
+        (runtimeState.enableDistortions && !runtimeFrame.distortionQueue.empty());
+}
+
+bool ReadEnvFlag(const wchar_t* name) {
+    wchar_t value[32]{};
+    const DWORD length = GetEnvironmentVariableW(name, value, static_cast<DWORD>(_countof(value)));
+    if (length == 0) {
+        return false;
+    }
+
+    for (DWORD i = 0; i < length && i < _countof(value); ++i) {
+        value[i] = static_cast<wchar_t>(std::towlower(value[i]));
+    }
+
+    return value[0] == L'1' ||
+        std::wcscmp(value, L"true") == 0 ||
+        std::wcscmp(value, L"yes") == 0 ||
+        std::wcscmp(value, L"on") == 0;
+}
+
+bool IsAuthoringSampleEffectPath(const std::filesystem::path& path) {
+    const std::string stem = path.stem().string();
+    return stem.rfind("Authoring", 0) == 0;
+}
+
+bool IsAuthoringSampleEffectAsset(const LoadedEffectAsset& loaded) {
+    return loaded.asset.name.rfind("authoring_", 0) == 0 ||
+        IsAuthoringSampleEffectPath(loaded.path);
+}
+
+bool ShouldLoadAuthoringSamples() {
+    static const bool enabled = ReadEnvFlag(L"GE3_LOAD_AUTHORING_SAMPLES");
+    return enabled;
 }
 
 void ApplyLiveTuningToComponent(
@@ -190,9 +343,6 @@ void UpdateIceProjectilePreview(
     runtimeState.enableCylinders = true;
     runtimeState.enableTrails = true;
 
-    constexpr float kTravelDuration = 1.08f;
-    constexpr float kCleanupDelay = 2.08f;
-
     if (runtimeState.iceProjectilePreviewActive) {
         EnqueueIceProjectileShot(
             effectRuntime,
@@ -212,13 +362,21 @@ void UpdateIceProjectilePreview(
 
         Vector3 start = shot.start;
         Vector3 end = shot.target;
-        if (std::abs(start.z - end.z) < 0.05f || start.z > -1.4f) {
+        if (!shot.useWorldSpace && (std::abs(start.z - end.z) < 0.05f || start.z > -1.4f)) {
             start.z = -3.05f;
             end.z = 0.42f;
         }
+        const float travelDuration = (std::max)(0.05f, shot.travelDuration);
+        const float cleanupDelay = (std::max)(travelDuration, shot.cleanupDelay);
+
+        shot.timer += (std::max)(0.0f, deltaTime);
+        const float localTimer = shot.timer - (std::max)(0.0f, shot.launchDelay);
+        if (localTimer < 0.0f) {
+            continue;
+        }
 
         EffectInstance* projectile = effectRuntime.FindInstance(shot.instanceId);
-        if (projectile == nullptr && shot.timer <= 0.0f) {
+        if (projectile == nullptr && localTimer <= (std::max)(0.0f, deltaTime)) {
             shot.instanceId = effectRuntime.PlayEffectWithParams(
                 "ice_projectile",
                 start,
@@ -227,8 +385,7 @@ void UpdateIceProjectilePreview(
             projectile = effectRuntime.FindInstance(shot.instanceId);
         }
 
-        shot.timer += (std::max)(0.0f, deltaTime);
-        const float travelT = (std::clamp)(shot.timer / kTravelDuration, 0.0f, 1.0f);
+        const float travelT = (std::clamp)(localTimer / travelDuration, 0.0f, 1.0f);
         const float easedT = travelT * travelT * (2.15f - 1.15f * travelT);
         Vector3 position = LerpVector3(start, end, easedT);
         position.y += std::sin(travelT * 3.14159265f) * 0.05f;
@@ -239,7 +396,9 @@ void UpdateIceProjectilePreview(
                 ? shot.rotationZ
                 : std::atan2(end.y - start.y, end.x - start.x);
             projectile->transform.rotate.y = -0.34f;
-            const float depthScale = 2.05f + (0.58f - 2.05f) * easedT;
+            const float depthScale = shot.useWorldSpace
+                ? (std::max)(0.1f, shot.visualScale)
+                : 2.05f + (0.58f - 2.05f) * easedT;
             const Vector3 assetScale = projectile->asset != nullptr
                 ? projectile->asset->size
                 : Vector3{1.0f, 1.0f, 1.0f};
@@ -257,7 +416,11 @@ void UpdateIceProjectilePreview(
                 "ice_impact",
                 impactPosition,
                 {0.72f, 0.92f, 1.0f, 1.0f},
-                {1.0f, 1.0f, 1.0f});
+                {
+                    (std::max)(0.1f, shot.impactScale),
+                    (std::max)(0.1f, shot.impactScale),
+                    (std::max)(0.1f, shot.impactScale),
+                });
             if (shot.instanceId != 0) {
                 effectRuntime.StopEffect(shot.instanceId);
                 shot.instanceId = 0;
@@ -265,7 +428,7 @@ void UpdateIceProjectilePreview(
             shot.impactSpawned = true;
         }
 
-        if (shot.timer >= kCleanupDelay) {
+        if (localTimer >= cleanupDelay) {
             if (shot.instanceId != 0) {
                 effectRuntime.StopEffect(shot.instanceId);
             }
@@ -470,11 +633,34 @@ void VfxEngine::RegisterBuiltInAssets() {
 }
 
 void VfxEngine::LoadEffectDirectory(const char* directory) {
-    loadedEffectAssets_ = effectAssetLoader_.LoadDirectory(
-        directory,
-        effectAuthoringRegistry_);
-    for (const LoadedEffectAsset& loaded : loadedEffectAssets_) {
-        effectSystem_.RegisterAsset(loaded.asset, effectAuthoringRegistry_);
+    loadedEffectAssets_.clear();
+
+    const std::filesystem::path effectDirectory{directory};
+    if (!std::filesystem::exists(effectDirectory)) {
+        return;
+    }
+
+    const bool loadAuthoringSamples = ShouldLoadAuthoringSamples();
+    for (const std::filesystem::directory_entry& entry :
+         std::filesystem::directory_iterator(effectDirectory)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".effect") {
+            continue;
+        }
+        if (!loadAuthoringSamples && IsAuthoringSampleEffectPath(entry.path())) {
+            continue;
+        }
+
+        LoadedEffectAsset loaded{};
+        if (effectAssetLoader_.LoadFile(
+                entry.path(),
+                loaded,
+                effectAuthoringRegistry_)) {
+            if (!loadAuthoringSamples && IsAuthoringSampleEffectAsset(loaded)) {
+                continue;
+            }
+            effectSystem_.RegisterAsset(loaded.asset, effectAuthoringRegistry_);
+            loadedEffectAssets_.push_back(std::move(loaded));
+        }
     }
 }
 
@@ -570,7 +756,20 @@ void VfxEngine::Update(AppVfxRuntimeState& runtimeState, float deltaTime) {
     beamTime_ += deltaTime;
     beam_.SetTime(beamTime_);
     effectRuntime_.Update(deltaTime);
-    ReloadChangedEffectAssets();
+
+    if (!effectHotReloadConfigured_) {
+        effectHotReloadConfigured_ = true;
+        effectHotReloadEnabled_ = ReadEnvFlag(L"GE3_EFFECT_HOT_RELOAD");
+    }
+    if (!effectHotReloadEnabled_) {
+        return;
+    }
+
+    effectAssetReloadPollTimer_ += (std::max)(0.0f, deltaTime);
+    if (effectAssetReloadPollTimer_ >= kEffectAssetReloadPollInterval) {
+        effectAssetReloadPollTimer_ = 0.0f;
+        ReloadChangedEffectAssets();
+    }
 }
 
 void VfxEngine::ReloadChangedEffectAssets() {
@@ -613,6 +812,9 @@ void VfxEngine::ReloadChangedEffectAssets() {
         if (!entry.is_regular_file() || entry.path().extension() != ".effect") {
             continue;
         }
+        if (!ShouldLoadAuthoringSamples() && IsAuthoringSampleEffectPath(entry.path())) {
+            continue;
+        }
         if (IsLoadedEffectPath(loadedEffectAssets_, entry.path())) {
             continue;
         }
@@ -622,6 +824,9 @@ void VfxEngine::ReloadChangedEffectAssets() {
                 entry.path(),
                 loaded,
                 effectAuthoringRegistry_)) {
+            if (!ShouldLoadAuthoringSamples() && IsAuthoringSampleEffectAsset(loaded)) {
+                continue;
+            }
             effectSystem_.RegisterAsset(loaded.asset, effectAuthoringRegistry_);
             loadedEffectAssets_.push_back(std::move(loaded));
         }
@@ -666,6 +871,7 @@ void VfxEngine::RegisterRenderPasses(
     RegisterDefaultTextures(scene);
 
     frameGraphEffectRuntimeFrame_ = BuildFrame();
+    const bool hasAnyVfxWork = HasAnyVfxWork(graphContext, frameGraphEffectRuntimeFrame_);
     const ParticleRenderQueue& particleQueue = frameGraphEffectRuntimeFrame_.particleQueue;
     const ParticleRenderFallback primaryParticleFx =
         !particleQueue.empty() ? frameGraphEffectRuntimeFrame_.PrimaryParticleFallback()
@@ -700,6 +906,9 @@ void VfxEngine::RegisterRenderPasses(
                 context,
                 selectedResources);
         });
+    if (!hasAnyVfxWork) {
+        return;
+    }
     gpuParticleSystem_.EnsureGraphBuffers(device, *graphContext.renderGraph);
     if (!gpuParticleSystem_.IsGpuManagedParticlePoolInitialized() &&
         graphContext.appPipelines != nullptr &&
@@ -788,24 +997,25 @@ VfxGraphResourceStats VfxEngine::PrepareGraphResources(
     ge3::graphics::RenderGraph& renderGraph,
     uint32_t width,
     uint32_t height) {
+    const auto prepareStart = VfxPreparePerfClock::now();
+    RecordVfxPrepareStage("prepare.begin");
+    const auto planStart = VfxPreparePerfClock::now();
     const std::vector<ge3::graphics::TransientRenderTargetDesc> transientRenderTargetPlan =
         renderGraph.BuildTransientRenderTargetPlan();
-    const std::vector<ge3::graphics::TransientBufferDesc> transientBufferPlan =
-        renderGraph.BuildTransientBufferPlan();
+    const double targetPlanMs = VfxPrepareElapsedMs(planStart, VfxPreparePerfClock::now());
+    RecordVfxPrepareStage("prepare.afterRenderTargetPlan");
 
+    const auto storageStart = VfxPreparePerfClock::now();
     std::unordered_set<std::string> transientTargetStorages;
-    std::unordered_set<std::string> transientBufferStorages;
     for (const auto& target : transientRenderTargetPlan) {
         if (target.transient) {
             transientTargetStorages.insert(target.storageName);
         }
     }
-    for (const auto& buffer : transientBufferPlan) {
-        if (buffer.transient) {
-            transientBufferStorages.insert(buffer.storageName);
-        }
-    }
+    const double storageSetMs = VfxPrepareElapsedMs(storageStart, VfxPreparePerfClock::now());
+    RecordVfxPrepareStage("prepare.afterStorageSets");
 
+    const auto requestStart = VfxPreparePerfClock::now();
     vfxRenderTargets_.ResetRequests();
     for (const auto& renderTarget : transientRenderTargetPlan) {
         if (renderTarget.transient) {
@@ -824,21 +1034,49 @@ VfxGraphResourceStats VfxEngine::PrepareGraphResources(
             renderTarget.clearColor,
             renderTarget.initialState);
     }
+    const double requestMs = VfxPrepareElapsedMs(requestStart, VfxPreparePerfClock::now());
+    RecordVfxPrepareStage("prepare.afterTargetRequests");
 
+    const auto initializeStart = VfxPreparePerfClock::now();
     vfxRenderTargets_.Initialize(device, heaps, width, height);
+    const double initializeMs = VfxPrepareElapsedMs(initializeStart, VfxPreparePerfClock::now());
+    RecordVfxPrepareStage("prepare.afterRenderTargetInitialize");
+    const auto registerStart = VfxPreparePerfClock::now();
     vfxRenderTargets_.Register(resourceRegistry);
+    const double registerMs = VfxPrepareElapsedMs(registerStart, VfxPreparePerfClock::now());
+    RecordVfxPrepareStage("prepare.afterRegisterTargets");
+
+    const uint32_t transientTargetCount = static_cast<uint32_t>(std::count_if(
+        transientRenderTargetPlan.begin(),
+        transientRenderTargetPlan.end(),
+        [](const auto& target) { return target.transient; }));
+    const uint32_t transientTargetStorageCount = static_cast<uint32_t>(transientTargetStorages.size());
+    const double totalMs = VfxPrepareElapsedMs(prepareStart, VfxPreparePerfClock::now());
+    if (totalMs >= kVfxPrepareSpikeLogThresholdMs) {
+        char line[768] = {};
+        std::snprintf(
+            line,
+            sizeof(line),
+            "[VfxPrepareSpike] totalMs=%.3f targetPlanMs=%.3f storageSetMs=%.3f requestMs=%.3f initializeMs=%.3f registerMs=%.3f planTargets=%zu transientTargets=%u transientStorages=%u size=%ux%u\n",
+            totalMs,
+            targetPlanMs,
+            storageSetMs,
+            requestMs,
+            initializeMs,
+            registerMs,
+            transientRenderTargetPlan.size(),
+            transientTargetCount,
+            transientTargetStorageCount,
+            width,
+            height);
+        WriteVfxPrepareSpikeLine(line);
+    }
 
     return {
-        static_cast<uint32_t>(std::count_if(
-            transientRenderTargetPlan.begin(),
-            transientRenderTargetPlan.end(),
-            [](const auto& target) { return target.transient; })),
-        static_cast<uint32_t>(transientTargetStorages.size()),
-        static_cast<uint32_t>(std::count_if(
-            transientBufferPlan.begin(),
-            transientBufferPlan.end(),
-            [](const auto& buffer) { return buffer.transient; })),
-        static_cast<uint32_t>(transientBufferStorages.size())
+        transientTargetCount,
+        transientTargetStorageCount,
+        0,
+        0
     };
 }
 
@@ -865,20 +1103,48 @@ void VfxEngine::RegisterGraphResources(
         });
 }
 
-void VfxEngine::CaptureFrameTelemetry(ID3D12GraphicsCommandList* commandList) {
-    gpuParticleSystem_.CaptureTrailMeshStreamTelemetry(commandList);
-    gpuParticleSystem_.CaptureParticlePoolTelemetry(commandList);
-    gpuParticleSystem_.CaptureParticleDedicatedReadbackTelemetry(commandList);
-    gpuParticleSystem_.CaptureDistortionDedicatedReadbackTelemetry(commandList);
-    gpuParticleSystem_.CaptureBeamDedicatedReadbackTelemetry(commandList);
+void VfxEngine::CaptureFrameTelemetry(
+    ID3D12GraphicsCommandList* commandList,
+    const VfxFrameTelemetryOptions& options) {
+    if (!options.AnyEnabled()) {
+        return;
+    }
+    if (options.trailMeshStream) {
+        gpuParticleSystem_.CaptureTrailMeshStreamTelemetry(commandList);
+    }
+    if (options.particlePool) {
+        gpuParticleSystem_.CaptureParticlePoolTelemetry(commandList);
+    }
+    if (options.particleDedicatedReadback) {
+        gpuParticleSystem_.CaptureParticleDedicatedReadbackTelemetry(commandList);
+    }
+    if (options.distortionDedicatedReadback) {
+        gpuParticleSystem_.CaptureDistortionDedicatedReadbackTelemetry(commandList);
+    }
+    if (options.beamDedicatedReadback) {
+        gpuParticleSystem_.CaptureBeamDedicatedReadbackTelemetry(commandList);
+    }
 }
 
-void VfxEngine::ResolveFrameTelemetry() {
-    gpuParticleSystem_.ResolveTrailMeshStreamTelemetry();
-    gpuParticleSystem_.ResolveParticlePoolTelemetry();
-    gpuParticleSystem_.ResolveParticleDedicatedReadbackTelemetry();
-    gpuParticleSystem_.ResolveDistortionDedicatedReadbackTelemetry();
-    gpuParticleSystem_.ResolveBeamDedicatedReadbackTelemetry();
+void VfxEngine::ResolveFrameTelemetry(const VfxFrameTelemetryOptions& options) {
+    if (!options.AnyEnabled()) {
+        return;
+    }
+    if (options.trailMeshStream) {
+        gpuParticleSystem_.ResolveTrailMeshStreamTelemetry();
+    }
+    if (options.particlePool) {
+        gpuParticleSystem_.ResolveParticlePoolTelemetry();
+    }
+    if (options.particleDedicatedReadback) {
+        gpuParticleSystem_.ResolveParticleDedicatedReadbackTelemetry();
+    }
+    if (options.distortionDedicatedReadback) {
+        gpuParticleSystem_.ResolveDistortionDedicatedReadbackTelemetry();
+    }
+    if (options.beamDedicatedReadback) {
+        gpuParticleSystem_.ResolveBeamDedicatedReadbackTelemetry();
+    }
 }
 
 EffectRuntimeFrame VfxEngine::BuildFrame() const {

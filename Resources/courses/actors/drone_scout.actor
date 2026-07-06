@@ -1,0 +1,3 @@
+actor|drone_scout|Tutorial Scout Drone|ball|1.05|18|8|0.55|0.78|1.0|1.0|single_tutorial
+combat|1.05|0.55|34|single_tutorial
+movement|1.0

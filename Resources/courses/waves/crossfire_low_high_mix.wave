@@ -1,0 +1,6 @@
+wave|crossfire_low_high_mix|Crossfire Low High Mix
+unitAsset|low_left_scout|drone_scout|single_tutorial|28|-12|3|3.5|1.0|8|0.62|0.82|1.0|1.0
+unitAsset|low_right_scout|drone_scout|single_tutorial|34|12|3|3.5|1.0|8|0.62|0.82|1.0|1.0
+unitAsset|high_left_drone|drone_basic|single_red|52|-18|9|4.0|1.2|9|1.0|0.36|0.18|1.0
+unitAsset|high_right_drone|drone_basic|single_red|58|18|9|4.0|1.2|9|1.0|0.36|0.18|1.0
+unitAsset|center_leader|drone_leader|soft_spread|76|0|7|1.0|1.35|10|1.0|0.48|0.16|1.0

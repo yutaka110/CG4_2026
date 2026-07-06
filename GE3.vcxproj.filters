@@ -70,6 +70,24 @@
     <Filter Include="ヘッダー ファイル\engine\platform">
       <UniqueIdentifier>{1d035f3e-0c1d-411e-9a47-8d303e97f76d}</UniqueIdentifier>
     </Filter>
+    <Filter Include="ソース ファイル\application\diagnostics">
+      <UniqueIdentifier>{4e9b8b91-18e6-4c62-82dc-9a4c5cdd0f5a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ソース ファイル\application\terrain">
+      <UniqueIdentifier>{5a2c8cf4-3a19-4b91-a4cc-4a1f7dbb7f5a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ソース ファイル\application\course">
+      <UniqueIdentifier>{95b2e906-94f7-4d75-9d51-b011d2a6c4f1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ヘッダー ファイル\application\diagnostics">
+      <UniqueIdentifier>{a35ef5d2-5188-4f91-9f73-3b332d19c465}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ヘッダー ファイル\application\terrain">
+      <UniqueIdentifier>{828f6d1a-8a7e-4975-8e9c-465f580e9f4c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ヘッダー ファイル\application\course">
+      <UniqueIdentifier>{66918596-f9d6-463a-95b7-4e3984f10d31}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -219,6 +237,21 @@
     <ClCompile Include="engine\src\utils\DebugTools.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\diagnostics\DebugDrawSystem.cpp">
+      <Filter>ソース ファイル\application\diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="application\terrain\RailPath.cpp">
+      <Filter>ソース ファイル\application\terrain</Filter>
+    </ClCompile>
+    <ClCompile Include="application\terrain\TerrainChunkManager.cpp">
+      <Filter>ソース ファイル\application\terrain</Filter>
+    </ClCompile>
+    <ClCompile Include="application\terrain\TerrainPresetStore.cpp">
+      <Filter>ソース ファイル\application\terrain</Filter>
+    </ClCompile>
+    <ClCompile Include="application\terrain\TerrainVolumeField.cpp">
+      <Filter>ソース ファイル\application\terrain</Filter>
+    </ClCompile>
     <ClCompile Include="application\AnimationClip.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -249,6 +282,9 @@
     <ClCompile Include="application\AppCommandLineRunner.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\AppCourseTimelineDebugPanel.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
     <ClCompile Include="application\AppFrameGraphBuilder.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -276,6 +312,63 @@
     <ClCompile Include="application\TechniqueRegistry.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\BulletPatternAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseActorAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseCollisionSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseEventDispatcher.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseMeshRenderQueue.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseSpawnRuntime.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseValidation.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\DebrisCompositionSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EncounterDirector.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyWaveAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\ObstacleAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\PlayerCombatFeelSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailCameraDirector.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailLockOnSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailLockResolver.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailReticleController.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailTargetRegistry.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\SectionCheckpointSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\EffectRuntime.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -295,6 +388,9 @@
       <Filter>ソース ファイル</Filter>
     </ClCompile>
     <ClCompile Include="application\AppPostProcessPanel.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
+    <ClCompile Include="application\PostProcessPresetStore.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
     <ClCompile Include="application\PostProcessStack.cpp">
@@ -424,6 +520,8 @@
     <FxCompile Include="Resources\FullscreenComposite.PS.hlsl" />
     <FxCompile Include="Resources\Grayscale.PS.hlsl" />
     <FxCompile Include="Resources\Accretion.PS.hlsl" />
+    <FxCompile Include="Resources\DistanceFog.PS.hlsl" />
+    <FxCompile Include="Resources\ContactAO.PS.hlsl" />
     <FxCompile Include="Resources\Vignette.PS.hlsl" />
     <FxCompile Include="Resources\BoxBlurHorizontal.PS.hlsl" />
     <FxCompile Include="Resources\BoxBlurVertical.PS.hlsl" />
@@ -646,6 +744,9 @@
     <ClInclude Include="application\AppCommandLineRunner.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
+    <ClInclude Include="application\AppCourseTimelineDebugPanel.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
     <ClInclude Include="application\AppFrameGraphBuilder.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
@@ -673,6 +774,69 @@
     <ClInclude Include="application\TechniqueRegistry.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\BulletPatternAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseActorAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseAssetParsing.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseCollisionSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseEventDispatcher.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseMeshRenderQueue.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseSpawnRuntime.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseValidation.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\DebrisCompositionSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EncounterDirector.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyWaveAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\ObstacleAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\PlayerCombatFeelSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailCameraDirector.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailLockOnSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailLockOnTypes.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailLockResolver.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailReticleController.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailTargetRegistry.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\SectionCheckpointSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\EffectComponentViews.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
@@ -695,6 +859,9 @@
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\AppPostProcessPanel.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\PostProcessPresetStore.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\PostProcessStack.h">
@@ -802,6 +969,24 @@
     <ClInclude Include="application\src\vfx\VfxComponentDraw.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
+    <ClInclude Include="application\diagnostics\DebugDrawSystem.h">
+      <Filter>ヘッダー ファイル\application\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="application\terrain\RailPath.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="application\terrain\TerrainChunkManager.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="application\terrain\TerrainGenerationSettings.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="application\terrain\TerrainPresetStore.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="application\terrain\TerrainVolumeField.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Text Include="externals\imgui\LICENSE.txt">
@@ -813,10 +998,18 @@
     <None Include="Resources\Spear.PS.hlsl" />
     <None Include="Resources\Spear.VS.hlsl" />
     <None Include="Resources\Skybox.hlsli" />
+    <None Include="Resources\TerrainDebrisCull.CS.hlsl" />
+    <None Include="Resources\TerrainHiZBuild.CS.hlsl" />
+    <None Include="Resources\TerrainDebris.VS.hlsl" />
+    <None Include="Resources\TerrainDebrisShadow.VS.hlsl" />
+    <None Include="Resources\Terrain.PS.hlsl" />
+    <None Include="Resources\TerrainShadow.VS.hlsl" />
     <None Include="Resources\effects\AuthoringMetadataDemo.effect" />
     <None Include="Resources\effects\IceImpact.effect" />
     <None Include="Resources\effects\IceProjectile.effect" />
     <None Include="Resources\effects\WarpCore.effect" />
     <None Include="Resources\iceShard.png" />
+    <None Include="Resources\postprocess\default.postpreset" />
+    <None Include="Resources\terrain\default.terrainpreset" />
   </ItemGroup>
 </Project>

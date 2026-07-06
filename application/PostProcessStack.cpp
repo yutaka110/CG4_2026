@@ -40,9 +40,9 @@ void PostProcessStack::ResetToVfxDefaults() {
     bloomExtract.enabled = true;
     bloomExtract.intensity = 1.0f;
     bloomExtract.resolutionScale = 0.5f;
-    bloomExtract.parameters.bloomThresholdMin = 0.45f;
-    bloomExtract.parameters.bloomThresholdMax = 1.1f;
-    bloomExtract.parameters.bloomSoftKnee = 0.2f;
+    bloomExtract.parameters.bloomThresholdMin = 0.62f;
+    bloomExtract.parameters.bloomThresholdMax = 1.35f;
+    bloomExtract.parameters.bloomSoftKnee = 0.16f;
     passes_.push_back(bloomExtract);
 
     PostProcessPass bloomDownsampleQuarter{};
@@ -131,7 +131,7 @@ void PostProcessStack::ResetToVfxDefaults() {
     bloomUpsampleQuarter.enabled = true;
     bloomUpsampleQuarter.intensity = 1.0f;
     bloomUpsampleQuarter.resolutionScale = 0.25f;
-    bloomUpsampleQuarter.parameters.bloomUpsampleBlend = 0.85f;
+    bloomUpsampleQuarter.parameters.bloomUpsampleBlend = 0.68f;
     bloomUpsampleQuarter.parameters.bloomUpsampleSoftKnee = 0.35f;
     passes_.push_back(bloomUpsampleQuarter);
 
@@ -145,7 +145,7 @@ void PostProcessStack::ResetToVfxDefaults() {
     bloomUpsampleHalf.enabled = true;
     bloomUpsampleHalf.intensity = 1.0f;
     bloomUpsampleHalf.resolutionScale = 0.5f;
-    bloomUpsampleHalf.parameters.bloomUpsampleBlend = 0.7f;
+    bloomUpsampleHalf.parameters.bloomUpsampleBlend = 0.55f;
     bloomUpsampleHalf.parameters.bloomUpsampleSoftKnee = 0.25f;
     passes_.push_back(bloomUpsampleHalf);
 
@@ -161,6 +161,50 @@ void PostProcessStack::ResetToVfxDefaults() {
     distortionComposite.resolutionScale = 1.0f;
     distortionComposite.parameters.distortionScale = 0.02f;
     passes_.push_back(distortionComposite);
+
+    PostProcessPass contactAo{};
+    contactAo.name = "ContactAO";
+    contactAo.inputResource = kPostProcessOutputResource;
+    contactAo.outputResource = kPostProcessSwapOutputResource;
+    contactAo.pipeline = "ContactAO";
+    contactAo.secondaryInputResource = kPostProcessOutputResource;
+    contactAo.tertiaryInputResource = kPostProcessOutputResource;
+    contactAo.enabled = true;
+    contactAo.intensity = 0.42f;
+    contactAo.resolutionScale = 1.0f;
+    contactAo.parameters.contactAoRadiusPixels = 3.0f;
+    contactAo.parameters.contactAoBias = 0.25f;
+    contactAo.parameters.contactAoFalloff = 9.0f;
+    contactAo.parameters.contactAoNearPlane = 0.1f;
+    contactAo.parameters.contactAoFarPlane = 5000.0f;
+    passes_.push_back(contactAo);
+
+    PostProcessPass distanceFog{};
+    distanceFog.name = "DistanceFog";
+    distanceFog.inputResource = kPostProcessOutputResource;
+    distanceFog.outputResource = kPostProcessSwapOutputResource;
+    distanceFog.pipeline = "DistanceFog";
+    distanceFog.secondaryInputResource = kPostProcessOutputResource;
+    distanceFog.tertiaryInputResource = kPostProcessOutputResource;
+    distanceFog.enabled = true;
+    distanceFog.intensity = 0.48f;
+    distanceFog.resolutionScale = 1.0f;
+    distanceFog.parameters.fogStart = 135.0f;
+    distanceFog.parameters.fogEnd = 1450.0f;
+    distanceFog.parameters.fogDensity = 0.26f;
+    distanceFog.parameters.fogColorR = 0.42f;
+    distanceFog.parameters.fogColorG = 0.38f;
+    distanceFog.parameters.fogColorB = 0.36f;
+    distanceFog.parameters.fogNearPlane = 0.1f;
+    distanceFog.parameters.fogFarPlane = 5000.0f;
+    distanceFog.parameters.fogDepthBoost = 0.42f;
+    distanceFog.parameters.fogDepthBoostStart = 0.50f;
+    distanceFog.parameters.backlitFogLift = 0.34f;
+    distanceFog.parameters.openingGlowStrength = 0.58f;
+    distanceFog.parameters.foregroundSilhouetteStrength = 0.48f;
+    distanceFog.parameters.lowFogLayerStrength = 0.30f;
+    distanceFog.parameters.coolFloorHazeStrength = 0.24f;
+    passes_.push_back(distanceFog);
 
     PostProcessPass accretionComposite{};
     accretionComposite.name = "AccretionComposite";
@@ -208,9 +252,9 @@ void PostProcessStack::ResetToVfxDefaults() {
     glowComposite.secondaryInputResource = "VfxAccumulation";
     glowComposite.tertiaryInputResource = kPostProcessOutputResource;
     glowComposite.enabled = true;
-    glowComposite.intensity = 1.0f;
+    glowComposite.intensity = 0.88f;
     glowComposite.resolutionScale = 1.0f;
-    glowComposite.parameters.glowWeight = 1.0f;
+    glowComposite.parameters.glowWeight = 0.74f;
     glowComposite.parameters.glowTintR = 1.0f;
     glowComposite.parameters.glowTintG = 0.95f;
     glowComposite.parameters.glowTintB = 1.2f;

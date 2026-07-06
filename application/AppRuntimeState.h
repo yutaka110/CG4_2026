@@ -5,6 +5,7 @@
 #include <d3d12.h>
 
 #include "AppVfxRuntimeState.h"
+#include "terrain/TerrainGenerationSettings.h"
 #include "utils/math/MathUtils.h"
 
 struct RuntimeAabbState {
@@ -52,6 +53,10 @@ struct RuntimeCameraState {
     float fovY = 0.25f * 3.14159265358979323846f;
     float nearZ = 0.1f;
     float farZ = 1000.0f;
+    float debugMoveSpeed = 0.65f;
+    float debugFastMoveMultiplier = 6.0f;
+    float debugSlowMoveMultiplier = 0.25f;
+    float debugRotateSpeed = 0.02f;
     bool enableDebugInput = true;
 };
 
@@ -76,11 +81,12 @@ struct AppRuntimeState {
     RuntimeCameraState camera{};
     Vector3 cameraWorldPosition{};
 
-    bool useMonsterBall = true;
+    bool useMonsterBall = false;
     bool showAnimatedCube = true;
     bool showSkinnedModel = false;
     bool showSkeletonDebug = false;
-    bool showSkybox = true;
+    bool showSkybox = false;
+    bool showProceduralBackdrop = true;
     uint32_t selectedSkinnedModelIndex = 0;
     bool showVfxModelObjects = true;
     uint32_t selectedVfxModelObjectIndex = 0;
@@ -95,4 +101,5 @@ struct AppRuntimeState {
     float debugDepthPreviewFar = 25.0f;
     float debugDepthPreviewPower = 1.35f;
     float debugEmissivePreviewBoost = 2.0f;
+    TerrainAuthoringState terrain{};
 };

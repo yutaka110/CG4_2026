@@ -140,7 +140,7 @@ struct AppVfxRuntimeState {
     float autoPlayVfxTimer = 0.0f;
     float autoPlayVfxAngle = 0.0f;
     bool showcaseMode = false;
-    bool showcaseAutoRotate = true;
+    bool showcaseAutoRotate = false;
     bool showcaseHudVisible = true;
     bool showcaseTuningVisible = true;
     float showcaseAutoTimer = 0.0f;
@@ -173,8 +173,14 @@ struct AppVfxRuntimeState {
         bool impactSpawned = false;
         uint32_t instanceId = 0;
         float timer = 0.0f;
+        float launchDelay = 0.0f;
         bool hasExplicitRotationZ = false;
         float rotationZ = 0.0f;
+        bool useWorldSpace = false;
+        float travelDuration = 1.08f;
+        float cleanupDelay = 2.08f;
+        float visualScale = 1.0f;
+        float impactScale = 1.0f;
         Vector3 start = {0.0f, -1.55f, -3.05f};
         Vector3 target = {2.5f, 0.7f, 0.42f};
     };

@@ -2,6 +2,8 @@
 
 #include <cassert>
 #include <algorithm>
+#include <cstdint>
+#include <cwctype>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -56,6 +58,318 @@ namespace {
 
     uint32_t GetSkinningDescriptorBaseIndex(uint32_t modelIndex) {
         return kSkinningDescriptorBaseIndex + modelIndex * kSkinningDescriptorStride;
+    }
+
+    ComPtr<ID3D12Resource> CreateDepthShadowTexture(
+        ID3D12Device* device,
+        uint32_t width,
+        uint32_t height,
+        D3D12_RESOURCE_STATES initialState) {
+        D3D12_HEAP_PROPERTIES heapProperties{};
+        heapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+        D3D12_RESOURCE_DESC resourceDesc{};
+        resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        resourceDesc.Width = width;
+        resourceDesc.Height = height;
+        resourceDesc.DepthOrArraySize = 1;
+        resourceDesc.MipLevels = 1;
+        resourceDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+        resourceDesc.SampleDesc.Count = 1;
+        resourceDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        resourceDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+        D3D12_CLEAR_VALUE clearValue{};
+        clearValue.Format = DXGI_FORMAT_D32_FLOAT;
+        clearValue.DepthStencil.Depth = 1.0f;
+        clearValue.DepthStencil.Stencil = 0;
+
+        ComPtr<ID3D12Resource> resource;
+        const HRESULT hr = device->CreateCommittedResource(
+            &heapProperties,
+            D3D12_HEAP_FLAG_NONE,
+            &resourceDesc,
+            initialState,
+            &clearValue,
+            IID_PPV_ARGS(&resource));
+        assert(SUCCEEDED(hr));
+        return resource;
+    }
+
+    DirectX::ScratchImage CreateSolidColorTexture(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+        DirectX::ScratchImage image;
+        const HRESULT hr = image.Initialize2D(DXGI_FORMAT_R8G8B8A8_UNORM, 1, 1, 1, 1);
+        assert(SUCCEEDED(hr));
+        uint8_t* pixels = image.GetPixels();
+        assert(pixels != nullptr);
+        pixels[0] = r;
+        pixels[1] = g;
+        pixels[2] = b;
+        pixels[3] = a;
+        return image;
+    }
+
+    float Hash2D(int32_t x, int32_t y, uint32_t seed) {
+        uint32_t h = static_cast<uint32_t>(x) * 0x8da6b343u;
+        h ^= static_cast<uint32_t>(y) * 0xd8163841u;
+        h ^= seed * 0xcb1ab31fu;
+        h ^= h >> 16;
+        h *= 0x7feb352du;
+        h ^= h >> 15;
+        h *= 0x846ca68bu;
+        h ^= h >> 16;
+        return static_cast<float>(h & 0x00ffffffu) / static_cast<float>(0x01000000u);
+    }
+
+    float SmoothNoise2D(float x, float y, uint32_t seed) {
+        const float ix = std::floor(x);
+        const float iy = std::floor(y);
+        float fx = x - ix;
+        float fy = y - iy;
+        fx = fx * fx * (3.0f - 2.0f * fx);
+        fy = fy * fy * (3.0f - 2.0f * fy);
+        const int32_t x0 = static_cast<int32_t>(ix);
+        const int32_t y0 = static_cast<int32_t>(iy);
+        const float n00 = Hash2D(x0, y0, seed);
+        const float n10 = Hash2D(x0 + 1, y0, seed);
+        const float n01 = Hash2D(x0, y0 + 1, seed);
+        const float n11 = Hash2D(x0 + 1, y0 + 1, seed);
+        const float nx0 = std::lerp(n00, n10, fx);
+        const float nx1 = std::lerp(n01, n11, fx);
+        return std::lerp(nx0, nx1, fy);
+    }
+
+    uint8_t ToByte(float value) {
+        return static_cast<uint8_t>((std::clamp)(value, 0.0f, 1.0f) * 255.0f + 0.5f);
+    }
+
+    bool IsDdsFile(const std::filesystem::path& path) {
+        std::wstring extension = path.extension().wstring();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](wchar_t c) {
+            return static_cast<wchar_t>(std::towlower(c));
+        });
+        return extension == L".dds";
+    }
+
+    bool LoadLinearTextureFile(const std::filesystem::path& path, DirectX::ScratchImage& output) {
+        DirectX::ScratchImage image;
+        const std::string pathString = path.string();
+        const std::wstring pathWide = ConvertString(pathString);
+
+        HRESULT hr = S_OK;
+        if (IsDdsFile(path)) {
+            hr = DirectX::LoadFromDDSFile(pathWide.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, image);
+        } else {
+            hr = DirectX::LoadFromWICFile(pathWide.c_str(), DirectX::WIC_FLAGS_NONE, nullptr, image);
+        }
+        if (FAILED(hr)) {
+            return false;
+        }
+
+        const DirectX::TexMetadata& metadata = image.GetMetadata();
+        if (metadata.IsCubemap() || DirectX::IsCompressed(metadata.format) || metadata.mipLevels > 1) {
+            output = std::move(image);
+            return true;
+        }
+
+        DirectX::ScratchImage mipImages;
+        hr = DirectX::GenerateMipMaps(
+            image.GetImages(),
+            image.GetImageCount(),
+            metadata,
+            DirectX::TEX_FILTER_DEFAULT,
+            0,
+            mipImages);
+        if (FAILED(hr)) {
+            output = std::move(image);
+            return true;
+        }
+
+        output = std::move(mipImages);
+        return true;
+    }
+
+    bool CopyScratchImageToArray(
+        const DirectX::ScratchImage& source,
+        uint32_t arraySize,
+        DirectX::ScratchImage& output) {
+        const DirectX::TexMetadata& metadata = source.GetMetadata();
+        if (metadata.dimension != DirectX::TEX_DIMENSION_TEXTURE2D || metadata.IsCubemap() || metadata.arraySize == 0) {
+            return false;
+        }
+
+        const HRESULT hr = output.Initialize2D(
+            metadata.format,
+            metadata.width,
+            metadata.height,
+            arraySize,
+            metadata.mipLevels);
+        if (FAILED(hr)) {
+            return false;
+        }
+
+        for (uint32_t layerIndex = 0; layerIndex < arraySize; ++layerIndex) {
+            const size_t sourceLayer = static_cast<size_t>(layerIndex) % metadata.arraySize;
+            for (size_t mipLevel = 0; mipLevel < metadata.mipLevels; ++mipLevel) {
+                const DirectX::Image* src = source.GetImage(mipLevel, sourceLayer, 0);
+                const DirectX::Image* dst = output.GetImage(mipLevel, layerIndex, 0);
+                if (src == nullptr || dst == nullptr || src->pixels == nullptr || dst->pixels == nullptr) {
+                    return false;
+                }
+                std::memcpy(dst->pixels, src->pixels, (std::min)(dst->slicePitch, src->slicePitch));
+            }
+        }
+
+        return true;
+    }
+
+    bool TryLoadTerrainDetailNormalMapAsset(DirectX::ScratchImage& output, std::string& sourcePath) {
+        static constexpr uint32_t kLayerCount = 4;
+        const std::filesystem::path candidates[] = {
+            "Resources/terrain/terrain_detail_normal.dds",
+            "Resources/terrain/terrain_detail_normal.png",
+            "Resources/terrain/terrain_detail_normal.jpg",
+            "Resources/terrain/terrain_detail_normal.jpeg",
+        };
+
+        for (const std::filesystem::path& candidate : candidates) {
+            if (!std::filesystem::exists(candidate)) {
+                continue;
+            }
+
+            DirectX::ScratchImage loaded;
+            if (!LoadLinearTextureFile(candidate, loaded)) {
+                continue;
+            }
+
+            DirectX::ScratchImage asArray;
+            if (!CopyScratchImageToArray(loaded, kLayerCount, asArray)) {
+                continue;
+            }
+
+            output = std::move(asArray);
+            sourcePath = candidate.string();
+            return true;
+        }
+
+        return false;
+    }
+
+    struct TerrainDetailPattern {
+        float grain = 0.0f;
+        float verticalCrack = 0.0f;
+        float chipped = 0.0f;
+        float cavity = 0.0f;
+    };
+
+    TerrainDetailPattern EvaluateTerrainDetailPattern(float u, float v, uint32_t layerIndex) {
+        const float layerOffset = static_cast<float>(layerIndex) * 19.37f;
+        const float grainScale = 1.0f + static_cast<float>(layerIndex) * 0.17f;
+        const float strataScale = 1.0f + static_cast<float>((layerIndex + 1u) % 3u) * 0.12f;
+        const float crackBias = 0.68f + static_cast<float>(layerIndex) * 0.025f;
+        const uint32_t seedOffset = layerIndex * 8191u;
+
+        TerrainDetailPattern pattern{};
+        pattern.grain =
+            SmoothNoise2D(u * 38.0f * grainScale + layerOffset, v * 38.0f, 1337u + seedOffset) * 0.40f +
+            SmoothNoise2D(u * 91.0f + 17.0f, v * 91.0f * grainScale + layerOffset, 1447u + seedOffset) * 0.37f +
+            SmoothNoise2D(u * 177.0f * grainScale, v * 177.0f + 31.0f, 1559u + seedOffset) * 0.23f;
+        const float column =
+            SmoothNoise2D(u * 18.0f + layerOffset, v * 2.4f, 2311u + seedOffset) * 0.72f +
+            SmoothNoise2D(u * 54.0f + 8.0f, v * 4.8f + layerOffset, 2333u + seedOffset) * 0.28f;
+        const float fineSplit =
+            SmoothNoise2D(u * 112.0f, v * 12.0f + 23.0f + layerOffset, 2473u + seedOffset);
+        pattern.verticalCrack =
+            (std::clamp)((column - crackBias) / 0.25f, 0.0f, 1.0f) *
+            (std::clamp)((fineSplit - 0.32f) / 0.54f, 0.0f, 1.0f);
+        const float layerLine = std::abs(std::fmod(
+            v * 21.0f * strataScale + SmoothNoise2D(u * 9.0f + layerOffset, v * 9.0f, 3011u + seedOffset) * 0.56f,
+            1.0f) - 0.5f);
+        pattern.chipped =
+            (std::clamp)((0.085f - layerLine) / 0.085f, 0.0f, 1.0f) *
+            (std::clamp)((SmoothNoise2D(u * 63.0f, v * 16.0f + 11.0f + layerOffset, 3251u + seedOffset) - 0.36f) / 0.52f, 0.0f, 1.0f);
+        pattern.cavity =
+            SmoothNoise2D(u * 24.0f + 5.0f + layerOffset, v * 31.0f, 4001u + seedOffset) * 0.32f +
+            pattern.verticalCrack * 0.40f +
+            pattern.chipped * 0.28f;
+        return pattern;
+    }
+
+    float TerrainDetailHeightFromPattern(const TerrainDetailPattern& pattern) {
+        return
+            (pattern.grain - 0.5f) * 0.52f +
+            pattern.verticalCrack * 0.36f +
+            pattern.chipped * 0.24f +
+            pattern.cavity * 0.28f;
+    }
+
+    DirectX::ScratchImage CreateTerrainDetailCacheTexture() {
+        constexpr uint32_t kSize = 512;
+        constexpr uint32_t kLayerCount = 4;
+        DirectX::ScratchImage image;
+        const HRESULT hr = image.Initialize2D(DXGI_FORMAT_R8G8B8A8_UNORM, kSize, kSize, kLayerCount, 1);
+        assert(SUCCEEDED(hr));
+
+        for (uint32_t layerIndex = 0; layerIndex < kLayerCount; ++layerIndex) {
+            const DirectX::Image* img = image.GetImage(0, layerIndex, 0);
+            assert(img != nullptr);
+            uint8_t* pixels = img->pixels;
+            assert(pixels != nullptr);
+
+            for (uint32_t y = 0; y < kSize; ++y) {
+                for (uint32_t x = 0; x < kSize; ++x) {
+                    const float u = static_cast<float>(x) / static_cast<float>(kSize);
+                    const float v = static_cast<float>(y) / static_cast<float>(kSize);
+                    const TerrainDetailPattern pattern = EvaluateTerrainDetailPattern(u, v, layerIndex);
+
+                    uint8_t* dst = pixels + y * img->rowPitch + x * 4u;
+                    dst[0] = ToByte(pattern.grain);
+                    dst[1] = ToByte(pattern.verticalCrack);
+                    dst[2] = ToByte(pattern.chipped);
+                    dst[3] = ToByte(pattern.cavity);
+                }
+            }
+        }
+
+        return image;
+    }
+
+    DirectX::ScratchImage CreateTerrainDetailNormalMapTexture() {
+        constexpr uint32_t kSize = 512;
+        constexpr uint32_t kLayerCount = 4;
+        DirectX::ScratchImage image;
+        const HRESULT hr = image.Initialize2D(DXGI_FORMAT_R8G8B8A8_UNORM, kSize, kSize, kLayerCount, 1);
+        assert(SUCCEEDED(hr));
+
+        const float invSize = 1.0f / static_cast<float>(kSize);
+        for (uint32_t layerIndex = 0; layerIndex < kLayerCount; ++layerIndex) {
+            const DirectX::Image* img = image.GetImage(0, layerIndex, 0);
+            assert(img != nullptr);
+            uint8_t* pixels = img->pixels;
+            assert(pixels != nullptr);
+
+            for (uint32_t y = 0; y < kSize; ++y) {
+                for (uint32_t x = 0; x < kSize; ++x) {
+                    const float u = static_cast<float>(x) * invSize;
+                    const float v = static_cast<float>(y) * invSize;
+                    const float hL = TerrainDetailHeightFromPattern(EvaluateTerrainDetailPattern(u - invSize, v, layerIndex));
+                    const float hR = TerrainDetailHeightFromPattern(EvaluateTerrainDetailPattern(u + invSize, v, layerIndex));
+                    const float hD = TerrainDetailHeightFromPattern(EvaluateTerrainDetailPattern(u, v - invSize, layerIndex));
+                    const float hU = TerrainDetailHeightFromPattern(EvaluateTerrainDetailPattern(u, v + invSize, layerIndex));
+                    const float dx = (hR - hL) * 2.65f;
+                    const float dy = (hU - hD) * 2.65f;
+                    const float invLen = 1.0f / std::sqrt(dx * dx + dy * dy + 1.0f);
+
+                    uint8_t* dst = pixels + y * img->rowPitch + x * 4u;
+                    dst[0] = ToByte(-dx * invLen * 0.5f + 0.5f);
+                    dst[1] = ToByte(-dy * invLen * 0.5f + 0.5f);
+                    dst[2] = ToByte(invLen * 0.5f + 0.5f);
+                    dst[3] = 255;
+                }
+            }
+        }
+
+        return image;
     }
 
     std::vector<SphereVertex> BuildSphereVertices(uint32_t stackCount, uint32_t sliceCount) {
@@ -352,6 +666,7 @@ namespace {
         ComPtr<ID3D12Device> device,
         size_t sizeInBytes,
         D3D12_RESOURCE_STATES initialState) {
+        (void)initialState;
         D3D12_HEAP_PROPERTIES heapProps{};
         heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
@@ -371,7 +686,7 @@ namespace {
             &heapProps,
             D3D12_HEAP_FLAG_NONE,
             &resourceDesc,
-            initialState,
+            D3D12_RESOURCE_STATE_COMMON,
             nullptr,
             IID_PPV_ARGS(&resource));
         assert(SUCCEEDED(hr));
@@ -382,6 +697,7 @@ namespace {
         ComPtr<ID3D12Device> device,
         size_t sizeInBytes,
         D3D12_RESOURCE_STATES initialState) {
+        (void)initialState;
         D3D12_HEAP_PROPERTIES heapProps{};
         heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
@@ -400,7 +716,7 @@ namespace {
             &heapProps,
             D3D12_HEAP_FLAG_NONE,
             &resourceDesc,
-            initialState,
+            D3D12_RESOURCE_STATE_COMMON,
             nullptr,
             IID_PPV_ARGS(&resource));
         assert(SUCCEEDED(hr));
@@ -425,6 +741,14 @@ namespace {
         uploadResource->Map(0, nullptr, &mappedData);
         std::memcpy(mappedData, source, sizeInBytes);
         uploadResource->Unmap(0, nullptr);
+
+        D3D12_RESOURCE_BARRIER copyBarrier{};
+        copyBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        copyBarrier.Transition.pResource = destination;
+        copyBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+        copyBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+        copyBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &copyBarrier);
 
         commandList->CopyBufferRegion(
             destination,
@@ -464,7 +788,7 @@ namespace {
             CreateDefaultBufferResource(
                 device,
                 sizeof(VertexData) * modelData.vertices.size(),
-                D3D12_RESOURCE_STATE_COPY_DEST);
+                D3D12_RESOURCE_STATE_COMMON);
         UploadStaticBufferData(
             device,
             uploadCommandList,
@@ -482,7 +806,7 @@ namespace {
             CreateDefaultBufferResource(
                 device,
                 sizeof(uint32_t) * modelData.indices.size(),
-                D3D12_RESOURCE_STATE_COPY_DEST);
+                D3D12_RESOURCE_STATE_COMMON);
         UploadStaticBufferData(
             device,
             uploadCommandList,
@@ -531,8 +855,8 @@ namespace {
             CreateDefaultBufferResource(
                 device,
                 sizeof(JointPaletteEntry) * jointCount,
-                D3D12_RESOURCE_STATE_COPY_DEST);
-        skinCluster.paletteState = D3D12_RESOURCE_STATE_COPY_DEST;
+                D3D12_RESOURCE_STATE_COMMON);
+        skinCluster.paletteState = D3D12_RESOURCE_STATE_COMMON;
         skinCluster.paletteUploadResource =
             CreateBufferResource(device, sizeof(JointPaletteEntry) * jointCount);
         skinCluster.paletteUploadResource->Map(
@@ -597,7 +921,7 @@ namespace {
             CreateDefaultBufferResource(
                 device,
                 sizeof(VertexInfluence) * vertexCount,
-                D3D12_RESOURCE_STATE_COPY_DEST);
+                D3D12_RESOURCE_STATE_COMMON);
         skinCluster.influenceBufferView.BufferLocation =
             skinCluster.influenceResource->GetGPUVirtualAddress();
         skinCluster.influenceBufferView.SizeInBytes =
@@ -631,8 +955,8 @@ namespace {
         skinCluster.skinnedVertexResource = CreateUavBufferResource(
             device,
             sizeof(VertexData) * vertexCount,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        skinCluster.skinnedVertexState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            D3D12_RESOURCE_STATE_COMMON);
+        skinCluster.skinnedVertexState = D3D12_RESOURCE_STATE_COMMON;
         skinCluster.skinnedVertexBufferView.BufferLocation =
             skinCluster.skinnedVertexResource->GetGPUVirtualAddress();
         skinCluster.skinnedVertexBufferView.SizeInBytes =
@@ -951,6 +1275,15 @@ bool AppSceneResources::Initialize(
     materialData->specularMode = 1;
     materialData->uvTransform = MakeIdentity4x4();
 
+    terrainMaterialResource = CreateBufferResource(device, sizeof(Material));
+    terrainMaterialResource->Map(0, nullptr, reinterpret_cast<void**>(&terrainMaterialData));
+    terrainMaterialData->color = Vector4(1.02f, 0.96f, 0.90f, 1.0f);
+    terrainMaterialData->enableLighting = true;
+    terrainMaterialData->shininess = 2.0f;
+    terrainMaterialData->environmentCoefficient = 0.0f;
+    terrainMaterialData->specularMode = 1;
+    terrainMaterialData->uvTransform = MakeIdentity4x4();
+
     materialResourceSprite = CreateBufferResource(device, sizeof(Material));
     materialResourceSprite->Map(
         0,
@@ -1016,6 +1349,91 @@ bool AppSceneResources::Initialize(
     mappedCamera->padding = 0.0f;
 
     // =========================================================
+    // Cascaded shadow maps
+    // =========================================================
+    cascadeShadowResource = CreateBufferResource(device, sizeof(CascadeShadowData));
+    cascadeShadowResource->Map(0, nullptr, reinterpret_cast<void**>(&mappedCascadeShadow));
+    mappedCascadeShadow->cascadeSplits = Vector4(120.0f, 260.0f, 520.0f, 960.0f);
+    mappedCascadeShadow->parameters = Vector4(
+        0.0018f,
+        0.62f,
+        1.0f,
+        1.0f / static_cast<float>(kCascadeShadowMapSize));
+
+    for (uint32_t cascade = 0; cascade < kCascadeShadowCount; ++cascade) {
+        cascadeShadowDrawResources[cascade] = CreateBufferResource(device, sizeof(CascadeShadowData));
+        cascadeShadowDrawResources[cascade]->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&mappedCascadeShadowDraw[cascade]));
+        *mappedCascadeShadowDraw[cascade] = *mappedCascadeShadow;
+        mappedCascadeShadowDraw[cascade]->parameters.w = static_cast<float>(cascade);
+    }
+
+    D3D12_DESCRIPTOR_HEAP_DESC shadowDsvHeapDesc{};
+    shadowDsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    shadowDsvHeapDesc.NumDescriptors = kCascadeShadowCount;
+    shadowDsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    HRESULT shadowHeapHr = device->CreateDescriptorHeap(
+        &shadowDsvHeapDesc,
+        IID_PPV_ARGS(&cascadeShadowDsvHeap));
+    assert(SUCCEEDED(shadowHeapHr));
+
+    const uint32_t shadowDsvIncrement =
+        device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+    D3D12_CPU_DESCRIPTOR_HANDLE shadowDsvStart =
+        cascadeShadowDsvHeap->GetCPUDescriptorHandleForHeapStart();
+
+    for (uint32_t cascade = 0; cascade < kCascadeShadowCount; ++cascade) {
+        cascadeShadowMaps[cascade] = CreateDepthShadowTexture(
+            device.Get(),
+            kCascadeShadowMapSize,
+            kCascadeShadowMapSize,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        cascadeShadowStates[cascade] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+        cascadeShadowDsvCpu[cascade] = shadowDsvStart;
+        cascadeShadowDsvCpu[cascade].ptr +=
+            static_cast<SIZE_T>(shadowDsvIncrement) * cascade;
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+        dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
+        device->CreateDepthStencilView(
+            cascadeShadowMaps[cascade].Get(),
+            &dsvDesc,
+            cascadeShadowDsvCpu[cascade]);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MostDetailedMip = 0;
+        srvDesc.Texture2D.MipLevels = 1;
+        srvDesc.Texture2D.PlaneSlice = 0;
+        srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE srvCpu = AppRenderResources::GetCPUDescriptorHandle(
+            srvDescriptorHeap,
+            descriptorSizeSRV,
+            kCascadeShadowSrvBaseIndex + cascade);
+        cascadeShadowSrvGpuHandles[cascade] = AppRenderResources::GetGPUDescriptorHandle(
+            srvDescriptorHeap,
+            descriptorSizeSRV,
+            kCascadeShadowSrvBaseIndex + cascade);
+        device->CreateShaderResourceView(
+            cascadeShadowMaps[cascade].Get(),
+            &srvDesc,
+            srvCpu);
+    }
+    cascadeShadowSrvGpu = AppRenderResources::GetGPUDescriptorHandle(
+        srvDescriptorHeap,
+        descriptorSizeSRV,
+        kCascadeShadowSrvBaseIndex);
+    cascadeShadowSrvTableGpu = cascadeShadowSrvGpu;
+
+    // =========================================================
     // Texture 2譫・
     // slot 1, 2 繧剃ｽｿ逕ｨ・・lot 0 縺ｯ ImGui 逕ｨ縺ｮ蜑肴署・・
     // =========================================================
@@ -1029,15 +1447,8 @@ bool AppSceneResources::Initialize(
         mipImages,
         initialUploadResources_);
 
-    DirectX::ScratchImage mipImages2 = AppRenderResources::LoadTexture("resources/monsterBall.png");
-    const DirectX::TexMetadata& metadata2 = mipImages2.GetMetadata();
-    textureResource2 = AppRenderResources::CreateTextureResource(device, metadata2);
-    AppRenderResources::UploadTextureData(
-        device,
-        uploadCommandList,
-        textureResource2,
-        mipImages2,
-        initialUploadResources_);
+    textureResource2 = textureResource;
+    const DirectX::TexMetadata& metadata2 = metadata;
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
     srvDesc.Format = metadata.format;
@@ -1058,6 +1469,97 @@ bool AppSceneResources::Initialize(
     textureSrvHandleCPU2 = AppRenderResources::GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 2);
     textureSrvHandleGPU2 = AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 2);
     device->CreateShaderResourceView(textureResource2.Get(), &srvDesc2, textureSrvHandleCPU2);
+
+    DirectX::ScratchImage terrainAlbedoImages = CreateSolidColorTexture(184, 137, 88, 255);
+    const DirectX::TexMetadata& terrainAlbedoMetadata = terrainAlbedoImages.GetMetadata();
+    terrainAlbedoTextureResource = AppRenderResources::CreateTextureResource(device, terrainAlbedoMetadata);
+    AppRenderResources::UploadTextureData(
+        device,
+        uploadCommandList,
+        terrainAlbedoTextureResource,
+        terrainAlbedoImages,
+        initialUploadResources_);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC terrainAlbedoSrvDesc{};
+    terrainAlbedoSrvDesc.Format = terrainAlbedoMetadata.format;
+    terrainAlbedoSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    terrainAlbedoSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    terrainAlbedoSrvDesc.Texture2D.MipLevels = UINT(terrainAlbedoMetadata.mipLevels);
+
+    terrainAlbedoTextureSrvHandleCPU =
+        AppRenderResources::GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 8);
+    terrainAlbedoTextureSrvHandleGPU =
+        AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 8);
+    device->CreateShaderResourceView(
+        terrainAlbedoTextureResource.Get(),
+        &terrainAlbedoSrvDesc,
+        terrainAlbedoTextureSrvHandleCPU);
+
+    DirectX::ScratchImage terrainDetailCacheImages = CreateTerrainDetailCacheTexture();
+    const DirectX::TexMetadata& terrainDetailCacheMetadata = terrainDetailCacheImages.GetMetadata();
+    terrainDetailCacheTextureResource = AppRenderResources::CreateTextureResource(device, terrainDetailCacheMetadata);
+    AppRenderResources::UploadTextureData(
+        device,
+        uploadCommandList,
+        terrainDetailCacheTextureResource,
+        terrainDetailCacheImages,
+        initialUploadResources_);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC terrainDetailCacheSrvDesc{};
+    terrainDetailCacheSrvDesc.Format = terrainDetailCacheMetadata.format;
+    terrainDetailCacheSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    terrainDetailCacheSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    terrainDetailCacheSrvDesc.Texture2DArray.MipLevels = UINT(terrainDetailCacheMetadata.mipLevels);
+    terrainDetailCacheSrvDesc.Texture2DArray.ArraySize = UINT(terrainDetailCacheMetadata.arraySize);
+
+    terrainDetailCacheTextureSrvHandleCPU =
+        AppRenderResources::GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 9);
+    terrainDetailCacheTextureSrvHandleGPU =
+        AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 9);
+    device->CreateShaderResourceView(
+        terrainDetailCacheTextureResource.Get(),
+        &terrainDetailCacheSrvDesc,
+        terrainDetailCacheTextureSrvHandleCPU);
+
+    DirectX::ScratchImage terrainDetailNormalMapImages;
+    std::string terrainDetailNormalMapSourcePath;
+    const bool loadedExternalTerrainDetailNormalMap =
+        TryLoadTerrainDetailNormalMapAsset(terrainDetailNormalMapImages, terrainDetailNormalMapSourcePath);
+    if (!loadedExternalTerrainDetailNormalMap) {
+        terrainDetailNormalMapImages = CreateTerrainDetailNormalMapTexture();
+        terrainDetailNormalMapSourcePath = "generated://terrain-detail-normal-map";
+    }
+    {
+        const std::string message =
+            std::string("[AppSceneResources] Terrain detail normal map: ") +
+            terrainDetailNormalMapSourcePath +
+            (loadedExternalTerrainDetailNormalMap ? "\n" : " (procedural fallback)\n");
+        OutputDebugStringA(message.c_str());
+    }
+    const DirectX::TexMetadata& terrainDetailNormalMapMetadata = terrainDetailNormalMapImages.GetMetadata();
+    terrainDetailNormalMapTextureResource = AppRenderResources::CreateTextureResource(device, terrainDetailNormalMapMetadata);
+    AppRenderResources::UploadTextureData(
+        device,
+        uploadCommandList,
+        terrainDetailNormalMapTextureResource,
+        terrainDetailNormalMapImages,
+        initialUploadResources_);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC terrainDetailNormalMapSrvDesc{};
+    terrainDetailNormalMapSrvDesc.Format = terrainDetailNormalMapMetadata.format;
+    terrainDetailNormalMapSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    terrainDetailNormalMapSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    terrainDetailNormalMapSrvDesc.Texture2DArray.MipLevels = UINT(terrainDetailNormalMapMetadata.mipLevels);
+    terrainDetailNormalMapSrvDesc.Texture2DArray.ArraySize = UINT(terrainDetailNormalMapMetadata.arraySize);
+
+    terrainDetailNormalMapTextureSrvHandleCPU =
+        AppRenderResources::GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 10);
+    terrainDetailNormalMapTextureSrvHandleGPU =
+        AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 10);
+    device->CreateShaderResourceView(
+        terrainDetailNormalMapTextureResource.Get(),
+        &terrainDetailNormalMapSrvDesc,
+        terrainDetailNormalMapTextureSrvHandleCPU);
 
     const std::string circle2TexturePath =
         std::filesystem::exists("Resources/circle2.png") ? "Resources/circle2.png" : "resources/monsterBall.png";
@@ -1224,6 +1726,30 @@ bool AppSceneResources::Initialize(
         gradationLineTextureSrvHandleGPU,
         6,
         gradationLineMetadata);
+    registerExistingVfxTexture(
+        "terrainFlatRock",
+        "generated://terrain-flat-rock",
+        terrainAlbedoTextureResource,
+        terrainAlbedoTextureSrvHandleCPU,
+        terrainAlbedoTextureSrvHandleGPU,
+        8,
+        terrainAlbedoMetadata);
+    registerExistingVfxTexture(
+        "terrainDetailCache",
+        "generated://terrain-detail-cache",
+        terrainDetailCacheTextureResource,
+        terrainDetailCacheTextureSrvHandleCPU,
+        terrainDetailCacheTextureSrvHandleGPU,
+        9,
+        terrainDetailCacheMetadata);
+    registerExistingVfxTexture(
+        "terrainDetailNormalMap",
+        terrainDetailNormalMapSourcePath,
+        terrainDetailNormalMapTextureResource,
+        terrainDetailNormalMapTextureSrvHandleCPU,
+        terrainDetailNormalMapTextureSrvHandleGPU,
+        10,
+        terrainDetailNormalMapMetadata);
 
     struct VfxTextureLoadSpec {
         const char* name;
@@ -1237,6 +1763,10 @@ bool AppSceneResources::Initialize(
         {"uvChecker", "Resources/uvChecker.png"},
         {"fence", "Resources/fence/fence.png"},
         {"iceShard", "Resources/iceShard.png"},
+        {"courseOrganicRock", "Resources/course_meshes/materials/organic_rock_albedo.bmp"},
+        {"courseRibRock", "Resources/course_meshes/materials/rib_rock_albedo.bmp"},
+        {"courseRootRock", "Resources/course_meshes/materials/root_rock_albedo.bmp"},
+        {"courseVistaRock", "Resources/course_meshes/materials/vista_rock_albedo.bmp"},
     };
 
     for (uint32_t index = 0; index < _countof(vfxTextureLoadSpecs); ++index) {
@@ -1492,6 +2022,47 @@ bool AppSceneResources::Initialize(
             animatedCubeTextureSrvHandleGPU.ptr != 0,
         });
     }
+    auto findManagedTextureGpu = [&](const char* textureName) {
+        for (const AppManagedTextureResource& texture : vfxTextureLibrary) {
+            if (texture.name == textureName && texture.gpu.ptr != 0) {
+                return texture.gpu;
+            }
+        }
+        return terrainAlbedoTextureSrvHandleGPU.ptr != 0 ? terrainAlbedoTextureSrvHandleGPU : textureSrvHandleGPU2;
+    };
+    auto registerCourseMesh = [&](const char* name, const char* directory, const char* filename, const char* textureName) {
+        ModelData courseMeshData = LoadObjFile_Assimp(directory, filename);
+        if (courseMeshData.vertices.empty() || courseMeshData.indices.empty()) {
+            OutputDebugStringA(("[AppSceneResources] Course mesh has no indexed data: " + std::string(name) + "\n").c_str());
+            return;
+        }
+
+        GpuMeshResource courseMesh = CreateGpuMeshResource(
+            device,
+            uploadCommandList,
+            courseMeshData,
+            initialUploadResources_);
+        if (courseMesh.indexCount == 0) {
+            OutputDebugStringA(("[AppSceneResources] Course mesh GPU upload failed: " + std::string(name) + "\n").c_str());
+            return;
+        }
+
+        vfxModelLibrary.push_back({
+            name,
+            directory,
+            filename,
+            std::move(courseMeshData),
+            courseMesh,
+            findManagedTextureGpu(textureName),
+            findManagedTextureGpu(textureName).ptr != 0,
+        });
+    };
+    registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj", "courseOrganicRock");
+    registerCourseMesh("rib_tunnel_wall", "Resources/course_meshes/RibTunnelWall", "RibTunnelWall.obj", "courseRibRock");
+    registerCourseMesh("root_spire_column", "Resources/course_meshes/RootSpireColumn", "RootSpireColumn.obj", "courseRootRock");
+    registerCourseMesh("curved_canyon_wall", "Resources/course_meshes/CurvedCanyonWall", "CurvedCanyonWall.obj", "courseOrganicRock");
+    registerCourseMesh("vista_hole_wall", "Resources/course_meshes/VistaHoleWall", "VistaHoleWall.obj", "courseVistaRock");
+    registerCourseMesh("spire_broken_bridge_arc", "Resources/course_meshes/SpireBrokenBridgeArc", "SpireBrokenBridgeArc.obj", "courseRootRock");
 
     vfxModelObjects.clear();
     vfxModelObjects.resize(kRuntimeVfxModelObjectCount);
@@ -1592,6 +2163,14 @@ bool AppSceneResources::Initialize(
         skeletonDebugTransformData->WorldInverseTranspose = MakeIdentity4x4();
     }
 
+    if (!debugDraw.Initialize(device, 65536)) {
+        OutputDebugStringA("[AppSceneResources] DebugDraw initialization failed.\n");
+    }
+    if (!courseMeshRenderQueue.Initialize(device, 256)) {
+        OutputDebugStringA("[AppSceneResources] CourseMeshRenderQueue initialization failed.\n");
+        return false;
+    }
+
     return true;
 }
 
@@ -1629,6 +2208,36 @@ const AppManagedModelResource* AppSceneResources::FindManagedModel(uint32_t mode
     }
     const AppManagedModelResource& model = vfxModelLibrary[modelIndex];
     return model.loaded ? &model : nullptr;
+}
+
+void AppSceneResources::SyncCourseMeshRenderQueue(
+    const CourseSpawnRuntime& courseRuntime,
+    const CourseAsset* course,
+    float currentDistance,
+    const RailPath& railPath,
+    const Matrix4x4& viewMatrix,
+    const Matrix4x4& projMatrix) {
+    std::vector<CourseMeshModelBinding> bindings;
+    bindings.reserve(vfxModelLibrary.size());
+    for (const AppManagedModelResource& model : vfxModelLibrary) {
+        CourseMeshModelBinding binding{};
+        binding.name = model.name;
+        binding.rootLocal = model.model.rootNode.localMatrix;
+        binding.loaded =
+            model.loaded &&
+            model.mesh.indexCount > 0 &&
+            model.textureGpu.ptr != 0;
+        bindings.push_back(binding);
+    }
+
+    courseMeshRenderQueue.SyncFromCourseRuntime(
+        courseRuntime,
+        course,
+        currentDistance,
+        railPath,
+        bindings,
+        viewMatrix,
+        projMatrix);
 }
 
 void AppSceneResources::UpdateTransforms(
@@ -1928,5 +2537,60 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
     if (materialData != nullptr) {
         runtimeState.materialData.specularMode = std::clamp(runtimeState.materialData.specularMode, 0, 1);
         *materialData = runtimeState.materialData;
+    }
+
+    if (terrainMaterialData != nullptr) {
+        TerrainAuthoringState& terrain = runtimeState.terrain;
+        terrain.materialBrightness = std::clamp(terrain.materialBrightness, 0.05f, 3.0f);
+        terrain.materialNoiseStrength = std::clamp(terrain.materialNoiseStrength, 0.0f, 2.0f);
+        terrain.materialStrataStrength = std::clamp(terrain.materialStrataStrength, 0.0f, 2.0f);
+        terrain.materialStrataBreakupStrength = std::clamp(terrain.materialStrataBreakupStrength, 0.0f, 1.5f);
+        terrain.materialSpecularStrength = std::clamp(terrain.materialSpecularStrength, 0.0f, 0.25f);
+        terrain.materialRimLightStrength = std::clamp(terrain.materialRimLightStrength, 0.0f, 2.0f);
+        terrain.materialBacklightRimBoost = std::clamp(terrain.materialBacklightRimBoost, 0.0f, 2.0f);
+        terrain.materialFloorSandShadowStrength = std::clamp(terrain.materialFloorSandShadowStrength, 0.0f, 1.5f);
+        terrain.materialDetailNormalStrength = std::clamp(terrain.materialDetailNormalStrength, 0.0f, 2.0f);
+        terrain.materialMicroDetailStrength = std::clamp(terrain.materialMicroDetailStrength, 0.0f, 2.0f);
+        terrain.materialDetailCacheScale = std::clamp(terrain.materialDetailCacheScale, 0.25f, 4.0f);
+        terrain.materialDetailTileWorldSize = std::clamp(terrain.materialDetailTileWorldSize, 32.0f, 240.0f);
+        terrain.materialDetailNearScale = std::clamp(terrain.materialDetailNearScale, 0.25f, 3.0f);
+        terrain.materialDetailFarScale = std::clamp(terrain.materialDetailFarScale, 0.15f, 1.5f);
+        terrain.materialDetailDistanceBlend = std::clamp(terrain.materialDetailDistanceBlend, 40.0f, 420.0f);
+        terrain.materialDetailNormalMapStrength = std::clamp(terrain.materialDetailNormalMapStrength, 0.0f, 2.0f);
+        terrain.materialDetailHybridBlend = std::clamp(terrain.materialDetailHybridBlend, 0.0f, 1.0f);
+        terrain.materialCavityAoStrength = std::clamp(terrain.materialCavityAoStrength, 0.0f, 1.5f);
+        terrain.materialSkyFillStrength = std::clamp(terrain.materialSkyFillStrength, 0.0f, 1.2f);
+        terrainMaterialData->color = {
+            terrain.materialBaseColor.x * terrain.materialBrightness,
+            terrain.materialBaseColor.y * terrain.materialBrightness,
+            terrain.materialBaseColor.z * terrain.materialBrightness,
+            terrain.materialNoiseStrength,
+        };
+        terrainMaterialData->padding[0] = terrain.materialDetailNormalStrength;
+        terrainMaterialData->padding[1] = terrain.materialCavityAoStrength;
+        terrainMaterialData->padding[2] = terrain.materialSkyFillStrength;
+        terrainMaterialData->enableLighting =
+            terrain.displayMode == TerrainDisplayMode::Unlit ? 0 : 1;
+        terrainMaterialData->shininess = terrain.materialSpecularStrength;
+        terrainMaterialData->environmentCoefficient = terrain.materialStrataStrength;
+        terrainMaterialData->specularMode = 1;
+        terrainMaterialData->padding2[0] = terrain.materialRimLightStrength;
+        terrainMaterialData->padding2[1] = terrain.materialMicroDetailStrength;
+        terrainMaterialData->padding2[2] = terrain.useDetailTextureCache ? 1.0f : 0.0f;
+        terrainMaterialData->padding2[3] = terrain.materialDetailCacheScale;
+        terrainMaterialData->padding2[4] = terrain.materialDetailTileWorldSize;
+        terrainMaterialData->padding2[5] = terrain.materialDetailNearScale;
+        terrainMaterialData->padding2[6] = terrain.materialDetailFarScale;
+        terrainMaterialData->padding2[7] = terrain.materialDetailDistanceBlend;
+        terrainMaterialData->padding2[8] = terrain.useDetailNormalMap ? 1.0f : 0.0f;
+        terrainMaterialData->padding2[9] = terrain.materialDetailNormalMapStrength;
+        terrainMaterialData->padding2[10] = terrain.materialDetailHybridBlend;
+        terrainMaterialData->padding2[11] = terrain.invertDetailNormalY ? 1.0f : 0.0f;
+        terrainMaterialData->padding2[12] =
+            terrain.displayMode == TerrainDisplayMode::DetailNormal ? 1.0f : 0.0f;
+        terrainMaterialData->padding2[13] = terrain.materialStrataBreakupStrength;
+        terrainMaterialData->padding2[14] = terrain.materialFloorSandShadowStrength;
+        terrainMaterialData->padding2[15] = terrain.materialBacklightRimBoost;
+        terrainMaterialData->uvTransform = MakeIdentity4x4();
     }
 }

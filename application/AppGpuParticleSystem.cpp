@@ -182,7 +182,7 @@ bool EnsureDefaultBuffer(
     }
 
     currentBytes = desc.sizeInBytes;
-    currentState = desc.initialState;
+    currentState = D3D12_RESOURCE_STATE_COMMON;
     return true;
 }
 

@@ -1,0 +1,5 @@
+wave|spire_shard_crossfire|Spire Shard Crossfire
+unitAsset|left_anchor|spire_anchor_turret|spire_cross|24|-20|9|0|1.7|11|1.0|0.24|0.12|1.0
+unitAsset|right_anchor|spire_anchor_turret|spire_cross|32|20|9|0|1.7|11|1.0|0.24|0.12|1.0
+unitAsset|dust_interceptor_left|spire_interceptor|twin_chase|52|-8|6|5.0|1.1|9|1.0|0.56|0.18|1.0
+unitAsset|dust_interceptor_right|spire_interceptor|twin_chase|60|8|6|5.0|1.1|9|1.0|0.56|0.18|1.0

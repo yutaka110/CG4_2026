@@ -1,0 +1,4 @@
+wave|spire_escape_chasers|Spire Escape Chasers
+unitAsset|chaser_left_low|spire_interceptor|twin_chase|-28|-10|3|13|1.05|9|1.0|0.56|0.18|1.0
+unitAsset|chaser_right_low|spire_interceptor|twin_chase|-28|10|3|13|1.05|9|1.0|0.56|0.18|1.0
+unitAsset|chaser_center_high|drone_chaser|twin_chase|-40|0|9|16|1.25|10|1.0|0.72|0.18|1.0

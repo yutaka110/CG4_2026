@@ -1,0 +1,7 @@
+# obstacle|id|displayName|meshId|lifetime|halfX|halfY|halfZ|r|g|b|a
+# placement|distanceOffset|lateralOffset|verticalOffset|forwardSpeed
+# breakable|enabled|hitPoints
+obstacle|tunnel_ceiling_teeth_01|Tunnel Ceiling Teeth 01|animated_cube|11|6.0|1.7|2.8|0.86|0.50|0.20|1.0
+placement|30|0|7|0
+breakable|false|180
+vfx|ceiling_dust_trail

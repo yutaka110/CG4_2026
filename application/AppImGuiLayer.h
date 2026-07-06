@@ -17,6 +17,11 @@ class EffectRuntime;
 class EffectAuthoringRegistry;
 struct LoadedEffectAsset;
 class PostProcessStack;
+class CourseCollisionSystem;
+class CourseSpawnRuntime;
+class PlayerCombatFeelSystem;
+class SectionCheckpointSystem;
+struct CourseAsset;
 
 struct AppImGuiFrameContext {
     AppRuntimeState* runtimeState = nullptr;
@@ -36,6 +41,7 @@ struct AppImGuiFrameContext {
     D3D12_GPU_DESCRIPTOR_HANDLE postColorPreview{};
     D3D12_GPU_DESCRIPTOR_HANDLE depthPreview{};
     D3D12_GPU_DESCRIPTOR_HANDLE emissivePreview{};
+    D3D12_GPU_DESCRIPTOR_HANDLE terrainHiZPreview{};
     AppRenderResources* renderResources = nullptr;
     AppSceneResources* scene = nullptr;
     AppPipelines* appPipelines = nullptr;
@@ -44,6 +50,19 @@ struct AppImGuiFrameContext {
     ID3D12DescriptorHeap* srvDescriptorHeap = nullptr;
     D3D12_GPU_DESCRIPTOR_HANDLE vfxTextureHandle{};
     D3D12_GPU_DESCRIPTOR_HANDLE depthTextureHandle{};
+    CourseAsset* course = nullptr;
+    const CourseSpawnRuntime* courseSpawnRuntime = nullptr;
+    const CourseCollisionSystem* courseCollisionSystem = nullptr;
+    const SectionCheckpointSystem* courseCheckpointSystem = nullptr;
+    const PlayerCombatFeelSystem* playerCombatFeelSystem = nullptr;
+    const std::string* courseLoadStatus = nullptr;
+    const std::string* coursePath = nullptr;
+    float courseDistance = 0.0f;
+    float courseRailLength = 0.0f;
+    std::function<bool(std::string*)> onSaveCourse;
+    std::function<void()> onApplyCourse;
+    std::function<void()> onReloadCourse;
+    std::function<void(float)> onTeleportCourseToDistance;
     std::function<void()> onAddParticle;
 };
 
@@ -58,6 +77,7 @@ public:
 
     void Render(ID3D12GraphicsCommandList* cmdList);
     bool IsEnabled() const;
+    bool WantsDeveloperDiagnostics() const;
 
     void Shutdown();
 
@@ -84,4 +104,5 @@ private:
     uint32_t beamDedicatedHealthFrames_ = 0;
     uint32_t beamDedicatedStableFrames_ = 0;
     uint32_t beamDedicatedActiveStableFrames_ = 0;
+    uint32_t hiddenRuntimeTelemetryFrame_ = 0;
 };

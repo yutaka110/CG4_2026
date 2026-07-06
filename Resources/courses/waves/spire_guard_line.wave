@@ -1,0 +1,4 @@
+wave|spire_guard_line|Spire Guard Line
+unitAsset|guard_left|spire_interceptor|twin_chase|30|-12|5|4.5|1.1|9|1.0|0.56|0.18|1.0
+unitAsset|guard_center|drone_leader|soft_spread|42|0|7|1.5|1.3|10|1.0|0.48|0.16|1.0
+unitAsset|guard_right|spire_interceptor|twin_chase|54|12|5|4.5|1.1|9|1.0|0.56|0.18|1.0

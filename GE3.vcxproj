@@ -166,6 +166,8 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\AppAudio.cpp" />
     <ClCompile Include="application\AppBootstrap.cpp" />
     <ClCompile Include="application\AppCommandLineRunner.cpp" />
+    <ClCompile Include="application\AppCourseTimelineDebugPanel.cpp" />
+    <ClCompile Include="application\diagnostics\DebugDrawSystem.cpp" />
     <ClCompile Include="application\AppFrameGraphBuilder.cpp" />
     <ClCompile Include="application\AppPostProcessPipeline.cpp" />
     <ClCompile Include="application\AppSceneRenderPipeline.cpp" />
@@ -175,6 +177,29 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\RendererRegistry.cpp" />
     <ClCompile Include="application\SimulationRegistry.cpp" />
     <ClCompile Include="application\TechniqueRegistry.cpp" />
+    <ClCompile Include="application\course\BulletPatternAsset.cpp" />
+    <ClCompile Include="application\course\CourseActorAsset.cpp" />
+    <ClCompile Include="application\course\CourseAsset.cpp" />
+    <ClCompile Include="application\course\CourseCollisionSystem.cpp" />
+    <ClCompile Include="application\course\CourseEventDispatcher.cpp" />
+    <ClCompile Include="application\course\CourseMeshRenderQueue.cpp" />
+    <ClCompile Include="application\course\CourseSpawnRuntime.cpp" />
+    <ClCompile Include="application\course\CourseValidation.cpp" />
+    <ClCompile Include="application\course\DebrisCompositionSystem.cpp" />
+    <ClCompile Include="application\course\EncounterDirector.cpp" />
+    <ClCompile Include="application\course\EnemyWaveAsset.cpp" />
+    <ClCompile Include="application\course\ObstacleAsset.cpp" />
+    <ClCompile Include="application\course\PlayerCombatFeelSystem.cpp" />
+    <ClCompile Include="application\course\RailCameraDirector.cpp" />
+    <ClCompile Include="application\course\RailLockOnSystem.cpp" />
+    <ClCompile Include="application\course\RailLockResolver.cpp" />
+    <ClCompile Include="application\course\RailReticleController.cpp" />
+    <ClCompile Include="application\course\RailTargetRegistry.cpp" />
+    <ClCompile Include="application\course\SectionCheckpointSystem.cpp" />
+    <ClCompile Include="application\terrain\RailPath.cpp" />
+    <ClCompile Include="application\terrain\TerrainChunkManager.cpp" />
+    <ClCompile Include="application\terrain\TerrainPresetStore.cpp" />
+    <ClCompile Include="application\terrain\TerrainVolumeField.cpp" />
     <ClCompile Include="application\EffectRuntime.cpp" />
     <ClCompile Include="application\EffectSystem.cpp" />
     <ClCompile Include="application\AppDebugViewsPanel.cpp">
@@ -191,6 +216,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\AppPostProcessPanel.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="application\PostProcessPresetStore.cpp" />
     <ClCompile Include="application\PostProcessStack.cpp" />
     <ClCompile Include="application\AppRenderResources.cpp" />
     <ClCompile Include="application\AppRunLoop.cpp" />
@@ -532,6 +558,22 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
     </FxCompile>
+    <FxCompile Include="Resources\DistanceFog.PS.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Development|x64'">Pixel</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Development|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+    </FxCompile>
+    <FxCompile Include="Resources\ContactAO.PS.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Development|x64'">Pixel</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Development|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+    </FxCompile>
     <FxCompile Include="Resources\Vignette.PS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Development|x64'">Pixel</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
@@ -636,6 +678,8 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\AppAudio.h" />
     <ClInclude Include="application\AppBootstrap.h" />
     <ClInclude Include="application\AppCommandLineRunner.h" />
+    <ClInclude Include="application\AppCourseTimelineDebugPanel.h" />
+    <ClInclude Include="application\diagnostics\DebugDrawSystem.h" />
     <ClInclude Include="application\AppFrameState.h" />
     <ClInclude Include="application\AppFrameGraphBuilder.h" />
     <ClInclude Include="application\AppPostProcessPipeline.h" />
@@ -646,6 +690,32 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\RendererRegistry.h" />
     <ClInclude Include="application\SimulationRegistry.h" />
     <ClInclude Include="application\TechniqueRegistry.h" />
+    <ClInclude Include="application\course\BulletPatternAsset.h" />
+    <ClInclude Include="application\course\CourseActorAsset.h" />
+    <ClInclude Include="application\course\CourseAsset.h" />
+    <ClInclude Include="application\course\CourseAssetParsing.h" />
+    <ClInclude Include="application\course\CourseCollisionSystem.h" />
+    <ClInclude Include="application\course\CourseEventDispatcher.h" />
+    <ClInclude Include="application\course\CourseMeshRenderQueue.h" />
+    <ClInclude Include="application\course\CourseSpawnRuntime.h" />
+    <ClInclude Include="application\course\CourseValidation.h" />
+    <ClInclude Include="application\course\DebrisCompositionSystem.h" />
+    <ClInclude Include="application\course\EncounterDirector.h" />
+    <ClInclude Include="application\course\EnemyWaveAsset.h" />
+    <ClInclude Include="application\course\ObstacleAsset.h" />
+    <ClInclude Include="application\course\PlayerCombatFeelSystem.h" />
+    <ClInclude Include="application\course\RailCameraDirector.h" />
+    <ClInclude Include="application\course\RailLockOnSystem.h" />
+    <ClInclude Include="application\course\RailLockOnTypes.h" />
+    <ClInclude Include="application\course\RailLockResolver.h" />
+    <ClInclude Include="application\course\RailReticleController.h" />
+    <ClInclude Include="application\course\RailTargetRegistry.h" />
+    <ClInclude Include="application\course\SectionCheckpointSystem.h" />
+    <ClInclude Include="application\terrain\RailPath.h" />
+    <ClInclude Include="application\terrain\TerrainChunkManager.h" />
+    <ClInclude Include="application\terrain\TerrainGenerationSettings.h" />
+    <ClInclude Include="application\terrain\TerrainPresetStore.h" />
+    <ClInclude Include="application\terrain\TerrainVolumeField.h" />
     <ClInclude Include="application\EffectComponentViews.h" />
     <ClInclude Include="application\EffectRuntime.h" />
     <ClInclude Include="application\EffectSystem.h" />
@@ -655,6 +725,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\AppFrameRenderer.h" />
     <ClInclude Include="application\AppGpuParticleSystem.h" />
     <ClInclude Include="application\AppPostProcessPanel.h" />
+    <ClInclude Include="application\PostProcessPresetStore.h" />
     <ClInclude Include="application\PostProcessStack.h" />
     <ClInclude Include="application\AppRenderResources.h" />
     <ClInclude Include="application\AppImGuiLayer.h" />
@@ -773,6 +844,14 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <None Include="Resources\Spear.PS.hlsl" />
     <None Include="Resources\Spear.VS.hlsl" />
     <None Include="Resources\Skybox.hlsli" />
+    <None Include="Resources\TerrainDebrisCull.CS.hlsl" />
+    <None Include="Resources\TerrainHiZBuild.CS.hlsl" />
+    <None Include="Resources\TerrainDebris.VS.hlsl" />
+    <None Include="Resources\TerrainDebrisShadow.VS.hlsl" />
+    <None Include="Resources\Terrain.PS.hlsl" />
+    <None Include="Resources\TerrainShadow.VS.hlsl" />
+    <None Include="Resources\postprocess\default.postpreset" />
+    <None Include="Resources\terrain\default.terrainpreset" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

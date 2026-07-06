@@ -1,0 +1,6 @@
+# actor|id|displayName|meshId|radius|hitPoints|lifetime|r|g|b|a|bulletPatternId
+# combat|fireInterval|firstShotDelay|bulletSpeed|bulletPatternId
+# movement|forwardSpeed
+actor|drone_basic|Basic Attack Drone|ball|1.2|28|9|1.0|0.34|0.20|1.0|single_red
+combat|0.82|0.26|46|single_red
+movement|2

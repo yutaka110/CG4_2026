@@ -1,0 +1,3 @@
+actor|spire_anchor_turret|Spire Anchor Turret|animated_cube|1.7|76|11|1.0|0.24|0.12|1.0|spire_cross
+combat|0.68|0.30|44|spire_cross
+movement|0

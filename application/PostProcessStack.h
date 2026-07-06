@@ -46,6 +46,26 @@ struct PostProcessPass {
         float accretionGuideOpacity = 1.0f;
         float accretionLensStrength = 1.0f;
         float accretionGuideWidth = 0.18f;
+        float fogStart = 180.0f;
+        float fogEnd = 1200.0f;
+        float fogDensity = 0.32f;
+        float fogColorR = 0.46f;
+        float fogColorG = 0.40f;
+        float fogColorB = 0.34f;
+        float fogNearPlane = 0.1f;
+        float fogFarPlane = 5000.0f;
+        float fogDepthBoost = 0.35f;
+        float fogDepthBoostStart = 0.58f;
+        float backlitFogLift = 0.18f;
+        float openingGlowStrength = 0.42f;
+        float foregroundSilhouetteStrength = 0.34f;
+        float lowFogLayerStrength = 0.36f;
+        float coolFloorHazeStrength = 0.28f;
+        float contactAoRadiusPixels = 3.0f;
+        float contactAoBias = 0.25f;
+        float contactAoFalloff = 9.0f;
+        float contactAoNearPlane = 0.1f;
+        float contactAoFarPlane = 5000.0f;
     };
 
     std::string name;

@@ -22,7 +22,9 @@ inline VfxRenderContext BuildPassRenderContext(
         ctx.effectResourceCache,
         ctx.depthTextureHandle,
         ctx.beamTime,
-        &resources
+        &resources,
+        ctx.runtimeState,
+        ctx.terrainChunkManager
     };
 }
 } // namespace vfx

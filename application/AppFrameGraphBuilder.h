@@ -15,6 +15,7 @@ class AppSceneResources;
 class AppVfxRenderTargets;
 struct AppVfxRendererSet;
 class PostProcessStack;
+class TerrainChunkManager;
 struct AppRuntimeState;
 namespace ge3::resources {
 class EffectResourceCache;
@@ -39,6 +40,7 @@ struct AppFrameGraphBuildContext {
     FrameLoopState* frameState = nullptr;
     ID3D12DescriptorHeap* srvDescriptorHeap = nullptr;
     ID3D12Resource* backBuffer = nullptr;
+    ID3D12Resource* depthTextureResource = nullptr;
     D3D12_CPU_DESCRIPTOR_HANDLE rtv{};
     D3D12_CPU_DESCRIPTOR_HANDLE dsv{};
     D3D12_GPU_DESCRIPTOR_HANDLE spriteTextureHandle{};
@@ -49,6 +51,7 @@ struct AppFrameGraphBuildContext {
     const EffectRuntimeFrame* effectRuntime = nullptr;
     ParticleRenderFallback primaryParticleFx{};
     float beamTime = 0.0f;
+    TerrainChunkManager* terrainChunkManager = nullptr;
 };
 
 class AppFrameGraphBuilder {

@@ -3,7 +3,9 @@
 #include <Windows.h>
 #include <array>
 #include <cstdint>
+#include <fstream>
 #include <string>
+#include <vector>
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -17,6 +19,17 @@
 #include "graphics/RenderGraph.h"
 #include "graphics/SwapChain.h"
 #include "resources/ResourceRegistry.h"
+#include "course/CourseAsset.h"
+#include "course/CourseCollisionSystem.h"
+#include "course/CourseEventDispatcher.h"
+#include "course/EncounterDirector.h"
+#include "course/PlayerCombatFeelSystem.h"
+#include "course/RailCameraDirector.h"
+#include "course/RailLockOnSystem.h"
+#include "course/SectionCheckpointSystem.h"
+#include "terrain/RailPath.h"
+#include "terrain/TerrainChunkManager.h"
+#include "terrain/TerrainPresetStore.h"
 #include "utils/math/MathUtils.h"
 #include "AppSceneState.h"
 #include "AppSceneStateManager.h"
@@ -67,10 +80,24 @@ public:
     void Shutdown();
 
 private:
+    struct CourseObjectEditSnapshot;
+    struct CourseObjectDragState;
+
+    void EnterRailShooterScene() override;
+    void UpdateRailShooterFrame() override;
+    void RenderRailShooterFrame() override;
     void UpdateVfxPreviewFrame() override;
     void RenderVfxPreviewFrame() override;
     void BeginFrameSystems();
-    void SignalAndWaitGpu();
+    bool WaitForFrameSlot(uint32_t frameIndex);
+    bool SignalFrame(uint32_t frameIndex);
+    bool FlushGpu();
+    void ProcessCourseObjectViewportEditing();
+    CourseObjectEditSnapshot CaptureCourseObjectSnapshot() const;
+    void RestoreCourseObjectSnapshot(const CourseObjectEditSnapshot& snapshot);
+    void EnsureCourseObjectHistoryBaseline();
+    void CommitCourseObjectHistoryIfNeeded();
+    void ProcessCourseObjectUndoRedo();
     void ProcessIceProjectileMouseLaunch();
     void ProcessReleaseShowcaseControls(float deltaTime);
     void PlayShowcaseEffect(AppVfxRuntimeState::ShowcaseEffect effect, bool resetAutoTimer);
@@ -78,6 +105,27 @@ private:
     void FireShowcaseIceProjectile();
     void ConfigureShowcasePostProcess();
     void UpdateShowcaseWindowTitle();
+    void UpdateTerrainAuthoring(float deltaTime);
+    void RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList);
+    void ConfigureRenderGraphDebugDump();
+    void DumpRenderGraphDebugFrame();
+    void LoadRailShooterCourse();
+    void ApplyRailShooterCourse();
+    bool SaveRailShooterCourse(std::string* errorMessage = nullptr);
+    void TeleportRailShooterCourse(float distance);
+    void LogCourseEvents(const std::vector<CourseEventMarker>& events);
+    void ApplyRailShooterVisualPresets(float distance);
+    void DrawRailLockOnHud();
+    void DrawRailLockOnDebugPanel();
+    int ProcessRailLockOnRelease(const Vector3& muzzlePosition);
+    void QueueRailLockIceProjectile(const Vector3& start, const Vector3& target, int shotIndex);
+    void LogRailShooterRuntimeDiagnostics(const char* reason);
+    void LogRailShooterPerfSpike();
+    bool EnsureRailGpuTimingResources();
+    void ResolveCompletedRailGpuTiming(uint32_t backBufferIndex);
+    void BeginRailGpuTiming(ID3D12GraphicsCommandList* commandList, uint32_t backBufferIndex);
+    void EndRailGpuTiming(ID3D12GraphicsCommandList* commandList, uint32_t backBufferIndex);
+    void CaptureRailGpuTimingCpuMetadata(uint32_t backBufferIndex);
     bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
@@ -105,6 +153,21 @@ private:
     AppSceneStateManager sceneStateManager_;
     VfxEngine vfxEngine_;
     AppFrameGraphBuilder frameGraphBuilder_;
+    CourseAsset railShooterCourse_;
+    CourseRuntime railShooterCourseRuntime_;
+    CourseCollisionSystem railShooterCollisionSystem_;
+    SectionCheckpointSystem railShooterCheckpointSystem_;
+    PlayerCombatFeelSystem railShooterCombatFeelSystem_;
+    CourseEventDispatcher railShooterEventDispatcher_;
+    EncounterDirector railShooterEncounterDirector_;
+    RailCameraDirector railShooterCameraDirector_;
+    CourseSpawnRuntime railShooterSpawnRuntime_;
+    RailLockOnSystem railShooterLockOnSystem_;
+    std::string railShooterCoursePath_ = "Resources/courses/CanyonAssaultRoute01.course";
+    std::string railShooterCourseLoadStatus_;
+    RailPath railPath_;
+    TerrainChunkManager terrainChunkManager_;
+    TerrainPresetStore terrainPresetStore_;
     ge3::graphics::RenderGraph renderGraph_;
     ge3::resources::ResourceRegistry resourceRegistry_;
     ge3::resources::FrameTransientAllocator frameTransientAllocator_;
@@ -115,8 +178,69 @@ private:
     uint32_t lastTransientTargetStorageCount_ = 0;
     uint32_t lastTransientBufferCount_ = 0;
     uint32_t lastTransientBufferStorageCount_ = 0;
+    uint32_t vfxTelemetryFrameIndex_ = 0;
+    std::vector<uint64_t> frameFenceValues_;
+    uint64_t nextFrameFenceValue_ = 1;
+    struct RailGpuTimingSlot {
+        bool pending = false;
+        uint32_t frame = 0;
+        float distance = 0.0f;
+        std::string section;
+        double cpuNoPresentMs = 0.0;
+        double waitFrameSlotMs = 0.0;
+        double renderGraphExecuteMs = 0.0;
+        double endAndExecuteMs = 0.0;
+        double presentMs = 0.0;
+    };
+    Microsoft::WRL::ComPtr<ID3D12QueryHeap> railGpuTimingQueryHeap_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> railGpuTimingReadback_;
+    std::vector<RailGpuTimingSlot> railGpuTimingSlots_;
+    uint64_t railGpuTimestampFrequency_ = 0;
+    bool railGpuTimingReady_ = false;
+    bool railGpuTimingUnsupportedLogged_ = false;
+    bool renderGraphDumpConfigured_ = false;
+    bool renderGraphDumpEnabled_ = false;
+    uint32_t renderGraphDumpFrameLimit_ = 0;
+    uint32_t renderGraphDumpFrameIndex_ = 0;
+    std::ofstream renderGraphDump_;
     D3D12_RESOURCE_STATES sceneDepthState_ = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    float railShooterDistance_ = 0.0f;
+    uint32_t railShooterFrameIndex_ = 0;
+    bool railShooterInitialized_ = false;
+    bool gpuDeviceLost_ = false;
     bool previousLeftMouseDown_ = false;
+    struct CourseObjectEditSnapshot {
+        std::vector<CourseTerrainPlacement> terrainPlacements;
+        std::vector<CourseRockCluster> rockClusters;
+        int selectionType = 0;
+        int selectedTerrainPlacement = -1;
+        int selectedRockCluster = -1;
+    };
+    struct CourseObjectDragState {
+        bool active = false;
+        bool changed = false;
+        int type = -1;
+        int index = -1;
+        int axis = -1;
+        POINT startMouse{};
+        float startDistance = 0.0f;
+        float startLateral = 0.0f;
+        float startVertical = 0.0f;
+        float startForward = 0.0f;
+        Vector3 startScale = {1.0f, 1.0f, 1.0f};
+        Vector3 startRotation = {};
+        float startMinScale = 0.0f;
+        float startMaxScale = 0.0f;
+        Vector3 startSpread = {};
+        float startClearLaneRadius = 0.0f;
+    };
+    std::vector<CourseObjectEditSnapshot> courseObjectUndoStack_;
+    std::vector<CourseObjectEditSnapshot> courseObjectRedoStack_;
+    CourseObjectEditSnapshot courseObjectHistoryBaseline_{};
+    uint32_t courseObjectHistoryRevision_ = 0;
+    bool courseObjectHistoryInitialized_ = false;
+    CourseObjectDragState courseObjectDrag_{};
+    bool previousCourseEditorLeftMouseDown_ = false;
     bool releaseShowcaseInitialized_ = false;
     bool releaseShowcaseTitleDirty_ = true;
     std::array<bool, 256> previousKeyDown_{};

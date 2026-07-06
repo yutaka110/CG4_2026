@@ -569,6 +569,12 @@ void RenderGraph::Execute(ID3D12GraphicsCommandList* commandList) const {
     context.commandList = commandList;
     for (const RenderPassDesc* pass : orderedPasses) {
         if (pass != nullptr && pass->execute) {
+            if (!pass->name.empty()) {
+                commandList->SetMarker(
+                    0,
+                    pass->name.data(),
+                    static_cast<UINT>(pass->name.size()));
+            }
             std::unordered_set<std::string> transitioned;
             for (const RenderPassResourceAccess& access : pass->accesses) {
                 if (access.resource.empty() || transitioned.contains(access.resource)) {
@@ -732,8 +738,12 @@ std::string RenderGraph::ResolveStateKey(std::string_view name) const {
 }
 
 std::string RenderGraph::Describe() const {
-    std::ostringstream stream;
     const std::vector<RenderPassDebugInfo> passDebugInfo = BuildPassDebugInfo();
+    return Describe(passDebugInfo);
+}
+
+std::string RenderGraph::Describe(const std::vector<RenderPassDebugInfo>& passDebugInfo) const {
+    std::ostringstream stream;
     for (const RenderPassDebugInfo& pass : passDebugInfo) {
         stream << (pass.executed ? "[ON]  " : "[OFF] ") <<
             ToString(pass.layer) << "." << pass.name;

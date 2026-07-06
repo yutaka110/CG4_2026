@@ -7,6 +7,7 @@
 #include "../../AppRenderResources.h"
 #include "../../AppRuntimeState.h"
 #include "../../AppSceneResources.h"
+#include "../../terrain/TerrainChunkManager.h"
 #include "VfxComponentDraw.h"
 #include "graphics/RenderGraph.h"
 #include "resources/ResourceRegistry.h"
@@ -222,6 +223,14 @@ uint32_t ResolveGpuEmitterKey(const ParticleRenderInput& input, uint32_t fallbac
     return HashGpuEmitterKey(instanceId, componentId, input.primary.renderQueue, fallbackIndex);
 }
 
+uint32_t HashTerrainDustEmitterKey(uint32_t zoneKey, uint32_t fallbackIndex) {
+    uint32_t key = 2166136261u;
+    key = (key ^ 0x74525544u) * 16777619u;
+    key = (key ^ (zoneKey != 0 ? zoneKey : 0x9e3779b9u + fallbackIndex)) * 16777619u;
+    key &= 0x00ffffffu;
+    return key != 0 ? key : 1u;
+}
+
 float ResolveGpuEmitterTimelineAge(const ParticleRenderInput& input, float fallbackAge) {
     if (input.primary.componentInstance != nullptr) {
         return input.primary.componentInstance->age;
@@ -244,6 +253,32 @@ uint32_t ResolveParticleTextureIndex(
     return context.effectResourceCache->ResolveTextureIndex(
         common->texture,
         context.vfxTextureDescriptorIndex != 0 ? context.vfxTextureDescriptorIndex : 1);
+}
+
+uint32_t ResolveNamedParticleTextureIndex(
+    const VfxRenderContext& context,
+    std::string_view textureName) {
+    const uint32_t fallback = context.vfxTextureDescriptorIndex != 0 ? context.vfxTextureDescriptorIndex : 1;
+    if (context.effectResourceCache == nullptr) {
+        return fallback;
+    }
+    return context.effectResourceCache->ResolveTextureIndex(textureName, fallback);
+}
+
+bool HasTerrainDustEmitters(const VfxRenderContext& context) {
+    if (context.runtimeState == nullptr ||
+        context.terrainChunkManager == nullptr ||
+        !context.runtimeState->terrain.enabled ||
+        context.runtimeState->terrain.settings.dustZoneDensity <= 0.0f) {
+        return false;
+    }
+
+    for (const TerrainChunkDebugInfo& chunk : context.terrainChunkManager->Chunks()) {
+        if (!chunk.vfxZones.empty()) {
+            return true;
+        }
+    }
+    return false;
 }
 } // namespace
 
@@ -271,12 +306,17 @@ void ParticleRenderer::RegisterPasses(
         vfxResources.particle.routing.depthTarget,
         [this, ctx, vfxResources](ge3::graphics::RenderPassContext& passContext) {
             const ParticleRenderQueue& queue = ctx.effectRuntime->particleQueue;
-            if (!ctx.runtimeState->vfx.enableParticles || queue.empty()) {
+            const VfxRenderContext renderContext = vfx::BuildPassRenderContext(ctx, vfxResources);
+            const bool hasTerrainDust = HasTerrainDustEmitters(renderContext);
+            if (!ctx.runtimeState->vfx.enableParticles) {
+                return;
+            }
+            if (queue.empty() && !hasTerrainDust) {
                 return;
             }
             Draw(
                 passContext.commandList,
-                vfx::BuildPassRenderContext(ctx, vfxResources),
+                renderContext,
                 ctx.effectRuntime->ParticleInput(ctx.primaryParticleFx));
         }});
 }
@@ -551,11 +591,83 @@ void ParticleRenderer::Simulate(
         return requestedCount;
     };
 
+    auto simulateTerrainDust = [&](const TerrainVfxZone& zone, bool updateExistingParticles, uint32_t emitterIndex) -> uint32_t {
+        const float clampedIntensity = std::clamp(zone.intensity, 0.0f, 2.0f);
+        const float radius = (std::max)(0.25f, zone.radius);
+        const Vector4 tint = {
+            0.72f + clampedIntensity * 0.08f,
+            0.56f + clampedIntensity * 0.06f,
+            0.39f,
+            0.36f + clampedIntensity * 0.12f,
+        };
+        const Vector3 scale = {
+            (std::max)(0.35f, radius * 0.16f),
+            (std::max)(0.28f, radius * (0.11f + clampedIntensity * 0.025f)),
+            1.0f,
+        };
+        constexpr float kDustLifetime = 1.8f;
+        constexpr float kDustBurstCount = 4.0f;
+        constexpr float kDustSpawnFrequency = 0.11f;
+        constexpr float kDustRandomRotation = 1.0f;
+        const float spawnRadius = radius * (0.18f + clampedIntensity * 0.035f);
+        const uint32_t textureIndex = ResolveNamedParticleTextureIndex(context, "circle2");
+        const uint32_t emitterKey = HashTerrainDustEmitterKey(zone.key, emitterIndex);
+        const float turbulence = 0.34f + clampedIntensity * 0.18f;
+        const float deltaTime = context.frameState != nullptr ? context.frameState->deltaTime : 0.016f;
+
+        context.gpuParticleSystem->SimulateGpuManagedParticles(
+            commandList,
+            context.srvDescriptorHeap,
+            context.appPipelines->GetGpuParticleComputeRootSignature(),
+            context.appPipelines->GetGpuParticlePoolBeginComputePSO(),
+            context.appPipelines->GetGpuParticlePoolUpdateComputePSO(),
+            context.appPipelines->GetGpuParticleEmitterUpdateComputePSO(),
+            context.appPipelines->GetGpuParticleEmitterResetComputePSO(),
+            context.frameState->viewProjectionMatrix,
+            deltaTime,
+            context.beamTime,
+            tint,
+            scale,
+            0.32f,
+            turbulence,
+            0.75f,
+            spawnRadius,
+            0.18f,
+            kDustLifetime,
+            kDustBurstCount,
+            kDustSpawnFrequency,
+            kDustRandomRotation,
+            0.42f,
+            1.35f,
+            {0.0f, 0.0f, 1.0f, 1.0f},
+            textureIndex,
+            zone.position,
+            updateExistingParticles,
+            emitterIndex,
+            emitterKey,
+            emitterKey,
+            context.beamTime);
+
+        if (updateExistingParticles) {
+            gpuManagedFrameTint = tint;
+            gpuManagedFrameScale = scale;
+            gpuManagedFrameEmissive = 0.32f;
+            gpuManagedFrameTurbulence = turbulence;
+            gpuManagedFramePulseSpeed = 0.75f;
+            gpuManagedFrameSpawnRadius = spawnRadius;
+            gpuManagedFrameUvScrollSpeed = 0.18f;
+            gpuManagedFrameUvRect = {0.0f, 0.0f, 1.0f, 1.0f};
+            gpuManagedFrameTextureIndex = textureIndex;
+        }
+        return static_cast<uint32_t>(kDustBurstCount);
+    };
+
     uint32_t instanceCount = 0;
     if (useGpuManagedPool) {
+        bool updateExistingParticles = true;
+        uint32_t emitterIndex = 0;
+        bool emittedGpuManagedSource = false;
         if (!queue.empty()) {
-            bool updateExistingParticles = true;
-            uint32_t emitterIndex = 0;
             for (const ParticleRenderItem& item : queue) {
                 ParticleRenderInput input{};
                 input.primary = {
@@ -574,9 +686,23 @@ void ParticleRenderer::Simulate(
                 input.fallbackSettings = fallback.settings;
                 simulateGpuManaged(input, updateExistingParticles, emitterIndex);
                 updateExistingParticles = false;
+                emittedGpuManagedSource = true;
                 ++emitterIndex;
             }
-        } else {
+        }
+
+        if (HasTerrainDustEmitters(context)) {
+            for (const TerrainChunkDebugInfo& chunk : context.terrainChunkManager->Chunks()) {
+                for (const TerrainVfxZone& zone : chunk.vfxZones) {
+                    simulateTerrainDust(zone, updateExistingParticles, emitterIndex);
+                    updateExistingParticles = false;
+                    emittedGpuManagedSource = true;
+                    ++emitterIndex;
+                }
+            }
+        }
+
+        if (!emittedGpuManagedSource) {
             ParticleRenderInput input{};
             input.fallbackCommon = fallback.common;
             input.fallbackSettings = fallback.settings;
