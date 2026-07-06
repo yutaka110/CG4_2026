@@ -40,9 +40,9 @@ void PostProcessStack::ResetToVfxDefaults() {
     bloomExtract.enabled = true;
     bloomExtract.intensity = 1.0f;
     bloomExtract.resolutionScale = 0.5f;
-    bloomExtract.parameters.bloomThresholdMin = 0.45f;
-    bloomExtract.parameters.bloomThresholdMax = 1.1f;
-    bloomExtract.parameters.bloomSoftKnee = 0.2f;
+    bloomExtract.parameters.bloomThresholdMin = 0.62f;
+    bloomExtract.parameters.bloomThresholdMax = 1.35f;
+    bloomExtract.parameters.bloomSoftKnee = 0.16f;
     passes_.push_back(bloomExtract);
 
     PostProcessPass bloomDownsampleQuarter{};
@@ -131,7 +131,7 @@ void PostProcessStack::ResetToVfxDefaults() {
     bloomUpsampleQuarter.enabled = true;
     bloomUpsampleQuarter.intensity = 1.0f;
     bloomUpsampleQuarter.resolutionScale = 0.25f;
-    bloomUpsampleQuarter.parameters.bloomUpsampleBlend = 0.85f;
+    bloomUpsampleQuarter.parameters.bloomUpsampleBlend = 0.68f;
     bloomUpsampleQuarter.parameters.bloomUpsampleSoftKnee = 0.35f;
     passes_.push_back(bloomUpsampleQuarter);
 
@@ -145,7 +145,7 @@ void PostProcessStack::ResetToVfxDefaults() {
     bloomUpsampleHalf.enabled = true;
     bloomUpsampleHalf.intensity = 1.0f;
     bloomUpsampleHalf.resolutionScale = 0.5f;
-    bloomUpsampleHalf.parameters.bloomUpsampleBlend = 0.7f;
+    bloomUpsampleHalf.parameters.bloomUpsampleBlend = 0.55f;
     bloomUpsampleHalf.parameters.bloomUpsampleSoftKnee = 0.25f;
     passes_.push_back(bloomUpsampleHalf);
 
@@ -252,9 +252,9 @@ void PostProcessStack::ResetToVfxDefaults() {
     glowComposite.secondaryInputResource = "VfxAccumulation";
     glowComposite.tertiaryInputResource = kPostProcessOutputResource;
     glowComposite.enabled = true;
-    glowComposite.intensity = 1.0f;
+    glowComposite.intensity = 0.88f;
     glowComposite.resolutionScale = 1.0f;
-    glowComposite.parameters.glowWeight = 1.0f;
+    glowComposite.parameters.glowWeight = 0.74f;
     glowComposite.parameters.glowTintR = 1.0f;
     glowComposite.parameters.glowTintG = 0.95f;
     glowComposite.parameters.glowTintB = 1.2f;

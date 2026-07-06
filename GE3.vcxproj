@@ -185,6 +185,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\course\CourseMeshRenderQueue.cpp" />
     <ClCompile Include="application\course\CourseSpawnRuntime.cpp" />
     <ClCompile Include="application\course\CourseValidation.cpp" />
+    <ClCompile Include="application\course\DebrisCompositionSystem.cpp" />
     <ClCompile Include="application\course\EncounterDirector.cpp" />
     <ClCompile Include="application\course\EnemyWaveAsset.cpp" />
     <ClCompile Include="application\course\ObstacleAsset.cpp" />
@@ -694,6 +695,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\course\CourseMeshRenderQueue.h" />
     <ClInclude Include="application\course\CourseSpawnRuntime.h" />
     <ClInclude Include="application\course\CourseValidation.h" />
+    <ClInclude Include="application\course\DebrisCompositionSystem.h" />
     <ClInclude Include="application\course\EncounterDirector.h" />
     <ClInclude Include="application\course\EnemyWaveAsset.h" />
     <ClInclude Include="application\course\ObstacleAsset.h" />

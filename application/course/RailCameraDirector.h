@@ -36,6 +36,12 @@ public:
 private:
     CourseCameraKey SmoothRig(const CourseCameraKey& target, float deltaTime);
     void ApplySectionDirecting(CourseCameraKey& rig, const CourseSection* section, std::string& mode) const;
+    void ApplyCinematicShotDirecting(
+        CourseCameraKey& rig,
+        const CourseAsset* course,
+        float distance,
+        std::string& mode,
+        RailCameraDirectorFrame& frame) const;
     void ApplyEventDirecting(CourseCameraKey& rig, float deltaTime, std::string& mode);
 
     CourseCameraKey smoothedRig_{};

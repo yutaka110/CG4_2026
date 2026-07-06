@@ -8,6 +8,7 @@
 #include "course/CourseValidation.h"
 #include "course/PlayerCombatFeelSystem.h"
 #include "course/SectionCheckpointSystem.h"
+#include "AppRuntimeState.h"
 
 #include "../../externals/imgui/imgui.h"
 
@@ -264,6 +265,226 @@ bool InputString(const char* label, std::string& value) {
     return false;
 }
 
+bool DragVector3(const char* label, Vector3& value, float speed, float minValue, float maxValue) {
+    float values[3] = {value.x, value.y, value.z};
+    if (ImGui::DragFloat3(label, values, speed, minValue, maxValue, "%.2f")) {
+        value = {values[0], values[1], values[2]};
+        return true;
+    }
+    return false;
+}
+
+bool ColorEditVector4(const char* label, Vector4& value) {
+    float values[4] = {value.x, value.y, value.z, value.w};
+    if (ImGui::ColorEdit4(label, values)) {
+        value = {values[0], values[1], values[2], values[3]};
+        return true;
+    }
+    return false;
+}
+
+bool ComboTerrainLayer(const char* label, CourseTerrainLayer& layer) {
+    constexpr CourseTerrainLayer values[] = {
+        CourseTerrainLayer::GameplayCollision,
+        CourseTerrainLayer::HeroLandmark,
+        CourseTerrainLayer::VistaBackground,
+    };
+    int current = 0;
+    for (int index = 0; index < static_cast<int>(sizeof(values) / sizeof(values[0])); ++index) {
+        if (values[index] == layer) {
+            current = index;
+            break;
+        }
+    }
+    bool changed = false;
+    if (ImGui::BeginCombo(label, ToCourseTerrainLayerString(layer))) {
+        for (int index = 0; index < static_cast<int>(sizeof(values) / sizeof(values[0])); ++index) {
+            const bool selected = index == current;
+            if (ImGui::Selectable(ToCourseTerrainLayerString(values[index]), selected)) {
+                layer = values[index];
+                changed = true;
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    return changed;
+}
+
+bool ComboCollisionMode(const char* label, CourseTerrainCollisionMode& mode) {
+    constexpr CourseTerrainCollisionMode values[] = {
+        CourseTerrainCollisionMode::None,
+        CourseTerrainCollisionMode::Proxy,
+        CourseTerrainCollisionMode::Solid,
+    };
+    int current = 0;
+    for (int index = 0; index < static_cast<int>(sizeof(values) / sizeof(values[0])); ++index) {
+        if (values[index] == mode) {
+            current = index;
+            break;
+        }
+    }
+    bool changed = false;
+    if (ImGui::BeginCombo(label, ToCourseTerrainCollisionModeString(mode))) {
+        for (int index = 0; index < static_cast<int>(sizeof(values) / sizeof(values[0])); ++index) {
+            const bool selected = index == current;
+            if (ImGui::Selectable(ToCourseTerrainCollisionModeString(values[index]), selected)) {
+                mode = values[index];
+                changed = true;
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    return changed;
+}
+
+bool ComboRockAnchor(const char* label, CourseRockClusterAnchor& anchor) {
+    constexpr CourseRockClusterAnchor values[] = {
+        CourseRockClusterAnchor::LeftWall,
+        CourseRockClusterAnchor::RightWall,
+        CourseRockClusterAnchor::Floor,
+        CourseRockClusterAnchor::CeilingBreak,
+        CourseRockClusterAnchor::VistaWall,
+    };
+    int current = 0;
+    for (int index = 0; index < static_cast<int>(sizeof(values) / sizeof(values[0])); ++index) {
+        if (values[index] == anchor) {
+            current = index;
+            break;
+        }
+    }
+    bool changed = false;
+    if (ImGui::BeginCombo(label, ToCourseRockClusterAnchorString(anchor))) {
+        for (int index = 0; index < static_cast<int>(sizeof(values) / sizeof(values[0])); ++index) {
+            const bool selected = index == current;
+            if (ImGui::Selectable(ToCourseRockClusterAnchorString(values[index]), selected)) {
+                anchor = values[index];
+                changed = true;
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    return changed;
+}
+
+bool ComboRockType(const char* label, CourseRockClusterType& type) {
+    constexpr CourseRockClusterType values[] = {
+        CourseRockClusterType::AttachedDebris,
+        CourseRockClusterType::HeroFracture,
+        CourseRockClusterType::FallingDebris,
+        CourseRockClusterType::VistaSilhouette,
+    };
+    int current = 0;
+    for (int index = 0; index < static_cast<int>(sizeof(values) / sizeof(values[0])); ++index) {
+        if (values[index] == type) {
+            current = index;
+            break;
+        }
+    }
+    bool changed = false;
+    if (ImGui::BeginCombo(label, ToCourseRockClusterTypeString(type))) {
+        for (int index = 0; index < static_cast<int>(sizeof(values) / sizeof(values[0])); ++index) {
+            const bool selected = index == current;
+            if (ImGui::Selectable(ToCourseRockClusterTypeString(values[index]), selected)) {
+                type = values[index];
+                changed = true;
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    return changed;
+}
+
+int FindNearestTerrainMaterialPresetIndex(const CourseAsset& course, float distance) {
+    int bestIndex = -1;
+    float bestDistance = FLT_MAX;
+    for (size_t index = 0; index < course.terrainMaterialPresets.size(); ++index) {
+        const float delta = std::abs(course.terrainMaterialPresets[index].distance - distance);
+        if (delta < bestDistance) {
+            bestDistance = delta;
+            bestIndex = static_cast<int>(index);
+        }
+    }
+    return bestIndex;
+}
+
+bool DrawTerrainMaterialPresetDetails(CourseAsset& course, float selectedDistance) {
+    bool changed = false;
+    static int selectedMaterialPreset = -1;
+    if (course.terrainMaterialPresets.empty()) {
+        if (ImGui::Button("Add Material Preset")) {
+            course.terrainMaterialPresets.push_back({selectedDistance, "new_material"});
+            selectedMaterialPreset = 0;
+            changed = true;
+        }
+        return changed;
+    }
+
+    if (selectedMaterialPreset < 0 ||
+        selectedMaterialPreset >= static_cast<int>(course.terrainMaterialPresets.size())) {
+        selectedMaterialPreset = FindNearestTerrainMaterialPresetIndex(course, selectedDistance);
+    }
+
+    const char* preview = selectedMaterialPreset >= 0
+        ? course.terrainMaterialPresets[static_cast<size_t>(selectedMaterialPreset)].id.c_str()
+        : "-";
+    if (ImGui::BeginCombo("Material Preset", preview)) {
+        for (size_t index = 0; index < course.terrainMaterialPresets.size(); ++index) {
+            const bool selected = static_cast<int>(index) == selectedMaterialPreset;
+            if (ImGui::Selectable(course.terrainMaterialPresets[index].id.c_str(), selected)) {
+                selectedMaterialPreset = static_cast<int>(index);
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Add At Object")) {
+        CourseTerrainMaterialPreset preset{};
+        preset.distance = selectedDistance;
+        preset.id = "object_material";
+        course.terrainMaterialPresets.push_back(preset);
+        selectedMaterialPreset = static_cast<int>(course.terrainMaterialPresets.size() - 1);
+        changed = true;
+    }
+
+    if (selectedMaterialPreset < 0 ||
+        selectedMaterialPreset >= static_cast<int>(course.terrainMaterialPresets.size())) {
+        return changed;
+    }
+
+    CourseTerrainMaterialPreset& preset =
+        course.terrainMaterialPresets[static_cast<size_t>(selectedMaterialPreset)];
+    ImGui::PushID("MaterialPresetDetails");
+    changed |= InputString<96>("Material Id", preset.id);
+    changed |= ImGui::DragFloat("Material Distance", &preset.distance, 1.0f, 0.0f, 10000.0f, "%.1f");
+    changed |= ImGui::DragFloat("Blend Distance", &preset.blendDistance, 1.0f, 0.0f, 1000.0f, "%.1f");
+    changed |= ColorEditVector4("Base Color", preset.baseColor);
+    changed |= ImGui::DragFloat("Brightness", &preset.brightness, 0.01f, 0.05f, 3.0f, "%.2f");
+    changed |= ImGui::DragFloat("Specular", &preset.specularStrength, 0.005f, 0.0f, 0.35f, "%.3f");
+    changed |= ImGui::DragFloat("Rim", &preset.rimLightStrength, 0.01f, 0.0f, 2.0f, "%.2f");
+    changed |= ImGui::DragFloat("Backlight Rim", &preset.backlightRimBoost, 0.01f, 0.0f, 2.0f, "%.2f");
+    changed |= ImGui::DragFloat("Cavity AO", &preset.cavityAoStrength, 0.01f, 0.0f, 1.5f, "%.2f");
+    changed |= ImGui::DragFloat("Detail Normal", &preset.detailNormalStrength, 0.01f, 0.0f, 2.0f, "%.2f");
+    changed |= ImGui::DragFloat("Micro Detail", &preset.microDetailStrength, 0.01f, 0.0f, 2.0f, "%.2f");
+    changed |= ImGui::DragFloat("Sky Fill", &preset.skyFillStrength, 0.01f, 0.0f, 1.2f, "%.2f");
+    ImGui::PopID();
+    return changed;
+}
+
 CourseValidationReport BuildValidationReport(const CourseTimelineDebugPanelInput& input, const CourseAsset& course) {
     CourseValidationOptions options{};
     options.railLength = input.railLength;
@@ -413,6 +634,185 @@ void DrawTerrainPlacementTable(const CourseAsset& course, float currentDistance)
             placement.lateralOffset,
             placement.verticalOffset,
             placement.forwardOffset);
+    }
+
+    ImGui::EndTable();
+}
+
+void DrawRockClusterTable(const CourseAsset& course, float currentDistance) {
+    if (!ImGui::BeginTable(
+            "CourseRockClusterTable",
+            8,
+            ImGuiTableFlags_Borders |
+                ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_ScrollY |
+                ImGuiTableFlags_Resizable,
+            ImVec2(0.0f, 220.0f))) {
+        return;
+    }
+
+    ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 58.0f);
+    ImGui::TableSetupColumn("Dist", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+    ImGui::TableSetupColumn("Id", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Mesh", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+    ImGui::TableSetupColumn("Anchor", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+    ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 64.0f);
+    ImGui::TableSetupColumn("Rules");
+    ImGui::TableHeadersRow();
+
+    for (const CourseRockCluster& cluster : course.rockClusters) {
+        const float behind = (std::max)(0.0f, cluster.cullBehindDistance);
+        const float ahead = (std::max)(0.0f, cluster.cullAheadDistance);
+        const float delta = cluster.distance - currentDistance;
+        const bool active = delta >= -behind && delta <= ahead;
+        const bool retired = delta < -behind;
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextColored(
+            active ? ImVec4(0.42f, 0.92f, 0.56f, 1.0f) :
+                retired ? ImVec4(0.55f, 0.65f, 0.72f, 1.0f) :
+                ImVec4(0.45f, 0.85f, 1.0f, 1.0f),
+            "%s",
+            active ? "active" : retired ? "retired" : "ahead");
+        ImGui::TableNextColumn();
+        ImGui::Text("%.0f", cluster.distance);
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(cluster.id.c_str());
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(cluster.meshId.c_str());
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(ToCourseRockClusterAnchorString(cluster.anchor));
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(ToCourseRockClusterTypeString(cluster.type));
+        ImGui::TableNextColumn();
+        ImGui::Text("%u", cluster.count);
+        ImGui::TableNextColumn();
+        ImGui::Text(
+            "scale %.1f-%.1f  clear %.1f  spread %.1f %.1f %.1f  rot %.0f %.0f %.0f  overrides %zu  cull %.0f/%.0f",
+            cluster.minScale,
+            cluster.maxScale,
+            cluster.clearLaneRadius,
+            cluster.spread.x,
+            cluster.spread.y,
+            cluster.spread.z,
+            cluster.rotation.x * 180.0f / 3.14159265358979323846f,
+            cluster.rotation.y * 180.0f / 3.14159265358979323846f,
+            cluster.rotation.z * 180.0f / 3.14159265358979323846f,
+            cluster.instanceOverrides.size(),
+            behind,
+            ahead);
+    }
+
+    ImGui::EndTable();
+}
+
+void DrawVisualPresetTable(const CourseAsset& course, float currentDistance) {
+    if (!ImGui::BeginTable(
+            "CourseVisualPresetTable",
+            6,
+            ImGuiTableFlags_Borders |
+                ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_ScrollY |
+                ImGuiTableFlags_Resizable,
+            ImVec2(0.0f, 240.0f))) {
+        return;
+    }
+
+    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 115.0f);
+    ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 58.0f);
+    ImGui::TableSetupColumn("Dist", ImGuiTableColumnFlags_WidthFixed, 78.0f);
+    ImGui::TableSetupColumn("End", ImGuiTableColumnFlags_WidthFixed, 78.0f);
+    ImGui::TableSetupColumn("Id", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Key Values");
+    ImGui::TableHeadersRow();
+
+    for (const CourseCinematicShotSet& shotSet : course.cinematicShotSets) {
+        const bool active = currentDistance >= shotSet.startDistance && currentDistance <= shotSet.endDistance;
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("Shot Set");
+        ImGui::TableNextColumn();
+        ImGui::TextColored(
+            active ? ImVec4(0.35f, 1.0f, 0.65f, 1.0f) : ImVec4(0.55f, 0.65f, 0.72f, 1.0f),
+            "%s",
+            active ? "active" : (shotSet.endDistance < currentDistance ? "done" : "ahead"));
+        ImGui::TableNextColumn();
+        ImGui::Text("%.0f", shotSet.startDistance);
+        ImGui::TableNextColumn();
+        ImGui::Text("%.0f", shotSet.endDistance);
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(shotSet.id.c_str());
+        ImGui::TableNextColumn();
+        ImGui::Text(
+            "%s  fog %s  L:%s C:%s M:%s  landmarks %zu/%zu",
+            shotSet.label.empty() ? "-" : shotSet.label.c_str(),
+            shotSet.fogMood.empty() ? "-" : shotSet.fogMood.c_str(),
+            shotSet.lightingPresetId.empty() ? "-" : shotSet.lightingPresetId.c_str(),
+            shotSet.cameraShotId.empty() ? "-" : shotSet.cameraShotId.c_str(),
+            shotSet.terrainMaterialId.empty() ? "-" : shotSet.terrainMaterialId.c_str(),
+            shotSet.heroLandmarkIds.size(),
+            shotSet.vistaLandmarkIds.size());
+    }
+
+    for (const CourseLightingPreset& preset : course.lightingPresets) {
+        const bool active = preset.distance <= currentDistance;
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("Lighting");
+        ImGui::TableNextColumn();
+        ImGui::TextColored(
+            active ? ImVec4(0.55f, 0.65f, 0.72f, 1.0f) : ImVec4(0.45f, 0.85f, 1.0f, 1.0f),
+            "%s",
+            active ? "seen" : "ahead");
+        ImGui::TableNextColumn();
+        ImGui::Text("%.0f", preset.distance);
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("-");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(preset.id.c_str());
+        ImGui::TableNextColumn();
+        ImGui::Text("sun %.2f  fog %.2f %.0f-%.0f", preset.sunIntensity, preset.fogIntensity, preset.fogStart, preset.fogEnd);
+    }
+
+    for (const CourseCinematicCameraShot& shot : course.cinematicCameraShots) {
+        const bool active = currentDistance >= shot.startDistance && currentDistance <= shot.endDistance;
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("Camera Shot");
+        ImGui::TableNextColumn();
+        ImGui::TextColored(
+            active ? ImVec4(0.35f, 1.0f, 0.65f, 1.0f) : ImVec4(0.55f, 0.65f, 0.72f, 1.0f),
+            "%s",
+            active ? "active" : (shot.endDistance < currentDistance ? "done" : "ahead"));
+        ImGui::TableNextColumn();
+        ImGui::Text("%.0f", shot.startDistance);
+        ImGui::TableNextColumn();
+        ImGui::Text("%.0f", shot.endDistance);
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(shot.id.c_str());
+        ImGui::TableNextColumn();
+        ImGui::Text("%s  fov %.1f  roll %.1f", shot.mode.c_str(), shot.fovOffset * 180.0f / 3.14159265358979323846f, shot.rollOffset * 180.0f / 3.14159265358979323846f);
+    }
+
+    for (const CourseTerrainMaterialPreset& preset : course.terrainMaterialPresets) {
+        const bool active = preset.distance <= currentDistance;
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("Material");
+        ImGui::TableNextColumn();
+        ImGui::TextColored(
+            active ? ImVec4(0.55f, 0.65f, 0.72f, 1.0f) : ImVec4(0.45f, 0.85f, 1.0f, 1.0f),
+            "%s",
+            active ? "seen" : "ahead");
+        ImGui::TableNextColumn();
+        ImGui::Text("%.0f", preset.distance);
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("-");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(preset.id.c_str());
+        ImGui::TableNextColumn();
+        ImGui::Text("bright %.2f  rim %.2f  cavity %.2f", preset.brightness, preset.rimLightStrength, preset.cavityAoStrength);
     }
 
     ImGui::EndTable();
@@ -748,6 +1148,332 @@ bool DrawCameraAuthoringTable(CourseAsset& course) {
     return changed;
 }
 
+bool DrawCourseObjectEditor(const CourseTimelineDebugPanelInput& input, CourseAsset& course) {
+    if (input.runtimeState == nullptr) {
+        ImGui::TextUnformatted("Runtime state unavailable.");
+        return false;
+    }
+
+    TerrainAuthoringState& editor = input.runtimeState->terrain;
+    bool changed = false;
+    ImGui::Checkbox("Viewport Pick", &editor.enableCourseObjectViewportEditing);
+    ImGui::SameLine();
+    const char* gizmoModes[] = {"Move", "Scale", "Rotate"};
+    ImGui::SetNextItemWidth(112.0f);
+    ImGui::Combo("Gizmo", &editor.courseObjectGizmoMode, gizmoModes, IM_ARRAYSIZE(gizmoModes));
+    ImGui::SameLine();
+    ImGui::Checkbox("Snap", &editor.courseObjectSnapEnabled);
+    if (ImGui::Button("Undo")) {
+        editor.courseObjectUndoRequested = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Redo")) {
+        editor.courseObjectRedoRequested = true;
+    }
+    ImGui::SameLine();
+    ImGui::Text("History %u/%u", editor.courseObjectUndoDepth, editor.courseObjectRedoDepth);
+    ImGui::Checkbox("Frame Box", &editor.showCourseObjectFrame);
+    ImGui::SameLine();
+    ImGui::Checkbox("Depth Test", &editor.courseObjectFrameDepthTest);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(120.0f);
+    ImGui::DragFloat("Frame Padding", &editor.courseObjectFramePadding, 0.01f, 1.0f, 2.0f, "%.2f");
+    ImGui::SetNextItemWidth(140.0f);
+    ImGui::DragFloat("Move Sens", &editor.courseObjectMoveSensitivity, 0.005f, 0.001f, 2.0f, "%.3f");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(140.0f);
+    ImGui::DragFloat("Scale Sens", &editor.courseObjectScaleSensitivity, 0.001f, 0.0001f, 0.2f, "%.4f");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(140.0f);
+    ImGui::DragFloat("Rotate Sens", &editor.courseObjectRotateSensitivity, 0.0005f, 0.0001f, 0.1f, "%.4f");
+    ImGui::SetNextItemWidth(140.0f);
+    ImGui::DragFloat("Move Snap", &editor.courseObjectMoveSnap, 0.05f, 0.01f, 20.0f, "%.2f");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(140.0f);
+    ImGui::DragFloat("Scale Snap", &editor.courseObjectScaleSnap, 0.01f, 0.01f, 5.0f, "%.2f");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(140.0f);
+    ImGui::DragFloat("Rotate Snap", &editor.courseObjectRotateSnapDegrees, 0.5f, 0.1f, 90.0f, "%.1f deg");
+
+    if (ImGui::Button("Add Terrain Placement")) {
+        CourseTerrainPlacement placement{};
+        placement.distance = input.currentDistance;
+        placement.id = "new_terrain";
+        placement.meshId = "curved_canyon_wall";
+        placement.layer = CourseTerrainLayer::HeroLandmark;
+        placement.scale = {4.0f, 8.0f, 8.0f};
+        placement.cullBehindDistance = 160.0f;
+        placement.cullAheadDistance = 320.0f;
+        course.terrainPlacements.push_back(placement);
+        editor.courseObjectSelectionType = 0;
+        editor.selectedCourseTerrainPlacement = static_cast<int>(course.terrainPlacements.size() - 1);
+        editor.selectedCourseRockCluster = -1;
+        changed = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Add Rock Cluster")) {
+        CourseRockCluster cluster{};
+        cluster.distance = input.currentDistance;
+        cluster.id = "new_rock_cluster";
+        cluster.meshId = "curved_canyon_wall";
+        cluster.anchor = CourseRockClusterAnchor::LeftWall;
+        cluster.type = CourseRockClusterType::AttachedDebris;
+        cluster.count = 3;
+        cluster.minScale = 0.18f;
+        cluster.maxScale = 0.36f;
+        cluster.clearLaneRadius = 32.0f;
+        cluster.cullBehindDistance = 90.0f;
+        cluster.cullAheadDistance = 150.0f;
+        course.rockClusters.push_back(cluster);
+        editor.courseObjectSelectionType = 1;
+        editor.selectedCourseRockCluster = static_cast<int>(course.rockClusters.size() - 1);
+        editor.selectedCourseTerrainPlacement = -1;
+        changed = true;
+    }
+
+    ImGui::Separator();
+    ImGui::BeginChild("CourseObjectOutliner", ImVec2(0.0f, 240.0f), true);
+    if (ImGui::BeginTable(
+            "CourseObjectOutlinerTable",
+            5,
+            ImGuiTableFlags_Borders |
+                ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_ScrollY |
+                ImGuiTableFlags_Resizable)) {
+        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 86.0f);
+        ImGui::TableSetupColumn("Dist", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+        ImGui::TableSetupColumn("Id", ImGuiTableColumnFlags_WidthFixed, 230.0f);
+        ImGui::TableSetupColumn("Mesh", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+        ImGui::TableSetupColumn("State");
+        ImGui::TableHeadersRow();
+
+        for (size_t index = 0; index < course.terrainPlacements.size(); ++index) {
+            const CourseTerrainPlacement& placement = course.terrainPlacements[index];
+            const bool selected =
+                editor.courseObjectSelectionType == 0 &&
+                editor.selectedCourseTerrainPlacement == static_cast<int>(index);
+            ImGui::PushID(static_cast<int>(index));
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (ImGui::Selectable("Terrain", selected, ImGuiSelectableFlags_SpanAllColumns)) {
+                editor.courseObjectSelectionType = 0;
+                editor.selectedCourseTerrainPlacement = static_cast<int>(index);
+                editor.selectedCourseRockCluster = -1;
+            }
+            ImGui::TableNextColumn();
+            ImGui::Text("%.0f", placement.distance);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(placement.id.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(placement.meshId.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(ToCourseTerrainLayerString(placement.layer));
+            ImGui::PopID();
+        }
+
+        for (size_t index = 0; index < course.rockClusters.size(); ++index) {
+            const CourseRockCluster& cluster = course.rockClusters[index];
+            const bool selected =
+                editor.courseObjectSelectionType == 1 &&
+                editor.selectedCourseRockCluster == static_cast<int>(index);
+            ImGui::PushID(10000 + static_cast<int>(index));
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (ImGui::Selectable("Rock", selected, ImGuiSelectableFlags_SpanAllColumns)) {
+                editor.courseObjectSelectionType = 1;
+                editor.selectedCourseRockCluster = static_cast<int>(index);
+                editor.selectedCourseTerrainPlacement = -1;
+            }
+            ImGui::TableNextColumn();
+            ImGui::Text("%.0f", cluster.distance);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(cluster.id.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(cluster.meshId.c_str());
+            ImGui::TableNextColumn();
+            ImGui::Text("%s / %s", ToCourseRockClusterAnchorString(cluster.anchor), ToCourseRockClusterTypeString(cluster.type));
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::EndChild();
+
+    int removeTerrain = -1;
+    int removeRock = -1;
+    ImGui::SeparatorText("Details");
+    if (editor.courseObjectSelectionType == 0 &&
+        editor.selectedCourseTerrainPlacement >= 0 &&
+        editor.selectedCourseTerrainPlacement < static_cast<int>(course.terrainPlacements.size())) {
+        CourseTerrainPlacement& placement =
+            course.terrainPlacements[static_cast<size_t>(editor.selectedCourseTerrainPlacement)];
+        ImGui::PushID("TerrainDetails");
+        changed |= InputString<128>("Id", placement.id);
+        changed |= InputString<128>("Mesh", placement.meshId);
+        changed |= ComboTerrainLayer("Layer", placement.layer);
+        changed |= ComboCollisionMode("Collision", placement.collisionMode);
+        changed |= ImGui::DragFloat("Distance", &placement.distance, 1.0f, 0.0f, input.railLength, "%.1f");
+        changed |= ImGui::DragFloat("Lateral", &placement.lateralOffset, 0.25f, -500.0f, 500.0f, "%.2f");
+        changed |= ImGui::DragFloat("Vertical", &placement.verticalOffset, 0.25f, -500.0f, 500.0f, "%.2f");
+        changed |= ImGui::DragFloat("Forward", &placement.forwardOffset, 0.25f, -500.0f, 500.0f, "%.2f");
+        changed |= DragVector3("Scale", placement.scale, 0.10f, 0.01f, 200.0f);
+        Vector3 rotationDegrees = {
+            placement.rotation.x * 180.0f / 3.14159265358979323846f,
+            placement.rotation.y * 180.0f / 3.14159265358979323846f,
+            placement.rotation.z * 180.0f / 3.14159265358979323846f,
+        };
+        if (DragVector3("Rotation Deg", rotationDegrees, 0.25f, -360.0f, 360.0f)) {
+            placement.rotation = {
+                rotationDegrees.x * 3.14159265358979323846f / 180.0f,
+                rotationDegrees.y * 3.14159265358979323846f / 180.0f,
+                rotationDegrees.z * 3.14159265358979323846f / 180.0f,
+            };
+            changed = true;
+        }
+        changed |= ImGui::DragInt("Render Priority", &placement.renderPriority, 1.0f, -100, 100);
+        changed |= ImGui::DragFloat("Cull Behind", &placement.cullBehindDistance, 1.0f, -1.0f, 2000.0f, "%.1f");
+        changed |= ImGui::DragFloat("Cull Ahead", &placement.cullAheadDistance, 1.0f, -1.0f, 3000.0f, "%.1f");
+        if (ImGui::Button("Teleport To Object") && input.onTeleportToDistance) {
+            input.onTeleportToDistance(placement.distance);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Delete Object")) {
+            removeTerrain = editor.selectedCourseTerrainPlacement;
+        }
+        ImGui::SeparatorText("Material");
+        changed |= DrawTerrainMaterialPresetDetails(course, placement.distance);
+        ImGui::PopID();
+    } else if (editor.courseObjectSelectionType == 1 &&
+        editor.selectedCourseRockCluster >= 0 &&
+        editor.selectedCourseRockCluster < static_cast<int>(course.rockClusters.size())) {
+        CourseRockCluster& cluster =
+            course.rockClusters[static_cast<size_t>(editor.selectedCourseRockCluster)];
+        ImGui::PushID("RockClusterDetails");
+        changed |= InputString<128>("Id", cluster.id);
+        changed |= InputString<128>("Mesh", cluster.meshId);
+        changed |= ComboRockAnchor("Anchor", cluster.anchor);
+        changed |= ComboRockType("Type", cluster.type);
+        Vector3 clusterRotationDegrees = {
+            cluster.rotation.x * 180.0f / 3.14159265358979323846f,
+            cluster.rotation.y * 180.0f / 3.14159265358979323846f,
+            cluster.rotation.z * 180.0f / 3.14159265358979323846f,
+        };
+        if (DragVector3("Rotation Deg", clusterRotationDegrees, 0.25f, -360.0f, 360.0f)) {
+            cluster.rotation = {
+                clusterRotationDegrees.x * 3.14159265358979323846f / 180.0f,
+                clusterRotationDegrees.y * 3.14159265358979323846f / 180.0f,
+                clusterRotationDegrees.z * 3.14159265358979323846f / 180.0f,
+            };
+            changed = true;
+        }
+        changed |= ImGui::DragFloat("Distance", &cluster.distance, 1.0f, 0.0f, input.railLength, "%.1f");
+        int count = static_cast<int>(cluster.count);
+        if (ImGui::DragInt("Count", &count, 1.0f, 0, 32)) {
+            cluster.count = static_cast<uint32_t>((std::clamp)(count, 0, 32));
+            changed = true;
+        }
+        changed |= ImGui::DragFloat("Min Scale", &cluster.minScale, 0.01f, 0.01f, 20.0f, "%.2f");
+        changed |= ImGui::DragFloat("Max Scale", &cluster.maxScale, 0.01f, 0.01f, 20.0f, "%.2f");
+        changed |= DragVector3("Spread", cluster.spread, 0.10f, 0.0f, 500.0f);
+        changed |= ImGui::DragFloat("Clear Lane", &cluster.clearLaneRadius, 0.25f, 0.0f, 200.0f, "%.1f");
+        changed |= ImGui::DragFloat("Cull Behind", &cluster.cullBehindDistance, 1.0f, 0.0f, 2000.0f, "%.1f");
+        changed |= ImGui::DragFloat("Cull Ahead", &cluster.cullAheadDistance, 1.0f, 0.0f, 3000.0f, "%.1f");
+        if (ImGui::Button("Teleport To Cluster") && input.onTeleportToDistance) {
+            input.onTeleportToDistance(cluster.distance);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Delete Cluster")) {
+            removeRock = editor.selectedCourseRockCluster;
+        }
+        ImGui::SeparatorText("Instance Overrides");
+        if (ImGui::Button("Add Instance Override")) {
+            CourseRockCluster::InstanceTransformOverride transformOverride{};
+            transformOverride.index = cluster.instanceOverrides.empty()
+                ? 0u
+                : cluster.instanceOverrides.back().index + 1u;
+            if (cluster.count > 0) {
+                transformOverride.index = (std::min)(transformOverride.index, cluster.count - 1u);
+            }
+            cluster.instanceOverrides.push_back(transformOverride);
+            changed = true;
+        }
+        int removeOverride = -1;
+        if (ImGui::BeginTable(
+                "RockInstanceOverrideTable",
+                5,
+                ImGuiTableFlags_Borders |
+                    ImGuiTableFlags_RowBg |
+                    ImGuiTableFlags_Resizable)) {
+            ImGui::TableSetupColumn("Index", ImGuiTableColumnFlags_WidthFixed, 64.0f);
+            ImGui::TableSetupColumn("Local Offset", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+            ImGui::TableSetupColumn("Scale", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+            ImGui::TableSetupColumn("Rotation", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+            ImGui::TableSetupColumn("Edit", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableHeadersRow();
+            for (size_t overrideIndex = 0; overrideIndex < cluster.instanceOverrides.size(); ++overrideIndex) {
+                CourseRockCluster::InstanceTransformOverride& transformOverride =
+                    cluster.instanceOverrides[overrideIndex];
+                ImGui::PushID(static_cast<int>(overrideIndex));
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                int instanceIndex = static_cast<int>(transformOverride.index);
+                if (ImGui::DragInt("##Index", &instanceIndex, 1.0f, 0, 31)) {
+                    transformOverride.index = static_cast<uint32_t>((std::clamp)(instanceIndex, 0, 31));
+                    changed = true;
+                }
+                ImGui::TableNextColumn();
+                changed |= DragVector3("##Offset", transformOverride.localOffset, 0.10f, -500.0f, 500.0f);
+                ImGui::TableNextColumn();
+                changed |= DragVector3("##Scale", transformOverride.scale, 0.02f, 0.01f, 20.0f);
+                ImGui::TableNextColumn();
+                Vector3 overrideRotationDegrees = {
+                    transformOverride.rotation.x * 180.0f / 3.14159265358979323846f,
+                    transformOverride.rotation.y * 180.0f / 3.14159265358979323846f,
+                    transformOverride.rotation.z * 180.0f / 3.14159265358979323846f,
+                };
+                if (DragVector3("##Rotation", overrideRotationDegrees, 0.25f, -360.0f, 360.0f)) {
+                    transformOverride.rotation = {
+                        overrideRotationDegrees.x * 3.14159265358979323846f / 180.0f,
+                        overrideRotationDegrees.y * 3.14159265358979323846f / 180.0f,
+                        overrideRotationDegrees.z * 3.14159265358979323846f / 180.0f,
+                    };
+                    changed = true;
+                }
+                ImGui::TableNextColumn();
+                if (ImGui::Button("Remove")) {
+                    removeOverride = static_cast<int>(overrideIndex);
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if (removeOverride >= 0 &&
+            removeOverride < static_cast<int>(cluster.instanceOverrides.size())) {
+            cluster.instanceOverrides.erase(cluster.instanceOverrides.begin() + removeOverride);
+            changed = true;
+        }
+        ImGui::SeparatorText("Material");
+        changed |= DrawTerrainMaterialPresetDetails(course, cluster.distance);
+        ImGui::PopID();
+    } else {
+        ImGui::TextUnformatted("No object selected.");
+    }
+
+    if (removeTerrain >= 0 && removeTerrain < static_cast<int>(course.terrainPlacements.size())) {
+        course.terrainPlacements.erase(course.terrainPlacements.begin() + removeTerrain);
+        editor.selectedCourseTerrainPlacement = -1;
+        changed = true;
+    }
+    if (removeRock >= 0 && removeRock < static_cast<int>(course.rockClusters.size())) {
+        course.rockClusters.erase(course.rockClusters.begin() + removeRock);
+        editor.selectedCourseRockCluster = -1;
+        changed = true;
+    }
+    if (changed) {
+        ++editor.courseObjectEditRevision;
+    }
+    return changed;
+}
+
 void DrawCourseAuthoring(
     const CourseTimelineDebugPanelInput& input,
     CourseAsset& course,
@@ -879,11 +1605,21 @@ void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input) {
     CourseAsset& course = *input.course;
     const float railLength = (std::max)(0.0f, input.railLength);
     const CourseSection* section = course.FindSection(input.currentDistance);
+    const CourseCinematicShotSet* shotSet = course.FindCinematicShotSet(input.currentDistance);
     const CourseEventMarker* nextEvent = FindNextEvent(course, input.currentDistance);
     static CourseValidationReport validationReport{};
     static bool validationReady = false;
     static bool dirty = false;
+    static uint32_t seenCourseObjectEditRevision = 0;
     static std::string authoringStatus;
+
+    if (input.runtimeState != nullptr &&
+        input.runtimeState->terrain.courseObjectEditRevision != seenCourseObjectEditRevision) {
+        seenCourseObjectEditRevision = input.runtimeState->terrain.courseObjectEditRevision;
+        dirty = true;
+        validationReady = false;
+        authoringStatus = "Viewport object edit pending.";
+    }
 
     if (input.loadStatus != nullptr) {
         ImGui::TextUnformatted(input.loadStatus->c_str());
@@ -903,7 +1639,17 @@ void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input) {
         nextEvent != nullptr ? nextEvent->type.c_str() : "-",
         nextEvent != nullptr ? nextEvent->id.c_str() : "-",
         nextEvent != nullptr ? nextEvent->distance - input.currentDistance : 0.0f);
-    ImGui::Text("Terrain placements: %zu", course.terrainPlacements.size());
+    ImGui::Text(
+        "Shot Set: %s / %s",
+        shotSet != nullptr ? shotSet->id.c_str() : "-",
+        shotSet != nullptr ? shotSet->label.c_str() : "-");
+    ImGui::Text("Terrain placements: %zu  rock clusters: %zu", course.terrainPlacements.size(), course.rockClusters.size());
+    ImGui::Text(
+        "Visual presets: sets %zu  lighting %zu  shots %zu  materials %zu",
+        course.cinematicShotSets.size(),
+        course.lightingPresets.size(),
+        course.cinematicCameraShots.size(),
+        course.terrainMaterialPresets.size());
 
     DrawTimelineBar(input, course);
 
@@ -969,12 +1715,27 @@ void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input) {
                 authoringStatus);
             ImGui::EndTabItem();
         }
+        if (ImGui::BeginTabItem("Object Editor")) {
+            if (DrawCourseObjectEditor(input, course)) {
+                dirty = true;
+                validationReady = false;
+            }
+            ImGui::EndTabItem();
+        }
         if (ImGui::BeginTabItem("Events")) {
             DrawEventTable(course, input.currentDistance);
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Terrain")) {
             DrawTerrainPlacementTable(course, input.currentDistance);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Rock Clusters")) {
+            DrawRockClusterTable(course, input.currentDistance);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Visuals")) {
+            DrawVisualPresetTable(course, input.currentDistance);
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Enemies")) {

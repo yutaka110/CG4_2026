@@ -1763,6 +1763,10 @@ bool AppSceneResources::Initialize(
         {"uvChecker", "Resources/uvChecker.png"},
         {"fence", "Resources/fence/fence.png"},
         {"iceShard", "Resources/iceShard.png"},
+        {"courseOrganicRock", "Resources/course_meshes/materials/organic_rock_albedo.bmp"},
+        {"courseRibRock", "Resources/course_meshes/materials/rib_rock_albedo.bmp"},
+        {"courseRootRock", "Resources/course_meshes/materials/root_rock_albedo.bmp"},
+        {"courseVistaRock", "Resources/course_meshes/materials/vista_rock_albedo.bmp"},
     };
 
     for (uint32_t index = 0; index < _countof(vfxTextureLoadSpecs); ++index) {
@@ -2018,7 +2022,15 @@ bool AppSceneResources::Initialize(
             animatedCubeTextureSrvHandleGPU.ptr != 0,
         });
     }
-    auto registerCourseMesh = [&](const char* name, const char* directory, const char* filename) {
+    auto findManagedTextureGpu = [&](const char* textureName) {
+        for (const AppManagedTextureResource& texture : vfxTextureLibrary) {
+            if (texture.name == textureName && texture.gpu.ptr != 0) {
+                return texture.gpu;
+            }
+        }
+        return terrainAlbedoTextureSrvHandleGPU.ptr != 0 ? terrainAlbedoTextureSrvHandleGPU : textureSrvHandleGPU2;
+    };
+    auto registerCourseMesh = [&](const char* name, const char* directory, const char* filename, const char* textureName) {
         ModelData courseMeshData = LoadObjFile_Assimp(directory, filename);
         if (courseMeshData.vertices.empty() || courseMeshData.indices.empty()) {
             OutputDebugStringA(("[AppSceneResources] Course mesh has no indexed data: " + std::string(name) + "\n").c_str());
@@ -2041,16 +2053,16 @@ bool AppSceneResources::Initialize(
             filename,
             std::move(courseMeshData),
             courseMesh,
-            terrainAlbedoTextureSrvHandleGPU.ptr != 0 ? terrainAlbedoTextureSrvHandleGPU : textureSrvHandleGPU2,
-            true,
+            findManagedTextureGpu(textureName),
+            findManagedTextureGpu(textureName).ptr != 0,
         });
     };
-    registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj");
-    registerCourseMesh("rib_tunnel_wall", "Resources/course_meshes/RibTunnelWall", "RibTunnelWall.obj");
-    registerCourseMesh("root_spire_column", "Resources/course_meshes/RootSpireColumn", "RootSpireColumn.obj");
-    registerCourseMesh("curved_canyon_wall", "Resources/course_meshes/CurvedCanyonWall", "CurvedCanyonWall.obj");
-    registerCourseMesh("vista_hole_wall", "Resources/course_meshes/VistaHoleWall", "VistaHoleWall.obj");
-    registerCourseMesh("spire_broken_bridge_arc", "Resources/course_meshes/SpireBrokenBridgeArc", "SpireBrokenBridgeArc.obj");
+    registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj", "courseOrganicRock");
+    registerCourseMesh("rib_tunnel_wall", "Resources/course_meshes/RibTunnelWall", "RibTunnelWall.obj", "courseRibRock");
+    registerCourseMesh("root_spire_column", "Resources/course_meshes/RootSpireColumn", "RootSpireColumn.obj", "courseRootRock");
+    registerCourseMesh("curved_canyon_wall", "Resources/course_meshes/CurvedCanyonWall", "CurvedCanyonWall.obj", "courseOrganicRock");
+    registerCourseMesh("vista_hole_wall", "Resources/course_meshes/VistaHoleWall", "VistaHoleWall.obj", "courseVistaRock");
+    registerCourseMesh("spire_broken_bridge_arc", "Resources/course_meshes/SpireBrokenBridgeArc", "SpireBrokenBridgeArc.obj", "courseRootRock");
 
     vfxModelObjects.clear();
     vfxModelObjects.resize(kRuntimeVfxModelObjectCount);

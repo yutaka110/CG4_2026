@@ -336,6 +336,9 @@
     <ClCompile Include="application\course\CourseValidation.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\DebrisCompositionSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\EncounterDirector.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
@@ -784,6 +787,9 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\CourseValidation.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\DebrisCompositionSystem.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\EncounterDirector.h">

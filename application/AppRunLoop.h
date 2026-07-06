@@ -79,6 +79,9 @@ public:
     void Shutdown();
 
 private:
+    struct CourseObjectEditSnapshot;
+    struct CourseObjectDragState;
+
     void EnterRailShooterScene() override;
     void UpdateRailShooterFrame() override;
     void RenderRailShooterFrame() override;
@@ -88,6 +91,12 @@ private:
     bool WaitForFrameSlot(uint32_t frameIndex);
     bool SignalFrame(uint32_t frameIndex);
     bool FlushGpu();
+    void ProcessCourseObjectViewportEditing();
+    CourseObjectEditSnapshot CaptureCourseObjectSnapshot() const;
+    void RestoreCourseObjectSnapshot(const CourseObjectEditSnapshot& snapshot);
+    void EnsureCourseObjectHistoryBaseline();
+    void CommitCourseObjectHistoryIfNeeded();
+    void ProcessCourseObjectUndoRedo();
     void ProcessIceProjectileMouseLaunch();
     void ProcessReleaseShowcaseControls(float deltaTime);
     void PlayShowcaseEffect(AppVfxRuntimeState::ShowcaseEffect effect, bool resetAutoTimer);
@@ -104,6 +113,14 @@ private:
     bool SaveRailShooterCourse(std::string* errorMessage = nullptr);
     void TeleportRailShooterCourse(float distance);
     void LogCourseEvents(const std::vector<CourseEventMarker>& events);
+    void ApplyRailShooterVisualPresets(float distance);
+    void LogRailShooterRuntimeDiagnostics(const char* reason);
+    void LogRailShooterPerfSpike();
+    bool EnsureRailGpuTimingResources();
+    void ResolveCompletedRailGpuTiming(uint32_t backBufferIndex);
+    void BeginRailGpuTiming(ID3D12GraphicsCommandList* commandList, uint32_t backBufferIndex);
+    void EndRailGpuTiming(ID3D12GraphicsCommandList* commandList, uint32_t backBufferIndex);
+    void CaptureRailGpuTimingCpuMetadata(uint32_t backBufferIndex);
     bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
@@ -158,6 +175,23 @@ private:
     uint32_t vfxTelemetryFrameIndex_ = 0;
     std::vector<uint64_t> frameFenceValues_;
     uint64_t nextFrameFenceValue_ = 1;
+    struct RailGpuTimingSlot {
+        bool pending = false;
+        uint32_t frame = 0;
+        float distance = 0.0f;
+        std::string section;
+        double cpuNoPresentMs = 0.0;
+        double waitFrameSlotMs = 0.0;
+        double renderGraphExecuteMs = 0.0;
+        double endAndExecuteMs = 0.0;
+        double presentMs = 0.0;
+    };
+    Microsoft::WRL::ComPtr<ID3D12QueryHeap> railGpuTimingQueryHeap_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> railGpuTimingReadback_;
+    std::vector<RailGpuTimingSlot> railGpuTimingSlots_;
+    uint64_t railGpuTimestampFrequency_ = 0;
+    bool railGpuTimingReady_ = false;
+    bool railGpuTimingUnsupportedLogged_ = false;
     bool renderGraphDumpConfigured_ = false;
     bool renderGraphDumpEnabled_ = false;
     uint32_t renderGraphDumpFrameLimit_ = 0;
@@ -165,9 +199,42 @@ private:
     std::ofstream renderGraphDump_;
     D3D12_RESOURCE_STATES sceneDepthState_ = D3D12_RESOURCE_STATE_DEPTH_WRITE;
     float railShooterDistance_ = 0.0f;
+    uint32_t railShooterFrameIndex_ = 0;
     bool railShooterInitialized_ = false;
     bool gpuDeviceLost_ = false;
     bool previousLeftMouseDown_ = false;
+    struct CourseObjectEditSnapshot {
+        std::vector<CourseTerrainPlacement> terrainPlacements;
+        std::vector<CourseRockCluster> rockClusters;
+        int selectionType = 0;
+        int selectedTerrainPlacement = -1;
+        int selectedRockCluster = -1;
+    };
+    struct CourseObjectDragState {
+        bool active = false;
+        bool changed = false;
+        int type = -1;
+        int index = -1;
+        int axis = -1;
+        POINT startMouse{};
+        float startDistance = 0.0f;
+        float startLateral = 0.0f;
+        float startVertical = 0.0f;
+        float startForward = 0.0f;
+        Vector3 startScale = {1.0f, 1.0f, 1.0f};
+        Vector3 startRotation = {};
+        float startMinScale = 0.0f;
+        float startMaxScale = 0.0f;
+        Vector3 startSpread = {};
+        float startClearLaneRadius = 0.0f;
+    };
+    std::vector<CourseObjectEditSnapshot> courseObjectUndoStack_;
+    std::vector<CourseObjectEditSnapshot> courseObjectRedoStack_;
+    CourseObjectEditSnapshot courseObjectHistoryBaseline_{};
+    uint32_t courseObjectHistoryRevision_ = 0;
+    bool courseObjectHistoryInitialized_ = false;
+    CourseObjectDragState courseObjectDrag_{};
+    bool previousCourseEditorLeftMouseDown_ = false;
     bool releaseShowcaseInitialized_ = false;
     bool releaseShowcaseTitleDirty_ = true;
     std::array<bool, 256> previousKeyDown_{};

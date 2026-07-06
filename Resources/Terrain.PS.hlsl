@@ -843,14 +843,14 @@ PixelShaderOutput main(VertexShaderOutput input)
     float wetGrazingBase = saturate(dot(normal, lightDir) * 0.5f + 0.5f);
     float wetGrazing = Pow2(wetGrazingBase) * lerp(1.0f, wetGrazingBase, 0.18f);
     float wetFloorSpec = lerp(Pow8(wetHalf), Pow16(wetHalf), rockVariation) *
-        specularStrength * floorWaterFilmMask * (1.20f + wetGrazing * 0.95f + backlightRimBoost * 0.42f);
+        specularStrength * floorWaterFilmMask * (1.45f + wetGrazing * 1.10f + backlightRimBoost * 0.50f);
     float wetRidgeSpec = lerp(Pow32(wetHalf), Pow64(wetHalf), rockVariation) *
-        specularStrength * wallWetRidgeMask * (1.05f + highFrequencyDetail * 0.95f + microCracks * 0.35f);
+        specularStrength * wallWetRidgeMask * (1.20f + highFrequencyDetail * 1.05f + microCracks * 0.42f);
     float wetSparkleSpec = lerp(Pow64(wetHalf), Pow128(wetHalf), saturate(dryGrain)) *
-        specularStrength * wallWetRidgeMask * highFrequencyDetail * (1.65f + microCracks * 0.60f);
+        specularStrength * wallWetRidgeMask * highFrequencyDetail * (1.95f + microCracks * 0.70f);
     float3 wetSpecTint = lerp(float3(0.62f, 0.72f, 0.82f), float3(0.90f, 0.88f, 0.76f), nDotL);
     lit += wetSpecTint * (wetFloorSpec + wetRidgeSpec + wetSparkleSpec) * shadowVisibility;
-    lit += float3(0.13f, 0.22f, 0.30f) * floorWaterFilmMask * (0.12f + skyFillStrength * 0.22f) * (0.45f + upFacing * 0.55f);
+    lit += float3(0.16f, 0.27f, 0.36f) * floorWaterFilmMask * (0.14f + skyFillStrength * 0.28f) * (0.45f + upFacing * 0.55f);
 
     float silhouetteBase = 1.0f - saturate(dot(normal, viewDir));
     float silhouette = Pow2(silhouetteBase) * lerp(1.0f, silhouetteBase, 0.35f);

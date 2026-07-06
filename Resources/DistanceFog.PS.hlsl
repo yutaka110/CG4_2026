@@ -74,12 +74,12 @@ float4 main(PSInput input) : SV_TARGET
         smoothstep(0.18f, 0.84f, rangeMask);
 
     float fogMask = saturate(max(exponentialMask + depthBoost, skyMask) * gIntensity + floorLayer * 0.18f);
-    fogMask = min(fogMask, 0.66f + openingGlow * 0.08f);
+    fogMask = min(fogMask, 0.52f + openingGlow * 0.12f);
     float3 liftedFog =
         fogColor +
         float3(0.075f, 0.058f, 0.042f) * verticalLift +
         float3(0.18f, 0.13f, 0.055f) * backlitLift +
-        float3(0.70f, 0.68f, 0.62f) * openingGlow +
+        float3(0.48f, 0.46f, 0.42f) * openingGlow +
         float3(0.11f, 0.14f, 0.17f) * coolFloor;
     float3 result = lerp(color.rgb, liftedFog, fogMask);
 
@@ -91,11 +91,11 @@ float4 main(PSInput input) : SV_TARGET
         saturate(max(gForegroundSilhouetteStrength, 0.0f) *
         nearMask *
         (topMask * 0.78f + sideMask * 0.54f) *
-        (1.0f - openingGlow * 0.34f));
-    result = lerp(result, result * float3(0.34f, 0.29f, 0.25f), silhouetteMask);
+        (1.0f - openingGlow * 0.22f));
+    result = lerp(result, result * float3(0.23f, 0.20f, 0.18f), silhouetteMask);
 
     float3 whiteHot = float3(1.0f, 0.965f, 0.90f);
-    result += whiteHot * openingGlow * 0.30f;
+    result += whiteHot * openingGlow * 0.26f;
     result += float3(0.22f, 0.30f, 0.36f) * floorLayer * coolFloor * 0.11f;
     return float4(saturate(result), color.a);
 }

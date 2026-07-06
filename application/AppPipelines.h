@@ -94,6 +94,7 @@ public:
     ID3D12PipelineState* GetOrbitRibbonPSO() const { return orbitRibbonPso_.Get(); }
     ID3D12PipelineState* GetCylinderPSO() const { return cylinderPso_.Get(); }
     ID3D12PipelineState* GetSkeletonDebugPSO() const { return skeletonDebugPso_.Get(); }
+    ID3D12PipelineState* GetSkeletonDebugDepthTestPSO() const { return skeletonDebugDepthTestPso_.Get(); }
 
 private:
     // RootSignature
@@ -176,6 +177,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> orbitRibbonPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> cylinderPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> skeletonDebugPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> skeletonDebugDepthTestPso_;
 
     // Shader blobs are kept alive while PSO uses them
     ge3::core::ShaderCompiler shaderCompiler_;

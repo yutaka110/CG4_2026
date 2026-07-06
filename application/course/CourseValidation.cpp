@@ -72,6 +72,10 @@ bool NearlyEqual(float a, float b) {
     return std::abs(a - b) <= 0.01f;
 }
 
+bool IsBlankReference(const std::string& value) {
+    return value.empty() || value == "-";
+}
+
 float ResolveRailLength(const CourseAsset& course, float optionLength) {
     if (optionLength > 0.0f) {
         return optionLength;
@@ -227,6 +231,182 @@ CourseValidationReport ValidateCourseAsset(
         }
         if (vistaTerrainCount == 0) {
             AddIssue(report, CourseValidationSeverity::Info, "terrain", "No vista background terrain placements authored.");
+        }
+    }
+
+    for (size_t index = 0; index < course.rockClusters.size(); ++index) {
+        const CourseRockCluster& cluster = course.rockClusters[index];
+        const std::string subject = "rock_cluster[" + std::to_string(index) + "]";
+        if (cluster.id.empty()) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Rock cluster id is empty.", cluster.distance);
+        }
+        if (cluster.meshId.empty()) {
+            AddIssue(report, CourseValidationSeverity::Error, subject, "Rock cluster mesh id is empty.", cluster.distance);
+        }
+        if (cluster.distance < 0.0f || (railLength > 0.0f && cluster.distance > railLength + 0.01f)) {
+            AddIssue(report, CourseValidationSeverity::Error, subject, "Rock cluster is outside rail length.", cluster.distance);
+        }
+        if (cluster.count == 0) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Rock cluster count is zero.", cluster.distance);
+        }
+        if (cluster.count > 32) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Rock cluster count will be clamped at runtime.", cluster.distance);
+        }
+        const uint32_t authoredLimit =
+            cluster.type == CourseRockClusterType::HeroFracture ? 6u :
+            cluster.type == CourseRockClusterType::FallingDebris ? 12u :
+            cluster.type == CourseRockClusterType::VistaSilhouette ? 8u :
+            10u;
+        if (cluster.count > authoredLimit) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Rock cluster count is high for this composition type.", cluster.distance);
+        }
+        if (cluster.minScale <= 0.0f || cluster.maxScale <= 0.0f || cluster.maxScale < cluster.minScale) {
+            AddIssue(report, CourseValidationSeverity::Error, subject, "Rock cluster scale range is invalid.", cluster.distance);
+        }
+        if (cluster.spread.x < 0.0f || cluster.spread.y < 0.0f || cluster.spread.z < 0.0f) {
+            AddIssue(report, CourseValidationSeverity::Error, subject, "Rock cluster spread must be non-negative.", cluster.distance);
+        }
+        if (cluster.clearLaneRadius < 10.0f &&
+            cluster.type != CourseRockClusterType::VistaSilhouette) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Rock cluster clear lane radius is small; gameplay readability may suffer.", cluster.distance);
+        }
+        if (cluster.type == CourseRockClusterType::AttachedDebris &&
+            cluster.anchor == CourseRockClusterAnchor::CeilingBreak) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Attached debris on a ceiling break can read as floating; use falling_debris or wall/floor anchors.", cluster.distance);
+        }
+        if (cluster.type != CourseRockClusterType::FallingDebris &&
+            cluster.anchor == CourseRockClusterAnchor::CeilingBreak &&
+            cluster.spread.y > 12.0f) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Static ceiling rock cluster has high vertical spread; it may look like floating debris.", cluster.distance);
+        }
+        if (cluster.type == CourseRockClusterType::VistaSilhouette &&
+            cluster.anchor != CourseRockClusterAnchor::VistaWall) {
+            AddIssue(report, CourseValidationSeverity::Info, subject, "Vista silhouette clusters usually work best on vista_wall anchors.", cluster.distance);
+        }
+        if (cluster.cullAheadDistance < 40.0f || cluster.cullBehindDistance < 20.0f) {
+            AddIssue(report, CourseValidationSeverity::Info, subject, "Rock cluster cull distances are very tight.", cluster.distance);
+        }
+        std::unordered_set<uint32_t> overrideIndices;
+        for (const CourseRockCluster::InstanceTransformOverride& transformOverride : cluster.instanceOverrides) {
+            const std::string overrideSubject =
+                subject + ".override[" + std::to_string(transformOverride.index) + "]";
+            if (cluster.count > 0 && transformOverride.index >= cluster.count) {
+                AddIssue(report, CourseValidationSeverity::Warning, overrideSubject, "Rock instance override index is outside cluster count.", cluster.distance);
+            }
+            if (!overrideIndices.insert(transformOverride.index).second) {
+                AddIssue(report, CourseValidationSeverity::Warning, overrideSubject, "Duplicate rock instance override index; first matching override wins at runtime.", cluster.distance);
+            }
+            if (transformOverride.scale.x <= 0.0f ||
+                transformOverride.scale.y <= 0.0f ||
+                transformOverride.scale.z <= 0.0f) {
+                AddIssue(report, CourseValidationSeverity::Error, overrideSubject, "Rock instance override scale must be positive.", cluster.distance);
+            }
+        }
+    }
+
+    std::unordered_set<std::string> terrainPlacementIds;
+    for (const CourseTerrainPlacement& placement : course.terrainPlacements) {
+        if (!placement.id.empty()) {
+            terrainPlacementIds.insert(placement.id);
+        }
+    }
+
+    std::unordered_set<std::string> lightingPresetIds;
+    for (size_t index = 0; index < course.lightingPresets.size(); ++index) {
+        const CourseLightingPreset& preset = course.lightingPresets[index];
+        if (!preset.id.empty()) {
+            lightingPresetIds.insert(preset.id);
+        }
+        const std::string subject = "lighting[" + std::to_string(index) + "]";
+        if (preset.id.empty()) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Lighting preset id is empty.", preset.distance);
+        }
+        if (preset.distance < 0.0f || (railLength > 0.0f && preset.distance > railLength + 0.01f)) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Lighting preset is outside rail length.", preset.distance);
+        }
+        if (preset.blendDistance < 0.0f) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Lighting blend distance should be non-negative.", preset.distance);
+        }
+        if (preset.fogEnd <= preset.fogStart) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Fog end should be greater than fog start.", preset.distance);
+        }
+    }
+
+    std::unordered_set<std::string> cameraShotIds;
+    for (size_t index = 0; index < course.cinematicCameraShots.size(); ++index) {
+        const CourseCinematicCameraShot& shot = course.cinematicCameraShots[index];
+        if (!shot.id.empty()) {
+            cameraShotIds.insert(shot.id);
+        }
+        const std::string subject = "camera_shot[" + std::to_string(index) + "]";
+        if (shot.id.empty()) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Camera shot id is empty.", shot.startDistance);
+        }
+        if (shot.endDistance <= shot.startDistance) {
+            AddIssue(report, CourseValidationSeverity::Error, subject, "Camera shot range is invalid.", shot.startDistance);
+        }
+        if (shot.startDistance < 0.0f || (railLength > 0.0f && shot.endDistance > railLength + 0.01f)) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Camera shot extends outside rail length.", shot.startDistance);
+        }
+    }
+
+    std::unordered_set<std::string> terrainMaterialIds;
+    for (size_t index = 0; index < course.terrainMaterialPresets.size(); ++index) {
+        const CourseTerrainMaterialPreset& preset = course.terrainMaterialPresets[index];
+        if (!preset.id.empty()) {
+            terrainMaterialIds.insert(preset.id);
+        }
+        const std::string subject = "terrain_material[" + std::to_string(index) + "]";
+        if (preset.id.empty()) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Terrain material preset id is empty.", preset.distance);
+        }
+        if (preset.distance < 0.0f || (railLength > 0.0f && preset.distance > railLength + 0.01f)) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Terrain material preset is outside rail length.", preset.distance);
+        }
+        if (preset.brightness <= 0.0f) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Terrain material brightness should be positive.", preset.distance);
+        }
+    }
+
+    for (size_t index = 0; index < course.cinematicShotSets.size(); ++index) {
+        const CourseCinematicShotSet& shotSet = course.cinematicShotSets[index];
+        const std::string subject = "cinematic_shot_set[" + std::to_string(index) + "]";
+        if (shotSet.id.empty()) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Cinematic shot set id is empty.", shotSet.startDistance);
+        }
+        if (shotSet.label.empty()) {
+            AddIssue(report, CourseValidationSeverity::Info, subject, "Cinematic shot set label is empty.", shotSet.startDistance);
+        }
+        if (shotSet.endDistance <= shotSet.startDistance) {
+            AddIssue(report, CourseValidationSeverity::Error, subject, "Cinematic shot set range is invalid.", shotSet.startDistance);
+        }
+        if (shotSet.startDistance < 0.0f || (railLength > 0.0f && shotSet.endDistance > railLength + 0.01f)) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Cinematic shot set extends outside rail length.", shotSet.startDistance);
+        }
+        if (shotSet.heroLandmarkIds.empty() && shotSet.vistaLandmarkIds.empty()) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Cinematic shot set has no landmark references.", shotSet.startDistance);
+        }
+        for (const std::string& id : shotSet.heroLandmarkIds) {
+            if (!IsBlankReference(id) && terrainPlacementIds.find(id) == terrainPlacementIds.end()) {
+                AddIssue(report, CourseValidationSeverity::Warning, subject, "Missing hero landmark terrain placement: " + id, shotSet.startDistance);
+            }
+        }
+        for (const std::string& id : shotSet.vistaLandmarkIds) {
+            if (!IsBlankReference(id) && terrainPlacementIds.find(id) == terrainPlacementIds.end()) {
+                AddIssue(report, CourseValidationSeverity::Warning, subject, "Missing vista landmark terrain placement: " + id, shotSet.startDistance);
+            }
+        }
+        if (!IsBlankReference(shotSet.lightingPresetId) &&
+            lightingPresetIds.find(shotSet.lightingPresetId) == lightingPresetIds.end()) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Missing lighting preset: " + shotSet.lightingPresetId, shotSet.startDistance);
+        }
+        if (!IsBlankReference(shotSet.cameraShotId) &&
+            cameraShotIds.find(shotSet.cameraShotId) == cameraShotIds.end()) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Missing camera shot: " + shotSet.cameraShotId, shotSet.startDistance);
+        }
+        if (!IsBlankReference(shotSet.terrainMaterialId) &&
+            terrainMaterialIds.find(shotSet.terrainMaterialId) == terrainMaterialIds.end()) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Missing terrain material preset: " + shotSet.terrainMaterialId, shotSet.startDistance);
         }
     }
 

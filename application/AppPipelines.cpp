@@ -2301,6 +2301,18 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         d.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
         hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&skeletonDebugPso_));
         if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(SkeletonDebug)", hr);
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC depthTestDesc = d;
+        D3D12_DEPTH_STENCIL_DESC depthTest{};
+        depthTest.DepthEnable = TRUE;
+        depthTest.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        depthTest.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        depthTest.StencilEnable = FALSE;
+        depthTestDesc.DepthStencilState = depthTest;
+        hr = device->CreateGraphicsPipelineState(
+            &depthTestDesc,
+            IID_PPV_ARGS(&skeletonDebugDepthTestPso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(SkeletonDebugDepthTest)", hr);
     }
 
     // ------------------------------

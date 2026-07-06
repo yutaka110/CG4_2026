@@ -1,7 +1,66 @@
 #include "AppVfxRenderTargets.h"
 
+#include <atomic>
+#include <cstdio>
+#include <fstream>
+#include <thread>
+
 namespace {
 constexpr DXGI_FORMAT kVfxColorFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+constexpr uint32_t kRetiredTargetFrames = 8;
+constexpr DWORD kVfxTargetsWatchdogStallMs = 3000;
+
+std::atomic<bool> gVfxTargetsWatchdogStarted{false};
+std::atomic<DWORD> gVfxTargetsStageTick{0};
+std::atomic<const char*> gVfxTargetsStageName{nullptr};
+
+void WriteVfxTargetsWatchdogLine(const char* message) {
+    OutputDebugStringA(message);
+    std::ofstream log("logs/vfx_targets_watchdog.log", std::ios::app);
+    if (log) {
+        log << message;
+    }
+}
+
+void StartVfxTargetsWatchdogOnce() {
+    bool expected = false;
+    if (!gVfxTargetsWatchdogStarted.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    std::thread([]() {
+        const char* lastLoggedStage = nullptr;
+        for (;;) {
+            Sleep(1000);
+            const DWORD tick = gVfxTargetsStageTick.load(std::memory_order_relaxed);
+            if (tick == 0u) {
+                continue;
+            }
+            const DWORD idleMs = GetTickCount() - tick;
+            if (idleMs < kVfxTargetsWatchdogStallMs) {
+                continue;
+            }
+            const char* stage = gVfxTargetsStageName.load(std::memory_order_relaxed);
+            if (stage == lastLoggedStage) {
+                continue;
+            }
+            lastLoggedStage = stage;
+            char message[256]{};
+            std::snprintf(
+                message,
+                sizeof(message),
+                "[VfxTargetsWatchdog] stalled idleMs=%lu stage=%s\n",
+                static_cast<unsigned long>(idleMs),
+                stage != nullptr ? stage : "unknown");
+            WriteVfxTargetsWatchdogLine(message);
+        }
+    }).detach();
+}
+
+void RecordVfxTargetsStage(const char* stage) {
+    StartVfxTargetsWatchdogOnce();
+    gVfxTargetsStageName.store(stage != nullptr ? stage : "unknown", std::memory_order_relaxed);
+    gVfxTargetsStageTick.store(GetTickCount(), std::memory_order_relaxed);
+}
 
 D3D12_RESOURCE_BARRIER MakeTransition(
     ID3D12Resource* resource,
@@ -27,8 +86,6 @@ bool RequestEquals(
         lhs.clearColor[1] == rhs.clearColor[1] &&
         lhs.clearColor[2] == rhs.clearColor[2] &&
         lhs.clearColor[3] == rhs.clearColor[3] &&
-        lhs.lifetimeBegin == rhs.lifetimeBegin &&
-        lhs.lifetimeEnd == rhs.lifetimeEnd &&
         lhs.transient == rhs.transient &&
         lhs.pingPong == rhs.pingPong;
 }
@@ -109,9 +166,12 @@ bool AppVfxRenderTargets::Initialize(
     ge3::core::DescriptorHeapSet& heaps,
     uint32_t width,
     uint32_t height) {
+    RecordVfxTargetsStage("targets.initialize.begin");
     if (device == nullptr || width == 0 || height == 0) {
         return false;
     }
+    ReleaseExpiredRetiredTargets(heaps);
+    RecordVfxTargetsStage("targets.initialize.afterReleaseExpired");
 
     if (requests_.empty()) {
         const float opaqueBlack[4] = {0.0f, 0.0f, 0.0f, 1.0f};
@@ -122,16 +182,20 @@ bool AppVfxRenderTargets::Initialize(
     }
 
     if (initialized_ && RequestsMatch(width, height)) {
+        RecordVfxTargetsStage("targets.initialize.requestsMatched");
         return true;
     }
 
-    ReleaseTargets(heaps);
+    RecordVfxTargetsStage("targets.initialize.beforeReuseTargets");
+    std::unordered_map<std::string, Target> reusableTargets = std::move(targets_);
+    targets_.clear();
+    RecordVfxTargetsStage("targets.initialize.afterReuseTargets");
     width_ = width;
     height_ = height;
-    targets_.clear();
     initialized_ = true;
     std::unordered_set<std::string> usedStorageNames;
     for (const TargetRequest& request : requests_) {
+        RecordVfxTargetsStage("targets.initialize.beforeAcquire");
         Target requestedTarget{};
         requestedTarget.name = request.name;
         requestedTarget.width = static_cast<uint32_t>(width * request.resolutionScale);
@@ -151,7 +215,32 @@ bool AppVfxRenderTargets::Initialize(
         requestedTarget.transient = request.transient;
         requestedTarget.pingPong = request.pingPong;
 
-        Target target = AcquireTargetStorage(device, heaps, requestedTarget);
+        Target target{};
+        if (requestedTarget.storageName.empty()) {
+            const auto reusable = reusableTargets.find(requestedTarget.name);
+            if (reusable != reusableTargets.end() &&
+                MatchesTargetKey(reusable->second, MakeTargetKey(requestedTarget))) {
+                target = std::move(reusable->second);
+                reusableTargets.erase(reusable);
+                target.name = requestedTarget.name;
+                target.resolutionScale = requestedTarget.resolutionScale;
+                target.clearColor[0] = requestedTarget.clearColor[0];
+                target.clearColor[1] = requestedTarget.clearColor[1];
+                target.clearColor[2] = requestedTarget.clearColor[2];
+                target.clearColor[3] = requestedTarget.clearColor[3];
+                target.storageName.clear();
+                target.lifetimeBegin = requestedTarget.lifetimeBegin;
+                target.lifetimeEnd = requestedTarget.lifetimeEnd;
+                target.transient = requestedTarget.transient;
+                target.pingPong = requestedTarget.pingPong;
+                target.ownsStorage = true;
+            } else {
+                target = AcquireTargetStorage(device, heaps, requestedTarget);
+            }
+        } else {
+            target = AcquireTargetStorage(device, heaps, requestedTarget);
+        }
+        RecordVfxTargetsStage("targets.initialize.afterAcquire");
         if (target.resource == nullptr) {
             initialized_ = false;
             break;
@@ -161,8 +250,16 @@ bool AppVfxRenderTargets::Initialize(
         }
         targets_[target.name] = std::move(target);
     }
+    for (auto& [name, target] : reusableTargets) {
+        (void)name;
+        if (target.ownsStorage) {
+            ReleaseOwnedTarget(heaps, target);
+        }
+    }
     ReleaseUnusedTransientStorages(heaps, usedStorageNames);
+    RecordVfxTargetsStage("targets.initialize.afterReleaseUnused");
     activeRequests_ = requests_;
+    RecordVfxTargetsStage("targets.initialize.end");
     return initialized_;
 }
 
@@ -170,6 +267,7 @@ bool AppVfxRenderTargets::CreateTarget(
     ID3D12Device* device,
     ge3::core::DescriptorHeapSet& heaps,
     Target& target) {
+    RecordVfxTargetsStage("targets.create.begin");
     D3D12_RESOURCE_DESC desc{};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     desc.Width = target.width;
@@ -198,12 +296,14 @@ bool AppVfxRenderTargets::CreateTarget(
         target.state,
         &clearValue,
         IID_PPV_ARGS(&target.resource));
+    RecordVfxTargetsStage("targets.create.afterCreateCommittedResource");
     if (FAILED(hr)) {
         return false;
     }
 
     target.rtv = heaps.rtv.Allocate();
     target.srv = heaps.srv.Allocate();
+    RecordVfxTargetsStage("targets.create.afterAllocateDescriptors");
 
     D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
     rtvDesc.Format = target.format;
@@ -216,6 +316,7 @@ bool AppVfxRenderTargets::CreateTarget(
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = 1;
     device->CreateShaderResourceView(target.resource.Get(), &srvDesc, target.srv.cpu);
+    RecordVfxTargetsStage("targets.create.end");
     return true;
 }
 
@@ -269,9 +370,10 @@ AppVfxRenderTargets::Target AppVfxRenderTargets::AcquirePlannedTransientStorage(
     return logicalTarget;
 }
 
-void AppVfxRenderTargets::ReleaseOwnedTarget(
+void AppVfxRenderTargets::DestroyOwnedTarget(
     ge3::core::DescriptorHeapSet& heaps,
     Target& target) {
+    RecordVfxTargetsStage("targets.destroy.begin");
     if (target.rtv.IsValid()) {
         heaps.rtv.Free(target.rtv.index);
     }
@@ -281,6 +383,34 @@ void AppVfxRenderTargets::ReleaseOwnedTarget(
     target.rtv = {};
     target.srv = {};
     target.resource.Reset();
+    RecordVfxTargetsStage("targets.destroy.end");
+}
+
+void AppVfxRenderTargets::ReleaseExpiredRetiredTargets(ge3::core::DescriptorHeapSet& heaps) {
+    RecordVfxTargetsStage("targets.retired.begin");
+    for (auto it = retiredTargets_.begin(); it != retiredTargets_.end();) {
+        if (it->framesRemaining > 0u) {
+            --it->framesRemaining;
+            ++it;
+            continue;
+        }
+        DestroyOwnedTarget(heaps, it->target);
+        it = retiredTargets_.erase(it);
+    }
+    RecordVfxTargetsStage("targets.retired.end");
+}
+
+void AppVfxRenderTargets::ReleaseOwnedTarget(
+    ge3::core::DescriptorHeapSet& heaps,
+    Target& target) {
+    (void)heaps;
+    if (target.resource != nullptr || target.rtv.IsValid() || target.srv.IsValid()) {
+        RetiredTarget retired{};
+        retired.target = std::move(target);
+        retired.framesRemaining = kRetiredTargetFrames;
+        retiredTargets_.push_back(std::move(retired));
+    }
+    target = {};
 }
 
 void AppVfxRenderTargets::ReleaseTargets(ge3::core::DescriptorHeapSet& heaps) {

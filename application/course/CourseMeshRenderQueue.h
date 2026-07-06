@@ -61,6 +61,12 @@ public:
     size_t VisibleCount() const { return visibleCount_; }
 
 private:
+    void AddCourseDebrisInstances(
+        const CourseAsset& course,
+        float currentDistance,
+        const RailPath& railPath,
+        std::span<const CourseMeshModelBinding> models,
+        const Matrix4x4& viewProjection);
     CourseMeshRenderItem* AllocateItem();
     uint32_t ResolveModelIndex(
         std::span<const CourseMeshModelBinding> models,

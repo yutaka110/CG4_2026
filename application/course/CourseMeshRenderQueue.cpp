@@ -1,6 +1,7 @@
 #include "CourseMeshRenderQueue.h"
 
 #include "CourseSpawnRuntime.h"
+#include "DebrisCompositionSystem.h"
 #include "utils/dx12/BufferHelper.h"
 
 #include <algorithm>
@@ -48,25 +49,25 @@ CourseMeshRenderKind RenderKindForTerrainLayer(CourseTerrainLayer layer) {
 float DefaultCullBehind(CourseTerrainLayer layer) {
     switch (layer) {
     case CourseTerrainLayer::GameplayCollision:
-        return 90.0f;
+        return 70.0f;
     case CourseTerrainLayer::HeroLandmark:
-        return 260.0f;
+        return 180.0f;
     case CourseTerrainLayer::VistaBackground:
-        return 760.0f;
+        return 420.0f;
     }
-    return 260.0f;
+    return 180.0f;
 }
 
 float DefaultCullAhead(CourseTerrainLayer layer) {
     switch (layer) {
     case CourseTerrainLayer::GameplayCollision:
-        return 320.0f;
+        return 220.0f;
     case CourseTerrainLayer::HeroLandmark:
-        return 760.0f;
+        return 360.0f;
     case CourseTerrainLayer::VistaBackground:
-        return 1900.0f;
+        return 760.0f;
     }
-    return 760.0f;
+    return 360.0f;
 }
 
 bool ShouldDrawTerrainPlacement(const CourseTerrainPlacement& placement, float currentDistance) {
@@ -78,6 +79,10 @@ bool ShouldDrawTerrainPlacement(const CourseTerrainPlacement& placement, float c
         : DefaultCullAhead(placement.layer);
     const float delta = placement.distance - currentDistance;
     return delta >= -behind && delta <= ahead;
+}
+
+bool IsPlaceholderCourseMesh(const std::string& meshId) {
+    return meshId == "animated_cube" || meshId == "ball";
 }
 } // namespace
 
@@ -146,10 +151,8 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
             if (!ShouldDrawTerrainPlacement(placement, currentDistance)) {
                 continue;
             }
-
-            CourseMeshRenderItem* item = AllocateItem();
-            if (item == nullptr) {
-                break;
+            if (IsPlaceholderCourseMesh(placement.meshId)) {
+                continue;
             }
 
             const RailPathSample sample =
@@ -157,6 +160,15 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
             const uint32_t modelIndex =
                 ResolveModelIndex(models, placement.meshId, "animated_cube");
             const CourseMeshModelBinding& model = models[modelIndex];
+            if (IsPlaceholderCourseMesh(model.name)) {
+                continue;
+            }
+
+            CourseMeshRenderItem* item = AllocateItem();
+            if (item == nullptr) {
+                break;
+            }
+
             item->kind = RenderKindForTerrainLayer(placement.layer);
             item->terrainLayer = placement.layer;
             item->collisionMode = placement.collisionMode;
@@ -184,12 +196,17 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
                 center,
                 viewProjection);
         }
+        AddCourseDebrisInstances(
+            *course,
+            currentDistance,
+            railPath,
+            models,
+            viewProjection);
     }
 
     for (const CourseObstacleActor& obstacle : runtime.Obstacles()) {
-        CourseMeshRenderItem* item = AllocateItem();
-        if (item == nullptr) {
-            break;
+        if (IsPlaceholderCourseMesh(obstacle.desc.meshId)) {
+            continue;
         }
 
         const RailPathSample sample =
@@ -197,6 +214,15 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
         const uint32_t modelIndex =
             ResolveModelIndex(models, obstacle.desc.meshId, "animated_cube");
         const CourseMeshModelBinding& model = models[modelIndex];
+        if (IsPlaceholderCourseMesh(model.name)) {
+            continue;
+        }
+
+        CourseMeshRenderItem* item = AllocateItem();
+        if (item == nullptr) {
+            break;
+        }
+
         item->kind = CourseMeshRenderKind::Obstacle;
         item->name = obstacle.desc.id;
         item->meshId = obstacle.desc.meshId;
@@ -224,9 +250,8 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
     }
 
     for (const CourseEnemyActor& enemy : runtime.Enemies()) {
-        CourseMeshRenderItem* item = AllocateItem();
-        if (item == nullptr) {
-            break;
+        if (IsPlaceholderCourseMesh(enemy.desc.meshId)) {
+            continue;
         }
 
         const RailPathSample sample =
@@ -234,6 +259,15 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
         const uint32_t modelIndex =
             ResolveModelIndex(models, enemy.desc.meshId, "ball");
         const CourseMeshModelBinding& model = models[modelIndex];
+        if (IsPlaceholderCourseMesh(model.name)) {
+            continue;
+        }
+
+        CourseMeshRenderItem* item = AllocateItem();
+        if (item == nullptr) {
+            break;
+        }
+
         item->kind = CourseMeshRenderKind::Enemy;
         item->name = enemy.desc.role;
         item->meshId = enemy.desc.meshId;
@@ -258,6 +292,59 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
             {scale, scale, scale},
             RotationFromRailTangent(sample.tangent),
             center,
+            viewProjection);
+    }
+}
+
+void CourseMeshRenderQueue::AddCourseDebrisInstances(
+    const CourseAsset& course,
+    float currentDistance,
+    const RailPath& railPath,
+    std::span<const CourseMeshModelBinding> models,
+    const Matrix4x4& viewProjection) {
+    std::vector<CourseDebrisRenderInstance> debrisInstances;
+    DebrisCompositionSystem::BuildVisibleRockInstances(
+        course,
+        currentDistance,
+        railPath,
+        debrisInstances);
+
+    for (const CourseDebrisRenderInstance& debris : debrisInstances) {
+        if (IsPlaceholderCourseMesh(debris.meshId)) {
+            continue;
+        }
+
+        const uint32_t modelIndex =
+            ResolveModelIndex(models, debris.meshId, "curved_canyon_wall");
+        const CourseMeshModelBinding& model = models[modelIndex];
+        if (IsPlaceholderCourseMesh(model.name)) {
+            continue;
+        }
+
+        CourseMeshRenderItem* item = AllocateItem();
+        if (item == nullptr) {
+            break;
+        }
+
+        item->kind = RenderKindForTerrainLayer(debris.layer);
+        item->terrainLayer = debris.layer;
+        item->collisionMode = debris.collisionMode;
+        item->name = debris.id;
+        item->meshId = debris.meshId;
+        item->sourceActorId = 0;
+        item->modelIndex = modelIndex;
+        item->sortDistance = debris.sortDistance;
+        item->visible = model.loaded && item->transformData != nullptr;
+        if (!item->visible) {
+            continue;
+        }
+
+        WriteItemTransform(
+            *item,
+            model.rootLocal,
+            debris.scale,
+            debris.rotation,
+            debris.position,
             viewProjection);
     }
 }

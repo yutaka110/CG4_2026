@@ -3,6 +3,8 @@
 #include <DirectXMath.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -10,6 +12,7 @@
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include <thread>
 #include <utility>
 
 #include "AppFrameRenderer.h"
@@ -30,6 +33,189 @@ using namespace Microsoft::WRL;
 
 namespace {
 constexpr DWORD kGpuFenceWaitTimeoutMs = 2000;
+constexpr uint32_t kRailWatchdogStartFrame = 400;
+constexpr DWORD kRailWatchdogStallMs = 3000;
+constexpr double kRailGpuTimingLogThresholdMs = 10.0;
+constexpr double kRailFramePacingLogThresholdMs = 8.0;
+
+std::atomic<bool> gRailWatchdogStarted{false};
+std::atomic<uint32_t> gRailStageFrame{0};
+std::atomic<DWORD> gRailStageTick{0};
+std::atomic<const char*> gRailStageName{nullptr};
+
+using RailPerfClock = std::chrono::steady_clock;
+
+struct RailPerfFrameSample {
+    uint32_t frame = 0;
+    float distance = 0.0f;
+    double updateMs = 0.0;
+    double collisionMs = 0.0;
+    double visualPresetMs = 0.0;
+    double vfxUpdateMs = 0.0;
+    double terrainUpdateMs = 0.0;
+    double particleUpdateMs = 0.0;
+    double renderMs = 0.0;
+    double waitFrameSlotMs = 0.0;
+    double commandListBeginMs = 0.0;
+    double gpuParticleInitMs = 0.0;
+    double sceneTransformsMs = 0.0;
+    double syncCourseMeshMs = 0.0;
+    double imguiMs = 0.0;
+    double sceneRuntimeSyncMs = 0.0;
+    double registerPassesMs = 0.0;
+    double prepareGraphResourcesMs = 0.0;
+    double renderGraphDebugMs = 0.0;
+    double cascadeShadowMs = 0.0;
+    double renderGraphExecuteMs = 0.0;
+    double telemetryMs = 0.0;
+    double endFrameMs = 0.0;
+    double endAndExecuteMs = 0.0;
+    double signalMs = 0.0;
+    double presentMs = 0.0;
+};
+
+RailPerfFrameSample gRailPerfFrame{};
+
+double ElapsedMs(RailPerfClock::time_point begin, RailPerfClock::time_point end) {
+    return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+
+void ResetRailPerfFrame(uint32_t frameIndex, float distance) {
+    gRailPerfFrame = {};
+    gRailPerfFrame.frame = frameIndex;
+    gRailPerfFrame.distance = distance;
+}
+
+void WriteRailWatchdogLine(const char* message) {
+    OutputDebugStringA(message);
+    std::ofstream log("logs/rail_watchdog.log", std::ios::app);
+    if (log) {
+        log << message;
+    }
+}
+
+void StartRailWatchdogOnce() {
+    bool expected = false;
+    if (!gRailWatchdogStarted.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    std::thread([]() {
+        uint32_t lastLoggedFrame = 0;
+        const char* lastLoggedStage = nullptr;
+        for (;;) {
+            Sleep(1000);
+            const uint32_t frame = gRailStageFrame.load(std::memory_order_relaxed);
+            if (frame < kRailWatchdogStartFrame) {
+                continue;
+            }
+            const DWORD tick = gRailStageTick.load(std::memory_order_relaxed);
+            const DWORD idleMs = GetTickCount() - tick;
+            const char* stage = gRailStageName.load(std::memory_order_relaxed);
+            if (idleMs < kRailWatchdogStallMs) {
+                continue;
+            }
+            if (frame == lastLoggedFrame && stage == lastLoggedStage) {
+                continue;
+            }
+            lastLoggedFrame = frame;
+            lastLoggedStage = stage;
+            char message[256]{};
+            std::snprintf(
+                message,
+                sizeof(message),
+                "[RailWatchdog] stalled frame=%u idleMs=%lu stage=%s\n",
+                frame,
+                static_cast<unsigned long>(idleMs),
+                stage != nullptr ? stage : "unknown");
+            WriteRailWatchdogLine(message);
+        }
+    }).detach();
+}
+
+void RecordRailFrameStage(uint32_t frameIndex, const char* stage) {
+    if (frameIndex < kRailWatchdogStartFrame) {
+        return;
+    }
+    StartRailWatchdogOnce();
+    gRailStageName.store(stage != nullptr ? stage : "unknown", std::memory_order_relaxed);
+    gRailStageFrame.store(frameIndex, std::memory_order_relaxed);
+    gRailStageTick.store(GetTickCount(), std::memory_order_relaxed);
+}
+
+void ApplyRailShooterTerrainBudget(TerrainAuthoringState& terrain) {
+    terrain.autoReloadPreset = false;
+    terrain.showShadowDebugView = false;
+    terrain.cascadeShadowEnabled = false;
+    terrain.enableDebrisRendering = false;
+    terrain.settings.visibleAheadChunks =
+        (std::min)(terrain.settings.visibleAheadChunks, 4u);
+    terrain.settings.visibleBehindChunks =
+        (std::min)(terrain.settings.visibleBehindChunks, 1u);
+    terrain.settings.surfaceLongitudinalSteps =
+        (std::min)(terrain.settings.surfaceLongitudinalSteps, 24u);
+    terrain.settings.surfaceRadialSegments =
+        (std::min)(terrain.settings.surfaceRadialSegments, 36u);
+    terrain.settings.lodNearDistance =
+        (std::min)(terrain.settings.lodNearDistance, 140.0f);
+    terrain.settings.lodFarDistance =
+        (std::min)(terrain.settings.lodFarDistance, 320.0f);
+    terrain.settings.rockPillarDensity =
+        (std::min)(terrain.settings.rockPillarDensity, 0.22f);
+    terrain.settings.rockScatterDensity =
+        (std::min)(terrain.settings.rockScatterDensity, 0.24f);
+    terrain.settings.rockContactPebbleDensity =
+        (std::min)(terrain.settings.rockContactPebbleDensity, 0.24f);
+    terrain.settings.floorPebbleDensity =
+        (std::min)(terrain.settings.floorPebbleDensity, 0.18f);
+    terrain.settings.dustZoneDensity =
+        (std::min)(terrain.settings.dustZoneDensity, 0.16f);
+    terrain.debrisOcclusionUpdateInterval =
+        (std::max)(terrain.debrisOcclusionUpdateInterval, 8u);
+}
+
+bool ShouldTraceRailFrame(uint32_t frameIndex) {
+    static const bool enabled = []() {
+        char value[8] = {};
+        const DWORD length = GetEnvironmentVariableA(
+            "CG5_RAIL_FRAME_TRACE",
+            value,
+            static_cast<DWORD>(std::size(value)));
+        if (length == 0u) {
+            return false;
+        }
+        return value[0] != '0';
+    }();
+    return enabled && frameIndex >= 470u && frameIndex <= 700u;
+}
+
+bool RailShaderHotReloadEnabled() {
+    static const bool enabled = []() {
+        char value[8] = {};
+        const DWORD length = GetEnvironmentVariableA(
+            "CG5_RAIL_SHADER_HOT_RELOAD",
+            value,
+            static_cast<DWORD>(std::size(value)));
+        return length > 0u && value[0] != '0';
+    }();
+    return enabled;
+}
+
+void LogRailFrameStage(uint32_t frameIndex, float distance, const char* stage) {
+    RecordRailFrameStage(frameIndex, stage);
+    if (!ShouldTraceRailFrame(frameIndex)) {
+        return;
+    }
+    std::ostringstream line;
+    line << "[RailFrameTrace] frame=" << frameIndex
+         << " distance=" << distance
+         << " stage=" << (stage != nullptr ? stage : "unknown")
+         << "\n";
+    OutputDebugStringA(line.str().c_str());
+    std::ofstream log("logs/rail_frame_trace.log", std::ios::app);
+    if (log) {
+        log << line.str();
+    }
+}
 
 Vector3 NormalizeOr(const Vector3& value, const Vector3& fallback) {
     const float len2 = value.x * value.x + value.y * value.y + value.z * value.z;
@@ -159,6 +345,438 @@ uint32_t ReadEnvironmentUInt(const char* name, uint32_t fallback) {
     return static_cast<uint32_t>(parsed);
 }
 
+Vector3 RailLocalPoint(
+    const RailPath& railPath,
+    float distance,
+    float lateral,
+    float vertical,
+    float forward) {
+    const RailPathSample sample = railPath.Evaluate(distance + forward);
+    return Add(
+        Add(sample.position, Scale(sample.right, lateral)),
+        Scale(sample.up, vertical));
+}
+
+struct CourseObjectBounds {
+    int type = -1;
+    int index = -1;
+    Vector3 center{};
+    Vector3 extents{};
+    Vector3 axisX{1.0f, 0.0f, 0.0f};
+    Vector3 axisY{0.0f, 1.0f, 0.0f};
+    Vector3 axisZ{0.0f, 0.0f, 1.0f};
+};
+
+bool BuildCourseTerrainPlacementBounds(
+    const CourseTerrainPlacement& placement,
+    int index,
+    const RailPath& railPath,
+    CourseObjectBounds& outBounds) {
+    if (railPath.Length() <= 0.0f) {
+        return false;
+    }
+
+    const RailPathSample sample = railPath.Evaluate(placement.distance + placement.forwardOffset);
+    outBounds.type = 0;
+    outBounds.index = index;
+    outBounds.center = Add(
+        Add(sample.position, Scale(sample.right, placement.lateralOffset)),
+        Scale(sample.up, placement.verticalOffset));
+    outBounds.extents = {
+        (std::max)(2.0f, std::abs(placement.scale.x) * 2.5f),
+        (std::max)(2.0f, std::abs(placement.scale.y) * 2.5f),
+        (std::max)(2.0f, std::abs(placement.scale.z) * 2.5f),
+    };
+    outBounds.axisX = NormalizeOr(sample.right, {1.0f, 0.0f, 0.0f});
+    outBounds.axisY = NormalizeOr(sample.up, {0.0f, 1.0f, 0.0f});
+    outBounds.axisZ = NormalizeOr(sample.tangent, {0.0f, 0.0f, 1.0f});
+    return true;
+}
+
+bool BuildCourseRockClusterBounds(
+    const CourseRockCluster& cluster,
+    int index,
+    const RailPath& railPath,
+    CourseObjectBounds& outBounds) {
+    if (railPath.Length() <= 0.0f) {
+        return false;
+    }
+
+    const RailPathSample sample = railPath.Evaluate(cluster.distance);
+    float lateral = 0.0f;
+    float vertical = 2.0f;
+    float forward = 0.0f;
+    switch (cluster.anchor) {
+    case CourseRockClusterAnchor::LeftWall:
+        lateral = -cluster.clearLaneRadius - cluster.spread.x;
+        vertical = (std::max)(1.0f, cluster.spread.y * 0.4f);
+        break;
+    case CourseRockClusterAnchor::RightWall:
+        lateral = cluster.clearLaneRadius + cluster.spread.x;
+        vertical = (std::max)(1.0f, cluster.spread.y * 0.4f);
+        break;
+    case CourseRockClusterAnchor::Floor:
+        lateral = 0.0f;
+        vertical = 1.0f;
+        break;
+    case CourseRockClusterAnchor::CeilingBreak:
+        lateral = 0.0f;
+        vertical = (std::max)(8.0f, cluster.spread.y * 1.35f);
+        break;
+    case CourseRockClusterAnchor::VistaWall:
+        lateral = cluster.clearLaneRadius + cluster.spread.x;
+        vertical = (std::max)(12.0f, cluster.spread.y * 0.8f);
+        forward = cluster.spread.z * 1.45f;
+        break;
+    }
+
+    outBounds.type = 1;
+    outBounds.index = index;
+    outBounds.center = Add(
+        Add(sample.position, Scale(sample.right, lateral)),
+        Add(Scale(sample.up, vertical), Scale(sample.tangent, forward)));
+    const float scaleExtent = (std::max)(cluster.maxScale, cluster.minScale) * 6.0f;
+    outBounds.extents = {
+        (std::max)(4.0f, cluster.spread.x + scaleExtent),
+        (std::max)(4.0f, cluster.spread.y + scaleExtent),
+        (std::max)(4.0f, cluster.spread.z + scaleExtent),
+    };
+    outBounds.axisX = NormalizeOr(sample.right, {1.0f, 0.0f, 0.0f});
+    outBounds.axisY = NormalizeOr(sample.up, {0.0f, 1.0f, 0.0f});
+    outBounds.axisZ = NormalizeOr(sample.tangent, {0.0f, 0.0f, 1.0f});
+    return true;
+}
+
+bool BuildSelectedCourseObjectBounds(
+    const CourseAsset& course,
+    const RailPath& railPath,
+    const TerrainAuthoringState& authoring,
+    CourseObjectBounds& outBounds) {
+    if (authoring.courseObjectSelectionType == 0 &&
+        authoring.selectedCourseTerrainPlacement >= 0 &&
+        authoring.selectedCourseTerrainPlacement < static_cast<int>(course.terrainPlacements.size())) {
+        return BuildCourseTerrainPlacementBounds(
+            course.terrainPlacements[static_cast<size_t>(authoring.selectedCourseTerrainPlacement)],
+            authoring.selectedCourseTerrainPlacement,
+            railPath,
+            outBounds);
+    }
+    if (authoring.courseObjectSelectionType == 1 &&
+        authoring.selectedCourseRockCluster >= 0 &&
+        authoring.selectedCourseRockCluster < static_cast<int>(course.rockClusters.size())) {
+        return BuildCourseRockClusterBounds(
+            course.rockClusters[static_cast<size_t>(authoring.selectedCourseRockCluster)],
+            authoring.selectedCourseRockCluster,
+            railPath,
+            outBounds);
+    }
+    return false;
+}
+
+bool MakeScreenRay(
+    POINT clientPoint,
+    uint32_t windowWidth,
+    uint32_t windowHeight,
+    const Matrix4x4& viewProjection,
+    Vector3& outOrigin,
+    Vector3& outDirection) {
+    if (windowWidth == 0 || windowHeight == 0) {
+        return false;
+    }
+    if (clientPoint.x < 0 ||
+        clientPoint.y < 0 ||
+        clientPoint.x >= static_cast<LONG>(windowWidth) ||
+        clientPoint.y >= static_cast<LONG>(windowHeight)) {
+        return false;
+    }
+
+    const float x = (static_cast<float>(clientPoint.x) / static_cast<float>(windowWidth)) * 2.0f - 1.0f;
+    const float y = 1.0f - (static_cast<float>(clientPoint.y) / static_cast<float>(windowHeight)) * 2.0f;
+
+    Matrix4x4 viewProjectionCopy = viewProjection;
+    const Matrix4x4 inverseViewProjection = Inverse(viewProjectionCopy);
+    const Vector3 nearPoint = TransformCoord({x, y, 0.0f}, inverseViewProjection);
+    const Vector3 farPoint = TransformCoord({x, y, 1.0f}, inverseViewProjection);
+    outOrigin = nearPoint;
+    outDirection = NormalizeOr(Subtract(farPoint, nearPoint), {0.0f, 0.0f, 1.0f});
+    return true;
+}
+
+bool RayIntersectsAabb(
+    const Vector3& origin,
+    const Vector3& direction,
+    const Vector3& center,
+    const Vector3& extents,
+    float& outT) {
+    const Vector3 min = {center.x - extents.x, center.y - extents.y, center.z - extents.z};
+    const Vector3 max = {center.x + extents.x, center.y + extents.y, center.z + extents.z};
+    float tMin = 0.0f;
+    float tMax = 1000000.0f;
+
+    const auto testAxis = [&](float originAxis, float directionAxis, float minAxis, float maxAxis) {
+        if (std::abs(directionAxis) <= 0.00001f) {
+            return originAxis >= minAxis && originAxis <= maxAxis;
+        }
+        float t1 = (minAxis - originAxis) / directionAxis;
+        float t2 = (maxAxis - originAxis) / directionAxis;
+        if (t1 > t2) {
+            std::swap(t1, t2);
+        }
+        tMin = (std::max)(tMin, t1);
+        tMax = (std::min)(tMax, t2);
+        return tMin <= tMax;
+    };
+
+    if (!testAxis(origin.x, direction.x, min.x, max.x) ||
+        !testAxis(origin.y, direction.y, min.y, max.y) ||
+        !testAxis(origin.z, direction.z, min.z, max.z)) {
+        return false;
+    }
+
+    outT = tMin;
+    return tMax >= 0.0f;
+}
+
+float LengthSquared(const Vector3& value) {
+    return Dot(value, value);
+}
+
+float DistanceRayToSegment(
+    const Vector3& rayOrigin,
+    const Vector3& rayDirection,
+    const Vector3& segmentStart,
+    const Vector3& segmentEnd,
+    float& outRayT) {
+    const Vector3 u = rayDirection;
+    const Vector3 v = Subtract(segmentEnd, segmentStart);
+    const Vector3 w = Subtract(rayOrigin, segmentStart);
+    const float a = Dot(u, u);
+    const float b = Dot(u, v);
+    const float c = Dot(v, v);
+    const float d = Dot(u, w);
+    const float e = Dot(v, w);
+    const float denom = a * c - b * b;
+
+    float rayT = 0.0f;
+    float segmentT = 0.0f;
+    if (denom > 0.00001f) {
+        rayT = (b * e - c * d) / denom;
+        segmentT = (a * e - b * d) / denom;
+    }
+    rayT = (std::max)(0.0f, rayT);
+    segmentT = (std::clamp)(segmentT, 0.0f, 1.0f);
+
+    const Vector3 rayPoint = Add(rayOrigin, Scale(u, rayT));
+    const Vector3 segmentPoint = Add(segmentStart, Scale(v, segmentT));
+    outRayT = rayT;
+    return std::sqrt(LengthSquared(Subtract(rayPoint, segmentPoint)));
+}
+
+float CourseObjectGizmoLength(const CourseObjectBounds& bounds, float padding) {
+    const float maxExtent = (std::max)(bounds.extents.x, (std::max)(bounds.extents.y, bounds.extents.z));
+    return (std::max)(6.0f, maxExtent * (std::clamp)(padding, 1.0f, 2.0f) * 1.45f);
+}
+
+bool PickCourseObjectGizmoAxis(
+    const CourseObjectBounds& bounds,
+    const Vector3& rayOrigin,
+    const Vector3& rayDirection,
+    float padding,
+    int& outAxis) {
+    const float length = CourseObjectGizmoLength(bounds, padding);
+    const float threshold = (std::clamp)(length * 0.075f, 0.65f, 4.0f);
+    const Vector3 axes[3] = {bounds.axisX, bounds.axisY, bounds.axisZ};
+    float bestRayT = 1000000.0f;
+    int bestAxis = -1;
+    for (int axis = 0; axis < 3; ++axis) {
+        const Vector3 start = bounds.center;
+        const Vector3 end = Add(bounds.center, Scale(axes[axis], length));
+        float rayT = 0.0f;
+        const float distance = DistanceRayToSegment(rayOrigin, rayDirection, start, end, rayT);
+        if (distance <= threshold && rayT < bestRayT) {
+            bestRayT = rayT;
+            bestAxis = axis;
+        }
+    }
+    outAxis = bestAxis;
+    return bestAxis >= 0;
+}
+
+bool PickCourseObject(
+    const CourseAsset& course,
+    const RailPath& railPath,
+    const Vector3& rayOrigin,
+    const Vector3& rayDirection,
+    float padding,
+    CourseObjectBounds& outHit) {
+    const float safePadding = (std::clamp)(padding, 1.0f, 2.0f);
+    bool hit = false;
+    float bestT = 1000000.0f;
+
+    for (size_t index = 0; index < course.terrainPlacements.size(); ++index) {
+        CourseObjectBounds bounds{};
+        if (!BuildCourseTerrainPlacementBounds(
+                course.terrainPlacements[index],
+                static_cast<int>(index),
+                railPath,
+                bounds)) {
+            continue;
+        }
+        bounds.extents = Scale(bounds.extents, safePadding);
+        float t = 0.0f;
+        if (RayIntersectsAabb(rayOrigin, rayDirection, bounds.center, bounds.extents, t) && t < bestT) {
+            bestT = t;
+            outHit = bounds;
+            hit = true;
+        }
+    }
+
+    for (size_t index = 0; index < course.rockClusters.size(); ++index) {
+        CourseObjectBounds bounds{};
+        if (!BuildCourseRockClusterBounds(
+                course.rockClusters[index],
+                static_cast<int>(index),
+                railPath,
+                bounds)) {
+            continue;
+        }
+        bounds.extents = Scale(bounds.extents, safePadding);
+        float t = 0.0f;
+        if (RayIntersectsAabb(rayOrigin, rayDirection, bounds.center, bounds.extents, t) && t < bestT) {
+            bestT = t;
+            outHit = bounds;
+            hit = true;
+        }
+    }
+
+    return hit;
+}
+
+float SnapCourseObjectValue(float value, float step) {
+    if (step <= 0.00001f) {
+        return value;
+    }
+    return std::round(value / step) * step;
+}
+
+Vector3 SnapCourseObjectVector(const Vector3& value, float step) {
+    return {
+        SnapCourseObjectValue(value.x, step),
+        SnapCourseObjectValue(value.y, step),
+        SnapCourseObjectValue(value.z, step),
+    };
+}
+
+void AddSelectionFrameBox(
+    ge3::debug::DebugDrawSystem& debugDraw,
+    const Vector3& center,
+    const Vector3& extents,
+    const Vector3& axisX,
+    const Vector3& axisY,
+    const Vector3& axisZ,
+    float padding,
+    const Vector4& color,
+    int gizmoMode) {
+    const float safePadding = (std::clamp)(padding, 1.0f, 2.0f);
+    const Vector3 e = {
+        (std::max)(0.25f, std::abs(extents.x) * safePadding),
+        (std::max)(0.25f, std::abs(extents.y) * safePadding),
+        (std::max)(0.25f, std::abs(extents.z) * safePadding),
+    };
+    debugDraw.AddBox(
+        {center.x - e.x, center.y - e.y, center.z - e.z},
+        {center.x + e.x, center.y + e.y, center.z + e.z},
+        color);
+    debugDraw.AddPoint(center, 1.25f, color);
+    CourseObjectBounds visualBounds{};
+    visualBounds.center = center;
+    visualBounds.extents = extents;
+    visualBounds.axisX = axisX;
+    visualBounds.axisY = axisY;
+    visualBounds.axisZ = axisZ;
+    const float gizmoLength = CourseObjectGizmoLength(visualBounds, padding);
+    debugDraw.AddLine(
+        center,
+        Add(center, Scale(axisX, gizmoLength)),
+        {1.0f, 0.18f, 0.12f, 1.0f});
+    debugDraw.AddLine(
+        center,
+        Add(center, Scale(axisY, gizmoLength)),
+        {0.24f, 1.0f, 0.22f, 1.0f});
+    debugDraw.AddLine(
+        center,
+        Add(center, Scale(axisZ, gizmoLength)),
+        {0.25f, 0.55f, 1.0f, 1.0f});
+    debugDraw.AddPoint(Add(center, Scale(axisX, gizmoLength)), 1.0f, {1.0f, 0.18f, 0.12f, 1.0f});
+    debugDraw.AddPoint(Add(center, Scale(axisY, gizmoLength)), 1.0f, {0.24f, 1.0f, 0.22f, 1.0f});
+    debugDraw.AddPoint(Add(center, Scale(axisZ, gizmoLength)), 1.0f, {0.25f, 0.55f, 1.0f, 1.0f});
+    if (gizmoMode == 2) {
+        const float radius = (std::max)(3.0f, gizmoLength * 0.72f);
+        debugDraw.AddCircle(center, axisY, axisZ, radius, {1.0f, 0.18f, 0.12f, 1.0f}, 48);
+        debugDraw.AddCircle(center, axisX, axisZ, radius, {0.24f, 1.0f, 0.22f, 1.0f}, 48);
+        debugDraw.AddCircle(center, axisX, axisY, radius, {0.25f, 0.55f, 1.0f, 1.0f}, 48);
+    }
+}
+
+void AppendCourseObjectSelectionDebugDraw(
+    ge3::debug::DebugDrawSystem& debugDraw,
+    const CourseAsset& course,
+    const RailPath& railPath,
+    const TerrainAuthoringState& authoring) {
+    if (!authoring.showCourseObjectFrame || railPath.Length() <= 0.0f) {
+        return;
+    }
+
+    constexpr Vector4 kTerrainColor = {0.25f, 0.92f, 1.0f, 1.0f};
+    constexpr Vector4 kRockColor = {1.0f, 0.84f, 0.22f, 1.0f};
+    if (authoring.courseObjectSelectionType == 0 &&
+        authoring.selectedCourseTerrainPlacement >= 0 &&
+        authoring.selectedCourseTerrainPlacement < static_cast<int>(course.terrainPlacements.size())) {
+        CourseObjectBounds bounds{};
+        if (!BuildCourseTerrainPlacementBounds(
+                course.terrainPlacements[static_cast<size_t>(authoring.selectedCourseTerrainPlacement)],
+                authoring.selectedCourseTerrainPlacement,
+                railPath,
+                bounds)) {
+            return;
+        }
+        AddSelectionFrameBox(
+            debugDraw,
+            bounds.center,
+            bounds.extents,
+            bounds.axisX,
+            bounds.axisY,
+            bounds.axisZ,
+            authoring.courseObjectFramePadding,
+            kTerrainColor,
+            authoring.courseObjectGizmoMode);
+        return;
+    }
+
+    if (authoring.courseObjectSelectionType == 1 &&
+        authoring.selectedCourseRockCluster >= 0 &&
+        authoring.selectedCourseRockCluster < static_cast<int>(course.rockClusters.size())) {
+        CourseObjectBounds bounds{};
+        if (!BuildCourseRockClusterBounds(
+                course.rockClusters[static_cast<size_t>(authoring.selectedCourseRockCluster)],
+                authoring.selectedCourseRockCluster,
+                railPath,
+                bounds)) {
+            return;
+        }
+        AddSelectionFrameBox(
+            debugDraw,
+            bounds.center,
+            bounds.extents,
+            bounds.axisX,
+            bounds.axisY,
+            bounds.axisZ,
+            authoring.courseObjectFramePadding,
+            kRockColor,
+            authoring.courseObjectGizmoMode);
+    }
+}
+
 const char* WaitResultName(DWORD waitResult) {
     switch (waitResult) {
     case WAIT_OBJECT_0:
@@ -175,6 +793,15 @@ const char* WaitResultName(DWORD waitResult) {
 void WriteGpuDiagnosticLine(const char* message) {
     OutputDebugStringA(message);
     std::ofstream log("logs/gpu_fence_wait.log", std::ios::app);
+    if (log) {
+        log << message;
+    }
+}
+
+void WriteRailGpuTimingLine(const std::string& message) {
+    OutputDebugStringA(message.c_str());
+    std::filesystem::create_directories("logs");
+    std::ofstream log("logs/rail_gpu_timing.log", std::ios::app);
     if (log) {
         log << message;
     }
@@ -281,6 +908,26 @@ void DumpDredBreadcrumbs(ID3D12Device* device) {
             "[DRED] PageFaultVA=0x%llX\n",
             static_cast<unsigned long long>(pageFault.PageFaultVA));
         WriteGpuDiagnosticLine(message);
+
+        auto logAllocations = [](const char* label, const D3D12_DRED_ALLOCATION_NODE1* node) {
+            uint32_t index = 0;
+            while (node != nullptr && index < 24) {
+                char allocationMessage[512]{};
+                std::snprintf(
+                    allocationMessage,
+                    sizeof(allocationMessage),
+                    "[DRED]   %s[%u] type=%u name=%s\n",
+                    label,
+                    index,
+                    static_cast<unsigned int>(node->AllocationType),
+                    node->ObjectNameA != nullptr ? node->ObjectNameA : "(unnamed)");
+                WriteGpuDiagnosticLine(allocationMessage);
+                node = node->pNext;
+                ++index;
+            }
+        };
+        logAllocations("existing", pageFault.pHeadExistingAllocationNode);
+        logAllocations("recentFreed", pageFault.pHeadRecentFreedAllocationNode);
     }
 }
 
@@ -499,6 +1146,11 @@ void AppRunLoop::ApplyRailShooterCourse() {
     railShooterCombatFeelSystem_.Reset();
     railShooterEncounterDirector_.Reset();
     railShooterCameraDirector_.Reset();
+    courseObjectUndoStack_.clear();
+    courseObjectRedoStack_.clear();
+    courseObjectHistoryInitialized_ = false;
+    runtimeState_.terrain.courseObjectUndoDepth = 0;
+    runtimeState_.terrain.courseObjectRedoDepth = 0;
 }
 
 bool AppRunLoop::SaveRailShooterCourse(std::string* errorMessage) {
@@ -562,6 +1214,186 @@ void AppRunLoop::LogCourseEvents(const std::vector<CourseEventMarker>& events) {
     }
 }
 
+void AppRunLoop::ApplyRailShooterVisualPresets(float distance) {
+    const CourseLightingPreset lighting = railShooterCourse_.EvaluateLightingPreset(distance);
+    TerrainAuthoringState& terrain = runtimeState_.terrain;
+
+    terrain.useCanyonSunLighting = true;
+    terrain.canyonSunColor = lighting.sunColor;
+    terrain.canyonSunDirection = NormalizeOr(lighting.sunDirection, {-0.38f, -0.52f, 0.76f});
+    terrain.canyonSunIntensity = lighting.sunIntensity;
+
+    runtimeState_.clearColor[0] = lighting.clearColor.x;
+    runtimeState_.clearColor[1] = lighting.clearColor.y;
+    runtimeState_.clearColor[2] = lighting.clearColor.z;
+    runtimeState_.clearColor[3] = lighting.clearColor.w;
+
+    for (PostProcessPass& pass : vfxEngine_.PostProcess().MutablePasses()) {
+        if (pass.name != "DistanceFog") {
+            continue;
+        }
+        pass.enabled = lighting.fogIntensity > 0.0f;
+        pass.intensity = lighting.fogIntensity;
+        pass.parameters.fogColorR = lighting.fogColor.x;
+        pass.parameters.fogColorG = lighting.fogColor.y;
+        pass.parameters.fogColorB = lighting.fogColor.z;
+        pass.parameters.fogStart = lighting.fogStart;
+        pass.parameters.fogEnd = (std::max)(lighting.fogEnd, lighting.fogStart + 1.0f);
+        pass.parameters.fogDensity = lighting.fogDensity;
+        pass.parameters.backlitFogLift = lighting.backlitFogLift;
+        pass.parameters.openingGlowStrength = lighting.openingGlowStrength;
+        pass.parameters.foregroundSilhouetteStrength = lighting.foregroundSilhouetteStrength;
+        pass.parameters.lowFogLayerStrength = lighting.lowFogLayerStrength;
+        pass.parameters.coolFloorHazeStrength = lighting.coolFloorHazeStrength;
+    }
+
+    const CourseTerrainMaterialPreset material =
+        railShooterCourse_.EvaluateTerrainMaterialPreset(distance);
+    terrain.materialBaseColor = material.baseColor;
+    terrain.materialBrightness = material.brightness;
+    terrain.materialNoiseStrength = material.noiseStrength;
+    terrain.materialStrataStrength = material.strataStrength;
+    terrain.materialStrataBreakupStrength = material.strataBreakupStrength;
+    terrain.materialSpecularStrength = material.specularStrength;
+    terrain.materialRimLightStrength = material.rimLightStrength;
+    terrain.materialBacklightRimBoost = material.backlightRimBoost;
+    terrain.materialFloorSandShadowStrength = material.floorSandShadowStrength;
+    terrain.materialDetailNormalStrength = material.detailNormalStrength;
+    terrain.materialMicroDetailStrength = material.microDetailStrength;
+    terrain.materialCavityAoStrength = material.cavityAoStrength;
+    terrain.materialSkyFillStrength = material.skyFillStrength;
+
+    runtimeState_.materialData.color = {
+        material.baseColor.x * material.brightness * 0.50f,
+        material.baseColor.y * material.brightness * 0.46f,
+        material.baseColor.z * material.brightness * 0.42f,
+        1.0f,
+    };
+    runtimeState_.materialData.enableLighting = true;
+    runtimeState_.materialData.shininess = (std::max)(6.0f, material.specularStrength * 72.0f);
+    runtimeState_.materialData.environmentCoefficient = 0.025f;
+    runtimeState_.materialData.specularMode = 1;
+}
+
+void AppRunLoop::LogRailShooterRuntimeDiagnostics(const char* reason) {
+    const CourseSection* section = railShooterCourse_.FindSection(railShooterDistance_);
+    const CourseCinematicShotSet* shotSet = railShooterCourse_.FindCinematicShotSet(railShooterDistance_);
+    const EffectRuntimeFrame vfxFrame = vfxEngine_.Runtime().BuildFrame();
+    const TerrainDebrisCullingStats& debrisStats = terrainChunkManager_.LastDebrisCullingStats();
+    std::ofstream log("logs/course_runtime_heartbeat.log", std::ios::app);
+    std::ostringstream line;
+    line << "[RailShooterRuntime] reason=" << (reason != nullptr ? reason : "unknown")
+         << " frame=" << railShooterFrameIndex_
+         << " distance=" << railShooterDistance_
+         << " railLength=" << railPath_.Length()
+         << " section=\"" << (section != nullptr ? section->name : std::string("-")) << "\""
+         << " cinematicShot=\"" << (shotSet != nullptr ? shotSet->id : std::string("-")) << "\""
+         << " enemies=" << railShooterSpawnRuntime_.ActiveEnemyCount()
+         << " bullets=" << railShooterSpawnRuntime_.ActiveBulletCount()
+         << " obstacles=" << railShooterSpawnRuntime_.ActiveObstacleCount()
+         << " vfx=" << railShooterSpawnRuntime_.ActiveVfxCueCount()
+         << " effectInstances=" << vfxFrame.activeInstanceCount
+         << " effectComponents=" << vfxFrame.activeComponentCount
+         << " effectParticles=" << vfxFrame.particleQueue.size()
+         << " effectTrails=" << vfxFrame.trailQueue.size()
+         << " effectRings=" << vfxFrame.ringQueue.size()
+         << " effectCylinders=" << vfxFrame.cylinderQueue.size()
+         << " courseMeshVisible=" << scene_.CourseMeshes().VisibleCount()
+         << " terrainChunks=" << terrainChunkManager_.RenderChunks().size()
+         << " terrainDebris=" << debrisStats.debrisInstanceCount
+         << " terrainDebrisCullDispatches=" << debrisStats.debrisCullDispatchCount
+         << " cascadeShadow=" << (runtimeState_.terrain.cascadeShadowEnabled ? 1 : 0)
+         << " visibleMeshes=\"";
+    bool firstVisibleCourseMesh = true;
+    for (const CourseMeshRenderItem& item : scene_.CourseMeshes().Items()) {
+        if (!item.visible) {
+            continue;
+        }
+        if (!firstVisibleCourseMesh) {
+            line << ",";
+        }
+        firstVisibleCourseMesh = false;
+        line << item.name << ":" << item.meshId << "@" << item.sortDistance;
+    }
+    line << "\"\n";
+    OutputDebugStringA(line.str().c_str());
+    if (log) {
+        log << line.str();
+    }
+}
+
+void AppRunLoop::LogRailShooterPerfSpike() {
+    const double cpuNoPresentMs =
+        gRailPerfFrame.updateMs +
+        (std::max)(0.0, gRailPerfFrame.renderMs - gRailPerfFrame.presentMs);
+    const bool shouldLog =
+        cpuNoPresentMs >= 18.0 ||
+        gRailPerfFrame.updateMs >= 8.0 ||
+        gRailPerfFrame.terrainUpdateMs >= 4.0 ||
+        gRailPerfFrame.syncCourseMeshMs >= 3.0 ||
+        gRailPerfFrame.imguiMs >= 4.0 ||
+        gRailPerfFrame.prepareGraphResourcesMs >= 3.0 ||
+        gRailPerfFrame.renderGraphExecuteMs >= 6.0 ||
+        gRailPerfFrame.endAndExecuteMs >= 4.0 ||
+        gRailPerfFrame.presentMs >= 30.0;
+    if (!shouldLog) {
+        return;
+    }
+
+    const CourseSection* section = railShooterCourse_.FindSection(railShooterDistance_);
+    const CourseCinematicShotSet* shotSet = railShooterCourse_.FindCinematicShotSet(railShooterDistance_);
+    const EffectRuntimeFrame vfxFrame = vfxEngine_.Runtime().BuildFrame();
+    const TerrainDebrisCullingStats& debrisStats = terrainChunkManager_.LastDebrisCullingStats();
+    std::ostringstream line;
+    line << "[RailPerfSpike]"
+         << " frame=" << gRailPerfFrame.frame
+         << " distance=" << railShooterDistance_
+         << " section=\"" << (section != nullptr ? section->name : std::string("-")) << "\""
+         << " cinematicShot=\"" << (shotSet != nullptr ? shotSet->id : std::string("-")) << "\""
+         << " cpuNoPresentMs=" << cpuNoPresentMs
+         << " updateMs=" << gRailPerfFrame.updateMs
+         << " renderMs=" << gRailPerfFrame.renderMs
+         << " presentMs=" << gRailPerfFrame.presentMs
+         << " collisionMs=" << gRailPerfFrame.collisionMs
+         << " visualPresetMs=" << gRailPerfFrame.visualPresetMs
+         << " vfxUpdateMs=" << gRailPerfFrame.vfxUpdateMs
+         << " terrainUpdateMs=" << gRailPerfFrame.terrainUpdateMs
+         << " particleUpdateMs=" << gRailPerfFrame.particleUpdateMs
+         << " waitFrameSlotMs=" << gRailPerfFrame.waitFrameSlotMs
+         << " gpuParticleInitMs=" << gRailPerfFrame.gpuParticleInitMs
+         << " sceneTransformsMs=" << gRailPerfFrame.sceneTransformsMs
+         << " syncCourseMeshMs=" << gRailPerfFrame.syncCourseMeshMs
+         << " imguiMs=" << gRailPerfFrame.imguiMs
+         << " sceneRuntimeSyncMs=" << gRailPerfFrame.sceneRuntimeSyncMs
+         << " registerPassesMs=" << gRailPerfFrame.registerPassesMs
+         << " prepareGraphResourcesMs=" << gRailPerfFrame.prepareGraphResourcesMs
+         << " renderGraphDebugMs=" << gRailPerfFrame.renderGraphDebugMs
+         << " cascadeShadowMs=" << gRailPerfFrame.cascadeShadowMs
+         << " renderGraphExecuteMs=" << gRailPerfFrame.renderGraphExecuteMs
+         << " telemetryMs=" << gRailPerfFrame.telemetryMs
+         << " endFrameMs=" << gRailPerfFrame.endFrameMs
+         << " endAndExecuteMs=" << gRailPerfFrame.endAndExecuteMs
+         << " signalMs=" << gRailPerfFrame.signalMs
+         << " enemies=" << railShooterSpawnRuntime_.ActiveEnemyCount()
+         << " bullets=" << railShooterSpawnRuntime_.ActiveBulletCount()
+         << " obstacles=" << railShooterSpawnRuntime_.ActiveObstacleCount()
+         << " vfxCues=" << railShooterSpawnRuntime_.ActiveVfxCueCount()
+         << " effectInstances=" << vfxFrame.activeInstanceCount
+         << " effectComponents=" << vfxFrame.activeComponentCount
+         << " effectParticles=" << vfxFrame.particleQueue.size()
+         << " effectRings=" << vfxFrame.ringQueue.size()
+         << " courseMeshVisible=" << scene_.CourseMeshes().VisibleCount()
+         << " terrainChunks=" << terrainChunkManager_.RenderChunks().size()
+         << " terrainDebris=" << debrisStats.debrisInstanceCount
+         << " terrainDebrisCullDispatches=" << debrisStats.debrisCullDispatchCount
+         << "\n";
+    OutputDebugStringA(line.str().c_str());
+    std::ofstream log("logs/rail_perf_spikes.log", std::ios::app);
+    if (log) {
+        log << line.str();
+    }
+}
+
 void AppRunLoop::Shutdown() {
     FlushGpu();
     sceneStateManager_.Shutdown(*this);
@@ -572,12 +1404,23 @@ void AppRunLoop::EnterRailShooterScene() {
     if (railPath_.Length() <= 0.0f) {
         ApplyRailShooterCourse();
     }
+    ClearShowcaseEffects();
     railShooterCourseRuntime_.Reset(runtimeState_.terrain.previewDistance);
     railShooterDistance_ = railShooterCourseRuntime_.Distance();
+    railShooterFrameIndex_ = 0;
     railShooterInitialized_ = true;
 
     runtimeState_.terrain.enabled = true;
     runtimeState_.terrain.autoAdvancePreview = false;
+    ApplyRailShooterTerrainBudget(runtimeState_.terrain);
+    runtimeState_.terrain.cascadeShadowSplit0 =
+        (std::min)(runtimeState_.terrain.cascadeShadowSplit0, 96.0f);
+    runtimeState_.terrain.cascadeShadowSplit1 =
+        (std::min)(runtimeState_.terrain.cascadeShadowSplit1, 220.0f);
+    runtimeState_.terrain.cascadeShadowSplit2 =
+        (std::min)(runtimeState_.terrain.cascadeShadowSplit2, 420.0f);
+    runtimeState_.terrain.cascadeShadowSplit3 =
+        (std::min)(runtimeState_.terrain.cascadeShadowSplit3, 760.0f);
     runtimeState_.camera.enableDebugInput = false;
     runtimeState_.camera.fovY = 0.30f * 3.14159265358979323846f;
     runtimeState_.camera.nearZ = 0.1f;
@@ -590,11 +1433,39 @@ void AppRunLoop::EnterRailShooterScene() {
     runtimeState_.showSkybox = false;
     runtimeState_.showProceduralBackdrop = true;
     runtimeState_.showVfxModelObjects = false;
+
+    runtimeState_.vfx.showcaseMode = false;
+    runtimeState_.vfx.autoPlayVfxDemo = false;
+    runtimeState_.vfx.enableParticles = true;
+    runtimeState_.vfx.enableTrails = true;
+    runtimeState_.vfx.enableBeams = false;
+    runtimeState_.vfx.enableDistortions = false;
+    runtimeState_.vfx.enableRings = true;
+    runtimeState_.vfx.enableCylinders = true;
+    runtimeState_.vfx.enableElectricOrbStrike = false;
+    runtimeState_.vfx.enableSkinnedSurfaceVfx = false;
+    runtimeState_.vfx.enableTrailMeshStream = false;
+    runtimeState_.vfx.enableTrailMeshStreamAutoFallback = false;
+    runtimeState_.vfx.enableTrailMeshStreamStartupTelemetry = false;
+    runtimeState_.vfx.trailMeshStreamFallbackActive = false;
+    runtimeState_.vfx.enableParticleDedicatedResourceProbe = false;
+    runtimeState_.vfx.enableParticleDedicatedProbeTelemetry = false;
+    runtimeState_.vfx.particleDedicatedResourceFallbackActive = false;
+    runtimeState_.vfx.enableDistortionDedicatedResources = false;
+    runtimeState_.vfx.distortionDedicatedResourceFallbackActive = false;
+    runtimeState_.vfx.enableBeamDedicatedTelemetry = false;
+    runtimeState_.vfx.beamDedicatedResourceFallbackActive = false;
 }
 
 void AppRunLoop::UpdateRailShooterFrame() {
-    appPipelines_.HotReloadIfNeeded(dev_.GetDevice());
+    const auto updateStart = RailPerfClock::now();
+    if (RailShaderHotReloadEnabled() || imguiLayer_.WantsDeveloperDiagnostics()) {
+        appPipelines_.HotReloadIfNeeded(dev_.GetDevice());
+    }
     ConfigureViewportAndScissor(runtimeState_, windowWidth_, windowHeight_);
+    ++railShooterFrameIndex_;
+    ResetRailPerfFrame(railShooterFrameIndex_, railShooterDistance_);
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.begin");
 
     constexpr float kFixedGameplayDeltaTime = 0.016f;
     if (!railShooterInitialized_) {
@@ -644,10 +1515,13 @@ void AppRunLoop::UpdateRailShooterFrame() {
     combatFeelInput.baseWeapon = baseWeapon;
     combatFeelInput.spawnRuntime = &railShooterSpawnRuntime_;
     collisionInput.weapon = railShooterCombatFeelSystem_.BuildWeaponState(combatFeelInput);
+    const auto collisionStart = RailPerfClock::now();
     const CourseCollisionFrameStats collisionStats =
         railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput);
     railShooterCombatFeelSystem_.ApplyCollisionStats(collisionStats);
     railShooterCombatFeelSystem_.Update(kFixedGameplayDeltaTime);
+    gRailPerfFrame.collisionMs = ElapsedMs(collisionStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterCollision");
     if (collisionStats.playerShotEnemyHits > 0 || collisionStats.playerShotObstacleHits > 0) {
         railShooterCameraDirector_.AddFeedbackImpulse(0.28f, -0.004f, 0.002f);
     }
@@ -656,6 +1530,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     railShooterSpawnRuntime_.SubmitPendingVfx(vfxEngine_.Runtime(), railPath_);
     runtimeState_.terrain.previewDistance = railShooterDistance_;
+    const auto visualPresetStart = RailPerfClock::now();
+    ApplyRailShooterVisualPresets(railShooterDistance_);
+    gRailPerfFrame.visualPresetMs = ElapsedMs(visualPresetStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterVisualPresets");
 
     RailCameraDirectorFrameInput cameraInput{};
     cameraInput.course = &railShooterCourse_;
@@ -694,11 +1572,24 @@ void AppRunLoop::UpdateRailShooterFrame() {
     runtimeState_.cameraWorldPosition = cameraPosition;
     scene_.UpdateCameraWorldPosition(cameraPosition);
 
+    const auto vfxUpdateStart = RailPerfClock::now();
     vfxEngine_.Update(runtimeState_.vfx, kFixedGameplayDeltaTime);
+    gRailPerfFrame.vfxUpdateMs = ElapsedMs(vfxUpdateStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterVfx");
+    const auto terrainUpdateStart = RailPerfClock::now();
     UpdateTerrainAuthoring(kFixedGameplayDeltaTime);
+    gRailPerfFrame.terrainUpdateMs = ElapsedMs(terrainUpdateStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterTerrain");
+    if ((railShooterFrameIndex_ % 120u) == 0u) {
+        LogRailShooterRuntimeDiagnostics("heartbeat");
+    }
+    const auto particleUpdateStart = RailPerfClock::now();
     frameState_.drawCount = particleSystem_.UpdateInstances(
         frameState_.viewProjectionMatrix,
         frameState_.deltaTime);
+    gRailPerfFrame.particleUpdateMs = ElapsedMs(particleUpdateStart, RailPerfClock::now());
+    gRailPerfFrame.updateMs = ElapsedMs(updateStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.end");
 }
 
 void AppRunLoop::RenderRailShooterFrame() {
@@ -853,6 +1744,181 @@ bool AppRunLoop::FlushGpu() {
     return true;
 }
 
+bool AppRunLoop::EnsureRailGpuTimingResources() {
+    if (railGpuTimingReady_) {
+        return true;
+    }
+    ID3D12Device* device = dev_.GetDevice();
+    if (device == nullptr || commandQueue_ == nullptr) {
+        return false;
+    }
+    const uint32_t slotCount = (std::max)(1u, swapChain_.BufferCount());
+    railGpuTimingSlots_.assign(slotCount, {});
+    if (FAILED(commandQueue_->GetTimestampFrequency(&railGpuTimestampFrequency_)) ||
+        railGpuTimestampFrequency_ == 0) {
+        if (!railGpuTimingUnsupportedLogged_) {
+            railGpuTimingUnsupportedLogged_ = true;
+            WriteRailGpuTimingLine("[RailGpuTiming] timestamp frequency unavailable\n");
+        }
+        return false;
+    }
+
+    D3D12_QUERY_HEAP_DESC queryHeapDesc{};
+    queryHeapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    queryHeapDesc.Count = slotCount * 2u;
+    if (FAILED(device->CreateQueryHeap(&queryHeapDesc, IID_PPV_ARGS(&railGpuTimingQueryHeap_)))) {
+        if (!railGpuTimingUnsupportedLogged_) {
+            railGpuTimingUnsupportedLogged_ = true;
+            WriteRailGpuTimingLine("[RailGpuTiming] CreateQueryHeap failed\n");
+        }
+        return false;
+    }
+
+    D3D12_HEAP_PROPERTIES heapProps{};
+    heapProps.Type = D3D12_HEAP_TYPE_READBACK;
+
+    D3D12_RESOURCE_DESC readbackDesc{};
+    readbackDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    readbackDesc.Width = sizeof(uint64_t) * queryHeapDesc.Count;
+    readbackDesc.Height = 1;
+    readbackDesc.DepthOrArraySize = 1;
+    readbackDesc.MipLevels = 1;
+    readbackDesc.Format = DXGI_FORMAT_UNKNOWN;
+    readbackDesc.SampleDesc.Count = 1;
+    readbackDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    if (FAILED(device->CreateCommittedResource(
+            &heapProps,
+            D3D12_HEAP_FLAG_NONE,
+            &readbackDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr,
+            IID_PPV_ARGS(&railGpuTimingReadback_)))) {
+        if (!railGpuTimingUnsupportedLogged_) {
+            railGpuTimingUnsupportedLogged_ = true;
+            WriteRailGpuTimingLine("[RailGpuTiming] CreateCommittedResource(readback) failed\n");
+        }
+        railGpuTimingQueryHeap_.Reset();
+        return false;
+    }
+
+    railGpuTimingReady_ = true;
+    std::ostringstream line;
+    line << "[RailGpuTiming] initialized slots=" << slotCount
+         << " timestampFrequency=" << railGpuTimestampFrequency_
+         << "\n";
+    WriteRailGpuTimingLine(line.str());
+    return true;
+}
+
+void AppRunLoop::ResolveCompletedRailGpuTiming(uint32_t backBufferIndex) {
+    if (!railGpuTimingReady_ || railGpuTimingReadback_ == nullptr || railGpuTimingSlots_.empty()) {
+        return;
+    }
+    const uint32_t slot = backBufferIndex % static_cast<uint32_t>(railGpuTimingSlots_.size());
+    RailGpuTimingSlot& timingSlot = railGpuTimingSlots_[slot];
+    if (!timingSlot.pending) {
+        return;
+    }
+
+    const uint64_t offsetBytes = sizeof(uint64_t) * slot * 2ull;
+    D3D12_RANGE readRange{static_cast<SIZE_T>(offsetBytes), static_cast<SIZE_T>(offsetBytes + sizeof(uint64_t) * 2ull)};
+    uint8_t* mapped = nullptr;
+    if (FAILED(railGpuTimingReadback_->Map(0, &readRange, reinterpret_cast<void**>(&mapped))) ||
+        mapped == nullptr) {
+        return;
+    }
+
+    const uint64_t* timestamps = reinterpret_cast<const uint64_t*>(mapped + offsetBytes);
+    const uint64_t begin = timestamps[0];
+    const uint64_t end = timestamps[1];
+    D3D12_RANGE writeRange{0, 0};
+    railGpuTimingReadback_->Unmap(0, &writeRange);
+
+    const uint64_t ticks = end >= begin ? end - begin : 0;
+    const double gpuMs =
+        railGpuTimestampFrequency_ > 0
+            ? (static_cast<double>(ticks) * 1000.0 / static_cast<double>(railGpuTimestampFrequency_))
+            : 0.0;
+    const double pacingWaitMs = timingSlot.waitFrameSlotMs + timingSlot.presentMs;
+    const bool shouldLog =
+        gpuMs >= kRailGpuTimingLogThresholdMs ||
+        timingSlot.cpuNoPresentMs >= 18.0 ||
+        pacingWaitMs >= kRailFramePacingLogThresholdMs ||
+        timingSlot.endAndExecuteMs >= 4.0;
+
+    if (shouldLog) {
+        std::ostringstream line;
+        line << "[RailGpuTiming]"
+             << " frame=" << timingSlot.frame
+             << " distance=" << timingSlot.distance
+             << " section=\"" << (timingSlot.section.empty() ? std::string("-") : timingSlot.section) << "\""
+             << " gpuMs=" << gpuMs
+             << " cpuNoPresentMs=" << timingSlot.cpuNoPresentMs
+             << " pacingWaitMs=" << pacingWaitMs
+             << " waitFrameSlotMs=" << timingSlot.waitFrameSlotMs
+             << " presentMs=" << timingSlot.presentMs
+             << " renderGraphExecuteMs=" << timingSlot.renderGraphExecuteMs
+             << " endAndExecuteMs=" << timingSlot.endAndExecuteMs
+             << " timestampTicks=" << ticks
+             << "\n";
+        WriteRailGpuTimingLine(line.str());
+    }
+    timingSlot.pending = false;
+}
+
+void AppRunLoop::BeginRailGpuTiming(ID3D12GraphicsCommandList* commandList, uint32_t backBufferIndex) {
+    if (commandList == nullptr || !EnsureRailGpuTimingResources()) {
+        return;
+    }
+    const uint32_t slot = backBufferIndex % static_cast<uint32_t>(railGpuTimingSlots_.size());
+    const uint32_t queryIndex = slot * 2u;
+    RailGpuTimingSlot& timingSlot = railGpuTimingSlots_[slot];
+    timingSlot = {};
+    timingSlot.pending = true;
+    timingSlot.frame = railShooterFrameIndex_;
+    timingSlot.distance = railShooterDistance_;
+    if (const CourseSection* section = railShooterCourse_.FindSection(railShooterDistance_)) {
+        timingSlot.section = section->name;
+    }
+    commandList->EndQuery(railGpuTimingQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, queryIndex);
+}
+
+void AppRunLoop::EndRailGpuTiming(ID3D12GraphicsCommandList* commandList, uint32_t backBufferIndex) {
+    if (!railGpuTimingReady_ || commandList == nullptr || railGpuTimingQueryHeap_ == nullptr ||
+        railGpuTimingReadback_ == nullptr || railGpuTimingSlots_.empty()) {
+        return;
+    }
+    const uint32_t slot = backBufferIndex % static_cast<uint32_t>(railGpuTimingSlots_.size());
+    const uint32_t queryIndex = slot * 2u;
+    commandList->EndQuery(railGpuTimingQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, queryIndex + 1u);
+    commandList->ResolveQueryData(
+        railGpuTimingQueryHeap_.Get(),
+        D3D12_QUERY_TYPE_TIMESTAMP,
+        queryIndex,
+        2,
+        railGpuTimingReadback_.Get(),
+        sizeof(uint64_t) * queryIndex);
+}
+
+void AppRunLoop::CaptureRailGpuTimingCpuMetadata(uint32_t backBufferIndex) {
+    if (!railGpuTimingReady_ || railGpuTimingSlots_.empty()) {
+        return;
+    }
+    const uint32_t slot = backBufferIndex % static_cast<uint32_t>(railGpuTimingSlots_.size());
+    RailGpuTimingSlot& timingSlot = railGpuTimingSlots_[slot];
+    if (!timingSlot.pending) {
+        return;
+    }
+    timingSlot.cpuNoPresentMs =
+        gRailPerfFrame.updateMs +
+        (std::max)(0.0, gRailPerfFrame.renderMs - gRailPerfFrame.presentMs);
+    timingSlot.waitFrameSlotMs = gRailPerfFrame.waitFrameSlotMs;
+    timingSlot.renderGraphExecuteMs = gRailPerfFrame.renderGraphExecuteMs;
+    timingSlot.endAndExecuteMs = gRailPerfFrame.endAndExecuteMs;
+    timingSlot.presentMs = gRailPerfFrame.presentMs;
+}
+
 void AppRunLoop::RenderFrame() {
     if (gpuDeviceLost_) {
         return;
@@ -887,6 +1953,9 @@ void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
     if (settingsChanged) {
         ApplyRailShooterCourse();
     }
+    if (railShooterInitialized_) {
+        ApplyRailShooterTerrainBudget(terrain);
+    }
 
     if (terrain.useCanyonSunLighting) {
         terrain.canyonSunDirection = NormalizeOr(terrain.canyonSunDirection, {-0.38f, -0.52f, 0.76f});
@@ -912,6 +1981,11 @@ void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
         frameState_.viewProjectionMatrix);
 
     scene_.debugDraw.BeginFrame();
+    AppendCourseObjectSelectionDebugDraw(
+        scene_.debugDraw,
+        railShooterCourse_,
+        railPath_,
+        terrain);
     railShooterSpawnRuntime_.AppendDebugDraw(scene_.debugDraw, railPath_);
     railShooterCollisionSystem_.AppendDebugDraw(scene_.debugDraw, railPath_);
     const bool debugDrawEnabled =
@@ -1195,6 +2269,422 @@ bool AppRunLoop::WasKeyPressed(int virtualKey) {
     const bool pressed = down && !previousKeyDown_[static_cast<size_t>(virtualKey)];
     previousKeyDown_[static_cast<size_t>(virtualKey)] = down;
     return pressed;
+}
+
+AppRunLoop::CourseObjectEditSnapshot AppRunLoop::CaptureCourseObjectSnapshot() const {
+    CourseObjectEditSnapshot snapshot{};
+    snapshot.terrainPlacements = railShooterCourse_.terrainPlacements;
+    snapshot.rockClusters = railShooterCourse_.rockClusters;
+    snapshot.selectionType = runtimeState_.terrain.courseObjectSelectionType;
+    snapshot.selectedTerrainPlacement = runtimeState_.terrain.selectedCourseTerrainPlacement;
+    snapshot.selectedRockCluster = runtimeState_.terrain.selectedCourseRockCluster;
+    return snapshot;
+}
+
+void AppRunLoop::RestoreCourseObjectSnapshot(const CourseObjectEditSnapshot& snapshot) {
+    railShooterCourse_.terrainPlacements = snapshot.terrainPlacements;
+    railShooterCourse_.rockClusters = snapshot.rockClusters;
+    runtimeState_.terrain.courseObjectSelectionType = snapshot.selectionType;
+    runtimeState_.terrain.selectedCourseTerrainPlacement = snapshot.selectedTerrainPlacement;
+    runtimeState_.terrain.selectedCourseRockCluster = snapshot.selectedRockCluster;
+}
+
+void AppRunLoop::EnsureCourseObjectHistoryBaseline() {
+    if (courseObjectHistoryInitialized_) {
+        return;
+    }
+    courseObjectHistoryBaseline_ = CaptureCourseObjectSnapshot();
+    courseObjectHistoryRevision_ = runtimeState_.terrain.courseObjectEditRevision;
+    courseObjectHistoryInitialized_ = true;
+    runtimeState_.terrain.courseObjectUndoDepth = 0;
+    runtimeState_.terrain.courseObjectRedoDepth = 0;
+}
+
+void AppRunLoop::CommitCourseObjectHistoryIfNeeded() {
+    EnsureCourseObjectHistoryBaseline();
+    TerrainAuthoringState& editor = runtimeState_.terrain;
+    if (editor.courseObjectEditRevision == courseObjectHistoryRevision_) {
+        editor.courseObjectUndoDepth = static_cast<uint32_t>(courseObjectUndoStack_.size());
+        editor.courseObjectRedoDepth = static_cast<uint32_t>(courseObjectRedoStack_.size());
+        return;
+    }
+
+    constexpr size_t kMaxCourseObjectUndo = 96;
+    courseObjectUndoStack_.push_back(courseObjectHistoryBaseline_);
+    if (courseObjectUndoStack_.size() > kMaxCourseObjectUndo) {
+        courseObjectUndoStack_.erase(courseObjectUndoStack_.begin());
+    }
+    courseObjectRedoStack_.clear();
+    courseObjectHistoryBaseline_ = CaptureCourseObjectSnapshot();
+    courseObjectHistoryRevision_ = editor.courseObjectEditRevision;
+    editor.courseObjectUndoDepth = static_cast<uint32_t>(courseObjectUndoStack_.size());
+    editor.courseObjectRedoDepth = 0;
+}
+
+void AppRunLoop::ProcessCourseObjectUndoRedo() {
+    EnsureCourseObjectHistoryBaseline();
+    TerrainAuthoringState& editor = runtimeState_.terrain;
+
+    if (editor.courseObjectUndoRequested) {
+        editor.courseObjectUndoRequested = false;
+        if (!courseObjectUndoStack_.empty()) {
+            courseObjectRedoStack_.push_back(CaptureCourseObjectSnapshot());
+            const CourseObjectEditSnapshot snapshot = courseObjectUndoStack_.back();
+            courseObjectUndoStack_.pop_back();
+            RestoreCourseObjectSnapshot(snapshot);
+            courseObjectHistoryBaseline_ = snapshot;
+            ++editor.courseObjectEditRevision;
+            courseObjectHistoryRevision_ = editor.courseObjectEditRevision;
+        }
+    }
+
+    if (editor.courseObjectRedoRequested) {
+        editor.courseObjectRedoRequested = false;
+        if (!courseObjectRedoStack_.empty()) {
+            courseObjectUndoStack_.push_back(CaptureCourseObjectSnapshot());
+            const CourseObjectEditSnapshot snapshot = courseObjectRedoStack_.back();
+            courseObjectRedoStack_.pop_back();
+            RestoreCourseObjectSnapshot(snapshot);
+            courseObjectHistoryBaseline_ = snapshot;
+            ++editor.courseObjectEditRevision;
+            courseObjectHistoryRevision_ = editor.courseObjectEditRevision;
+        }
+    }
+
+    editor.courseObjectUndoDepth = static_cast<uint32_t>(courseObjectUndoStack_.size());
+    editor.courseObjectRedoDepth = static_cast<uint32_t>(courseObjectRedoStack_.size());
+}
+
+void AppRunLoop::ProcessCourseObjectViewportEditing() {
+    TerrainAuthoringState& editor = runtimeState_.terrain;
+    EnsureCourseObjectHistoryBaseline();
+    ProcessCourseObjectUndoRedo();
+    CommitCourseObjectHistoryIfNeeded();
+
+    const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    const bool leftMousePressed = leftMouseDown && !previousCourseEditorLeftMouseDown_;
+    const bool leftMouseReleased = !leftMouseDown && previousCourseEditorLeftMouseDown_;
+
+    if (!editor.enableCourseObjectViewportEditing ||
+        hwnd_ == nullptr ||
+        railPath_.Length() <= 0.0f ||
+        windowWidth_ == 0 ||
+        windowHeight_ == 0) {
+        courseObjectDrag_.active = false;
+        previousCourseEditorLeftMouseDown_ = leftMouseDown;
+        return;
+    }
+
+    POINT cursor{};
+    if (!GetCursorPos(&cursor) || !ScreenToClient(hwnd_, &cursor)) {
+        courseObjectDrag_.active = false;
+        previousCourseEditorLeftMouseDown_ = leftMouseDown;
+        return;
+    }
+
+    const bool cursorInViewport =
+        cursor.x >= 0 &&
+        cursor.y >= 0 &&
+        cursor.x < static_cast<LONG>(windowWidth_) &&
+        cursor.y < static_cast<LONG>(windowHeight_);
+    bool imguiWantsMouse = false;
+#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
+    imguiWantsMouse = ImGui::GetIO().WantCaptureMouse;
+#endif
+
+    if (leftMousePressed && cursorInViewport && !imguiWantsMouse) {
+        Vector3 rayOrigin{};
+        Vector3 rayDirection{};
+        CourseObjectBounds hit{};
+        int pickedAxis = -1;
+        bool picked = false;
+        if (MakeScreenRay(
+                cursor,
+                windowWidth_,
+                windowHeight_,
+                frameState_.viewProjectionMatrix,
+                rayOrigin,
+                rayDirection)) {
+            CourseObjectBounds selectedBounds{};
+            if (BuildSelectedCourseObjectBounds(
+                    railShooterCourse_,
+                    railPath_,
+                    editor,
+                    selectedBounds) &&
+                PickCourseObjectGizmoAxis(
+                    selectedBounds,
+                    rayOrigin,
+                    rayDirection,
+                    editor.courseObjectFramePadding,
+                    pickedAxis)) {
+                hit = selectedBounds;
+                picked = true;
+            } else {
+                picked = PickCourseObject(
+                    railShooterCourse_,
+                    railPath_,
+                    rayOrigin,
+                    rayDirection,
+                    editor.courseObjectFramePadding,
+                    hit);
+            }
+        }
+        if (picked) {
+            editor.courseObjectSelectionType = hit.type;
+            editor.selectedCourseTerrainPlacement = hit.type == 0 ? hit.index : -1;
+            editor.selectedCourseRockCluster = hit.type == 1 ? hit.index : -1;
+            editor.courseObjectActiveAxis = pickedAxis;
+
+            courseObjectDrag_ = {};
+            courseObjectDrag_.active = true;
+            courseObjectDrag_.type = hit.type;
+            courseObjectDrag_.index = hit.index;
+            courseObjectDrag_.axis = pickedAxis;
+            courseObjectDrag_.startMouse = cursor;
+            if (hit.type == 0 &&
+                hit.index >= 0 &&
+                hit.index < static_cast<int>(railShooterCourse_.terrainPlacements.size())) {
+                const CourseTerrainPlacement& placement =
+                    railShooterCourse_.terrainPlacements[static_cast<size_t>(hit.index)];
+                courseObjectDrag_.startDistance = placement.distance;
+                courseObjectDrag_.startLateral = placement.lateralOffset;
+                courseObjectDrag_.startVertical = placement.verticalOffset;
+                courseObjectDrag_.startForward = placement.forwardOffset;
+                courseObjectDrag_.startScale = placement.scale;
+                courseObjectDrag_.startRotation = placement.rotation;
+            } else if (hit.type == 1 &&
+                hit.index >= 0 &&
+                hit.index < static_cast<int>(railShooterCourse_.rockClusters.size())) {
+                const CourseRockCluster& cluster =
+                    railShooterCourse_.rockClusters[static_cast<size_t>(hit.index)];
+                courseObjectDrag_.startDistance = cluster.distance;
+                courseObjectDrag_.startMinScale = cluster.minScale;
+                courseObjectDrag_.startMaxScale = cluster.maxScale;
+                courseObjectDrag_.startSpread = cluster.spread;
+                courseObjectDrag_.startClearLaneRadius = cluster.clearLaneRadius;
+                courseObjectDrag_.startRotation = cluster.rotation;
+            }
+        } else {
+            editor.selectedCourseTerrainPlacement = -1;
+            editor.selectedCourseRockCluster = -1;
+            editor.courseObjectActiveAxis = -1;
+            courseObjectDrag_.active = false;
+        }
+    }
+
+    if (courseObjectDrag_.active && leftMouseDown) {
+        const float dx = static_cast<float>(cursor.x - courseObjectDrag_.startMouse.x);
+        const float dy = static_cast<float>(cursor.y - courseObjectDrag_.startMouse.y);
+        const bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+        const float moveSensitivity = (std::max)(0.001f, editor.courseObjectMoveSensitivity);
+        const float scaleSensitivity = (std::max)(0.0001f, editor.courseObjectScaleSensitivity);
+        const bool scaleMode = editor.courseObjectGizmoMode == 1;
+        const bool rotateMode = editor.courseObjectGizmoMode == 2;
+        const float scaleFactor = (std::max)(0.05f, 1.0f + (dx - dy) * scaleSensitivity);
+        const float signedDrag = dx - dy;
+        const int axis = courseObjectDrag_.axis;
+        bool changed = false;
+
+        if (courseObjectDrag_.type == 0 &&
+            courseObjectDrag_.index >= 0 &&
+            courseObjectDrag_.index < static_cast<int>(railShooterCourse_.terrainPlacements.size())) {
+            CourseTerrainPlacement& placement =
+                railShooterCourse_.terrainPlacements[static_cast<size_t>(courseObjectDrag_.index)];
+            if (rotateMode) {
+                Vector3 rotation = courseObjectDrag_.startRotation;
+                float delta = signedDrag * (std::max)(0.0001f, editor.courseObjectRotateSensitivity);
+                if (editor.courseObjectSnapEnabled) {
+                    const float snapRadians =
+                        editor.courseObjectRotateSnapDegrees * 3.14159265358979323846f / 180.0f;
+                    delta = SnapCourseObjectValue(delta, snapRadians);
+                }
+                const int rotateAxis = axis >= 0 ? axis : 1;
+                if (rotateAxis == 0) {
+                    rotation.x = courseObjectDrag_.startRotation.x + delta;
+                } else if (rotateAxis == 1) {
+                    rotation.y = courseObjectDrag_.startRotation.y + delta;
+                } else {
+                    rotation.z = courseObjectDrag_.startRotation.z + delta;
+                }
+                changed =
+                    placement.rotation.x != rotation.x ||
+                    placement.rotation.y != rotation.y ||
+                    placement.rotation.z != rotation.z;
+                placement.rotation = rotation;
+            } else if (scaleMode) {
+                Vector3 scale = Scale(courseObjectDrag_.startScale, scaleFactor);
+                if (axis == 0) {
+                    scale = courseObjectDrag_.startScale;
+                    scale.x = courseObjectDrag_.startScale.x * scaleFactor;
+                } else if (axis == 1) {
+                    scale = courseObjectDrag_.startScale;
+                    scale.y = courseObjectDrag_.startScale.y * scaleFactor;
+                } else if (axis == 2) {
+                    scale = courseObjectDrag_.startScale;
+                    scale.z = courseObjectDrag_.startScale.z * scaleFactor;
+                }
+                if (editor.courseObjectSnapEnabled) {
+                    scale = SnapCourseObjectVector(scale, editor.courseObjectScaleSnap);
+                }
+                scale.x = (std::max)(0.01f, scale.x);
+                scale.y = (std::max)(0.01f, scale.y);
+                scale.z = (std::max)(0.01f, scale.z);
+                changed =
+                    placement.scale.x != scale.x ||
+                    placement.scale.y != scale.y ||
+                    placement.scale.z != scale.z;
+                placement.scale = scale;
+            } else {
+                float lateral = courseObjectDrag_.startLateral + dx * moveSensitivity;
+                float vertical = courseObjectDrag_.startVertical;
+                float forward = courseObjectDrag_.startForward;
+                if (axis == 0) {
+                    vertical = courseObjectDrag_.startVertical;
+                    forward = courseObjectDrag_.startForward;
+                } else if (axis == 1) {
+                    lateral = courseObjectDrag_.startLateral;
+                    vertical = courseObjectDrag_.startVertical - dy * moveSensitivity;
+                    forward = courseObjectDrag_.startForward;
+                } else if (axis == 2) {
+                    lateral = courseObjectDrag_.startLateral;
+                    vertical = courseObjectDrag_.startVertical;
+                    forward = courseObjectDrag_.startForward - dy * moveSensitivity;
+                } else if (shiftDown) {
+                    forward = courseObjectDrag_.startForward - dy * moveSensitivity;
+                } else {
+                    vertical = courseObjectDrag_.startVertical - dy * moveSensitivity;
+                }
+                if (editor.courseObjectSnapEnabled) {
+                    lateral = SnapCourseObjectValue(lateral, editor.courseObjectMoveSnap);
+                    vertical = SnapCourseObjectValue(vertical, editor.courseObjectMoveSnap);
+                    forward = SnapCourseObjectValue(forward, editor.courseObjectMoveSnap);
+                }
+                changed =
+                    placement.lateralOffset != lateral ||
+                    placement.verticalOffset != vertical ||
+                    placement.forwardOffset != forward;
+                placement.lateralOffset = lateral;
+                placement.verticalOffset = vertical;
+                placement.forwardOffset = forward;
+            }
+        } else if (courseObjectDrag_.type == 1 &&
+            courseObjectDrag_.index >= 0 &&
+            courseObjectDrag_.index < static_cast<int>(railShooterCourse_.rockClusters.size())) {
+            CourseRockCluster& cluster =
+                railShooterCourse_.rockClusters[static_cast<size_t>(courseObjectDrag_.index)];
+            if (rotateMode) {
+                Vector3 rotation = courseObjectDrag_.startRotation;
+                float delta = signedDrag * (std::max)(0.0001f, editor.courseObjectRotateSensitivity);
+                if (editor.courseObjectSnapEnabled) {
+                    const float snapRadians =
+                        editor.courseObjectRotateSnapDegrees * 3.14159265358979323846f / 180.0f;
+                    delta = SnapCourseObjectValue(delta, snapRadians);
+                }
+                const int rotateAxis = axis >= 0 ? axis : 1;
+                if (rotateAxis == 0) {
+                    rotation.x = courseObjectDrag_.startRotation.x + delta;
+                } else if (rotateAxis == 1) {
+                    rotation.y = courseObjectDrag_.startRotation.y + delta;
+                } else {
+                    rotation.z = courseObjectDrag_.startRotation.z + delta;
+                }
+                changed =
+                    cluster.rotation.x != rotation.x ||
+                    cluster.rotation.y != rotation.y ||
+                    cluster.rotation.z != rotation.z;
+                cluster.rotation = rotation;
+            } else if (scaleMode) {
+                float minScale = courseObjectDrag_.startMinScale * scaleFactor;
+                float maxScale = courseObjectDrag_.startMaxScale * scaleFactor;
+                Vector3 spread = Scale(courseObjectDrag_.startSpread, scaleFactor);
+                if (axis == 0) {
+                    minScale = courseObjectDrag_.startMinScale;
+                    maxScale = courseObjectDrag_.startMaxScale;
+                    spread = courseObjectDrag_.startSpread;
+                    spread.x = courseObjectDrag_.startSpread.x * scaleFactor;
+                } else if (axis == 1) {
+                    minScale = courseObjectDrag_.startMinScale;
+                    maxScale = courseObjectDrag_.startMaxScale;
+                    spread = courseObjectDrag_.startSpread;
+                    spread.y = courseObjectDrag_.startSpread.y * scaleFactor;
+                } else if (axis == 2) {
+                    minScale = courseObjectDrag_.startMinScale;
+                    maxScale = courseObjectDrag_.startMaxScale;
+                    spread = courseObjectDrag_.startSpread;
+                    spread.z = courseObjectDrag_.startSpread.z * scaleFactor;
+                }
+                if (editor.courseObjectSnapEnabled) {
+                    minScale = SnapCourseObjectValue(minScale, editor.courseObjectScaleSnap);
+                    maxScale = SnapCourseObjectValue(maxScale, editor.courseObjectScaleSnap);
+                    spread = SnapCourseObjectVector(spread, editor.courseObjectMoveSnap);
+                }
+                minScale = (std::max)(0.01f, minScale);
+                maxScale = (std::max)(minScale, maxScale);
+                spread.x = (std::max)(0.0f, spread.x);
+                spread.y = (std::max)(0.0f, spread.y);
+                spread.z = (std::max)(0.0f, spread.z);
+                changed =
+                    cluster.minScale != minScale ||
+                    cluster.maxScale != maxScale ||
+                    cluster.spread.x != spread.x ||
+                    cluster.spread.y != spread.y ||
+                    cluster.spread.z != spread.z;
+                cluster.minScale = minScale;
+                cluster.maxScale = maxScale;
+                cluster.spread = spread;
+            } else {
+                float clearLane = courseObjectDrag_.startClearLaneRadius + dx * moveSensitivity;
+                float distance = courseObjectDrag_.startDistance;
+                Vector3 spread = courseObjectDrag_.startSpread;
+                if (axis == 0) {
+                    spread = courseObjectDrag_.startSpread;
+                } else if (axis == 1) {
+                    clearLane = courseObjectDrag_.startClearLaneRadius;
+                    spread.y = courseObjectDrag_.startSpread.y - dy * moveSensitivity;
+                } else if (axis == 2) {
+                    clearLane = courseObjectDrag_.startClearLaneRadius;
+                    distance = courseObjectDrag_.startDistance - dy * moveSensitivity;
+                } else if (shiftDown) {
+                    distance = courseObjectDrag_.startDistance - dy * moveSensitivity;
+                } else {
+                    spread.y = courseObjectDrag_.startSpread.y - dy * moveSensitivity;
+                }
+                if (editor.courseObjectSnapEnabled) {
+                    clearLane = SnapCourseObjectValue(clearLane, editor.courseObjectMoveSnap);
+                    distance = SnapCourseObjectValue(distance, editor.courseObjectMoveSnap);
+                    spread = SnapCourseObjectVector(spread, editor.courseObjectMoveSnap);
+                }
+                clearLane = (std::max)(0.0f, clearLane);
+                distance = (std::clamp)(distance, 0.0f, (std::max)(0.0f, railPath_.Length()));
+                spread.x = (std::max)(0.0f, spread.x);
+                spread.y = (std::max)(0.0f, spread.y);
+                spread.z = (std::max)(0.0f, spread.z);
+                changed =
+                    cluster.clearLaneRadius != clearLane ||
+                    cluster.distance != distance ||
+                    cluster.spread.x != spread.x ||
+                    cluster.spread.y != spread.y ||
+                    cluster.spread.z != spread.z;
+                cluster.clearLaneRadius = clearLane;
+                cluster.distance = distance;
+                cluster.spread = spread;
+            }
+        }
+
+        if (changed) {
+            courseObjectDrag_.changed = true;
+        }
+    }
+
+    if (leftMouseReleased) {
+        if (courseObjectDrag_.active && courseObjectDrag_.changed) {
+            ++editor.courseObjectEditRevision;
+        }
+        courseObjectDrag_.active = false;
+        editor.courseObjectActiveAxis = -1;
+    }
+    previousCourseEditorLeftMouseDown_ = leftMouseDown;
+    CommitCourseObjectHistoryIfNeeded();
 }
 
 void AppRunLoop::ClearShowcaseEffects() {
@@ -1568,28 +3058,47 @@ void AppRunLoop::ProcessIceProjectileMouseLaunch() {
 }
 
 void AppRunLoop::RenderVfxPreviewFrame() {
+    const auto renderStart = RailPerfClock::now();
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.begin");
     BeginFrameSystems();
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterBeginFrameSystems");
 
     UINT backBufferIndex = swapChain_.CurrentIndex();
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.beforeWaitForFrameSlot");
+    const auto waitStart = RailPerfClock::now();
     if (!WaitForFrameSlot(backBufferIndex)) {
+        gRailPerfFrame.waitFrameSlotMs = ElapsedMs(waitStart, RailPerfClock::now());
+        LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.waitForFrameSlotFailed");
         return;
     }
+    gRailPerfFrame.waitFrameSlotMs = ElapsedMs(waitStart, RailPerfClock::now());
+    ResolveCompletedRailGpuTiming(backBufferIndex);
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterWaitForFrameSlot");
+    const auto commandBeginStart = RailPerfClock::now();
     ComPtr<ID3D12GraphicsCommandList> commandList =
         clPool_.Begin(backBufferIndex, appPipelines_.GetMainPSO());
+    gRailPerfFrame.commandListBeginMs = ElapsedMs(commandBeginStart, RailPerfClock::now());
     if (commandList == nullptr) {
+        LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.commandListBeginFailed");
         return;
     }
+    BeginRailGpuTiming(commandList.Get(), backBufferIndex);
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterCommandListBegin");
+    const auto gpuParticleInitStart = RailPerfClock::now();
     vfxEngine_.InitializeGpuParticles(
         dev_.GetDevice(),
         commandList.Get(),
         heaps_,
         appPipelines_);
+    gRailPerfFrame.gpuParticleInitMs = ElapsedMs(gpuParticleInitStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterInitializeGpuParticles");
 
     ID3D12Resource* backBuffer = swapChain_.BackBuffer(backBufferIndex);
     auto dsvHandle = heaps_.dsv.GetHandle(engineContext_.GetMainDsvIndex()).cpu;
     auto readOnlyDsvHandle = heaps_.dsv.GetHandle(engineContext_.GetReadOnlyDsvIndex()).cpu;
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = swapChain_.RTV(backBufferIndex);
 
+    const auto sceneTransformsStart = RailPerfClock::now();
     scene_.UpdateTransforms(
         runtimeState_,
         wvpData_,
@@ -1597,6 +3106,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         frameState_.projMatrix,
         windowWidth_,
         windowHeight_);
+    gRailPerfFrame.sceneTransformsMs = ElapsedMs(sceneTransformsStart, RailPerfClock::now());
+    const auto syncCourseMeshStart = RailPerfClock::now();
     scene_.SyncCourseMeshRenderQueue(
         railShooterSpawnRuntime_,
         &railShooterCourse_,
@@ -1604,11 +3115,14 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         railPath_,
         frameState_.viewMatrix,
         frameState_.projMatrix);
+    gRailPerfFrame.syncCourseMeshMs = ElapsedMs(syncCourseMeshStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterSyncCourseMeshes");
 
     const PostProcessExecutionPlan postExecutionPlan = vfxEngine_.PostProcess().BuildExecutionPlan();
     const D3D12_GPU_DESCRIPTOR_HANDLE spriteTextureHandle =
         runtimeState_.useMonsterBall ? scene_.textureSrvHandleGPU2 : scene_.textureSrvHandleGPU;
 
+    const auto imguiStart = RailPerfClock::now();
     imguiLayer_.BuildUi(
         AppImGuiFrameContext{
             &runtimeState_,
@@ -1671,14 +3185,19 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 particleSystem_.Emit(emitterState);
             }});
     imguiLayer_.EndFrame();
+    gRailPerfFrame.imguiMs = ElapsedMs(imguiStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterImgui");
 
+    ProcessCourseObjectViewportEditing();
     ProcessIceProjectileMouseLaunch();
 
+    const auto sceneRuntimeSyncStart = RailPerfClock::now();
     scene_.SyncRuntimeState(runtimeState_, frameState_.deltaTime);
     particleSystem_.SetAccelerationField({
         runtimeState_.accelerationField.acceleration,
         {runtimeState_.accelerationField.area.min, runtimeState_.accelerationField.area.max}
     });
+    gRailPerfFrame.sceneRuntimeSyncMs = ElapsedMs(sceneRuntimeSyncStart, RailPerfClock::now());
 
     AppFrameGraphBuildContext graphContext{};
     graphContext.renderGraph = &renderGraph_;
@@ -1696,6 +3215,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     graphContext.dsv = dsvHandle;
     graphContext.depthTextureHandle = engineContext_.GetDepthSrvGpuHandle();
     graphContext.terrainChunkManager = &terrainChunkManager_;
+    const auto registerPassesStart = RailPerfClock::now();
     vfxEngine_.RegisterRenderPasses(
         frameGraphBuilder_,
         graphContext,
@@ -1703,6 +3223,9 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         commandList.Get(),
         scene_,
         spriteTextureHandle);
+    gRailPerfFrame.registerPassesMs = ElapsedMs(registerPassesStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterRegisterPasses");
+    const auto prepareGraphStart = RailPerfClock::now();
     const VfxGraphResourceStats vfxGraphResourceStats = vfxEngine_.PrepareGraphResources(
         dev_.GetDevice(),
         heaps_,
@@ -1710,6 +3233,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         renderGraph_,
         windowWidth_,
         windowHeight_);
+    gRailPerfFrame.prepareGraphResourcesMs = ElapsedMs(prepareGraphStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterPrepareGraphResources");
 
     resourceRegistry_.RegisterRenderTarget({
         "BackBuffer",
@@ -1765,37 +3290,73 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         renderGraphDumpCapturing ||
         developerDiagnosticsVisible ||
         lastRenderPassDebugInfo_.empty();
+    const auto renderGraphDebugStart = RailPerfClock::now();
     if (refreshRenderGraphDebug) {
         lastRenderPassDebugInfo_ = renderGraph_.BuildPassDebugInfo();
         lastRenderGraphDescription_ = renderGraph_.Describe(lastRenderPassDebugInfo_);
     }
+    gRailPerfFrame.renderGraphDebugMs = ElapsedMs(renderGraphDebugStart, RailPerfClock::now());
     lastRenderGraphError_ = renderGraphError;
     lastTransientTargetCount_ = vfxGraphResourceStats.transientTargetCount;
     lastTransientTargetStorageCount_ = vfxGraphResourceStats.transientTargetStorageCount;
     lastTransientBufferCount_ = vfxGraphResourceStats.transientBufferCount;
     lastTransientBufferStorageCount_ = vfxGraphResourceStats.transientBufferStorageCount;
     terrainChunkManager_.ResetDebrisCullingStats();
+    const auto cascadeShadowStart = RailPerfClock::now();
     RenderCascadeShadowMaps(commandList.Get());
+    gRailPerfFrame.cascadeShadowMs = ElapsedMs(cascadeShadowStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterCascadeShadow");
+    const auto renderGraphExecuteStart = RailPerfClock::now();
     renderGraph_.Execute(commandList.Get());
+    gRailPerfFrame.renderGraphExecuteMs = ElapsedMs(renderGraphExecuteStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterRenderGraphExecute");
     DumpRenderGraphDebugFrame();
+    const auto telemetryStart = RailPerfClock::now();
     const VfxFrameTelemetryOptions vfxTelemetryOptions =
         BuildVfxTelemetryOptions(
             runtimeState_.vfx,
             vfxTelemetryFrameIndex_++,
             developerDiagnosticsVisible);
     vfxEngine_.CaptureFrameTelemetry(commandList.Get(), vfxTelemetryOptions);
+    gRailPerfFrame.telemetryMs = ElapsedMs(telemetryStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterCaptureTelemetry");
+    const auto endFrameStart = RailPerfClock::now();
     frameRenderer_.EndFrame(commandList.Get(), backBuffer);
+    gRailPerfFrame.endFrameMs = ElapsedMs(endFrameStart, RailPerfClock::now());
+    EndRailGpuTiming(commandList.Get(), backBufferIndex);
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterEndFrame");
 
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.beforeEndAndExecute");
+    const auto endAndExecuteStart = RailPerfClock::now();
     if (!clPool_.EndAndExecute(dev_)) {
+        gRailPerfFrame.endAndExecuteMs = ElapsedMs(endAndExecuteStart, RailPerfClock::now());
+        LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.endAndExecuteFailed");
         return;
     }
+    gRailPerfFrame.endAndExecuteMs = ElapsedMs(endAndExecuteStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterEndAndExecute");
+    const auto signalStart = RailPerfClock::now();
     if (!SignalFrame(backBufferIndex)) {
+        gRailPerfFrame.signalMs = ElapsedMs(signalStart, RailPerfClock::now());
+        LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.signalFrameFailed");
         return;
     }
+    gRailPerfFrame.signalMs = ElapsedMs(signalStart, RailPerfClock::now());
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterSignalFrame");
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.beforePresent");
+    const auto presentStart = RailPerfClock::now();
     const HRESULT presentHr = swapChain_.Present(dev_, 1);
+    gRailPerfFrame.presentMs = ElapsedMs(presentStart, RailPerfClock::now());
+    gRailPerfFrame.renderMs = ElapsedMs(renderStart, RailPerfClock::now());
+    CaptureRailGpuTimingCpuMetadata(backBufferIndex);
+    LogRailShooterPerfSpike();
+    LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterPresent");
     if (FAILED(presentHr)) {
         if (!gpuDeviceLost_) {
             gpuDeviceLost_ = true;
+            if (railShooterInitialized_) {
+                LogRailShooterRuntimeDiagnostics("present_failed");
+            }
             LogGpuFailure(
                 "Present",
                 presentHr,

@@ -863,6 +863,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
             }
 
             if (ctx.runtimeState->terrain.displayMode != TerrainDisplayMode::Wireframe &&
+                ctx.runtimeState->terrain.enableDebrisRendering &&
                 ctx.appPipelines->GetTerrainDebrisPSO() != nullptr) {
                 if (ctx.appPipelines->GetTerrainDebrisCullRootSignature() != nullptr &&
                     ctx.appPipelines->GetTerrainDebrisCullPSO() != nullptr &&
@@ -979,6 +980,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         "SceneDepth",
         [ctx](ge3::graphics::RenderPassContext& passContext) {
             if (!(ctx.runtimeState->terrain.showDebugDraw ||
+                  ctx.runtimeState->terrain.showCourseObjectFrame ||
                   ctx.runtimeState->terrain.showCascadeBounds ||
                   ctx.runtimeState->terrain.displayMode == TerrainDisplayMode::Debug) ||
                 ctx.scene->debugDraw.VertexCount() == 0 ||
@@ -991,7 +993,10 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 ctx.runtimeState->viewport,
                 ctx.runtimeState->scissorRect,
                 ctx.appPipelines->GetSkeletonDebugRootSignature(),
-                ctx.appPipelines->GetSkeletonDebugPSO());
+                ctx.runtimeState->terrain.courseObjectFrameDepthTest &&
+                        ctx.appPipelines->GetSkeletonDebugDepthTestPSO() != nullptr
+                    ? ctx.appPipelines->GetSkeletonDebugDepthTestPSO()
+                    : ctx.appPipelines->GetSkeletonDebugPSO());
             if (!ready) {
                 return;
             }

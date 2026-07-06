@@ -109,7 +109,12 @@ float BulletSpeedForRole(const std::string& role) {
     return 46.0f;
 }
 
-std::string EffectForEventType(const std::string& type) {
+bool ContainsToken(const std::string& value, const char* token) {
+    return value.find(token) != std::string::npos;
+}
+
+std::string EffectForCourseEvent(const CourseEventMarker& event) {
+    const std::string& type = event.type;
     if (type == "boss_phase" || type == "checkpoint") {
         return "hit_ring";
     }
@@ -117,7 +122,12 @@ std::string EffectForEventType(const std::string& type) {
         return "hit_plane_burst";
     }
     if (type == "vfx") {
-        return "ice_impact";
+        if (ContainsToken(event.id, "dust") ||
+            ContainsToken(event.id, "shockwave") ||
+            ContainsToken(event.id, "debris")) {
+            return "hit_plane_burst";
+        }
+        return "hit_ring";
     }
     return "hit_ring";
 }
@@ -401,7 +411,7 @@ void CourseEventDispatcher::SpawnEventActor(
 
     CourseVfxCueDesc cue{};
     cue.id = event.id;
-    cue.effectName = EffectForEventType(event.type);
+    cue.effectName = EffectForCourseEvent(event);
     cue.payload = event.payload;
     cue.spawnDistance = spawnDistance;
     cue.distanceOffset = event.type == "boss_phase" ? 30.0f : 22.0f;

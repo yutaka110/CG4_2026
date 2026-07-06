@@ -130,6 +130,7 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
     CourseCameraKey targetRig = input.course->EvaluateCamera(input.distance);
     frame.mode = "Default";
     ApplySectionDirecting(targetRig, input.section, frame.mode);
+    ApplyCinematicShotDirecting(targetRig, input.course, input.distance, frame.mode, frame);
     ApplyEventDirecting(targetRig, input.deltaTime, frame.mode);
     frame.rig = SmoothRig(targetRig, input.deltaTime);
 
@@ -154,6 +155,15 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
         frame.position = Add(frame.position, offset);
         frame.target = Add(frame.target, Scale(offset, 0.35f));
         frame.shakeAmount = shakeAmplitude_ * envelope;
+    }
+    if (frame.shakeAmount > 0.0f) {
+        const float phaseA = std::sin(directorTime_ * 23.0f + 0.4f);
+        const float phaseB = std::sin(directorTime_ * 31.0f + 2.2f);
+        const Vector3 offset = Add(
+            Scale(cameraSample.right, phaseA * frame.shakeAmount * 0.045f),
+            Scale(cameraSample.up, phaseB * frame.shakeAmount * 0.030f));
+        frame.position = Add(frame.position, offset);
+        frame.target = Add(frame.target, Scale(offset, 0.25f));
     }
 
     frame.forward = NormalizeOr(Subtract(frame.target, frame.position), cameraSample.tangent);
@@ -205,6 +215,38 @@ void RailCameraDirector::ApplySectionDirecting(
         rig.lateralOffset += std::sin(directorTime_ * 0.8f) * 1.6f;
         rig.lookAheadDistance += 8.0f;
         mode = "Setpiece";
+    }
+}
+
+void RailCameraDirector::ApplyCinematicShotDirecting(
+    CourseCameraKey& rig,
+    const CourseAsset* course,
+    float distance,
+    std::string& mode,
+    RailCameraDirectorFrame& frame) const {
+    if (course == nullptr) {
+        return;
+    }
+
+    const CourseCameraShotState shotState = course->EvaluateCinematicCameraShot(distance);
+    if (shotState.weight <= 0.0f) {
+        return;
+    }
+
+    const CourseCinematicCameraShot& shot = shotState.shot;
+    const float w = (std::clamp)(shotState.weight, 0.0f, 1.0f);
+    rig.backDistance += shot.backDistanceOffset * w;
+    rig.verticalOffset += shot.verticalOffset * w;
+    rig.lateralOffset += shot.lateralOffset * w;
+    rig.lookAheadDistance += shot.lookAheadOffset * w;
+    rig.lookUpOffset += shot.lookUpOffset * w;
+    rig.lookForwardOffset += shot.lookForwardOffset * w;
+    rig.fovY += shot.fovOffset * w;
+    rig.roll += shot.rollOffset * w;
+    frame.shakeAmount = (std::max)(frame.shakeAmount, shot.shakeAmount * w);
+
+    if (!shot.mode.empty()) {
+        mode = mode == "Default" ? shot.mode : mode + " + " + shot.mode;
     }
 }
 

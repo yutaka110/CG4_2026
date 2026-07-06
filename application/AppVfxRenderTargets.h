@@ -112,6 +112,10 @@ private:
         bool pingPong = false;
         bool ownsStorage = true;
     };
+    struct RetiredTarget {
+        Target target;
+        uint32_t framesRemaining = 0;
+    };
 
     bool CreateTarget(
         ID3D12Device* device,
@@ -127,6 +131,8 @@ private:
         ID3D12Device* device,
         ge3::core::DescriptorHeapSet& heaps,
         const Target& requestedTarget);
+    void DestroyOwnedTarget(ge3::core::DescriptorHeapSet& heaps, Target& target);
+    void ReleaseExpiredRetiredTargets(ge3::core::DescriptorHeapSet& heaps);
     void ReleaseOwnedTarget(ge3::core::DescriptorHeapSet& heaps, Target& target);
     void ReleaseTargets(ge3::core::DescriptorHeapSet& heaps);
     void ReleaseUnusedTransientStorages(
@@ -144,6 +150,7 @@ private:
     std::vector<TargetRequest> activeRequests_;
     std::unordered_map<std::string, Target> targets_;
     std::unordered_map<std::string, Target> transientStorageTargets_;
+    std::vector<RetiredTarget> retiredTargets_;
     uint32_t width_ = 0;
     uint32_t height_ = 0;
     bool initialized_ = false;

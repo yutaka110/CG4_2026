@@ -19,7 +19,7 @@ constexpr uint32_t kTerrainHiZBaseHeight = 144;
 constexpr uint32_t kTerrainStreamingJobSubmitBudget = 2;
 constexpr uint32_t kTerrainStreamingMaxPendingJobs = 2;
 constexpr uint32_t kTerrainStreamingUploadBudget = 1;
-constexpr uint64_t kTerrainStreamingRetiredChunkFrames = 4;
+constexpr uint64_t kTerrainStreamingRetiredChunkFrames = 240;
 constexpr double kTerrainStreamingHitchLogMs = 4.0;
 
 struct TerrainCpuMesh {
@@ -4540,6 +4540,36 @@ void TerrainChunkManager::Update(
         return;
     }
 
+    if (settingsHash == chunkCacheSettingsHash_ &&
+        firstIndex == cachedFirstChunkIndex_ &&
+        lastIndex == cachedLastChunkIndex_ &&
+        !chunks_.empty()) {
+        bool lodChanged = false;
+        for (TerrainChunkDebugInfo& chunk : chunks_) {
+            const float chunkMid = (chunk.startDistance + chunk.endDistance) * 0.5f;
+            const uint32_t lodTier =
+                TerrainLodTierForDistance(std::abs(chunkMid - focusDistance), settings);
+            if (chunk.lodTier != lodTier) {
+                chunk.lodTier = lodTier;
+                lodChanged = true;
+            }
+        }
+        cachedFocusBucket_ = focusBucket;
+        if (lodChanged || !HasMatchingRenderChunks()) {
+            renderSettingsHash_ = settingsHash;
+            RebuildRenderChunks(device, srvHeap, railPath, settings);
+        }
+        EnsureHiZResources(device, srvHeap);
+        UpdateChunkTransforms(viewProjection);
+        return;
+    }
+
+    std::vector<TerrainChunkDebugInfo> reusableDebugChunks;
+    if (settingsHash == chunkCacheSettingsHash_) {
+        reusableDebugChunks = std::move(chunks_);
+    } else {
+        chunks_.clear();
+    }
     chunks_.clear();
     chunks_.reserve(static_cast<size_t>((std::max)(0, lastIndex - firstIndex + 1)));
     TerrainVolumeField volumeField(railPath, settings);
@@ -4547,12 +4577,30 @@ void TerrainChunkManager::Update(
     for (int32_t chunkIndex = firstIndex; chunkIndex <= lastIndex; ++chunkIndex) {
         const float startDistance = static_cast<float>(chunkIndex) * settings.chunkLength;
         const float endDistance = startDistance + settings.chunkLength;
+        const uint32_t seed = Hash(settings.seed ^ static_cast<uint32_t>(chunkIndex * 747796405));
+        const float chunkMid = (startDistance + endDistance) * 0.5f;
+        const uint32_t lodTier = TerrainLodTierForDistance(std::abs(chunkMid - focusDistance), settings);
+        const auto reusable = std::find_if(
+            reusableDebugChunks.begin(),
+            reusableDebugChunks.end(),
+            [&](const TerrainChunkDebugInfo& chunk) {
+                return chunk.seed == seed &&
+                    std::abs(chunk.startDistance - startDistance) <= 0.001f &&
+                    std::abs(chunk.endDistance - endDistance) <= 0.001f;
+            });
+        if (reusable != reusableDebugChunks.end()) {
+            TerrainChunkDebugInfo chunk = std::move(*reusable);
+            reusableDebugChunks.erase(reusable);
+            chunk.lodTier = lodTier;
+            chunks_.push_back(std::move(chunk));
+            continue;
+        }
+
         TerrainChunkDebugInfo chunk{};
         chunk.startDistance = startDistance;
         chunk.endDistance = endDistance;
-        chunk.seed = Hash(settings.seed ^ static_cast<uint32_t>(chunkIndex * 747796405));
-        const float chunkMid = (startDistance + endDistance) * 0.5f;
-        chunk.lodTier = TerrainLodTierForDistance(std::abs(chunkMid - focusDistance), settings);
+        chunk.seed = seed;
+        chunk.lodTier = lodTier;
 
         const uint32_t candidateCount =
             1u + static_cast<uint32_t>(settings.rockPillarDensity * 4.0f) +

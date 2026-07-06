@@ -8,18 +8,93 @@
 #include "vfx/VfxRenderInputs.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cwchar>
 #include <cwctype>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 
 namespace {
 constexpr float kElectricOrbStrikeMinimumDuration = 4.10f;
 constexpr float kEffectAssetReloadPollInterval = 1.0f;
+constexpr DWORD kVfxPrepareWatchdogStallMs = 3000;
+constexpr double kVfxPrepareSpikeLogThresholdMs = 3.0;
+
+std::atomic<bool> gVfxPrepareWatchdogStarted{false};
+std::atomic<DWORD> gVfxPrepareStageTick{0};
+std::atomic<const char*> gVfxPrepareStageName{nullptr};
+
+using VfxPreparePerfClock = std::chrono::steady_clock;
+
+double VfxPrepareElapsedMs(
+    VfxPreparePerfClock::time_point begin,
+    VfxPreparePerfClock::time_point end) {
+    return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+
+void WriteVfxPrepareWatchdogLine(const char* message) {
+    OutputDebugStringA(message);
+    std::ofstream log("logs/vfx_prepare_watchdog.log", std::ios::app);
+    if (log) {
+        log << message;
+    }
+}
+
+void WriteVfxPrepareSpikeLine(const std::string& message) {
+    OutputDebugStringA(message.c_str());
+    std::filesystem::create_directories("logs");
+    std::ofstream log("logs/vfx_prepare_spikes.log", std::ios::app);
+    if (log) {
+        log << message;
+    }
+}
+
+void StartVfxPrepareWatchdogOnce() {
+    bool expected = false;
+    if (!gVfxPrepareWatchdogStarted.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    std::thread([]() {
+        const char* lastLoggedStage = nullptr;
+        for (;;) {
+            Sleep(1000);
+            const DWORD tick = gVfxPrepareStageTick.load(std::memory_order_relaxed);
+            if (tick == 0u) {
+                continue;
+            }
+            const DWORD idleMs = GetTickCount() - tick;
+            if (idleMs < kVfxPrepareWatchdogStallMs) {
+                continue;
+            }
+            const char* stage = gVfxPrepareStageName.load(std::memory_order_relaxed);
+            if (stage == lastLoggedStage) {
+                continue;
+            }
+            lastLoggedStage = stage;
+            char message[256]{};
+            std::snprintf(
+                message,
+                sizeof(message),
+                "[VfxPrepareWatchdog] stalled idleMs=%lu stage=%s\n",
+                static_cast<unsigned long>(idleMs),
+                stage != nullptr ? stage : "unknown");
+            WriteVfxPrepareWatchdogLine(message);
+        }
+    }).detach();
+}
+
+void RecordVfxPrepareStage(const char* stage) {
+    StartVfxPrepareWatchdogOnce();
+    gVfxPrepareStageName.store(stage != nullptr ? stage : "unknown", std::memory_order_relaxed);
+    gVfxPrepareStageTick.store(GetTickCount(), std::memory_order_relaxed);
+}
 
 size_t ShowcaseIndex(AppVfxRuntimeState::ShowcaseEffect effect) {
     return static_cast<size_t>(effect);
@@ -912,24 +987,25 @@ VfxGraphResourceStats VfxEngine::PrepareGraphResources(
     ge3::graphics::RenderGraph& renderGraph,
     uint32_t width,
     uint32_t height) {
+    const auto prepareStart = VfxPreparePerfClock::now();
+    RecordVfxPrepareStage("prepare.begin");
+    const auto planStart = VfxPreparePerfClock::now();
     const std::vector<ge3::graphics::TransientRenderTargetDesc> transientRenderTargetPlan =
         renderGraph.BuildTransientRenderTargetPlan();
-    const std::vector<ge3::graphics::TransientBufferDesc> transientBufferPlan =
-        renderGraph.BuildTransientBufferPlan();
+    const double targetPlanMs = VfxPrepareElapsedMs(planStart, VfxPreparePerfClock::now());
+    RecordVfxPrepareStage("prepare.afterRenderTargetPlan");
 
+    const auto storageStart = VfxPreparePerfClock::now();
     std::unordered_set<std::string> transientTargetStorages;
-    std::unordered_set<std::string> transientBufferStorages;
     for (const auto& target : transientRenderTargetPlan) {
         if (target.transient) {
             transientTargetStorages.insert(target.storageName);
         }
     }
-    for (const auto& buffer : transientBufferPlan) {
-        if (buffer.transient) {
-            transientBufferStorages.insert(buffer.storageName);
-        }
-    }
+    const double storageSetMs = VfxPrepareElapsedMs(storageStart, VfxPreparePerfClock::now());
+    RecordVfxPrepareStage("prepare.afterStorageSets");
 
+    const auto requestStart = VfxPreparePerfClock::now();
     vfxRenderTargets_.ResetRequests();
     for (const auto& renderTarget : transientRenderTargetPlan) {
         if (renderTarget.transient) {
@@ -948,21 +1024,49 @@ VfxGraphResourceStats VfxEngine::PrepareGraphResources(
             renderTarget.clearColor,
             renderTarget.initialState);
     }
+    const double requestMs = VfxPrepareElapsedMs(requestStart, VfxPreparePerfClock::now());
+    RecordVfxPrepareStage("prepare.afterTargetRequests");
 
+    const auto initializeStart = VfxPreparePerfClock::now();
     vfxRenderTargets_.Initialize(device, heaps, width, height);
+    const double initializeMs = VfxPrepareElapsedMs(initializeStart, VfxPreparePerfClock::now());
+    RecordVfxPrepareStage("prepare.afterRenderTargetInitialize");
+    const auto registerStart = VfxPreparePerfClock::now();
     vfxRenderTargets_.Register(resourceRegistry);
+    const double registerMs = VfxPrepareElapsedMs(registerStart, VfxPreparePerfClock::now());
+    RecordVfxPrepareStage("prepare.afterRegisterTargets");
+
+    const uint32_t transientTargetCount = static_cast<uint32_t>(std::count_if(
+        transientRenderTargetPlan.begin(),
+        transientRenderTargetPlan.end(),
+        [](const auto& target) { return target.transient; }));
+    const uint32_t transientTargetStorageCount = static_cast<uint32_t>(transientTargetStorages.size());
+    const double totalMs = VfxPrepareElapsedMs(prepareStart, VfxPreparePerfClock::now());
+    if (totalMs >= kVfxPrepareSpikeLogThresholdMs) {
+        char line[768] = {};
+        std::snprintf(
+            line,
+            sizeof(line),
+            "[VfxPrepareSpike] totalMs=%.3f targetPlanMs=%.3f storageSetMs=%.3f requestMs=%.3f initializeMs=%.3f registerMs=%.3f planTargets=%zu transientTargets=%u transientStorages=%u size=%ux%u\n",
+            totalMs,
+            targetPlanMs,
+            storageSetMs,
+            requestMs,
+            initializeMs,
+            registerMs,
+            transientRenderTargetPlan.size(),
+            transientTargetCount,
+            transientTargetStorageCount,
+            width,
+            height);
+        WriteVfxPrepareSpikeLine(line);
+    }
 
     return {
-        static_cast<uint32_t>(std::count_if(
-            transientRenderTargetPlan.begin(),
-            transientRenderTargetPlan.end(),
-            [](const auto& target) { return target.transient; })),
-        static_cast<uint32_t>(transientTargetStorages.size()),
-        static_cast<uint32_t>(std::count_if(
-            transientBufferPlan.begin(),
-            transientBufferPlan.end(),
-            [](const auto& buffer) { return buffer.transient; })),
-        static_cast<uint32_t>(transientBufferStorages.size())
+        transientTargetCount,
+        transientTargetStorageCount,
+        0,
+        0
     };
 }
 
