@@ -27,6 +27,7 @@
 #include "course/PlayerCombatFeelSystem.h"
 #include "course/RailCameraDirector.h"
 #include "course/RailLockOnSystem.h"
+#include "course/RailSpeedDirector.h"
 #include "course/SectionCheckpointSystem.h"
 #include "terrain/RailPath.h"
 #include "terrain/TerrainChunkManager.h"
@@ -118,7 +119,7 @@ private:
     void ApplyRailShooterVisualPresets(float distance);
     void DrawRailLockOnHud();
     void DrawRailLockOnDebugPanel();
-    bool BuildRailLockOnHudDraw();
+    void DrawRailVisibilityDebugOverlay();
     bool EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList);
     bool BuildRailLockOnHudAtlasQuads();
     void RegisterRailLockOnHudPass(ID3D12GraphicsCommandList* commandList);
@@ -167,13 +168,21 @@ private:
     CourseEventDispatcher railShooterEventDispatcher_;
     EncounterDirector railShooterEncounterDirector_;
     RailCameraDirector railShooterCameraDirector_;
+    RailSpeedDirector railShooterSpeedDirector_;
     CourseSpawnRuntime railShooterSpawnRuntime_;
     RailLockOnSystem railShooterLockOnSystem_;
-    ge3::debug::DebugDrawSystem railLockOnHudDraw_;
     struct RailHudAtlasVertex {
         Vector4 position;
         Vector2 texcoord;
         Vector4 color;
+    };
+    struct RailNormalShotLine {
+        Vector2 start{};
+        Vector2 end{};
+        float age = 0.0f;
+        float lifetime = 0.085f;
+        float thickness = 2.0f;
+        bool hit = false;
     };
     Microsoft::WRL::ComPtr<ID3D12Resource> railLockOnHudAtlasTexture_;
     Microsoft::WRL::ComPtr<ID3D12Resource> railLockOnHudAtlasVertexResource_;
@@ -183,6 +192,7 @@ private:
     D3D12_VERTEX_BUFFER_VIEW railLockOnHudAtlasVertexBufferView_{};
     uint32_t railLockOnHudAtlasVertexCount_ = 0;
     bool railLockOnHudAtlasReady_ = false;
+    std::vector<RailNormalShotLine> railNormalShotLines_;
     std::string railShooterCoursePath_ = "Resources/courses/CanyonAssaultRoute01.course";
     std::string railShooterCourseLoadStatus_;
     RailPath railPath_;
@@ -229,12 +239,31 @@ private:
     bool railShooterInitialized_ = false;
     bool gpuDeviceLost_ = false;
     bool previousLeftMouseDown_ = false;
+    struct RailVisibilityDebugOverlaySettings {
+        bool enabled = true;
+        bool showAimableZone = true;
+        bool showActors = true;
+        bool showLabels = true;
+        bool showThreatCenter = true;
+        float aimableZoneWidth = 0.58f;
+        float aimableZoneHeight = 0.58f;
+        float warningZoneWidth = 0.82f;
+        float warningZoneHeight = 0.78f;
+    };
+    RailVisibilityDebugOverlaySettings railVisibilityDebugOverlay_{};
     struct RailInputRouteDebugState {
         bool railSceneActive = false;
         bool lockHeld = false;
         bool lockPressed = false;
         bool lockReleased = false;
         bool normalShotEnabled = true;
+        bool normalShotHeld = false;
+        bool normalShotPressed = false;
+        bool normalShotBlockedByUi = false;
+        uint32_t normalShotsFired = 0;
+        uint32_t normalShotHits = 0;
+        float normalAimLateral = 0.0f;
+        float normalAimVertical = 4.0f;
         bool aimAssistEnabled = true;
         bool releaseFireTriggered = false;
         uint32_t releaseTokenCount = 0;

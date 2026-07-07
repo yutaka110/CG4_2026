@@ -14,20 +14,23 @@ void RailLockOnSystem::Reset() {
 void RailLockOnSystem::Update(const RailLockOnFrameInput& input) {
     elapsedTime_ += (std::max)(0.0f, input.deltaTime);
 
-    RailReticleFrameInput reticleInput{};
-    reticleInput.hwnd = input.hwnd;
-    reticleInput.deltaTime = input.deltaTime;
-    reticleInput.viewportWidth = input.viewportWidth;
-    reticleInput.viewportHeight = input.viewportHeight;
-    reticleInput.settings = settings_;
-    reticle_.Update(reticleInput);
-
     RailTargetRegistryFrameInput registryInput{};
     registryInput.spawnRuntime = input.spawnRuntime;
     registryInput.railPath = input.railPath;
     registryInput.playerDistance = input.playerDistance;
     registryInput.settings = settings_;
+    registryInput.cameraPosition = input.cameraPosition;
     registry_.Build(registryInput);
+
+    RailReticleFrameInput reticleInput{};
+    reticleInput.hwnd = input.hwnd;
+    reticleInput.deltaTime = input.deltaTime;
+    reticleInput.viewportWidth = input.viewportWidth;
+    reticleInput.viewportHeight = input.viewportHeight;
+    reticleInput.anchors = &registry_.Anchors();
+    reticleInput.viewProjection = input.viewProjection;
+    reticleInput.settings = settings_;
+    reticle_.Update(reticleInput);
 
     RailLockResolverFrameInput resolverInput{};
     resolverInput.anchors = &registry_.Anchors();

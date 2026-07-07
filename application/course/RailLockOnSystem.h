@@ -17,6 +17,7 @@ struct RailLockOnFrameInput {
     const Matrix4x4* viewProjection = nullptr;
     const RailPath* railPath = nullptr;
     const CourseSpawnRuntime* spawnRuntime = nullptr;
+    Vector3 cameraPosition{};
 };
 
 class RailLockOnSystem {

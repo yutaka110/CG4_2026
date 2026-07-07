@@ -28,11 +28,15 @@ CourseCollisionWeaponState PlayerCombatFeelSystem::BuildWeaponState(
     const PlayerCombatFeelFrameInput& input) {
     CourseCollisionWeaponState weapon = input.baseWeapon;
     weapon.assistEnabled = false;
-    weapon.assistLateralOffset = input.playerLateralOffset;
-    weapon.assistVerticalOffset = input.playerVerticalOffset;
+    weapon.assistLateralOffset = input.hasReticleAim
+        ? input.reticleAimLateralOffset
+        : input.playerLateralOffset;
+    weapon.assistVerticalOffset = input.hasReticleAim
+        ? input.reticleAimVerticalOffset
+        : input.playerVerticalOffset;
 
-    float targetLateral = input.playerLateralOffset;
-    float targetVertical = input.playerVerticalOffset;
+    float targetLateral = weapon.assistLateralOffset;
+    float targetVertical = weapon.assistVerticalOffset;
     float targetDistance = 0.0f;
     std::string targetName;
     if (input.allowAimAssist &&
@@ -40,11 +44,12 @@ CourseCollisionWeaponState PlayerCombatFeelSystem::BuildWeaponState(
         weapon.assistEnabled = true;
         weapon.assistLateralOffset = targetLateral;
         weapon.assistVerticalOffset = targetVertical;
-        weapon.radius = (std::max)(weapon.radius, 3.4f);
+        weapon.radius = (std::max)(weapon.radius, 2.7f);
         stats_.lockOnActive = true;
         stats_.lockOnTarget = std::move(targetName);
         stats_.lockOnDistance = targetDistance;
     } else {
+        weapon.assistEnabled = input.hasReticleAim;
         stats_.lockOnActive = false;
         stats_.lockOnTarget.clear();
         stats_.lockOnDistance = 0.0f;
@@ -128,6 +133,12 @@ bool PlayerCombatFeelSystem::TryResolveLockOn(
 
     constexpr float kForwardMin = 4.0f;
     const float forwardMax = input.baseWeapon.range;
+    const float aimLateral = input.hasReticleAim
+        ? input.reticleAimLateralOffset
+        : input.playerLateralOffset;
+    const float aimVertical = input.hasReticleAim
+        ? input.reticleAimVerticalOffset
+        : input.playerVerticalOffset;
     float bestScore = (std::numeric_limits<float>::max)();
     bool found = false;
 
@@ -137,12 +148,12 @@ bool PlayerCombatFeelSystem::TryResolveLockOn(
         if (forward < kForwardMin || forward > forwardMax) {
             continue;
         }
-        const float lateral = Abs(enemy.desc.lateralOffset - input.playerLateralOffset);
-        const float vertical = Abs(enemy.desc.verticalOffset - input.playerVerticalOffset);
-        if (lateral > 8.5f || vertical > 7.0f) {
+        const float lateral = Abs(enemy.desc.lateralOffset - aimLateral);
+        const float vertical = Abs(enemy.desc.verticalOffset - aimVertical);
+        if (lateral > 5.2f || vertical > 4.6f) {
             continue;
         }
-        const float score = forward * 0.025f + lateral * 1.6f + vertical * 1.2f;
+        const float score = forward * 0.020f + lateral * 2.2f + vertical * 1.8f;
         if (score < bestScore) {
             bestScore = score;
             lateralOffset = enemy.desc.lateralOffset;
@@ -162,13 +173,13 @@ bool PlayerCombatFeelSystem::TryResolveLockOn(
         if (forward < kForwardMin || forward > forwardMax) {
             continue;
         }
-        const float lateral = Abs(obstacle.desc.lateralOffset - input.playerLateralOffset);
-        const float vertical = Abs(obstacle.desc.verticalOffset - input.playerVerticalOffset);
-        if (lateral > obstacle.desc.halfExtents.x + 6.0f ||
-            vertical > obstacle.desc.halfExtents.y + 5.0f) {
+        const float lateral = Abs(obstacle.desc.lateralOffset - aimLateral);
+        const float vertical = Abs(obstacle.desc.verticalOffset - aimVertical);
+        if (lateral > obstacle.desc.halfExtents.x + 3.4f ||
+            vertical > obstacle.desc.halfExtents.y + 3.0f) {
             continue;
         }
-        const float score = forward * 0.04f + lateral * 1.4f + vertical * 1.1f + 2.0f;
+        const float score = forward * 0.035f + lateral * 1.7f + vertical * 1.45f + 2.0f;
         if (score < bestScore) {
             bestScore = score;
             lateralOffset = obstacle.desc.lateralOffset;

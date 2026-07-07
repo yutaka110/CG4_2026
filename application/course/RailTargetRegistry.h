@@ -12,6 +12,7 @@ struct RailTargetRegistryFrameInput {
     const RailPath* railPath = nullptr;
     float playerDistance = 0.0f;
     RailLockSettings settings{};
+    Vector3 cameraPosition{};
 };
 
 class RailTargetRegistry {

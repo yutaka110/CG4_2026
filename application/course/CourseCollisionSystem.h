@@ -18,6 +18,9 @@ struct CourseCollisionPlayerState {
 
 struct CourseCollisionWeaponState {
     bool enabled = true;
+    bool triggerHeld = false;
+    bool triggerPressed = false;
+    bool triggerReleased = false;
     float shotTimer = 0.0f;
     float shotInterval = 0.12f;
     float range = 96.0f;
@@ -26,6 +29,10 @@ struct CourseCollisionWeaponState {
     bool assistEnabled = false;
     float assistLateralOffset = 0.0f;
     float assistVerticalOffset = 4.0f;
+    float muzzleForwardOffset = 3.2f;
+    float tracerForwardDistance = 28.0f;
+    float muzzleRadius = 0.9f;
+    float tracerRadius = 1.0f;
 };
 
 struct CourseCollisionFrameInput {
@@ -53,6 +60,10 @@ public:
     const CourseCollisionPlayerState& Player() const { return player_; }
     const CourseCollisionWeaponState& Weapon() const { return weapon_; }
     const CourseCollisionFrameStats& LastFrameStats() const { return lastFrameStats_; }
+    bool LastShotVisible() const { return lastShotVisible_; }
+    float LastShotDistance() const { return lastShotDistance_; }
+    float LastShotLateralOffset() const { return lastShotLateralOffset_; }
+    float LastShotVerticalOffset() const { return lastShotVerticalOffset_; }
 
 private:
     void FirePlayerShot(CourseSpawnRuntime& runtime, const CourseCollisionFrameInput& input);

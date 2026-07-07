@@ -216,11 +216,17 @@ public:
     void Bind(const CourseAsset* asset);
     void Reset(float distance = 0.0f);
     std::vector<CourseEventMarker> Advance(float deltaTime, const RailPath& railPath);
+    std::vector<CourseEventMarker> Advance(float deltaTime, const RailPath& railPath, float speedOverride);
 
     float Distance() const { return distance_; }
     const CourseSection* CurrentSection() const;
 
 private:
+    std::vector<CourseEventMarker> AdvanceInternal(
+        float deltaTime,
+        const RailPath& railPath,
+        const float* speedOverride);
+
     const CourseAsset* asset_ = nullptr;
     float distance_ = 0.0f;
     size_t nextEventIndex_ = 0;
