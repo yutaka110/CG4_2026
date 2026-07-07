@@ -15,6 +15,9 @@ struct PlayerCombatFeelFrameInput {
     CourseCollisionWeaponState baseWeapon;
     const CourseSpawnRuntime* spawnRuntime = nullptr;
     bool allowAimAssist = true;
+    bool hasReticleAim = false;
+    float reticleAimLateralOffset = 0.0f;
+    float reticleAimVerticalOffset = 4.0f;
 };
 
 struct PlayerCombatFeelStats {

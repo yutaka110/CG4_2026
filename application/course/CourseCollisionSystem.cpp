@@ -73,7 +73,8 @@ void SpawnImpactCue(
     float lateral,
     float vertical,
     float radius,
-    const Vector4& color) {
+    const Vector4& color,
+    float lifetime = 1.2f) {
     CourseVfxCueDesc cue{};
     cue.id = id;
     cue.effectName = effectName;
@@ -82,10 +83,11 @@ void SpawnImpactCue(
     cue.lateralOffset = lateral;
     cue.verticalOffset = vertical;
     cue.radius = radius;
-    cue.lifetime = 1.2f;
+    cue.lifetime = lifetime;
     cue.color = color;
     runtime.SpawnVfxCue(std::move(cue));
 }
+
 } // namespace
 
 void CourseCollisionSystem::Reset() {
@@ -116,6 +118,9 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         (std::max)(0.0f, player_.invulnerabilityTime - dt);
 
     weapon_.enabled = input.weapon.enabled;
+    weapon_.triggerHeld = input.weapon.triggerHeld;
+    weapon_.triggerPressed = input.weapon.triggerPressed;
+    weapon_.triggerReleased = input.weapon.triggerReleased;
     weapon_.shotInterval = (std::max)(0.03f, input.weapon.shotInterval);
     weapon_.range = (std::max)(1.0f, input.weapon.range);
     weapon_.radius = (std::max)(0.1f, input.weapon.radius);
@@ -123,7 +128,17 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     weapon_.assistEnabled = input.weapon.assistEnabled;
     weapon_.assistLateralOffset = input.weapon.assistLateralOffset;
     weapon_.assistVerticalOffset = input.weapon.assistVerticalOffset;
+    weapon_.muzzleForwardOffset = (std::max)(0.0f, input.weapon.muzzleForwardOffset);
+    weapon_.tracerForwardDistance = (std::max)(4.0f, input.weapon.tracerForwardDistance);
+    weapon_.muzzleRadius = (std::max)(0.05f, input.weapon.muzzleRadius);
+    weapon_.tracerRadius = (std::max)(0.05f, input.weapon.tracerRadius);
     weapon_.shotTimer -= dt;
+    if (weapon_.triggerPressed) {
+        weapon_.shotTimer = (std::min)(weapon_.shotTimer, 0.0f);
+    }
+    if (!weapon_.triggerHeld) {
+        weapon_.shotTimer = (std::min)(weapon_.shotTimer, 0.0f);
+    }
 
     for (CourseBulletActor& bullet : runtime.MutableBullets()) {
         if (bullet.age >= bullet.lifetime || player_.invulnerabilityTime > 0.0f) {
@@ -204,7 +219,7 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         }
     }
 
-    while (weapon_.enabled && weapon_.shotTimer <= 0.0f) {
+    while (weapon_.enabled && weapon_.triggerHeld && weapon_.shotTimer <= 0.0f) {
         lastFrameStats_.playerShotsFired++;
         FirePlayerShot(runtime, input);
         weapon_.shotTimer += weapon_.shotInterval;
@@ -270,9 +285,10 @@ void CourseCollisionSystem::FirePlayerShot(
     }
 
     if (bestEnemy != nullptr) {
+        const float hitDistance = ActorDistance(*bestEnemy);
         bestEnemy->desc.hitPoints -= weapon_.damage;
         lastFrameStats_.playerShotEnemyHits++;
-        lastShotDistance_ = ActorDistance(*bestEnemy);
+        lastShotDistance_ = hitDistance;
         lastShotLateralOffset_ = bestEnemy->desc.lateralOffset;
         lastShotVerticalOffset_ = bestEnemy->desc.verticalOffset;
         lastShotVisible_ = true;
@@ -283,15 +299,17 @@ void CourseCollisionSystem::FirePlayerShot(
             lastShotDistance_,
             lastShotLateralOffset_,
             lastShotVerticalOffset_,
-            1.4f,
-            {0.7f, 0.95f, 1.0f, 1.0f});
+            0.65f,
+            {0.56f, 0.90f, 1.0f, 0.82f},
+            0.42f);
         return;
     }
 
     if (bestObstacle != nullptr) {
+        const float hitDistance = ObstacleDistance(*bestObstacle);
         bestObstacle->desc.hitPoints -= weapon_.damage;
         lastFrameStats_.playerShotObstacleHits++;
-        lastShotDistance_ = ObstacleDistance(*bestObstacle);
+        lastShotDistance_ = hitDistance;
         lastShotLateralOffset_ = bestObstacle->desc.lateralOffset;
         lastShotVerticalOffset_ = bestObstacle->desc.verticalOffset;
         lastShotVisible_ = true;
@@ -302,9 +320,18 @@ void CourseCollisionSystem::FirePlayerShot(
             lastShotDistance_,
             lastShotLateralOffset_,
             lastShotVerticalOffset_,
-            1.8f,
-            {1.0f, 0.75f, 0.25f, 1.0f});
+            0.85f,
+            {1.0f, 0.72f, 0.24f, 0.82f},
+            0.45f);
+        return;
     }
+
+    const float tracerDistance =
+        (std::min)(input.player.distance + weapon_.range, input.player.distance + weapon_.tracerForwardDistance);
+    lastShotDistance_ = tracerDistance;
+    lastShotLateralOffset_ = aimLateral;
+    lastShotVerticalOffset_ = aimVertical;
+    lastShotVisible_ = true;
 }
 
 void CourseCollisionSystem::AppendDebugDraw(
@@ -325,26 +352,6 @@ void CourseCollisionSystem::AppendDebugDraw(
             Vector4{1.0f, 0.35f, 0.15f, 1.0f} :
             Vector4{0.2f, 1.0f, 0.75f, 1.0f};
     debugDraw.AddCircle(playerCenter, playerSample.right, playerSample.up, player_.radius, playerColor, 24);
-    debugDraw.AddLine(
-        playerCenter,
-        {
-            playerCenter.x + playerSample.tangent.x * weapon_.range,
-            playerCenter.y + playerSample.tangent.y * weapon_.range,
-            playerCenter.z + playerSample.tangent.z * weapon_.range,
-        },
-        {0.2f, 0.8f, 1.0f, 0.75f});
-
-    if (!lastShotVisible_) {
-        return;
-    }
-    const RailPathSample hitSample = railPath.Evaluate(lastShotDistance_);
-    const Vector3 hitCenter{
-        hitSample.position.x + hitSample.right.x * lastShotLateralOffset_ + hitSample.up.x * lastShotVerticalOffset_,
-        hitSample.position.y + hitSample.right.y * lastShotLateralOffset_ + hitSample.up.y * lastShotVerticalOffset_,
-        hitSample.position.z + hitSample.right.z * lastShotLateralOffset_ + hitSample.up.z * lastShotVerticalOffset_,
-    };
-    debugDraw.AddLine(playerCenter, hitCenter, {0.35f, 0.95f, 1.0f, 1.0f});
-    debugDraw.AddCircle(hitCenter, hitSample.right, hitSample.up, weapon_.radius, {0.35f, 0.95f, 1.0f, 1.0f}, 16);
 }
 
 void CourseCollisionSystem::LogFrameStats(const CourseCollisionFrameStats& stats) const {

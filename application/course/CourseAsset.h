@@ -124,8 +124,11 @@ struct CourseCinematicCameraShot {
     float endDistance = 0.0f;
     std::string id;
     std::string mode;
+    std::string presetId;
+    std::string blendAssetId;
     float blendInDistance = 24.0f;
     float blendOutDistance = 24.0f;
+    float weightScale = 1.0f;
     float backDistanceOffset = 0.0f;
     float verticalOffset = 0.0f;
     float lateralOffset = 0.0f;
@@ -137,9 +140,34 @@ struct CourseCinematicCameraShot {
     float shakeAmount = 0.0f;
 };
 
+struct CourseCameraShotPreset {
+    std::string id;
+    std::string mode;
+    float backDistanceOffset = 0.0f;
+    float verticalOffset = 0.0f;
+    float lateralOffset = 0.0f;
+    float lookAheadOffset = 0.0f;
+    float lookUpOffset = 0.0f;
+    float lookForwardOffset = 0.0f;
+    float fovOffset = 0.0f;
+    float rollOffset = 0.0f;
+    float shakeAmount = 0.0f;
+};
+
+struct CourseCameraBlendAsset {
+    std::string id;
+    float blendInDistance = 24.0f;
+    float blendOutDistance = 24.0f;
+    std::string curve = "smoothstep";
+    float weightScale = 1.0f;
+};
+
 struct CourseCameraShotState {
     float weight = 0.0f;
     CourseCinematicCameraShot shot{};
+    std::string presetId;
+    std::string blendAssetId;
+    std::string blendCurve = "linear";
 };
 
 struct CourseTerrainMaterialPreset {
@@ -184,6 +212,8 @@ struct CourseAsset {
     std::vector<CourseTerrainPlacement> terrainPlacements;
     std::vector<CourseRockCluster> rockClusters;
     std::vector<CourseLightingPreset> lightingPresets;
+    std::vector<CourseCameraShotPreset> cameraShotPresets;
+    std::vector<CourseCameraBlendAsset> cameraBlendAssets;
     std::vector<CourseCinematicCameraShot> cinematicCameraShots;
     std::vector<CourseTerrainMaterialPreset> terrainMaterialPresets;
     std::vector<CourseCinematicShotSet> cinematicShotSets;
@@ -216,11 +246,17 @@ public:
     void Bind(const CourseAsset* asset);
     void Reset(float distance = 0.0f);
     std::vector<CourseEventMarker> Advance(float deltaTime, const RailPath& railPath);
+    std::vector<CourseEventMarker> Advance(float deltaTime, const RailPath& railPath, float speedOverride);
 
     float Distance() const { return distance_; }
     const CourseSection* CurrentSection() const;
 
 private:
+    std::vector<CourseEventMarker> AdvanceInternal(
+        float deltaTime,
+        const RailPath& railPath,
+        const float* speedOverride);
+
     const CourseAsset* asset_ = nullptr;
     float distance_ = 0.0f;
     size_t nextEventIndex_ = 0;

@@ -61,6 +61,68 @@ float DistancePointToSegment(Vector2 point, Vector2 start, Vector2 end) {
 bool SameTarget(const RailLockTargetHandle& a, const RailLockTargetHandle& b) {
     return a.kind == b.kind && a.actorId == b.actorId && a.generationId == b.generationId;
 }
+
+float Clamp01(float value) {
+    return (std::clamp)(value, 0.0f, 1.0f);
+}
+
+float SafeRange01(float value, float minValue, float maxValue) {
+    const float range = maxValue - minValue;
+    if (range <= 0.0001f) {
+        return 0.0f;
+    }
+    return Clamp01((value - minValue) / range);
+}
+
+float Distance(Vector2 a, Vector2 b) {
+    const float dx = a.x - b.x;
+    const float dy = a.y - b.y;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+float KindPriorityBonus(RailLockTargetKind kind, const RailLockSettings& settings) {
+    switch (kind) {
+    case RailLockTargetKind::Enemy:
+        return settings.lockPriorityEnemyBonus;
+    case RailLockTargetKind::Obstacle:
+        return settings.lockPriorityObstacleBonus;
+    }
+    return 0.0f;
+}
+
+void ResolvePriorityScore(
+    RailLockCandidate& candidate,
+    const RailReticleState& reticle,
+    const RailLockSettings& settings,
+    uint32_t viewportWidth,
+    uint32_t viewportHeight) {
+    const float lockRadius = (std::max)(1.0f, candidate.anchor.screenRadius + settings.assistRadius);
+    candidate.reticlePriorityScore = 1.0f - Clamp01(candidate.distanceToReticle / lockRadius);
+
+    const Vector2 screenCenter{
+        static_cast<float>(viewportWidth) * 0.5f,
+        static_cast<float>(viewportHeight) * 0.5f};
+    const float halfDiagonal = (std::max)(
+        1.0f,
+        std::sqrt(screenCenter.x * screenCenter.x + screenCenter.y * screenCenter.y));
+    candidate.centerPriorityScore = 1.0f - Clamp01(Distance(candidate.anchor.screenPosition, screenCenter) / halfDiagonal);
+
+    candidate.forwardPriorityScore =
+        1.0f - SafeRange01(candidate.anchor.forwardDistance, settings.minForwardDistance, settings.maxForwardDistance);
+    candidate.kindPriorityScore = KindPriorityBonus(candidate.anchor.target.kind, settings);
+    candidate.anchorPriorityScore = candidate.anchor.priority;
+
+    candidate.score =
+        candidate.reticlePriorityScore * settings.lockPriorityReticleWeight +
+        candidate.centerPriorityScore * settings.lockPriorityCenterWeight +
+        candidate.forwardPriorityScore * settings.lockPriorityForwardThreatWeight +
+        candidate.anchorPriorityScore * settings.lockPriorityAnchorWeight +
+        candidate.kindPriorityScore -
+        candidate.distanceToReticle * settings.lockPriorityDistanceTieBreak;
+
+    const float currentReticleDistance = Distance(candidate.anchor.screenPosition, reticle.currentScreenPosition);
+    candidate.score -= currentReticleDistance * settings.lockPriorityDistanceTieBreak * 0.25f;
+}
 } // namespace
 
 void RailLockResolver::Reset() {
@@ -84,7 +146,7 @@ void RailLockResolver::Update(const RailLockResolverFrameInput& input) {
     }
 
     RailLockCandidate best{};
-    best.score = (std::numeric_limits<float>::max)();
+    best.score = -(std::numeric_limits<float>::max)();
     bool hasBest = false;
 
     for (RailLockAnchor anchor : *input.anchors) {
@@ -130,6 +192,11 @@ void RailLockResolver::Update(const RailLockResolverFrameInput& input) {
             candidates_.push_back(candidate);
             continue;
         }
+        if (anchor.lineOfSightBlocked) {
+            candidate.rejectReason = RailLockRejectReason::Occluded;
+            candidates_.push_back(candidate);
+            continue;
+        }
 
         const float lockRadius = anchor.screenRadius + input.settings.assistRadius;
         candidate.distanceToReticle = DistancePointToSegment(
@@ -154,11 +221,13 @@ void RailLockResolver::Update(const RailLockResolverFrameInput& input) {
 
         candidate.lockable = true;
         candidate.rejectReason = RailLockRejectReason::None;
-        candidate.score =
-            candidate.distanceToReticle -
-            anchor.priority * 8.0f +
-            anchor.forwardDistance * 0.015f;
-        if (!hasBest || candidate.score < best.score) {
+        ResolvePriorityScore(
+            candidate,
+            *input.reticle,
+            input.settings,
+            input.viewportWidth,
+            input.viewportHeight);
+        if (!hasBest || candidate.score > best.score) {
             best = candidate;
             hasBest = true;
         }

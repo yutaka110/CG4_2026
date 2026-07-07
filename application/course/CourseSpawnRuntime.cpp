@@ -56,18 +56,32 @@ void CourseSpawnRuntime::Reset() {
     bullets_.clear();
     obstacles_.clear();
     vfxCues_.clear();
+    fireSafetyStats_ = {};
     nextActorId_ = 1;
 }
 
 void CourseSpawnRuntime::Update(float deltaTime) {
+    CourseEnemyFireSafetyFrameInput safetyInput{};
+    safetyInput.deltaTime = deltaTime;
+    Update(deltaTime, safetyInput);
+}
+
+void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput) {
     const float dt = (std::max)(0.0f, deltaTime);
+    fireSafetyStats_ = {};
 
     for (CourseEnemyActor& enemy : enemies_) {
+        ++fireSafetyStats_.activeEnemies;
         enemy.age += dt;
         enemy.desc.distanceOffset += enemy.desc.forwardSpeed * dt;
         enemy.fireTimer -= dt;
+        const bool canFire = CanEnemyFire(enemy, safetyInput, dt);
         while (enemy.fireTimer <= 0.0f && enemy.age < enemy.desc.lifetime) {
-            EmitEnemyBullets(enemy);
+            if (!canFire) {
+                enemy.fireTimer = (std::max)(enemy.fireTimer, fireSafetySettings_.blockedRetryDelay);
+                break;
+            }
+            fireSafetyStats_.bulletsEmitted += EmitEnemyBullets(enemy);
             enemy.fireTimer += (std::max)(0.08f, enemy.desc.fireInterval);
         }
     }
@@ -89,6 +103,66 @@ void CourseSpawnRuntime::Update(float deltaTime) {
     }
 
     PruneDestroyedActors();
+}
+
+bool CourseSpawnRuntime::CanEnemyFire(
+    CourseEnemyActor& enemy,
+    const CourseEnemyFireSafetyFrameInput& safetyInput,
+    float dt) {
+    if (!fireSafetySettings_.enabled) {
+        enemy.fireSafetyAllowed = true;
+        enemy.fireSafetyReason = "safety disabled";
+        ++fireSafetyStats_.allowedEnemies;
+        fireSafetyStats_.lastAllowedReason = enemy.fireSafetyReason;
+        return true;
+    }
+
+    const float actorDistance = enemy.desc.spawnDistance + enemy.desc.distanceOffset;
+    const float forwardDistance = actorDistance - safetyInput.playerDistance;
+    const bool cameraBlocks =
+        fireSafetySettings_.requireCameraAllowsFire &&
+        (!safetyInput.cameraAllowsEnemyFire ||
+            !safetyInput.cameraStableForAiming ||
+            safetyInput.cameraHardTransition);
+    const bool inFireRange =
+        forwardDistance >= fireSafetySettings_.minForwardDistance &&
+        forwardDistance <= fireSafetySettings_.maxForwardDistance;
+
+    if (!cameraBlocks && inFireRange) {
+        enemy.fireVisibleTime += dt;
+    } else {
+        enemy.fireVisibleTime = 0.0f;
+    }
+
+    if (cameraBlocks) {
+        enemy.fireSafetyAllowed = false;
+        enemy.fireSafetyReason = "camera: " + safetyInput.cameraReason;
+        ++fireSafetyStats_.blockedByCamera;
+        fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;
+        return false;
+    }
+    if (!inFireRange) {
+        enemy.fireSafetyAllowed = false;
+        enemy.fireSafetyReason = forwardDistance < fireSafetySettings_.minForwardDistance
+            ? "too close / behind safety window"
+            : "too far for readable fire";
+        ++fireSafetyStats_.blockedByRange;
+        fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;
+        return false;
+    }
+    if (enemy.fireVisibleTime < fireSafetySettings_.minVisibleBeforeFire) {
+        enemy.fireSafetyAllowed = false;
+        enemy.fireSafetyReason = "visible time warming";
+        ++fireSafetyStats_.blockedByVisibilityTime;
+        fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;
+        return false;
+    }
+
+    enemy.fireSafetyAllowed = true;
+    enemy.fireSafetyReason = "camera safe";
+    ++fireSafetyStats_.allowedEnemies;
+    fireSafetyStats_.lastAllowedReason = enemy.fireSafetyReason;
+    return true;
 }
 
 void CourseSpawnRuntime::PruneDestroyedActors() {
@@ -213,7 +287,7 @@ void CourseSpawnRuntime::SubmitPendingVfx(EffectRuntime& effectRuntime, const Ra
     }
 }
 
-void CourseSpawnRuntime::EmitEnemyBullets(const CourseEnemyActor& enemy) {
+uint32_t CourseSpawnRuntime::EmitEnemyBullets(const CourseEnemyActor& enemy) {
     const int bulletCount = (std::max)(1, enemy.desc.bulletCount);
     const float center = static_cast<float>(bulletCount - 1) * 0.5f;
 
@@ -235,6 +309,7 @@ void CourseSpawnRuntime::EmitEnemyBullets(const CourseEnemyActor& enemy) {
         bullet.color = enemy.desc.bulletColor;
         bullets_.push_back(std::move(bullet));
     }
+    return static_cast<uint32_t>(bulletCount);
 }
 
 void CourseSpawnRuntime::AppendDebugDraw(

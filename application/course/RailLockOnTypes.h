@@ -18,6 +18,7 @@ enum class RailLockRejectReason {
     Offscreen,
     OutOfDepth,
     OutOfForwardRange,
+    Occluded,
     NotSwept,
     AlreadyLocked,
     StackLimit,
@@ -40,13 +41,21 @@ struct RailLockAnchor {
     float screenRadius = 32.0f;
     float forwardDistance = 0.0f;
     float priority = 0.0f;
+    float lineOfSightBlockT = 0.0f;
+    uint32_t lineOfSightOccluderActorId = 0;
     int maxStack = 1;
+    bool lineOfSightBlocked = false;
 };
 
 struct RailLockCandidate {
     RailLockAnchor anchor{};
     float distanceToReticle = 0.0f;
     float score = 0.0f;
+    float reticlePriorityScore = 0.0f;
+    float centerPriorityScore = 0.0f;
+    float forwardPriorityScore = 0.0f;
+    float kindPriorityScore = 0.0f;
+    float anchorPriorityScore = 0.0f;
     bool lockable = false;
     RailLockRejectReason rejectReason = RailLockRejectReason::None;
 };
@@ -87,16 +96,46 @@ struct RailLockSettings {
     float lockVfxReleaseShotInterval = 0.035f;
     float lockVfxMuzzleForwardOffset = 4.0f;
     int lockVfxMaxConcurrentShots = 16;
+    float lockPriorityReticleWeight = 0.58f;
+    float lockPriorityCenterWeight = 0.22f;
+    float lockPriorityForwardThreatWeight = 0.18f;
+    float lockPriorityAnchorWeight = 0.32f;
+    float lockPriorityEnemyBonus = 0.18f;
+    float lockPriorityObstacleBonus = 0.04f;
+    float lockPriorityDistanceTieBreak = 0.004f;
+    bool lockLineOfSightEnabled = true;
+    float lockLineOfSightObstaclePadding = 0.65f;
+    bool lockAimFeelEnabled = true;
+    float lockAimMagnetRadius = 86.0f;
+    float lockAimMagnetStrength = 0.34f;
+    float lockAimMaxPullSpeed = 520.0f;
+    float lockAimDeadZone = 6.0f;
+    float lockAimTargetBlend = 0.62f;
+    float lockAimReticleIntentWeight = 0.72f;
+    float lockAimCenterIntentWeight = 0.16f;
+    float lockAimForwardIntentWeight = 0.12f;
+    bool lockHudPolishEnabled = true;
+    float lockHudScale = 1.0f;
+    float lockHudOpacity = 0.92f;
+    float lockHudSafeArea = 34.0f;
+    float lockHudTargetScoreAlpha = 0.42f;
+    float lockHudReticleGlowScale = 1.0f;
+    float lockHudReleaseFlash = 0.22f;
 };
 
 struct RailReticleState {
     Vector2 previousScreenPosition{};
     Vector2 currentScreenPosition{};
     Vector2 velocity{};
+    Vector2 aimFeelTargetScreenPosition{};
+    float aimFeelStrength = 0.0f;
+    float aimFeelPullPixels = 0.0f;
+    float aimFeelTargetScore = 0.0f;
     bool lockHeld = false;
     bool lockPressed = false;
     bool lockReleased = false;
     bool initialized = false;
+    bool aimFeelActive = false;
 };
 
 struct RailLockDebugFrame {

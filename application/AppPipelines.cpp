@@ -558,6 +558,48 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     if (FAILED(hr)) return FailHr("CreateRootSignature(Sprite)", hr);
 
     // ------------------------------
+    // Rail HUD Atlas RootSignature
+    // ------------------------------
+    D3D12_DESCRIPTOR_RANGE railHudAtlasTextureRange{};
+    railHudAtlasTextureRange.BaseShaderRegister = 0;
+    railHudAtlasTextureRange.NumDescriptors = 1;
+    railHudAtlasTextureRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    railHudAtlasTextureRange.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_ROOT_PARAMETER railHudAtlasRootParams[1] = {};
+    railHudAtlasRootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    railHudAtlasRootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    railHudAtlasRootParams[0].DescriptorTable.NumDescriptorRanges = 1;
+    railHudAtlasRootParams[0].DescriptorTable.pDescriptorRanges = &railHudAtlasTextureRange;
+
+    D3D12_ROOT_SIGNATURE_DESC railHudAtlasRsDesc{};
+    railHudAtlasRsDesc.NumParameters = _countof(railHudAtlasRootParams);
+    railHudAtlasRsDesc.pParameters = railHudAtlasRootParams;
+    railHudAtlasRsDesc.NumStaticSamplers = _countof(staticSamplers);
+    railHudAtlasRsDesc.pStaticSamplers = staticSamplers;
+    railHudAtlasRsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> railHudAtlasSigBlob;
+    ComPtr<ID3DBlob> railHudAtlasErrBlob;
+    hr = D3D12SerializeRootSignature(
+        &railHudAtlasRsDesc,
+        D3D_ROOT_SIGNATURE_VERSION_1,
+        &railHudAtlasSigBlob,
+        &railHudAtlasErrBlob);
+    if (FAILED(hr)) {
+        if (railHudAtlasErrBlob) {
+            OutputDebugStringA(reinterpret_cast<const char*>(railHudAtlasErrBlob->GetBufferPointer()));
+        }
+        return false;
+    }
+    hr = device->CreateRootSignature(
+        0,
+        railHudAtlasSigBlob->GetBufferPointer(),
+        railHudAtlasSigBlob->GetBufferSize(),
+        IID_PPV_ARGS(&railHudAtlasRootSignature_));
+    if (FAILED(hr)) return FailHr("CreateRootSignature(RailHudAtlas)", hr);
+
+    // ------------------------------
     // Skybox RootSignature
     // ------------------------------
     D3D12_DESCRIPTOR_RANGE skyboxTextureRange{};
@@ -1375,6 +1417,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     terrainPs_ = Compile_(L"resources/Terrain.PS.hlsl", L"ps_6_0");
     spriteVs_ = Compile_(L"resources/Sprite.VS.hlsl", L"vs_6_0");
     spritePs_ = Compile_(L"resources/Sprite.PS.hlsl", L"ps_6_0");
+    railHudAtlasVs_ = Compile_(L"resources/RailHudAtlas.VS.hlsl", L"vs_6_0");
+    railHudAtlasPs_ = Compile_(L"resources/RailHudAtlas.PS.hlsl", L"ps_6_0");
     skyboxVs_ = Compile_(L"resources/Skybox.VS.hlsl", L"vs_6_0");
     skyboxPs_ = Compile_(L"resources/Skybox.PS.hlsl", L"ps_6_0");
     cs_ = Compile_(L"resources/MotionDetect.CS.hlsl", L"cs_6_0");
@@ -1430,7 +1474,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     debugDepthPreviewPs_ = Compile_(L"resources/DebugDepthPreview.PS.hlsl", L"ps_6_0");
     debugEmissivePreviewPs_ = Compile_(L"resources/DebugEmissivePreview.PS.hlsl", L"ps_6_0");
 
-    if (!vs_ || !terrainShadowVs_ || !terrainDebrisVs_ || !terrainDebrisShadowVs_ || !terrainHiZBuildCs_ || !terrainDebrisCullCs_ || !skinnedVs_ || !skinningCs_ || !ps_ || !terrainPs_ || !spriteVs_ || !spritePs_ || !skyboxVs_ || !skyboxPs_ || !cs_ || !particleVs_ || !particlePs_ ||
+    if (!vs_ || !terrainShadowVs_ || !terrainDebrisVs_ || !terrainDebrisShadowVs_ || !terrainHiZBuildCs_ || !terrainDebrisCullCs_ || !skinnedVs_ || !skinningCs_ || !ps_ || !terrainPs_ || !spriteVs_ || !spritePs_ || !railHudAtlasVs_ || !railHudAtlasPs_ || !skyboxVs_ || !skyboxPs_ || !cs_ || !particleVs_ || !particlePs_ ||
         !trailMeshVs_ || !trailMeshStreamVs_ || !trailMeshPs_ || !distortionSpriteVs_ || !distortionSpritePs_ ||
         !ringVs_ || !ringPs_ || !spearVs_ || !spearPs_ || !orbitRibbonVs_ || !orbitRibbonPs_ || !cylinderVs_ || !cylinderPs_ || !skeletonDebugVs_ || !skeletonDebugPs_ ||
         !gpuParticleCs_ || !gpuParticleResetCs_ || !gpuParticlePoolResetCs_ || !gpuParticlePoolBeginCs_ ||
@@ -1726,6 +1770,63 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
     hr = device->CreateGraphicsPipelineState(&spriteDesc, IID_PPV_ARGS(&spritePso_));
     if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Sprite)", hr);
+
+    {
+        D3D12_INPUT_ELEMENT_DESC railHudAtlasElements[3] = {};
+        railHudAtlasElements[0].SemanticName = "POSITION";
+        railHudAtlasElements[0].SemanticIndex = 0;
+        railHudAtlasElements[0].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        railHudAtlasElements[0].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
+        railHudAtlasElements[1].SemanticName = "TEXCOORD";
+        railHudAtlasElements[1].SemanticIndex = 0;
+        railHudAtlasElements[1].Format = DXGI_FORMAT_R32G32_FLOAT;
+        railHudAtlasElements[1].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
+        railHudAtlasElements[2].SemanticName = "COLOR";
+        railHudAtlasElements[2].SemanticIndex = 0;
+        railHudAtlasElements[2].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        railHudAtlasElements[2].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
+
+        D3D12_INPUT_LAYOUT_DESC railHudAtlasInputLayout{};
+        railHudAtlasInputLayout.pInputElementDescs = railHudAtlasElements;
+        railHudAtlasInputLayout.NumElements = _countof(railHudAtlasElements);
+
+        D3D12_BLEND_DESC railHudAtlasBlend{};
+        railHudAtlasBlend.RenderTarget[0].BlendEnable = TRUE;
+        railHudAtlasBlend.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        railHudAtlasBlend.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        railHudAtlasBlend.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+        railHudAtlasBlend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+        railHudAtlasBlend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        railHudAtlasBlend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        railHudAtlasBlend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+        D3D12_DEPTH_STENCIL_DESC railHudAtlasDepth{};
+        railHudAtlasDepth.DepthEnable = FALSE;
+        railHudAtlasDepth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        railHudAtlasDepth.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+
+        D3D12_RASTERIZER_DESC railHudAtlasRaster{};
+        railHudAtlasRaster.CullMode = D3D12_CULL_MODE_NONE;
+        railHudAtlasRaster.FillMode = D3D12_FILL_MODE_SOLID;
+        railHudAtlasRaster.DepthClipEnable = TRUE;
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC railHudAtlasDesc{};
+        railHudAtlasDesc.pRootSignature = railHudAtlasRootSignature_.Get();
+        railHudAtlasDesc.InputLayout = railHudAtlasInputLayout;
+        railHudAtlasDesc.VS = {railHudAtlasVs_->GetBufferPointer(), railHudAtlasVs_->GetBufferSize()};
+        railHudAtlasDesc.PS = {railHudAtlasPs_->GetBufferPointer(), railHudAtlasPs_->GetBufferSize()};
+        railHudAtlasDesc.BlendState = railHudAtlasBlend;
+        railHudAtlasDesc.RasterizerState = railHudAtlasRaster;
+        railHudAtlasDesc.DepthStencilState = railHudAtlasDepth;
+        railHudAtlasDesc.NumRenderTargets = 1;
+        railHudAtlasDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        railHudAtlasDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        railHudAtlasDesc.SampleDesc.Count = 1;
+        railHudAtlasDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
+
+        hr = device->CreateGraphicsPipelineState(&railHudAtlasDesc, IID_PPV_ARGS(&railHudAtlasPso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(RailHudAtlas)", hr);
+    }
 
     // ------------------------------
     // Compute PSO

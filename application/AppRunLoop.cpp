@@ -8,11 +8,14 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <memory>
 #include <sstream>
 #include <thread>
+#include <ctime>
 #include <utility>
 
 #include "AppFrameRenderer.h"
@@ -23,6 +26,7 @@
 #include "AppRuntimeState.h"
 #include "AppSceneResources.h"
 #include "EngineContext.h"
+#include "utils/dx12/BufferHelper.h"
 
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
 #include "../externals/imgui/imgui.h"
@@ -217,6 +221,47 @@ void LogRailFrameStage(uint32_t frameIndex, float distance, const char* stage) {
     }
 }
 
+std::string CsvEscape(const std::string& value) {
+    bool needsQuote = false;
+    for (char c : value) {
+        if (c == ',' || c == '"' || c == '\n' || c == '\r') {
+            needsQuote = true;
+            break;
+        }
+    }
+    if (!needsQuote) {
+        return value;
+    }
+
+    std::string escaped;
+    escaped.reserve(value.size() + 2);
+    escaped.push_back('"');
+    for (char c : value) {
+        if (c == '"') {
+            escaped.push_back('"');
+        }
+        escaped.push_back(c);
+    }
+    escaped.push_back('"');
+    return escaped;
+}
+
+const char* BoolCsv(bool value) {
+    return value ? "1" : "0";
+}
+
+std::string BuildRailTuningCsvPath() {
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
+    std::tm localTime{};
+    localtime_s(&localTime, &nowTime);
+    std::ostringstream name;
+    name << "logs/rail_camera_tuning_"
+         << std::put_time(&localTime, "%Y%m%d_%H%M%S")
+         << ".csv";
+    return name.str();
+}
+
 Vector3 NormalizeOr(const Vector3& value, const Vector3& fallback) {
     const float len2 = value.x * value.x + value.y * value.y + value.z * value.z;
     if (len2 <= 0.000001f) {
@@ -355,6 +400,51 @@ Vector3 RailLocalPoint(
     return Add(
         Add(sample.position, Scale(sample.right, lateral)),
         Scale(sample.up, vertical));
+}
+
+struct RailOverlayProjectedPoint {
+    Vector2 screen{};
+    float depth = 0.0f;
+    bool behind = false;
+    bool inDepth = false;
+    bool onscreen = false;
+};
+
+RailOverlayProjectedPoint ProjectRailOverlayPoint(
+    const Vector3& point,
+    const Matrix4x4& matrix,
+    uint32_t width,
+    uint32_t height) {
+    const float x =
+        point.x * matrix.m[0][0] + point.y * matrix.m[1][0] + point.z * matrix.m[2][0] + matrix.m[3][0];
+    const float y =
+        point.x * matrix.m[0][1] + point.y * matrix.m[1][1] + point.z * matrix.m[2][1] + matrix.m[3][1];
+    const float z =
+        point.x * matrix.m[0][2] + point.y * matrix.m[1][2] + point.z * matrix.m[2][2] + matrix.m[3][2];
+    const float w =
+        point.x * matrix.m[0][3] + point.y * matrix.m[1][3] + point.z * matrix.m[2][3] + matrix.m[3][3];
+
+    RailOverlayProjectedPoint result{};
+    if (w <= 0.00001f) {
+        result.behind = true;
+        return result;
+    }
+
+    const float ndcX = x / w;
+    const float ndcY = y / w;
+    result.depth = z / w;
+    result.screen = {
+        (ndcX * 0.5f + 0.5f) * static_cast<float>(width),
+        (1.0f - (ndcY * 0.5f + 0.5f)) * static_cast<float>(height),
+    };
+    result.inDepth = result.depth >= 0.0f && result.depth <= 1.0f;
+    result.onscreen =
+        result.inDepth &&
+        result.screen.x >= 0.0f &&
+        result.screen.y >= 0.0f &&
+        result.screen.x <= static_cast<float>(width) &&
+        result.screen.y <= static_cast<float>(height);
+    return result;
 }
 
 struct CourseObjectBounds {
@@ -1146,6 +1236,10 @@ void AppRunLoop::ApplyRailShooterCourse() {
     railShooterCombatFeelSystem_.Reset();
     railShooterEncounterDirector_.Reset();
     railShooterCameraDirector_.Reset();
+    railShooterSpeedDirector_.Reset(
+        railPath_.Length() > 0.0f
+            ? railPath_.Evaluate(railShooterCourseRuntime_.Distance()).speed
+            : 0.0f);
     courseObjectUndoStack_.clear();
     courseObjectRedoStack_.clear();
     courseObjectHistoryInitialized_ = false;
@@ -1186,6 +1280,8 @@ void AppRunLoop::TeleportRailShooterCourse(float distance) {
     railShooterCombatFeelSystem_.Reset();
     railShooterEncounterDirector_.Reset();
     railShooterCameraDirector_.Reset();
+    railShooterSpeedDirector_.Reset(
+        railPath_.Length() > 0.0f ? railPath_.Evaluate(railShooterDistance_).speed : 0.0f);
 
     std::ostringstream line;
     line << "[Course] Teleported authoring preview to distance=" << railShooterDistance_ << "\n";
@@ -1212,6 +1308,197 @@ void AppRunLoop::LogCourseEvents(const std::vector<CourseEventMarker>& events) {
             log << line.str();
         }
     }
+}
+
+void AppRunLoop::StartRailCameraTuningRecording() {
+    railCameraTuningRecorder_.samples.clear();
+    railCameraTuningRecorder_.recording = true;
+    railCameraTuningRecorder_.recordedSamples = 0;
+    railCameraTuningRecorder_.droppedSamples = 0;
+    railCameraTuningRecorder_.recordingTimeSeconds = 0.0f;
+    railCameraTuningRecorder_.status = "recording";
+}
+
+void AppRunLoop::StopRailCameraTuningRecording() {
+    railCameraTuningRecorder_.recording = false;
+    railCameraTuningRecorder_.status = railCameraTuningRecorder_.samples.empty()
+        ? "stopped, no samples"
+        : "stopped";
+}
+
+void AppRunLoop::ClearRailCameraTuningRecording() {
+    railCameraTuningRecorder_.samples.clear();
+    railCameraTuningRecorder_.recordedSamples = 0;
+    railCameraTuningRecorder_.droppedSamples = 0;
+    railCameraTuningRecorder_.recordingTimeSeconds = 0.0f;
+    railCameraTuningRecorder_.status = railCameraTuningRecorder_.recording ? "recording, cleared" : "cleared";
+}
+
+bool AppRunLoop::ExportRailCameraTuningCsv(std::string* outPath) {
+    if (railCameraTuningRecorder_.samples.empty()) {
+        railCameraTuningRecorder_.status = "export skipped, no samples";
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories("logs", ec);
+    const std::string path = BuildRailTuningCsvPath();
+    std::ofstream csv(path, std::ios::out | std::ios::trunc);
+    if (!csv) {
+        railCameraTuningRecorder_.status = "export failed";
+        return false;
+    }
+
+    csv << "frame,timeSeconds,distance,sectionName,speedMode,speedReason,"
+        << "baseSpeed,targetSpeed,smoothedSpeed,zoneMultiplier,eventMultiplier,"
+        << "cameraMode,cameraModeKind,comfortReason,fovYDeg,rollDeg,angularVelocityDeg,"
+        << "angularAccelerationDeg,fovChangeRateDeg,linearSpeed,stabilityScore,shakeAmount,"
+        << "stableForAiming,hardTransition,allowEnemyFire,aimFocusBlend,lookAtBlend,"
+        << "compositionRisk,compositionSafetyBlend,compositionSafe,lineOfSightSafe,"
+        << "cameraCollisionSafe,segmentTransitionActive,segmentTransitionBlend,"
+        << "encounterFramingActive,encounterFramingBlend,encounterFramingSpread,"
+        << "encounterFramingEnemyCount,encounterFramingBossCount,activeEnemies,"
+        << "activeBullets,activeObstacles,lockTokenCount,lockHeld,normalShotHeld,"
+        << "normalShotsFired,normalShotHits,playerDamage,updateMs,renderMs,presentMs\n";
+    csv << std::fixed << std::setprecision(4);
+    for (const RailCameraTuningSample& s : railCameraTuningRecorder_.samples) {
+        csv << s.frame << ','
+            << s.timeSeconds << ','
+            << s.distance << ','
+            << CsvEscape(s.sectionName) << ','
+            << CsvEscape(s.speedMode) << ','
+            << CsvEscape(s.speedReason) << ','
+            << s.baseSpeed << ','
+            << s.targetSpeed << ','
+            << s.smoothedSpeed << ','
+            << s.zoneMultiplier << ','
+            << s.eventMultiplier << ','
+            << CsvEscape(s.cameraMode) << ','
+            << CsvEscape(s.cameraModeKind) << ','
+            << CsvEscape(s.comfortReason) << ','
+            << s.fovYDeg << ','
+            << s.rollDeg << ','
+            << s.angularVelocityDeg << ','
+            << s.angularAccelerationDeg << ','
+            << s.fovChangeRateDeg << ','
+            << s.linearSpeed << ','
+            << s.stabilityScore << ','
+            << s.shakeAmount << ','
+            << BoolCsv(s.stableForAiming) << ','
+            << BoolCsv(s.hardTransition) << ','
+            << BoolCsv(s.allowEnemyFire) << ','
+            << s.aimFocusBlend << ','
+            << s.lookAtBlend << ','
+            << s.compositionRisk << ','
+            << s.compositionSafetyBlend << ','
+            << BoolCsv(s.compositionSafe) << ','
+            << BoolCsv(s.lineOfSightSafe) << ','
+            << BoolCsv(s.cameraCollisionSafe) << ','
+            << BoolCsv(s.segmentTransitionActive) << ','
+            << s.segmentTransitionBlend << ','
+            << BoolCsv(s.encounterFramingActive) << ','
+            << s.encounterFramingBlend << ','
+            << s.encounterFramingSpread << ','
+            << s.encounterFramingEnemyCount << ','
+            << s.encounterFramingBossCount << ','
+            << s.activeEnemies << ','
+            << s.activeBullets << ','
+            << s.activeObstacles << ','
+            << s.lockTokenCount << ','
+            << BoolCsv(s.lockHeld) << ','
+            << BoolCsv(s.normalShotHeld) << ','
+            << s.normalShotsFired << ','
+            << s.normalShotHits << ','
+            << s.playerDamage << ','
+            << s.updateMs << ','
+            << s.renderMs << ','
+            << s.presentMs << '\n';
+    }
+
+    railCameraTuningRecorder_.lastExportPath = path;
+    railCameraTuningRecorder_.status = "exported " + path;
+    if (outPath != nullptr) {
+        *outPath = path;
+    }
+    return true;
+}
+
+void AppRunLoop::RecordRailCameraTuningSample(
+    float deltaTime,
+    const RailSpeedDirectorFrame& speedFrame,
+    const RailCameraDirectorFrame& cameraFrame,
+    const CourseCollisionFrameStats& collisionStats) {
+    if (!railCameraTuningRecorder_.recording || !IsRailShooterSceneActive()) {
+        return;
+    }
+
+    railCameraTuningRecorder_.recordingTimeSeconds += (std::max)(0.0f, deltaTime);
+    const uint32_t stride = (std::max)(1u, railCameraTuningRecorder_.sampleStride);
+    if ((railShooterFrameIndex_ % stride) != 0u) {
+        return;
+    }
+    if (railCameraTuningRecorder_.samples.size() >= railCameraTuningRecorder_.maxSamples) {
+        ++railCameraTuningRecorder_.droppedSamples;
+        railCameraTuningRecorder_.status = "recording, buffer full";
+        return;
+    }
+
+    RailCameraTuningSample sample{};
+    sample.frame = railShooterFrameIndex_;
+    sample.timeSeconds = railCameraTuningRecorder_.recordingTimeSeconds;
+    sample.distance = railShooterDistance_;
+    sample.sectionName = speedFrame.sectionName;
+    sample.speedMode = speedFrame.modeName;
+    sample.speedReason = speedFrame.reason;
+    sample.baseSpeed = speedFrame.baseSpeed;
+    sample.targetSpeed = speedFrame.targetSpeed;
+    sample.smoothedSpeed = speedFrame.smoothedSpeed;
+    sample.zoneMultiplier = speedFrame.zoneMultiplier;
+    sample.eventMultiplier = speedFrame.eventMultiplier;
+    sample.cameraMode = cameraFrame.mode;
+    sample.cameraModeKind = ToRailCameraDirectorModeString(cameraFrame.modeKind);
+    sample.comfortReason = cameraFrame.comfortReason;
+    sample.fovYDeg = cameraFrame.fovY * 180.0f / 3.14159265358979323846f;
+    sample.rollDeg = cameraFrame.rollDeg;
+    sample.angularVelocityDeg = cameraFrame.angularVelocityDeg;
+    sample.angularAccelerationDeg = cameraFrame.angularAccelerationDeg;
+    sample.fovChangeRateDeg = cameraFrame.fovChangeRateDeg;
+    sample.linearSpeed = cameraFrame.linearSpeed;
+    sample.stabilityScore = cameraFrame.stabilityScore;
+    sample.shakeAmount = cameraFrame.shakeAmount;
+    sample.stableForAiming = cameraFrame.stableForAiming;
+    sample.hardTransition = cameraFrame.hardTransition;
+    sample.allowEnemyFire = cameraFrame.allowEnemyFire;
+    sample.aimFocusBlend = cameraFrame.aimFocusBlend;
+    sample.lookAtBlend = cameraFrame.lookAtBlend;
+    sample.compositionRisk = cameraFrame.compositionRisk;
+    sample.compositionSafetyBlend = cameraFrame.compositionSafetyBlend;
+    sample.compositionSafe = cameraFrame.compositionSafeForAiming;
+    sample.lineOfSightSafe = cameraFrame.lineOfSightSafeForAiming;
+    sample.cameraCollisionSafe = cameraFrame.cameraCollisionSafe;
+    sample.segmentTransitionActive = cameraFrame.segmentTransitionActive;
+    sample.segmentTransitionBlend = cameraFrame.segmentTransitionBlend;
+    sample.encounterFramingActive = cameraFrame.encounterFramingActive;
+    sample.encounterFramingBlend = cameraFrame.encounterFramingBlend;
+    sample.encounterFramingSpread = cameraFrame.encounterFramingThreatSpread;
+    sample.encounterFramingEnemyCount = cameraFrame.encounterFramingEnemyCount;
+    sample.encounterFramingBossCount = cameraFrame.encounterFramingBossCount;
+    sample.activeEnemies = static_cast<uint32_t>(railShooterSpawnRuntime_.ActiveEnemyCount());
+    sample.activeBullets = static_cast<uint32_t>(railShooterSpawnRuntime_.ActiveBulletCount());
+    sample.activeObstacles = static_cast<uint32_t>(railShooterSpawnRuntime_.ActiveObstacleCount());
+    sample.lockTokenCount = static_cast<uint32_t>(railShooterLockOnSystem_.Tokens().size());
+    sample.lockHeld = railShooterLockOnSystem_.Reticle().lockHeld;
+    sample.normalShotHeld = railInputRouteDebug_.normalShotHeld;
+    sample.normalShotsFired = collisionStats.playerShotsFired;
+    sample.normalShotHits = collisionStats.playerShotEnemyHits + collisionStats.playerShotObstacleHits;
+    sample.playerDamage = collisionStats.playerDamage;
+    sample.updateMs = gRailPerfFrame.updateMs;
+    sample.renderMs = gRailPerfFrame.renderMs;
+    sample.presentMs = gRailPerfFrame.presentMs;
+
+    railCameraTuningRecorder_.samples.push_back(std::move(sample));
+    ++railCameraTuningRecorder_.recordedSamples;
+    railCameraTuningRecorder_.status = "recording";
 }
 
 void AppRunLoop::ApplyRailShooterVisualPresets(float distance) {
@@ -1276,6 +1563,7 @@ void AppRunLoop::ApplyRailShooterVisualPresets(float distance) {
 }
 
 void AppRunLoop::DrawRailLockOnHud() {
+    return;
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
     if (!railShooterInitialized_ || windowWidth_ == 0 || windowHeight_ == 0) {
         return;
@@ -1495,6 +1783,740 @@ void AppRunLoop::DrawRailLockOnHud() {
 #endif
 }
 
+void AppRunLoop::DrawRailVisibilityDebugOverlay() {
+#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
+    const RailVisibilityDebugOverlaySettings& overlay = railVisibilityDebugOverlay_;
+    if (!overlay.enabled || !railShooterInitialized_ || windowWidth_ == 0 || windowHeight_ == 0 ||
+        railPath_.Length() <= 0.0f) {
+        return;
+    }
+
+    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    if (drawList == nullptr) {
+        return;
+    }
+
+    const float width = static_cast<float>(windowWidth_);
+    const float height = static_cast<float>(windowHeight_);
+    const ImVec2 viewportCenter(width * 0.5f, height * 0.5f);
+    const auto makeCenteredRect = [&](float widthFraction, float heightFraction, ImVec2& outMin, ImVec2& outMax) {
+        const float rectWidth = width * (std::clamp)(widthFraction, 0.05f, 1.0f);
+        const float rectHeight = height * (std::clamp)(heightFraction, 0.05f, 1.0f);
+        outMin = ImVec2(viewportCenter.x - rectWidth * 0.5f, viewportCenter.y - rectHeight * 0.5f);
+        outMax = ImVec2(viewportCenter.x + rectWidth * 0.5f, viewportCenter.y + rectHeight * 0.5f);
+    };
+    const auto pointInRect = [](const Vector2& point, const ImVec2& min, const ImVec2& max) {
+        return point.x >= min.x && point.x <= max.x && point.y >= min.y && point.y <= max.y;
+    };
+    const auto visibleWithMargin = [&](const Vector2& point, float margin) {
+        return point.x >= -margin && point.y >= -margin && point.x <= width + margin && point.y <= height + margin;
+    };
+    const auto toImVec2 = [](const Vector2& value) {
+        return ImVec2(value.x, value.y);
+    };
+
+    ImVec2 aimMin{};
+    ImVec2 aimMax{};
+    ImVec2 warningMin{};
+    ImVec2 warningMax{};
+    makeCenteredRect(overlay.aimableZoneWidth, overlay.aimableZoneHeight, aimMin, aimMax);
+    makeCenteredRect(overlay.warningZoneWidth, overlay.warningZoneHeight, warningMin, warningMax);
+
+    if (overlay.showAimableZone) {
+        drawList->AddRectFilled(warningMin, warningMax, IM_COL32(255, 196, 80, 12), 0.0f);
+        drawList->AddRect(warningMin, warningMax, IM_COL32(255, 196, 80, 120), 0.0f, 0, 1.4f);
+        drawList->AddRectFilled(aimMin, aimMax, IM_COL32(52, 232, 255, 16), 0.0f);
+        drawList->AddRect(aimMin, aimMax, IM_COL32(80, 238, 255, 190), 0.0f, 0, 2.0f);
+        drawList->AddLine(
+            ImVec2(viewportCenter.x - 18.0f, viewportCenter.y),
+            ImVec2(viewportCenter.x + 18.0f, viewportCenter.y),
+            IM_COL32(120, 244, 255, 115),
+            1.2f);
+        drawList->AddLine(
+            ImVec2(viewportCenter.x, viewportCenter.y - 18.0f),
+            ImVec2(viewportCenter.x, viewportCenter.y + 18.0f),
+            IM_COL32(120, 244, 255, 115),
+            1.2f);
+        if (overlay.showLabels) {
+            drawList->AddText(ImVec2(aimMin.x + 8.0f, aimMin.y + 6.0f), IM_COL32(140, 248, 255, 210), "AIMABLE");
+            drawList->AddText(
+                ImVec2(warningMin.x + 8.0f, warningMin.y + 6.0f),
+                IM_COL32(255, 211, 96, 185),
+                "READABILITY");
+        }
+    }
+
+    const RailCameraDirectorFrame& cameraFrame = railShooterCameraDirector_.LastFrame();
+    const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(railShooterFrameIndex_) * 0.16f);
+
+    const auto drawScreenMarker = [&](const ImVec2& pos, float radius, ImU32 color, bool filled) {
+        if (filled) {
+            drawList->AddCircleFilled(pos, radius + 2.0f + pulse * 1.5f, color, 18);
+        }
+        drawList->AddCircle(pos, radius + 4.0f, color, 24, 1.7f);
+        drawList->AddLine(ImVec2(pos.x - radius, pos.y), ImVec2(pos.x + radius, pos.y), color, 1.2f);
+        drawList->AddLine(ImVec2(pos.x, pos.y - radius), ImVec2(pos.x, pos.y + radius), color, 1.2f);
+    };
+    const auto drawWorldDebugPoint = [&](const Vector3& world, const char* label, ImU32 color) {
+        const RailOverlayProjectedPoint projected =
+            ProjectRailOverlayPoint(world, frameState_.viewProjectionMatrix, windowWidth_, windowHeight_);
+        if (!projected.inDepth || !visibleWithMargin(projected.screen, 64.0f)) {
+            return;
+        }
+        const ImVec2 pos = toImVec2(projected.screen);
+        drawList->AddRect(
+            ImVec2(pos.x - 6.0f, pos.y - 6.0f),
+            ImVec2(pos.x + 6.0f, pos.y + 6.0f),
+            color,
+            0.0f,
+            0,
+            1.5f);
+        drawList->AddLine(viewportCenter, pos, IM_COL32(160, 210, 255, 70), 1.0f);
+        if (overlay.showLabels) {
+            drawList->AddText(ImVec2(pos.x + 8.0f, pos.y - 7.0f), color, label);
+        }
+    };
+
+    if (overlay.showActors) {
+        for (const CourseEnemyActor& enemy : railShooterSpawnRuntime_.Enemies()) {
+            const Vector3 center = RailLocalPoint(
+                railPath_,
+                enemy.desc.spawnDistance,
+                enemy.desc.lateralOffset,
+                enemy.desc.verticalOffset,
+                enemy.desc.distanceOffset);
+            const RailOverlayProjectedPoint projected =
+                ProjectRailOverlayPoint(center, frameState_.viewProjectionMatrix, windowWidth_, windowHeight_);
+            if (!projected.inDepth || !visibleWithMargin(projected.screen, 88.0f)) {
+                continue;
+            }
+
+            const bool inAimable = projected.onscreen && pointInRect(projected.screen, aimMin, aimMax);
+            const bool inWarning = projected.onscreen && pointInRect(projected.screen, warningMin, warningMax);
+            const ImU32 color =
+                inAimable && enemy.fireSafetyAllowed ? IM_COL32(88, 255, 176, 235) :
+                inAimable ? IM_COL32(255, 214, 82, 235) :
+                inWarning ? IM_COL32(255, 160, 70, 210) :
+                IM_COL32(255, 78, 72, 185);
+            const float radius = inAimable ? 9.0f : (inWarning ? 7.0f : 5.5f);
+            const ImVec2 pos = toImVec2(projected.screen);
+            drawScreenMarker(pos, radius, color, enemy.fireSafetyAllowed);
+
+            if (!inAimable) {
+                drawList->AddLine(pos, viewportCenter, IM_COL32(255, 170, 70, 72), 1.0f);
+            }
+            if (overlay.showLabels) {
+                char label[192]{};
+                const float forwardDistance =
+                    enemy.desc.spawnDistance + enemy.desc.distanceOffset - railShooterDistance_;
+                std::snprintf(
+                    label,
+                    sizeof(label),
+                    "E%u %s %.0fm %s",
+                    enemy.actorId,
+                    enemy.desc.role.c_str(),
+                    forwardDistance,
+                    enemy.fireSafetyReason.c_str());
+                drawList->AddText(ImVec2(pos.x + 10.0f, pos.y - 8.0f), color, label);
+            }
+        }
+
+        for (const CourseObstacleActor& obstacle : railShooterSpawnRuntime_.Obstacles()) {
+            const Vector3 center = RailLocalPoint(
+                railPath_,
+                obstacle.desc.spawnDistance,
+                obstacle.desc.lateralOffset,
+                obstacle.desc.verticalOffset,
+                obstacle.desc.distanceOffset);
+            const RailOverlayProjectedPoint projected =
+                ProjectRailOverlayPoint(center, frameState_.viewProjectionMatrix, windowWidth_, windowHeight_);
+            if (!projected.inDepth || !visibleWithMargin(projected.screen, 88.0f)) {
+                continue;
+            }
+
+            const bool inAimable = projected.onscreen && pointInRect(projected.screen, aimMin, aimMax);
+            const bool inWarning = projected.onscreen && pointInRect(projected.screen, warningMin, warningMax);
+            const ImU32 color =
+                inAimable ? IM_COL32(108, 208, 255, 210) :
+                inWarning ? IM_COL32(255, 184, 76, 185) :
+                IM_COL32(255, 92, 72, 150);
+            const ImVec2 pos = toImVec2(projected.screen);
+            const float radius = inAimable ? 8.0f : 6.0f;
+            drawList->AddRect(
+                ImVec2(pos.x - radius, pos.y - radius),
+                ImVec2(pos.x + radius, pos.y + radius),
+                color,
+                0.0f,
+                0,
+                1.6f);
+            if (overlay.showLabels) {
+                char label[96]{};
+                const float forwardDistance =
+                    obstacle.desc.spawnDistance + obstacle.desc.distanceOffset - railShooterDistance_;
+                std::snprintf(label, sizeof(label), "O%u %.0fm", obstacle.actorId, forwardDistance);
+                drawList->AddText(ImVec2(pos.x + 9.0f, pos.y - 7.0f), color, label);
+            }
+        }
+    }
+
+    if (overlay.showThreatCenter) {
+        drawWorldDebugPoint(cameraFrame.baseTarget, "BASE", IM_COL32(155, 190, 255, 170));
+        drawWorldDebugPoint(cameraFrame.threatCenter, "THREAT", IM_COL32(255, 120, 215, 220));
+    }
+#endif
+}
+
+bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList) {
+    constexpr uint32_t kAtlasWidth = 256;
+    constexpr uint32_t kAtlasHeight = 128;
+    constexpr uint32_t kDescriptorIndex = 18;
+    constexpr uint32_t kMaxAtlasVertices = 16384;
+    ComPtr<ID3D12Device> device = dev_.GetDevice();
+
+    if (railLockOnHudAtlasVertexResource_ == nullptr) {
+        railLockOnHudAtlasVertexResource_ = CreateBufferResource(
+            device,
+            sizeof(RailHudAtlasVertex) * kMaxAtlasVertices);
+        if (railLockOnHudAtlasVertexResource_ == nullptr) {
+            return false;
+        }
+        if (FAILED(railLockOnHudAtlasVertexResource_->Map(
+                0,
+                nullptr,
+                reinterpret_cast<void**>(&railLockOnHudAtlasMappedVertices_))) ||
+            railLockOnHudAtlasMappedVertices_ == nullptr) {
+            return false;
+        }
+        railLockOnHudAtlasVertexBufferView_.BufferLocation =
+            railLockOnHudAtlasVertexResource_->GetGPUVirtualAddress();
+        railLockOnHudAtlasVertexBufferView_.SizeInBytes =
+            sizeof(RailHudAtlasVertex) * kMaxAtlasVertices;
+        railLockOnHudAtlasVertexBufferView_.StrideInBytes = sizeof(RailHudAtlasVertex);
+    }
+
+    if (railLockOnHudAtlasReady_) {
+        return true;
+    }
+    if (commandList == nullptr || srvDescriptorHeap_ == nullptr || device == nullptr) {
+        return false;
+    }
+
+    DirectX::ScratchImage atlasImage;
+    if (FAILED(atlasImage.Initialize2D(
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            kAtlasWidth,
+            kAtlasHeight,
+            1,
+            1))) {
+        return false;
+    }
+    const DirectX::Image* image = atlasImage.GetImage(0, 0, 0);
+    if (image == nullptr || image->pixels == nullptr) {
+        return false;
+    }
+    std::memset(image->pixels, 0, image->slicePitch);
+
+    auto writePixel = [&](int x, int y, uint8_t alpha) {
+        if (x < 0 || y < 0 || x >= static_cast<int>(kAtlasWidth) || y >= static_cast<int>(kAtlasHeight)) {
+            return;
+        }
+        uint8_t* p = image->pixels + static_cast<size_t>(y) * image->rowPitch + static_cast<size_t>(x) * 4u;
+        p[0] = 255;
+        p[1] = 255;
+        p[2] = 255;
+        p[3] = alpha;
+    };
+    auto fillRect = [&](int x, int y, int w, int h, uint8_t alpha) {
+        for (int yy = y; yy < y + h; ++yy) {
+            for (int xx = x; xx < x + w; ++xx) {
+                writePixel(xx, yy, alpha);
+            }
+        }
+    };
+    auto fillCircle = [&](int cx, int cy, int radius) {
+        const float r = static_cast<float>((std::max)(radius, 1));
+        for (int y = cy - radius; y <= cy + radius; ++y) {
+            for (int x = cx - radius; x <= cx + radius; ++x) {
+                const float dx = static_cast<float>(x - cx);
+                const float dy = static_cast<float>(y - cy);
+                const float d = std::sqrt(dx * dx + dy * dy);
+                const float edge = (std::clamp)((r - d) / 3.0f, 0.0f, 1.0f);
+                const float body = d <= r ? 1.0f : 0.0f;
+                writePixel(x, y, static_cast<uint8_t>(255.0f * body * edge));
+            }
+        }
+    };
+    auto drawSegmentDigit = [&](int digit, int x, int y) {
+        static constexpr bool kSegments[10][7] = {
+            {true, true, true, false, true, true, true},
+            {false, false, true, false, false, true, false},
+            {true, false, true, true, true, false, true},
+            {true, false, true, true, false, true, true},
+            {false, true, true, true, false, true, false},
+            {true, true, false, true, false, true, true},
+            {true, true, false, true, true, true, true},
+            {true, false, true, false, false, true, false},
+            {true, true, true, true, true, true, true},
+            {true, true, true, true, false, true, true},
+        };
+        const bool* s = kSegments[(std::clamp)(digit, 0, 9)];
+        if (s[0]) fillRect(x + 2, y + 1, 7, 2, 255);
+        if (s[1]) fillRect(x + 1, y + 3, 2, 5, 255);
+        if (s[2]) fillRect(x + 8, y + 3, 2, 5, 255);
+        if (s[3]) fillRect(x + 2, y + 8, 7, 2, 255);
+        if (s[4]) fillRect(x + 1, y + 10, 2, 5, 255);
+        if (s[5]) fillRect(x + 8, y + 10, 2, 5, 255);
+        if (s[6]) fillRect(x + 2, y + 15, 7, 2, 255);
+    };
+    fillRect(0, 112, 8, 8, 255);
+    fillCircle(32, 104, 15);
+    fillCircle(72, 104, 15);
+    fillCircle(112, 104, 11);
+    for (int digit = 0; digit < 10; ++digit) {
+        drawSegmentDigit(digit, digit * 12, 0);
+    }
+
+    railLockOnHudAtlasTexture_ =
+        AppRenderResources::CreateTextureResource(device, atlasImage.GetMetadata());
+    if (railLockOnHudAtlasTexture_ == nullptr) {
+        return false;
+    }
+    AppRenderResources::UploadTextureData(
+        device,
+        commandList,
+        railLockOnHudAtlasTexture_,
+        atlasImage,
+        railLockOnHudAtlasUploadResources_);
+
+    const uint32_t descriptorSize = device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+    const D3D12_CPU_DESCRIPTOR_HANDLE cpu =
+        AppRenderResources::GetCPUDescriptorHandle(srvDescriptorHeap_, descriptorSize, kDescriptorIndex);
+    railLockOnHudAtlasSrvGpu_ =
+        AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap_, descriptorSize, kDescriptorIndex);
+    device->CreateShaderResourceView(railLockOnHudAtlasTexture_.Get(), &srvDesc, cpu);
+    railLockOnHudAtlasReady_ = railLockOnHudAtlasSrvGpu_.ptr != 0;
+    return railLockOnHudAtlasReady_;
+}
+
+bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
+    constexpr uint32_t kMaxAtlasVertices = 16384;
+    constexpr float kAtlasW = 256.0f;
+    constexpr float kAtlasH = 128.0f;
+    railLockOnHudAtlasVertexCount_ = 0;
+    if (railLockOnHudAtlasMappedVertices_ == nullptr || windowWidth_ == 0 || windowHeight_ == 0) {
+        return false;
+    }
+
+    const auto uv = [](float x, float y, float w, float h) {
+        return Vector4{x / kAtlasW, y / kAtlasH, (x + w) / kAtlasW, (y + h) / kAtlasH};
+    };
+    const Vector4 uvWhite = uv(0.0f, 112.0f, 8.0f, 8.0f);
+    const Vector4 uvCircle = uv(16.0f, 88.0f, 32.0f, 32.0f);
+    const Vector4 uvGlow = uv(56.0f, 88.0f, 32.0f, 32.0f);
+    const Vector4 uvPip = uv(101.0f, 93.0f, 22.0f, 22.0f);
+
+    const auto clip = [&](float x, float y) {
+        return Vector4{
+            x / static_cast<float>(windowWidth_) * 2.0f - 1.0f,
+            1.0f - y / static_cast<float>(windowHeight_) * 2.0f,
+            0.0f,
+            1.0f};
+    };
+    auto push = [&](float x, float y, float u, float v, const Vector4& color) {
+        if (railLockOnHudAtlasVertexCount_ >= kMaxAtlasVertices) {
+            return;
+        }
+        railLockOnHudAtlasMappedVertices_[railLockOnHudAtlasVertexCount_++] = {
+            clip(x, y),
+            {u, v},
+            color};
+    };
+    auto addQuad = [&](float x, float y, float w, float h, const Vector4& rect, const Vector4& color) {
+        if (w <= 0.0f || h <= 0.0f || railLockOnHudAtlasVertexCount_ + 6 > kMaxAtlasVertices) {
+            return;
+        }
+        const float x0 = x;
+        const float y0 = y;
+        const float x1 = x + w;
+        const float y1 = y + h;
+        push(x0, y0, rect.x, rect.y, color);
+        push(x1, y0, rect.z, rect.y, color);
+        push(x0, y1, rect.x, rect.w, color);
+        push(x0, y1, rect.x, rect.w, color);
+        push(x1, y0, rect.z, rect.y, color);
+        push(x1, y1, rect.z, rect.w, color);
+    };
+    auto addQuadCorners = [&](const Vector2& a, const Vector2& b, const Vector2& c, const Vector2& d, const Vector4& rect, const Vector4& color) {
+        if (railLockOnHudAtlasVertexCount_ + 6 > kMaxAtlasVertices) {
+            return;
+        }
+        push(a.x, a.y, rect.x, rect.y, color);
+        push(b.x, b.y, rect.z, rect.y, color);
+        push(c.x, c.y, rect.x, rect.w, color);
+        push(c.x, c.y, rect.x, rect.w, color);
+        push(b.x, b.y, rect.z, rect.y, color);
+        push(d.x, d.y, rect.z, rect.w, color);
+    };
+    auto addCentered = [&](const Vector2& center, float size, const Vector4& rect, const Vector4& color) {
+        addQuad(center.x - size * 0.5f, center.y - size * 0.5f, size, size, rect, color);
+    };
+    auto addCenteredRect = [&](const Vector2& center, float w, float h, const Vector4& rect, const Vector4& color) {
+        addQuad(center.x - w * 0.5f, center.y - h * 0.5f, w, h, rect, color);
+    };
+    auto addGlyph = [&](char c, float x, float y, float scale, const Vector4& color) {
+        if (c < '0' || c > '9') {
+            return;
+        }
+        const Vector4 rect = uv(static_cast<float>(c - '0') * 12.0f, 0.0f, 11.0f, 18.0f);
+        addQuad(x, y, 11.0f * scale, 18.0f * scale, rect, color);
+    };
+    auto addNumber = [&](int value, const Vector2& center, float scale, const Vector4& color) {
+        const int clamped = (std::clamp)(value, 0, 99);
+        char text[3] = {};
+        if (clamped >= 10) {
+            text[0] = static_cast<char>('0' + clamped / 10);
+            text[1] = static_cast<char>('0' + clamped % 10);
+        } else {
+            text[0] = static_cast<char>('0' + clamped);
+        }
+        const float width = static_cast<float>(std::strlen(text)) * 12.0f * scale;
+        float cursor = center.x - width * 0.5f;
+        for (const char* ch = text; *ch != '\0'; ++ch) {
+            addGlyph(*ch, cursor, center.y - 9.0f * scale, scale, color);
+            cursor += 12.0f * scale;
+        }
+    };
+    const auto validPoint = [](const Vector2& p) {
+        return std::isfinite(p.x) && std::isfinite(p.y);
+    };
+    auto addLine = [&](const Vector2& start, const Vector2& end, float thickness, const Vector4& color) {
+        if (!validPoint(start) || !validPoint(end) || thickness <= 0.0f) {
+            return;
+        }
+        const float dx = end.x - start.x;
+        const float dy = end.y - start.y;
+        const float length = std::sqrt(dx * dx + dy * dy);
+        if (length <= 0.0001f) {
+            return;
+        }
+        const float nx = -dy / length * thickness * 0.5f;
+        const float ny = dx / length * thickness * 0.5f;
+        addQuadCorners(
+            {start.x + nx, start.y + ny},
+            {end.x + nx, end.y + ny},
+            {start.x - nx, start.y - ny},
+            {end.x - nx, end.y - ny},
+            uvWhite,
+            color);
+    };
+    auto addSoftLine = [&](const Vector2& start, const Vector2& end, float thickness, const Vector4& color) {
+        addLine(start, end, thickness * 2.4f, Vector4{color.x, color.y, color.z, color.w * 0.16f});
+        addLine(start, end, thickness, color);
+    };
+    auto addCircleLine = [&](const Vector2& center, float radius, float thickness, const Vector4& color, int segments) {
+        if (!validPoint(center) || radius <= 0.0f || thickness <= 0.0f) {
+            return;
+        }
+        constexpr float kTau = 6.28318530717958647692f;
+        const int safeSegments = (std::clamp)(segments, 8, 48);
+        Vector2 previous{center.x + radius, center.y};
+        for (int index = 1; index <= safeSegments; ++index) {
+            const float t = kTau * static_cast<float>(index) / static_cast<float>(safeSegments);
+            Vector2 current{center.x + std::cos(t) * radius, center.y + std::sin(t) * radius};
+            addLine(previous, current, thickness, color);
+            previous = current;
+        }
+    };
+    auto addCross = [&](const Vector2& center, float radius, float thickness, const Vector4& color) {
+        addLine({center.x - radius, center.y}, {center.x + radius, center.y}, thickness, color);
+        addLine({center.x, center.y - radius}, {center.x, center.y + radius}, thickness, color);
+    };
+    auto addBracket = [&](const Vector2& center, float radius, float length, float thickness, const Vector4& color) {
+        const float inner = radius;
+        const float outer = radius + length;
+        addLine({center.x - outer, center.y - inner}, {center.x - inner, center.y - inner}, thickness, color);
+        addLine({center.x - inner, center.y - outer}, {center.x - inner, center.y - inner}, thickness, color);
+        addLine({center.x + inner, center.y - inner}, {center.x + outer, center.y - inner}, thickness, color);
+        addLine({center.x + inner, center.y - outer}, {center.x + inner, center.y - inner}, thickness, color);
+        addLine({center.x - outer, center.y + inner}, {center.x - inner, center.y + inner}, thickness, color);
+        addLine({center.x - inner, center.y + inner}, {center.x - inner, center.y + outer}, thickness, color);
+        addLine({center.x + inner, center.y + inner}, {center.x + outer, center.y + inner}, thickness, color);
+        addLine({center.x + inner, center.y + inner}, {center.x + inner, center.y + outer}, thickness, color);
+    };
+    auto addTickedRing = [&](const Vector2& center, float radius, int ticks, float thickness, const Vector4& color) {
+        addCircleLine(center, radius, thickness, color, 36);
+        constexpr float kTau = 6.28318530717958647692f;
+        const int safeTicks = (std::clamp)(ticks, 1, 8);
+        for (int index = 0; index < safeTicks; ++index) {
+            const float t = kTau * static_cast<float>(index) / static_cast<float>(safeTicks);
+            const float c = std::cos(t);
+            const float s = std::sin(t);
+            addLine(
+                {center.x + c * (radius - 4.0f), center.y + s * (radius - 4.0f)},
+                {center.x + c * (radius + 5.0f), center.y + s * (radius + 5.0f)},
+                thickness,
+                color);
+        }
+    };
+
+    if (!railShooterInitialized_) {
+        return false;
+    }
+
+    const RailLockDebugFrame& debug = railShooterLockOnSystem_.DebugFrame();
+    const RailReticleState& reticle = debug.reticle;
+    const RailLockSettings& settings = railShooterLockOnSystem_.Settings();
+    const int maxLocks = (std::max)(1, settings.maxLocks);
+    const int tokenCount = static_cast<int>(debug.tokens.size());
+    const bool maxLock = tokenCount >= maxLocks;
+    const float acquirePulse = debug.acceptedThisFrame > 0 ? 1.0f : 0.0f;
+    const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(railShooterFrameIndex_) * 0.18f);
+    const float baseScale = settings.lockHudPolishEnabled
+        ? (std::clamp)(settings.lockHudScale, 0.65f, 1.7f)
+        : 1.0f;
+    const float responsiveScale = (std::clamp)(static_cast<float>(windowHeight_) / 900.0f, 0.82f, 1.16f);
+    const float hudScale = baseScale * responsiveScale;
+    const float opacity = settings.lockHudPolishEnabled
+        ? (std::clamp)(settings.lockHudOpacity, 0.15f, 1.0f)
+        : 1.0f;
+    const float safeArea = settings.lockHudPolishEnabled
+        ? (std::max)(12.0f, settings.lockHudSafeArea) * hudScale
+        : 34.0f * hudScale;
+    const float glowScale = settings.lockHudPolishEnabled
+        ? (std::clamp)(settings.lockHudReticleGlowScale, 0.2f, 2.2f)
+        : 1.0f;
+    const float releaseFlash = (std::clamp)(
+        static_cast<float>(debug.releasedThisFrame) * settings.lockHudReleaseFlash,
+        0.0f,
+        0.42f);
+    const Vector4 cyan = maxLock
+        ? Vector4{1.0f, 0.78f, 0.26f, opacity}
+        : Vector4{0.25f, 0.92f, 1.0f, opacity};
+    const Vector4 cyanSoft = maxLock
+        ? Vector4{1.0f, 0.66f, 0.20f, opacity * 0.26f}
+        : Vector4{0.16f, 0.78f, 1.0f, opacity * 0.24f};
+    const Vector4 panel = Vector4{0.015f, 0.025f, 0.030f, opacity * 0.56f};
+    const Vector4 panelAccent = maxLock
+        ? Vector4{1.0f, 0.72f, 0.22f, opacity * 0.62f}
+        : Vector4{0.18f, 0.72f, 0.88f, opacity * 0.48f};
+    const Vector4 glass = Vector4{0.72f, 0.96f, 1.0f, opacity * 0.10f};
+    const Vector4 lockLine = maxLock
+        ? Vector4{1.0f, 0.86f, 0.30f, opacity * 0.86f}
+        : Vector4{0.34f, 0.94f, 1.0f, opacity * 0.80f};
+    const Vector4 candidateLine = Vector4{0.28f, 0.82f, 1.0f, opacity * 0.62f};
+    const Vector4 blockedLine = Vector4{0.90f, 0.48f, 0.20f, opacity * 0.56f};
+    const Vector4 reticleLine = reticle.lockHeld ? lockLine : Vector4{0.76f, 0.86f, 0.92f, opacity * 0.76f};
+
+    if (releaseFlash > 0.0f) {
+        addQuad(0.0f, 0.0f, static_cast<float>(windowWidth_), static_cast<float>(windowHeight_), uvWhite, Vector4{0.72f, 0.95f, 1.0f, releaseFlash});
+    }
+
+    for (const RailNormalShotLine& shot : railNormalShotLines_) {
+        const float t = shot.lifetime > 0.0f
+            ? (std::clamp)(shot.age / shot.lifetime, 0.0f, 1.0f)
+            : 1.0f;
+        const float alpha = (1.0f - t) * (1.0f - t);
+        if (alpha <= 0.001f || !validPoint(shot.start) || !validPoint(shot.end)) {
+            continue;
+        }
+        const Vector4 beamColor = shot.hit
+            ? Vector4{0.78f, 0.98f, 1.0f, 0.72f * alpha}
+            : Vector4{0.42f, 0.78f, 1.0f, 0.42f * alpha};
+        addSoftLine(shot.start, shot.end, shot.thickness, beamColor);
+        if (shot.hit) {
+            addCentered(shot.end, 10.0f + 8.0f * alpha, uvGlow, Vector4{0.65f, 0.96f, 1.0f, 0.30f * alpha});
+            addCentered(shot.end, 3.8f + 2.2f * alpha, uvPip, Vector4{0.86f, 1.0f, 1.0f, 0.86f * alpha});
+        }
+    }
+
+    const RailLockCandidate* primeCandidate = nullptr;
+    for (const RailLockCandidate& candidate : debug.candidates) {
+        if (candidate.lockable &&
+            (primeCandidate == nullptr || candidate.score > primeCandidate->score)) {
+            primeCandidate = &candidate;
+        }
+    }
+
+    int shownCandidates = 0;
+    for (const RailLockCandidate& candidate : debug.candidates) {
+        if (!candidate.lockable || shownCandidates >= 10) {
+            continue;
+        }
+        const float scoreAlpha = settings.lockHudPolishEnabled
+            ? (std::clamp)(0.16f + candidate.score * settings.lockHudTargetScoreAlpha, 0.10f, 0.52f)
+            : 0.24f;
+        const float size = (std::clamp)(candidate.anchor.screenRadius * 2.0f, 34.0f, 88.0f) * hudScale;
+        addCentered(candidate.anchor.screenPosition, size * 1.26f, uvGlow, Vector4{0.20f, 0.85f, 1.0f, opacity * scoreAlpha});
+        addCentered(candidate.anchor.screenPosition, size * 0.56f, uvCircle, Vector4{0.05f, 0.18f, 0.22f, opacity * 0.22f});
+        ++shownCandidates;
+    }
+
+    if (reticle.aimFeelActive && validPoint(reticle.aimFeelTargetScreenPosition)) {
+        const Vector4 aimFeelColor{0.72f, 0.98f, 1.0f, opacity * 0.50f};
+        addLine(reticle.currentScreenPosition, reticle.aimFeelTargetScreenPosition, 1.6f * hudScale, aimFeelColor);
+        addCircleLine(
+            reticle.aimFeelTargetScreenPosition,
+            (11.0f + reticle.aimFeelStrength * 7.0f) * hudScale,
+            1.4f * hudScale,
+            aimFeelColor,
+            24);
+    }
+
+    for (const RailLockCandidate& candidate : debug.candidates) {
+        const bool visible =
+            candidate.lockable ||
+            candidate.rejectReason == RailLockRejectReason::AlreadyLocked ||
+            candidate.rejectReason == RailLockRejectReason::StackLimit;
+        if (!visible || !validPoint(candidate.anchor.screenPosition)) {
+            continue;
+        }
+        const float scoreAlpha = settings.lockHudPolishEnabled
+            ? (std::clamp)(0.30f + candidate.score * settings.lockHudTargetScoreAlpha, 0.24f, 1.0f)
+            : 1.0f;
+        const Vector4 lineColor = candidate.lockable
+            ? Vector4{candidateLine.x, candidateLine.y, candidateLine.z, candidateLine.w * scoreAlpha}
+            : blockedLine;
+        const float radius = (std::clamp)(candidate.anchor.screenRadius, 12.0f, 48.0f) * hudScale;
+        addCircleLine(candidate.anchor.screenPosition, radius, 1.4f * hudScale, lineColor, 28);
+        addCross(candidate.anchor.screenPosition, radius * 0.34f, 1.2f * hudScale, lineColor);
+        if (&candidate == primeCandidate) {
+            addBracket(
+                candidate.anchor.screenPosition,
+                radius + 4.0f * hudScale + pulse * 3.0f,
+                8.0f * hudScale,
+                1.7f * hudScale,
+                Vector4{1.0f, 1.0f, 1.0f, opacity * 0.82f});
+        }
+    }
+
+    const float reticleGlowSize = (reticle.lockHeld ? 92.0f : 70.0f) * hudScale * glowScale;
+    addCentered(reticle.currentScreenPosition, reticleGlowSize, uvGlow, cyanSoft);
+    addCentered(reticle.currentScreenPosition, 28.0f * hudScale, uvCircle, Vector4{0.02f, 0.09f, 0.11f, opacity * 0.28f});
+    addCentered(reticle.currentScreenPosition, 6.0f * hudScale, uvPip, Vector4{0.84f, 1.0f, 1.0f, opacity * 0.72f});
+
+    for (int index = 0; index < tokenCount; ++index) {
+        const RailLockToken& token = debug.tokens[static_cast<size_t>(index)];
+        const float age = (std::max)(0.0f, debug.elapsedTime - token.acquiredTime);
+        const float flash = (std::max)(0.0f, 1.0f - age / 0.22f);
+        addLine(reticle.currentScreenPosition, token.acquiredScreenPosition, 1.8f * hudScale, lockLine);
+        addCentered(token.acquiredScreenPosition, (54.0f + flash * 18.0f) * hudScale, uvGlow, cyanSoft);
+        addCentered(token.acquiredScreenPosition, 40.0f * hudScale, uvCircle, Vector4{0.06f, 0.17f, 0.19f, opacity * 0.82f});
+        addCentered(token.acquiredScreenPosition, 26.0f * hudScale, uvCircle, Vector4{0.42f, 0.96f, 1.0f, opacity * 0.24f});
+        addTickedRing(token.acquiredScreenPosition, (23.0f + flash * 11.0f) * hudScale, index + 1, 1.6f * hudScale, lockLine);
+        addCircleLine(token.acquiredScreenPosition, (30.0f + pulse * 2.0f) * hudScale, 1.2f * hudScale, Vector4{lockLine.x, lockLine.y, lockLine.z, lockLine.w * 0.68f}, 36);
+        addNumber(index + 1, token.acquiredScreenPosition, 0.82f * hudScale, Vector4{0.82f, 0.99f, 1.0f, opacity});
+    }
+
+    for (const RailLockToken& token : debug.acquiredTokens) {
+        if (!validPoint(token.acquiredScreenPosition)) {
+            continue;
+        }
+        const float age = (std::max)(0.0f, debug.elapsedTime - token.acquiredTime);
+        const float flash = (std::max)(0.0f, 1.0f - age / 0.18f);
+        if (flash > 0.0f) {
+            addCircleLine(
+                token.acquiredScreenPosition,
+                (35.0f + flash * 18.0f) * hudScale,
+                2.2f * hudScale,
+                Vector4{1.0f, 1.0f, 1.0f, opacity * flash},
+                40);
+        }
+    }
+
+    const float reticleRadius = reticle.lockHeld
+        ? (27.0f + pulse * 3.0f + acquirePulse * 5.0f) * hudScale
+        : 21.0f * hudScale;
+    addCircleLine(reticle.currentScreenPosition, reticleRadius, 1.7f * hudScale, reticleLine, 40);
+    addCircleLine(reticle.currentScreenPosition, reticleRadius * 0.60f, 1.25f * hudScale, reticleLine, 32);
+    addCross(reticle.currentScreenPosition, reticleRadius * 0.86f, 1.35f * hudScale, reticleLine);
+    if (maxLock) {
+        addBracket(
+            reticle.currentScreenPosition,
+            reticleRadius + 8.0f * hudScale,
+            9.0f * hudScale,
+            1.9f * hudScale,
+            Vector4{1.0f, 0.86f, 0.30f, opacity});
+    }
+
+    const float meterWidth = (static_cast<float>(maxLocks) * 20.0f + 94.0f) * hudScale;
+    const float meterHeight = 54.0f * hudScale;
+    const float meterX = static_cast<float>(windowWidth_) * 0.5f - meterWidth * 0.5f;
+    const float meterY = static_cast<float>(windowHeight_) - safeArea - meterHeight;
+    addQuad(meterX, meterY, meterWidth, meterHeight, uvWhite, panel);
+    addQuad(meterX, meterY, meterWidth, 3.0f * hudScale, uvWhite, panelAccent);
+    addQuad(meterX + 8.0f * hudScale, meterY + meterHeight - 7.0f * hudScale, meterWidth - 16.0f * hudScale, 2.0f * hudScale, uvWhite, glass);
+    const Vector2 countCenter{meterX + meterWidth - 33.0f * hudScale, meterY + meterHeight * 0.50f};
+    addNumber(tokenCount, countCenter, 1.05f * hudScale, maxLock ? Vector4{1.0f, 0.86f, 0.34f, opacity} : Vector4{0.72f, 0.98f, 1.0f, opacity});
+    for (int index = 0; index < maxLocks; ++index) {
+        const bool filled = index < tokenCount;
+        const Vector2 center{
+            meterX + 18.0f * hudScale + static_cast<float>(index) * 20.0f * hudScale,
+            meterY + meterHeight * 0.50f};
+        if (filled) {
+            addCenteredRect(
+                center,
+                15.0f * hudScale,
+                28.0f * hudScale,
+                uvWhite,
+                Vector4{0.18f, 0.70f, 0.90f, opacity * 0.18f});
+        }
+        addCentered(
+            center,
+            (filled ? 16.0f + acquirePulse * 3.0f : 14.0f) * hudScale,
+            uvPip,
+            filled ? cyan : Vector4{0.38f, 0.46f, 0.50f, opacity * 0.42f});
+        addCircleLine(
+            center,
+            (filled ? 9.0f + acquirePulse * 2.2f : 8.0f) * hudScale,
+            1.0f * hudScale,
+            filled ? lockLine : Vector4{0.38f, 0.46f, 0.50f, opacity * 0.44f},
+            18);
+    }
+
+    return railLockOnHudAtlasVertexCount_ > 0;
+}
+
+void AppRunLoop::RegisterRailLockOnHudPass(ID3D12GraphicsCommandList* commandList) {
+    const bool atlasReady =
+        EnsureRailLockOnHudAtlas(commandList) &&
+        BuildRailLockOnHudAtlasQuads() &&
+        railLockOnHudAtlasVertexCount_ > 0;
+    if (!atlasReady) {
+        return;
+    }
+
+    renderGraph_.AddPass({
+        "UI.RailLockOnHud",
+        ge3::graphics::RenderPassLayer::Ui,
+        {
+            {"BackBuffer", ge3::graphics::RenderResourceAccessType::WriteRtv},
+        },
+        "",
+        [this](ge3::graphics::RenderPassContext& passContext) {
+            if (railLockOnHudAtlasVertexCount_ == 0 ||
+                railLockOnHudAtlasSrvGpu_.ptr == 0 ||
+                railLockOnHudAtlasVertexBufferView_.BufferLocation == 0) {
+                return;
+            }
+            passContext.commandList->RSSetViewports(1, &runtimeState_.viewport);
+            passContext.commandList->RSSetScissorRects(1, &runtimeState_.scissorRect);
+            passContext.commandList->SetGraphicsRootSignature(appPipelines_.GetRailHudAtlasRootSignature());
+            passContext.commandList->SetPipelineState(appPipelines_.GetRailHudAtlasPSO());
+            ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap_.Get()};
+            passContext.commandList->SetDescriptorHeaps(1, descriptorHeaps);
+            passContext.commandList->SetGraphicsRootDescriptorTable(0, railLockOnHudAtlasSrvGpu_);
+            passContext.commandList->IASetVertexBuffers(0, 1, &railLockOnHudAtlasVertexBufferView_);
+            passContext.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            passContext.commandList->DrawInstanced(railLockOnHudAtlasVertexCount_, 1, 0, 0);
+        }});
+}
+
 void AppRunLoop::DrawRailLockOnDebugPanel() {
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
     const auto reasonLabel = [](RailLockRejectReason reason) {
@@ -1504,6 +2526,7 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
         case RailLockRejectReason::Offscreen: return "Offscreen";
         case RailLockRejectReason::OutOfDepth: return "OutOfDepth";
         case RailLockRejectReason::OutOfForwardRange: return "OutOfForwardRange";
+        case RailLockRejectReason::Occluded: return "Occluded";
         case RailLockRejectReason::NotSwept: return "NotSwept";
         case RailLockRejectReason::AlreadyLocked: return "AlreadyLocked";
         case RailLockRejectReason::StackLimit: return "StackLimit";
@@ -1517,7 +2540,27 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
     const RailReticleState& reticle = debug.reticle;
     const PlayerCombatFeelStats& combatStats = railShooterCombatFeelSystem_.LastStats();
     RailLockSettings& settings = railShooterLockOnSystem_.MutableSettings();
-    ImGui::Begin("Rail Lock-On P0-C");
+    RailSpeedDirectorSettings& speedSettings = railShooterSpeedDirector_.MutableSettings();
+    const RailSpeedDirectorFrame& speedFrame = railShooterSpeedDirector_.LastFrame();
+    RailCameraComfortSettings& cameraComfort = railShooterCameraDirector_.MutableComfortSettings();
+    RailCameraAimFocusSettings& aimFocusSettings = railShooterCameraDirector_.MutableAimFocusSettings();
+    RailCameraLookAtSettings& lookAtSettings = railShooterCameraDirector_.MutableLookAtSettings();
+    RailCameraCompositionSafetySettings& compositionSettings =
+        railShooterCameraDirector_.MutableCompositionSafetySettings();
+    RailCameraLineOfSightSettings& lineOfSightSettings =
+        railShooterCameraDirector_.MutableLineOfSightSettings();
+    RailCameraCollisionProtectionSettings& collisionProtectionSettings =
+        railShooterCameraDirector_.MutableCollisionProtectionSettings();
+    RailCameraSegmentTransitionSettings& segmentTransitionSettings =
+        railShooterCameraDirector_.MutableSegmentTransitionSettings();
+    RailCameraEncounterFramingSettings& encounterFramingSettings =
+        railShooterCameraDirector_.MutableEncounterFramingSettings();
+    const RailCameraDirectorFrame& cameraFrame = railShooterCameraDirector_.LastFrame();
+    CourseEnemyFireSafetySettings& fireSafetySettings = railShooterSpawnRuntime_.MutableFireSafetySettings();
+    const CourseEnemyFireSafetyStats& fireSafetyStats = railShooterSpawnRuntime_.LastFireSafetyStats();
+    const IAppSceneState* currentScene = sceneStateManager_.CurrentState();
+    const char* currentSceneName = currentScene != nullptr ? currentScene->Name() : "-";
+    ImGui::Begin("Rail Lock-On P1-A");
     ImGui::Text(
         "Reticle prev=(%.1f, %.1f) current=(%.1f, %.1f)",
         reticle.previousScreenPosition.x,
@@ -1546,11 +2589,701 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
         combatStats.lastLockHitCount,
         combatStats.lastLockWasMax ? "MAX" : (combatStats.lastLockWasEarly ? "EARLY" : "-"));
     ImGui::Text(
-        "Role split: normalShot=%s lockMax=%d lockDamage=%.1f maxLockDamage=%.1f",
-        reticle.lockHeld ? "suppressed while locking" : "active",
+        "Role split: normalShot=%s lockMax=%d normalDamage=%.1f lockDamage=%.1f",
+        reticle.lockHeld ? "suppressed while locking" : "manual rapid fire",
         settings.maxLocks,
-        settings.releaseDamage,
-        settings.releaseDamage * 1.25f);
+        railShooterCollisionSystem_.Weapon().damage,
+        settings.releaseDamage);
+    ImGui::Text(
+        "Aim feel=%s target=(%.1f, %.1f) strength=%.2f pull=%.2f score=%.2f",
+        reticle.aimFeelActive ? "active" : "idle",
+        reticle.aimFeelTargetScreenPosition.x,
+        reticle.aimFeelTargetScreenPosition.y,
+        reticle.aimFeelStrength,
+        reticle.aimFeelPullPixels,
+        reticle.aimFeelTargetScore);
+
+    if (ImGui::CollapsingHeader("Camera/Rail Tuning Recorder P1-B-12", ImGuiTreeNodeFlags_DefaultOpen)) {
+        bool recording = railCameraTuningRecorder_.recording;
+        if (ImGui::Checkbox("Record Camera/Rail CSV", &recording)) {
+            if (recording) {
+                StartRailCameraTuningRecording();
+            } else {
+                StopRailCameraTuningRecording();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Export CSV")) {
+            std::string exportedPath;
+            ExportRailCameraTuningCsv(&exportedPath);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear Buffer")) {
+            ClearRailCameraTuningRecording();
+        }
+
+        int sampleStride = static_cast<int>(railCameraTuningRecorder_.sampleStride);
+        int maxSamples = static_cast<int>(railCameraTuningRecorder_.maxSamples);
+        ImGui::DragInt("Sample Stride", &sampleStride, 1.0f, 1, 60);
+        ImGui::DragInt("Max Samples", &maxSamples, 100.0f, 300, 60000);
+        railCameraTuningRecorder_.sampleStride = static_cast<uint32_t>((std::clamp)(sampleStride, 1, 60));
+        railCameraTuningRecorder_.maxSamples = static_cast<uint32_t>((std::clamp)(maxSamples, 300, 60000));
+
+        ImGui::Text(
+            "status=%s samples=%zu recorded=%u dropped=%u time=%.2f sec",
+            railCameraTuningRecorder_.status.c_str(),
+            railCameraTuningRecorder_.samples.size(),
+            railCameraTuningRecorder_.recordedSamples,
+            railCameraTuningRecorder_.droppedSamples,
+            railCameraTuningRecorder_.recordingTimeSeconds);
+        ImGui::Text(
+            "lastExport=%s",
+            railCameraTuningRecorder_.lastExportPath.empty()
+                ? "-"
+                : railCameraTuningRecorder_.lastExportPath.c_str());
+        ImGui::Text(
+            "captures speed/camera/comfort/composition/encounter/input/collision/frame timing into logs/rail_camera_tuning_*.csv");
+    }
+
+    if (ImGui::CollapsingHeader("Rail Speed Director P1-B-1", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Speed Director Enabled", &speedSettings.enabled);
+        ImGui::Text(
+            "Mode=%s section=%s reason=%s",
+            speedFrame.modeName.c_str(),
+            speedFrame.sectionName.c_str(),
+            speedFrame.reason.c_str());
+        ImGui::Text(
+            "distance=%.1f base=%.2f target=%.2f smoothed=%.2f zone=%.2f event=%.2f",
+            speedFrame.distance,
+            speedFrame.baseSpeed,
+            speedFrame.targetSpeed,
+            speedFrame.smoothedSpeed,
+            speedFrame.zoneMultiplier,
+            speedFrame.eventMultiplier);
+        ImGui::DragFloat("Min Speed", &speedSettings.minSpeed, 0.25f, 1.0f, 80.0f, "%.2f");
+        ImGui::DragFloat("Max Speed", &speedSettings.maxSpeed, 0.25f, 8.0f, 160.0f, "%.2f");
+        ImGui::DragFloat("Acceleration", &speedSettings.acceleration, 0.25f, 0.0f, 120.0f, "%.2f");
+        ImGui::DragFloat("Deceleration", &speedSettings.deceleration, 0.25f, 0.0f, 160.0f, "%.2f");
+        ImGui::DragFloat("Cruise Mult", &speedSettings.cruiseMultiplier, 0.01f, 0.25f, 2.0f, "%.2f");
+        ImGui::DragFloat("Combat Mult", &speedSettings.combatMultiplier, 0.01f, 0.25f, 2.0f, "%.2f");
+        ImGui::DragFloat("Tunnel Mult", &speedSettings.tunnelMultiplier, 0.01f, 0.25f, 2.0f, "%.2f");
+        ImGui::DragFloat("Boss Mult", &speedSettings.bossMultiplier, 0.01f, 0.25f, 2.0f, "%.2f");
+        ImGui::DragFloat("Setpiece Mult", &speedSettings.setpieceMultiplier, 0.01f, 0.25f, 2.0f, "%.2f");
+        ImGui::DragFloat("High Speed Mult", &speedSettings.highSpeedMultiplier, 0.01f, 0.25f, 2.0f, "%.2f");
+        ImGui::DragFloat("Cinematic Mult", &speedSettings.cinematicMultiplier, 0.01f, 0.25f, 2.0f, "%.2f");
+        ImGui::DragFloat("Event Slow Mult", &speedSettings.eventSlowMultiplier, 0.01f, 0.25f, 1.0f, "%.2f");
+        ImGui::DragFloat("Event Boost Mult", &speedSettings.eventBoostMultiplier, 0.01f, 1.0f, 2.0f, "%.2f");
+        ImGui::DragFloat("Event Blend Duration", &speedSettings.eventBlendDuration, 0.01f, 0.05f, 5.0f, "%.2f");
+
+        speedSettings.minSpeed = (std::max)(1.0f, speedSettings.minSpeed);
+        speedSettings.maxSpeed = (std::max)(speedSettings.minSpeed, speedSettings.maxSpeed);
+        speedSettings.acceleration = (std::max)(0.0f, speedSettings.acceleration);
+        speedSettings.deceleration = (std::max)(0.0f, speedSettings.deceleration);
+        speedSettings.cruiseMultiplier = (std::max)(0.25f, speedSettings.cruiseMultiplier);
+        speedSettings.combatMultiplier = (std::max)(0.25f, speedSettings.combatMultiplier);
+        speedSettings.tunnelMultiplier = (std::max)(0.25f, speedSettings.tunnelMultiplier);
+        speedSettings.bossMultiplier = (std::max)(0.25f, speedSettings.bossMultiplier);
+        speedSettings.setpieceMultiplier = (std::max)(0.25f, speedSettings.setpieceMultiplier);
+        speedSettings.highSpeedMultiplier = (std::max)(0.25f, speedSettings.highSpeedMultiplier);
+        speedSettings.cinematicMultiplier = (std::max)(0.25f, speedSettings.cinematicMultiplier);
+        speedSettings.eventSlowMultiplier = (std::clamp)(speedSettings.eventSlowMultiplier, 0.25f, 1.0f);
+        speedSettings.eventBoostMultiplier = (std::max)(1.0f, speedSettings.eventBoostMultiplier);
+        speedSettings.eventBlendDuration = (std::max)(0.05f, speedSettings.eventBlendDuration);
+        ImGui::TextUnformatted("Section names/categories drive zone mode; event impulses affect the following frames.");
+    }
+
+    if (ImGui::CollapsingHeader("Camera Director State P1-B-2", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Comfort Metrics Enabled", &cameraComfort.enabled);
+        ImGui::Text(
+            "Mode=%s shot=%s stable=%s hard=%s enemyFire=%s reason=%s",
+            ToRailCameraDirectorModeString(cameraFrame.modeKind),
+            cameraFrame.mode.c_str(),
+            cameraFrame.stableForAiming ? "true" : "false",
+            cameraFrame.hardTransition ? "true" : "false",
+            cameraFrame.allowEnemyFire ? "true" : "false",
+            cameraFrame.comfortReason.c_str());
+        ImGui::Text(
+            "speed rail=%.2f cameraLinear=%.2f stability=%.2f shake=%.2f",
+            cameraFrame.railSpeed,
+            cameraFrame.linearSpeed,
+            cameraFrame.stabilityScore,
+            cameraFrame.shakeAmount);
+        ImGui::Text(
+            "shot=%s preset=%s blend=%s curve=%s weight=%.2f",
+            cameraFrame.cinematicShotId.c_str(),
+            cameraFrame.cinematicShotPresetId.c_str(),
+            cameraFrame.cinematicShotBlendAssetId.c_str(),
+            cameraFrame.cinematicShotBlendCurve.c_str(),
+            cameraFrame.cinematicShotWeight);
+        ImGui::Text(
+            "angularVel=%.1f deg/s angularAccel=%.1f deg/s2 fovRate=%.1f deg/s roll=%.1f deg",
+            cameraFrame.angularVelocityDeg,
+            cameraFrame.angularAccelerationDeg,
+            cameraFrame.fovChangeRateDeg,
+            cameraFrame.rollDeg);
+        ImGui::DragFloat(
+            "Stable Angular Velocity",
+            &cameraComfort.stableAngularVelocityDeg,
+            1.0f,
+            1.0f,
+            180.0f,
+            "%.1f deg/s");
+        ImGui::DragFloat(
+            "Stable Angular Accel",
+            &cameraComfort.stableAngularAccelerationDeg,
+            5.0f,
+            10.0f,
+            3000.0f,
+            "%.1f deg/s2");
+        ImGui::DragFloat(
+            "Stable FOV Rate",
+            &cameraComfort.stableFovChangeRateDeg,
+            1.0f,
+            1.0f,
+            180.0f,
+            "%.1f deg/s");
+        ImGui::DragFloat("Stable Roll", &cameraComfort.stableRollDeg, 0.5f, 0.0f, 45.0f, "%.1f deg");
+        ImGui::DragFloat("Stable Shake", &cameraComfort.stableShakeAmount, 0.01f, 0.0f, 3.0f, "%.2f");
+        ImGui::DragFloat(
+            "Hard Angular Velocity",
+            &cameraComfort.hardTransitionAngularVelocityDeg,
+            1.0f,
+            1.0f,
+            360.0f,
+            "%.1f deg/s");
+        ImGui::DragFloat(
+            "Hard FOV Rate",
+            &cameraComfort.hardTransitionFovChangeRateDeg,
+            1.0f,
+            1.0f,
+            360.0f,
+            "%.1f deg/s");
+        ImGui::DragFloat(
+            "Hard Roll",
+            &cameraComfort.hardTransitionRollDeg,
+            0.5f,
+            0.0f,
+            90.0f,
+            "%.1f deg");
+
+        cameraComfort.stableAngularVelocityDeg =
+            (std::max)(1.0f, cameraComfort.stableAngularVelocityDeg);
+        cameraComfort.stableAngularAccelerationDeg =
+            (std::max)(10.0f, cameraComfort.stableAngularAccelerationDeg);
+        cameraComfort.stableFovChangeRateDeg =
+            (std::max)(1.0f, cameraComfort.stableFovChangeRateDeg);
+        cameraComfort.stableRollDeg = (std::max)(0.0f, cameraComfort.stableRollDeg);
+        cameraComfort.stableShakeAmount = (std::max)(0.0f, cameraComfort.stableShakeAmount);
+        cameraComfort.hardTransitionAngularVelocityDeg =
+            (std::max)(cameraComfort.stableAngularVelocityDeg, cameraComfort.hardTransitionAngularVelocityDeg);
+        cameraComfort.hardTransitionFovChangeRateDeg =
+            (std::max)(cameraComfort.stableFovChangeRateDeg, cameraComfort.hardTransitionFovChangeRateDeg);
+        cameraComfort.hardTransitionRollDeg =
+            (std::max)(cameraComfort.stableRollDeg, cameraComfort.hardTransitionRollDeg);
+        ImGui::TextUnformatted("These flags are the bridge for aim stabilization and enemy fire gating in later P1-B steps.");
+    }
+
+    if (ImGui::CollapsingHeader("Look-At Target / Threat Center P1-B-4", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Look-At Director Enabled", &lookAtSettings.enabled);
+        ImGui::Text(
+            "Policy=%s reason=%s candidates=%d blend=%.2f weight=%.2f",
+            ToRailCameraLookAtPolicyString(cameraFrame.lookAtPolicy),
+            cameraFrame.lookAtReason.c_str(),
+            cameraFrame.lookAtCandidateCount,
+            cameraFrame.lookAtBlend,
+            cameraFrame.lookAtWeight);
+        ImGui::Text(
+            "base=(%.1f, %.1f, %.1f) threat=(%.1f, %.1f, %.1f) target=(%.1f, %.1f, %.1f)",
+            cameraFrame.baseTarget.x,
+            cameraFrame.baseTarget.y,
+            cameraFrame.baseTarget.z,
+            cameraFrame.threatCenter.x,
+            cameraFrame.threatCenter.y,
+            cameraFrame.threatCenter.z,
+            cameraFrame.target.x,
+            cameraFrame.target.y,
+            cameraFrame.target.z);
+        ImGui::Text(
+            "runtime enemies=%zu obstacles=%zu lockTokens=%zu",
+            railShooterSpawnRuntime_.ActiveEnemyCount(),
+            railShooterSpawnRuntime_.ActiveObstacleCount(),
+            railShooterLockOnSystem_.Tokens().size());
+        ImGui::DragFloat("Blend Rate", &lookAtSettings.blendRate, 0.1f, 0.0f, 30.0f, "%.2f");
+        ImGui::DragFloat("Release Blend Rate", &lookAtSettings.releaseBlendRate, 0.1f, 0.0f, 30.0f, "%.2f");
+        ImGui::DragFloat("Min Forward", &lookAtSettings.minForwardDistance, 1.0f, -120.0f, 80.0f, "%.1f");
+        ImGui::DragFloat("Max Forward", &lookAtSettings.maxForwardDistance, 1.0f, 20.0f, 420.0f, "%.1f");
+        ImGui::DragFloat("Lock Token Weight", &lookAtSettings.lockTokenWeight, 0.05f, 0.0f, 12.0f, "%.2f");
+        ImGui::DragFloat("Enemy Weight", &lookAtSettings.enemyWeight, 0.05f, 0.0f, 8.0f, "%.2f");
+        ImGui::DragFloat("Boss Weight", &lookAtSettings.bossWeight, 0.05f, 0.0f, 12.0f, "%.2f");
+        ImGui::DragFloat("Obstacle Weight", &lookAtSettings.obstacleWeight, 0.05f, 0.0f, 8.0f, "%.2f");
+        ImGui::DragFloat("Center Retention", &lookAtSettings.centerRetention, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Max Target Offset", &lookAtSettings.maxTargetOffset, 1.0f, 0.0f, 160.0f, "%.1f");
+
+        lookAtSettings.blendRate = (std::max)(0.0f, lookAtSettings.blendRate);
+        lookAtSettings.releaseBlendRate = (std::max)(0.0f, lookAtSettings.releaseBlendRate);
+        lookAtSettings.maxForwardDistance =
+            (std::max)(lookAtSettings.minForwardDistance + 1.0f, lookAtSettings.maxForwardDistance);
+        lookAtSettings.lockTokenWeight = (std::max)(0.0f, lookAtSettings.lockTokenWeight);
+        lookAtSettings.enemyWeight = (std::max)(0.0f, lookAtSettings.enemyWeight);
+        lookAtSettings.bossWeight = (std::max)(0.0f, lookAtSettings.bossWeight);
+        lookAtSettings.obstacleWeight = (std::max)(0.0f, lookAtSettings.obstacleWeight);
+        lookAtSettings.centerRetention = (std::clamp)(lookAtSettings.centerRetention, 0.0f, 1.0f);
+        lookAtSettings.maxTargetOffset = (std::max)(0.0f, lookAtSettings.maxTargetOffset);
+        ImGui::TextUnformatted("Lock tokens override ambient threat center; otherwise active enemies steer the camera target.");
+    }
+
+    if (ImGui::CollapsingHeader("Gameplay Safety / Enemy Fire P1-B-5", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Enemy Fire Safety Enabled", &fireSafetySettings.enabled);
+        ImGui::Checkbox("Require Camera Allows Fire", &fireSafetySettings.requireCameraAllowsFire);
+        ImGui::Text(
+            "Camera allow=%s stable=%s hard=%s reason=%s",
+            cameraFrame.allowEnemyFire ? "true" : "false",
+            cameraFrame.stableForAiming ? "true" : "false",
+            cameraFrame.hardTransition ? "true" : "false",
+            cameraFrame.comfortReason.c_str());
+        ImGui::Text(
+            "Enemies active=%u allowed=%u blocked camera=%u range=%u visibleTime=%u bullets=%u",
+            fireSafetyStats.activeEnemies,
+            fireSafetyStats.allowedEnemies,
+            fireSafetyStats.blockedByCamera,
+            fireSafetyStats.blockedByRange,
+            fireSafetyStats.blockedByVisibilityTime,
+            fireSafetyStats.bulletsEmitted);
+        ImGui::Text(
+            "Last allowed=%s  last blocked=%s",
+            fireSafetyStats.lastAllowedReason.c_str(),
+            fireSafetyStats.lastBlockedReason.c_str());
+        ImGui::DragFloat("Fire Min Forward", &fireSafetySettings.minForwardDistance, 1.0f, -40.0f, 80.0f, "%.1f");
+        ImGui::DragFloat("Fire Max Forward", &fireSafetySettings.maxForwardDistance, 1.0f, 20.0f, 360.0f, "%.1f");
+        ImGui::DragFloat("Min Visible Before Fire", &fireSafetySettings.minVisibleBeforeFire, 0.01f, 0.0f, 2.0f, "%.2f");
+        ImGui::DragFloat("Blocked Retry Delay", &fireSafetySettings.blockedRetryDelay, 0.005f, 0.01f, 0.5f, "%.3f");
+
+        fireSafetySettings.maxForwardDistance =
+            (std::max)(fireSafetySettings.minForwardDistance + 1.0f, fireSafetySettings.maxForwardDistance);
+        fireSafetySettings.minVisibleBeforeFire = (std::max)(0.0f, fireSafetySettings.minVisibleBeforeFire);
+        fireSafetySettings.blockedRetryDelay = (std::max)(0.01f, fireSafetySettings.blockedRetryDelay);
+
+        int shown = 0;
+        for (const CourseEnemyActor& enemy : railShooterSpawnRuntime_.Enemies()) {
+            if (shown++ >= 12) {
+                ImGui::TextUnformatted("...");
+                break;
+            }
+            const float actorDistance = enemy.desc.spawnDistance + enemy.desc.distanceOffset;
+            ImGui::BulletText(
+                "actor=%u role=%s fire=%s reason=%s forward=%.1f visible=%.2f timer=%.2f",
+                enemy.actorId,
+                enemy.desc.role.c_str(),
+                enemy.fireSafetyAllowed ? "allowed" : "blocked",
+                enemy.fireSafetyReason.c_str(),
+                actorDistance - railShooterDistance_,
+                enemy.fireVisibleTime,
+                enemy.fireTimer);
+        }
+        ImGui::TextUnformatted("This uses the previous camera frame so enemy shots never occur during hard camera transitions.");
+    }
+
+    if (ImGui::CollapsingHeader("Aimable Zone / Visibility Overlay P1-B-6", ImGuiTreeNodeFlags_DefaultOpen)) {
+        RailVisibilityDebugOverlaySettings& overlay = railVisibilityDebugOverlay_;
+        ImGui::Checkbox("Overlay Enabled", &overlay.enabled);
+        ImGui::Checkbox("Show Aimable Zone", &overlay.showAimableZone);
+        ImGui::Checkbox("Show Actors", &overlay.showActors);
+        ImGui::Checkbox("Show Labels", &overlay.showLabels);
+        ImGui::Checkbox("Show Threat Center", &overlay.showThreatCenter);
+        ImGui::Text(
+            "Enemies=%zu Obstacles=%zu CameraFire=%s ThreatPolicy=%s",
+            railShooterSpawnRuntime_.ActiveEnemyCount(),
+            railShooterSpawnRuntime_.ActiveObstacleCount(),
+            cameraFrame.allowEnemyFire ? "allowed" : "blocked",
+            ToRailCameraLookAtPolicyString(cameraFrame.lookAtPolicy));
+        ImGui::DragFloat("Aimable Zone Width", &overlay.aimableZoneWidth, 0.01f, 0.10f, 1.00f, "%.2f");
+        ImGui::DragFloat("Aimable Zone Height", &overlay.aimableZoneHeight, 0.01f, 0.10f, 1.00f, "%.2f");
+        ImGui::DragFloat("Readability Zone Width", &overlay.warningZoneWidth, 0.01f, 0.10f, 1.00f, "%.2f");
+        ImGui::DragFloat("Readability Zone Height", &overlay.warningZoneHeight, 0.01f, 0.10f, 1.00f, "%.2f");
+
+        overlay.aimableZoneWidth = (std::clamp)(overlay.aimableZoneWidth, 0.10f, 1.00f);
+        overlay.aimableZoneHeight = (std::clamp)(overlay.aimableZoneHeight, 0.10f, 1.00f);
+        overlay.warningZoneWidth = (std::clamp)(
+            overlay.warningZoneWidth,
+            (std::min)(1.0f, overlay.aimableZoneWidth + 0.02f),
+            1.00f);
+        overlay.warningZoneHeight = (std::clamp)(
+            overlay.warningZoneHeight,
+            (std::min)(1.0f, overlay.aimableZoneHeight + 0.02f),
+            1.00f);
+        ImGui::TextUnformatted("Cyan=aimable, amber=readability edge, green=fire-safe enemy, magenta=threat center.");
+    }
+
+    if (ImGui::CollapsingHeader("Composition Safety Director P1-B-7", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Composition Safety Enabled", &compositionSettings.enabled);
+        ImGui::Text(
+            "blend=%.2f risk=%.2f safe=%s reason=%s",
+            cameraFrame.compositionSafetyBlend,
+            cameraFrame.compositionRisk,
+            cameraFrame.compositionSafeForAiming ? "true" : "false",
+            cameraFrame.compositionReason.c_str());
+        ImGui::Text(
+            "candidates=%d outAimable=%d outReadability=%d correction=(%.2f, %.2f) fov+=%.2f deg",
+            cameraFrame.compositionCandidateCount,
+            cameraFrame.compositionOutOfAimableCount,
+            cameraFrame.compositionOutOfReadabilityCount,
+            cameraFrame.compositionCorrection.x,
+            cameraFrame.compositionCorrection.y,
+            cameraFrame.compositionFovOffsetDeg);
+        ImGui::DragFloat("Comp Aimable Width", &compositionSettings.aimableZoneWidth, 0.01f, 0.10f, 1.00f, "%.2f");
+        ImGui::DragFloat("Comp Aimable Height", &compositionSettings.aimableZoneHeight, 0.01f, 0.10f, 1.00f, "%.2f");
+        ImGui::DragFloat(
+            "Comp Readability Width",
+            &compositionSettings.readabilityZoneWidth,
+            0.01f,
+            0.10f,
+            1.00f,
+            "%.2f");
+        ImGui::DragFloat(
+            "Comp Readability Height",
+            &compositionSettings.readabilityZoneHeight,
+            0.01f,
+            0.10f,
+            1.00f,
+            "%.2f");
+        ImGui::DragFloat("Comp Min Forward", &compositionSettings.minForwardDistance, 1.0f, -40.0f, 80.0f, "%.1f");
+        ImGui::DragFloat("Comp Max Forward", &compositionSettings.maxForwardDistance, 1.0f, 20.0f, 360.0f, "%.1f");
+        ImGui::DragFloat("Comp Blend In", &compositionSettings.blendInRate, 0.1f, 0.0f, 30.0f, "%.2f");
+        ImGui::DragFloat("Comp Blend Out", &compositionSettings.blendOutRate, 0.1f, 0.0f, 30.0f, "%.2f");
+        ImGui::DragFloat("Max Target Correction", &compositionSettings.maxTargetCorrection, 0.25f, 0.0f, 80.0f, "%.2f");
+        ImGui::DragFloat("Correction Gain", &compositionSettings.correctionGain, 0.01f, 0.0f, 2.0f, "%.2f");
+        ImGui::DragFloat("FOV Expand Deg", &compositionSettings.fovExpandDeg, 0.1f, 0.0f, 14.0f, "%.1f");
+        ImGui::DragFloat("Max FOV Deg", &compositionSettings.maxFovDeg, 0.5f, 40.0f, 90.0f, "%.1f");
+        ImGui::DragFloat("Fire Block Risk", &compositionSettings.fireBlockRisk, 0.01f, 0.0f, 1.50f, "%.2f");
+        ImGui::DragFloat("Comp Lock Weight", &compositionSettings.lockTokenWeight, 0.05f, 0.0f, 12.0f, "%.2f");
+        ImGui::DragFloat("Comp Boss Weight", &compositionSettings.bossWeight, 0.05f, 0.0f, 12.0f, "%.2f");
+        ImGui::DragFloat("Comp Enemy Weight", &compositionSettings.enemyWeight, 0.05f, 0.0f, 8.0f, "%.2f");
+        ImGui::DragFloat("Comp Obstacle Weight", &compositionSettings.obstacleWeight, 0.05f, 0.0f, 8.0f, "%.2f");
+
+        compositionSettings.aimableZoneWidth = (std::clamp)(compositionSettings.aimableZoneWidth, 0.10f, 1.00f);
+        compositionSettings.aimableZoneHeight = (std::clamp)(compositionSettings.aimableZoneHeight, 0.10f, 1.00f);
+        compositionSettings.readabilityZoneWidth = (std::clamp)(
+            compositionSettings.readabilityZoneWidth,
+            (std::min)(1.0f, compositionSettings.aimableZoneWidth + 0.02f),
+            1.00f);
+        compositionSettings.readabilityZoneHeight = (std::clamp)(
+            compositionSettings.readabilityZoneHeight,
+            (std::min)(1.0f, compositionSettings.aimableZoneHeight + 0.02f),
+            1.00f);
+        compositionSettings.maxForwardDistance =
+            (std::max)(compositionSettings.minForwardDistance + 1.0f, compositionSettings.maxForwardDistance);
+        compositionSettings.blendInRate = (std::max)(0.0f, compositionSettings.blendInRate);
+        compositionSettings.blendOutRate = (std::max)(0.0f, compositionSettings.blendOutRate);
+        compositionSettings.maxTargetCorrection = (std::max)(0.0f, compositionSettings.maxTargetCorrection);
+        compositionSettings.correctionGain = (std::max)(0.0f, compositionSettings.correctionGain);
+        compositionSettings.fovExpandDeg = (std::max)(0.0f, compositionSettings.fovExpandDeg);
+        compositionSettings.maxFovDeg = (std::max)(40.0f, compositionSettings.maxFovDeg);
+        compositionSettings.fireBlockRisk = (std::clamp)(compositionSettings.fireBlockRisk, 0.0f, 1.50f);
+        compositionSettings.lockTokenWeight = (std::max)(0.0f, compositionSettings.lockTokenWeight);
+        compositionSettings.bossWeight = (std::max)(0.0f, compositionSettings.bossWeight);
+        compositionSettings.enemyWeight = (std::max)(0.0f, compositionSettings.enemyWeight);
+        compositionSettings.obstacleWeight = (std::max)(0.0f, compositionSettings.obstacleWeight);
+        ImGui::TextUnformatted("Keeps important targets inside the aimable/readability zones by nudging target and FOV.");
+    }
+
+    if (ImGui::CollapsingHeader("Camera Occlusion / Line-of-Sight Safety P1-B-8", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Camera Line-of-Sight Enabled", &lineOfSightSettings.enabled);
+        ImGui::Checkbox("Block Enemy Fire When Occluded", &lineOfSightSettings.blockEnemyFireWhenOccluded);
+        ImGui::Checkbox("Prefer Base Target When Occluded", &lineOfSightSettings.preferBaseTargetWhenOccluded);
+        ImGui::Checkbox("Lock Line-of-Sight Reject", &settings.lockLineOfSightEnabled);
+        ImGui::Text(
+            "safe=%s candidates=%d blocked=%d occluder=%u reason=%s",
+            cameraFrame.lineOfSightSafeForAiming ? "true" : "false",
+            cameraFrame.lineOfSightCandidateCount,
+            cameraFrame.lineOfSightBlockedCount,
+            cameraFrame.lineOfSightOccluderActorId,
+            cameraFrame.lineOfSightReason.c_str());
+        ImGui::Text(
+            "cameraFire=%s comfort=%s fov+=%.2f deg",
+            cameraFrame.allowEnemyFire ? "allowed" : "blocked",
+            cameraFrame.comfortReason.c_str(),
+            cameraFrame.lineOfSightFovOffsetDeg);
+        ImGui::DragFloat("LOS Min Forward", &lineOfSightSettings.minForwardDistance, 1.0f, -40.0f, 80.0f, "%.1f");
+        ImGui::DragFloat("LOS Max Forward", &lineOfSightSettings.maxForwardDistance, 1.0f, 20.0f, 380.0f, "%.1f");
+        ImGui::DragFloat("LOS Obstacle Padding", &lineOfSightSettings.obstaclePadding, 0.05f, 0.0f, 8.0f, "%.2f");
+        ImGui::DragFloat("LOS Target Release", &lineOfSightSettings.targetReleaseStrength, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("LOS FOV Expand Deg", &lineOfSightSettings.fovExpandDeg, 0.1f, 0.0f, 12.0f, "%.1f");
+        ImGui::DragFloat("LOS Max FOV Deg", &lineOfSightSettings.maxFovDeg, 0.5f, 40.0f, 92.0f, "%.1f");
+        ImGui::DragFloat("Lock LOS Padding", &settings.lockLineOfSightObstaclePadding, 0.05f, 0.0f, 8.0f, "%.2f");
+
+        lineOfSightSettings.maxForwardDistance =
+            (std::max)(lineOfSightSettings.minForwardDistance + 1.0f, lineOfSightSettings.maxForwardDistance);
+        lineOfSightSettings.obstaclePadding = (std::max)(0.0f, lineOfSightSettings.obstaclePadding);
+        lineOfSightSettings.targetReleaseStrength =
+            (std::clamp)(lineOfSightSettings.targetReleaseStrength, 0.0f, 1.0f);
+        lineOfSightSettings.fovExpandDeg = (std::max)(0.0f, lineOfSightSettings.fovExpandDeg);
+        lineOfSightSettings.maxFovDeg = (std::max)(40.0f, lineOfSightSettings.maxFovDeg);
+        settings.lockLineOfSightObstaclePadding = (std::max)(0.0f, settings.lockLineOfSightObstaclePadding);
+        ImGui::TextUnformatted("Active obstacles act as inflated AABB occluders for camera safety and lock rejection.");
+    }
+
+    if (ImGui::CollapsingHeader("Camera Collision / Near-Clip Protection P1-B-9", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Camera Collision Protection Enabled", &collisionProtectionSettings.enabled);
+        ImGui::Checkbox("Block Enemy Fire When Camera Unsafe", &collisionProtectionSettings.blockEnemyFireWhenUnsafe);
+        ImGui::Text(
+            "safe=%s obstacles=%d closest=%.2f occluder=%u reason=%s",
+            cameraFrame.cameraCollisionSafe ? "true" : "false",
+            cameraFrame.cameraCollisionObstacleCount,
+            cameraFrame.cameraCollisionClosestDistance,
+            cameraFrame.cameraCollisionObstacleActorId,
+            cameraFrame.cameraCollisionReason.c_str());
+        ImGui::Text(
+            "push=%.2f fov+=%.2f deg cameraFire=%s comfort=%s",
+            cameraFrame.cameraCollisionPushDistance,
+            cameraFrame.cameraCollisionFovOffsetDeg,
+            cameraFrame.allowEnemyFire ? "allowed" : "blocked",
+            cameraFrame.comfortReason.c_str());
+        ImGui::DragFloat("Collision Obstacle Padding", &collisionProtectionSettings.obstaclePadding, 0.05f, 0.0f, 8.0f, "%.2f");
+        ImGui::DragFloat("Min Clearance", &collisionProtectionSettings.minClearance, 0.05f, 0.10f, 8.0f, "%.2f");
+        ImGui::DragFloat(
+            "Near Clip Clearance Mult",
+            &collisionProtectionSettings.nearClipClearanceMultiplier,
+            0.1f,
+            1.0f,
+            24.0f,
+            "%.1f");
+        ImGui::DragFloat("Max Push Distance", &collisionProtectionSettings.maxPushDistance, 0.1f, 0.0f, 24.0f, "%.2f");
+        ImGui::DragFloat("Target Compensation", &collisionProtectionSettings.targetCompensation, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Collision FOV Expand Deg", &collisionProtectionSettings.fovExpandDeg, 0.1f, 0.0f, 12.0f, "%.1f");
+        ImGui::DragFloat("Collision Max FOV Deg", &collisionProtectionSettings.maxFovDeg, 0.5f, 40.0f, 92.0f, "%.1f");
+
+        collisionProtectionSettings.obstaclePadding = (std::max)(0.0f, collisionProtectionSettings.obstaclePadding);
+        collisionProtectionSettings.minClearance = (std::max)(0.10f, collisionProtectionSettings.minClearance);
+        collisionProtectionSettings.nearClipClearanceMultiplier =
+            (std::max)(1.0f, collisionProtectionSettings.nearClipClearanceMultiplier);
+        collisionProtectionSettings.maxPushDistance = (std::max)(0.0f, collisionProtectionSettings.maxPushDistance);
+        collisionProtectionSettings.targetCompensation =
+            (std::clamp)(collisionProtectionSettings.targetCompensation, 0.0f, 1.0f);
+        collisionProtectionSettings.fovExpandDeg = (std::max)(0.0f, collisionProtectionSettings.fovExpandDeg);
+        collisionProtectionSettings.maxFovDeg = (std::max)(40.0f, collisionProtectionSettings.maxFovDeg);
+        ImGui::TextUnformatted("Pushes the camera out of inflated obstacle AABBs before line-of-sight and comfort metrics run.");
+    }
+
+    if (ImGui::CollapsingHeader("Rail Segment Transition Polish P1-B-10", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Segment Transition Polish Enabled", &segmentTransitionSettings.enabled);
+        ImGui::Text(
+            "active=%s blend=%.2f remaining=%.2f reason=%s",
+            cameraFrame.segmentTransitionActive ? "true" : "false",
+            cameraFrame.segmentTransitionBlend,
+            cameraFrame.segmentTransitionRemaining,
+            cameraFrame.segmentTransitionReason.c_str());
+        ImGui::Text(
+            "section prev=%s current=%s enemyFire=%s comfort=%s",
+            cameraFrame.previousSectionName.c_str(),
+            cameraFrame.currentSectionName.c_str(),
+            cameraFrame.allowEnemyFire ? "allowed" : "blocked",
+            cameraFrame.comfortReason.c_str());
+        ImGui::DragFloat("Transition Duration", &segmentTransitionSettings.duration, 0.01f, 0.10f, 3.0f, "%.2f");
+        ImGui::DragFloat("Min Transition Duration", &segmentTransitionSettings.minDuration, 0.01f, 0.05f, 1.0f, "%.2f");
+        ImGui::DragFloat("High Speed Duration", &segmentTransitionSettings.highSpeedDuration, 0.01f, 0.05f, 2.0f, "%.2f");
+        ImGui::DragFloat("Boss Duration", &segmentTransitionSettings.bossDuration, 0.01f, 0.05f, 3.0f, "%.2f");
+        ImGui::DragFloat("Tunnel Duration", &segmentTransitionSettings.tunnelDuration, 0.01f, 0.05f, 2.0f, "%.2f");
+        ImGui::DragFloat("Max Position Blend Dist", &segmentTransitionSettings.maxPositionBlendDistance, 0.5f, 0.0f, 120.0f, "%.1f");
+        ImGui::DragFloat("Max Target Blend Dist", &segmentTransitionSettings.maxTargetBlendDistance, 0.5f, 0.0f, 160.0f, "%.1f");
+        ImGui::DragFloat("Roll Blend Strength", &segmentTransitionSettings.rollBlendStrength, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("FOV Blend Strength", &segmentTransitionSettings.fovBlendStrength, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Shake Dampen", &segmentTransitionSettings.shakeDampen, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Enemy Fire Hold", &segmentTransitionSettings.enemyFireHold, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Comfort Grace Mult", &segmentTransitionSettings.comfortGraceMultiplier, 0.01f, 1.0f, 3.0f, "%.2f");
+
+        segmentTransitionSettings.duration = (std::max)(0.10f, segmentTransitionSettings.duration);
+        segmentTransitionSettings.minDuration = (std::max)(0.05f, segmentTransitionSettings.minDuration);
+        segmentTransitionSettings.highSpeedDuration =
+            (std::max)(segmentTransitionSettings.minDuration, segmentTransitionSettings.highSpeedDuration);
+        segmentTransitionSettings.bossDuration =
+            (std::max)(segmentTransitionSettings.minDuration, segmentTransitionSettings.bossDuration);
+        segmentTransitionSettings.tunnelDuration =
+            (std::max)(segmentTransitionSettings.minDuration, segmentTransitionSettings.tunnelDuration);
+        segmentTransitionSettings.maxPositionBlendDistance =
+            (std::max)(0.0f, segmentTransitionSettings.maxPositionBlendDistance);
+        segmentTransitionSettings.maxTargetBlendDistance =
+            (std::max)(0.0f, segmentTransitionSettings.maxTargetBlendDistance);
+        segmentTransitionSettings.rollBlendStrength =
+            (std::clamp)(segmentTransitionSettings.rollBlendStrength, 0.0f, 1.0f);
+        segmentTransitionSettings.fovBlendStrength =
+            (std::clamp)(segmentTransitionSettings.fovBlendStrength, 0.0f, 1.0f);
+        segmentTransitionSettings.shakeDampen =
+            (std::clamp)(segmentTransitionSettings.shakeDampen, 0.0f, 1.0f);
+        segmentTransitionSettings.enemyFireHold = (std::max)(0.0f, segmentTransitionSettings.enemyFireHold);
+        segmentTransitionSettings.comfortGraceMultiplier =
+            (std::max)(1.0f, segmentTransitionSettings.comfortGraceMultiplier);
+        ImGui::TextUnformatted("Blends camera output across section changes and briefly gates enemy fire at transition entry.");
+    }
+
+    if (ImGui::CollapsingHeader("Encounter Framing Rules P1-B-11", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Encounter Framing Enabled", &encounterFramingSettings.enabled);
+        ImGui::Text(
+            "active=%s blend=%.2f remain=%.2f reason=%s",
+            cameraFrame.encounterFramingActive ? "true" : "false",
+            cameraFrame.encounterFramingBlend,
+            cameraFrame.encounterFramingRemaining,
+            cameraFrame.encounterFramingReason.c_str());
+        ImGui::Text(
+            "enemies=%d bosses=%d spread=%.2f fov+=%.2f deg enemyFire=%s comfort=%s",
+            cameraFrame.encounterFramingEnemyCount,
+            cameraFrame.encounterFramingBossCount,
+            cameraFrame.encounterFramingThreatSpread,
+            cameraFrame.encounterFramingFovOffsetDeg,
+            cameraFrame.allowEnemyFire ? "allowed" : "blocked",
+            cameraFrame.comfortReason.c_str());
+        ImGui::DragFloat("Encounter Blend In", &encounterFramingSettings.blendInRate, 0.1f, 0.0f, 30.0f, "%.2f");
+        ImGui::DragFloat("Encounter Blend Out", &encounterFramingSettings.blendOutRate, 0.1f, 0.0f, 30.0f, "%.2f");
+        ImGui::DragFloat("Wave Hold", &encounterFramingSettings.waveHoldDuration, 0.01f, 0.0f, 5.0f, "%.2f");
+        ImGui::DragFloat("Boss Hold", &encounterFramingSettings.bossHoldDuration, 0.01f, 0.0f, 6.0f, "%.2f");
+        ImGui::DragFloat("Obstacle Hold", &encounterFramingSettings.obstacleHoldDuration, 0.01f, 0.0f, 3.0f, "%.2f");
+        ImGui::DragFloat("Min Forward", &encounterFramingSettings.minForwardDistance, 1.0f, -80.0f, 80.0f, "%.1f");
+        ImGui::DragFloat("Max Forward", &encounterFramingSettings.maxForwardDistance, 1.0f, 20.0f, 420.0f, "%.1f");
+        ImGui::DragFloat("Min Active Enemy Focus", &encounterFramingSettings.minActiveEnemyFocus, 0.1f, 0.0f, 12.0f, "%.1f");
+        ImGui::DragFloat("Enemies For Full Wide", &encounterFramingSettings.enemyCountForFullWide, 0.1f, 1.0f, 20.0f, "%.1f");
+        ImGui::DragFloat("Spread For Full Wide", &encounterFramingSettings.enemySpreadForFullWide, 0.25f, 1.0f, 80.0f, "%.1f");
+        ImGui::DragFloat("Boss Focus Boost", &encounterFramingSettings.bossFocusBoost, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Encounter FOV Expand", &encounterFramingSettings.fovExpandDeg, 0.1f, 0.0f, 18.0f, "%.1f");
+        ImGui::DragFloat("Boss FOV Expand", &encounterFramingSettings.bossFovExpandDeg, 0.1f, 0.0f, 18.0f, "%.1f");
+        ImGui::DragFloat("Encounter Max FOV", &encounterFramingSettings.maxFovDeg, 0.5f, 40.0f, 92.0f, "%.1f");
+        ImGui::DragFloat("Encounter Look Ahead", &encounterFramingSettings.lookAheadBoost, 0.25f, 0.0f, 30.0f, "%.1f");
+        ImGui::DragFloat("Encounter Back Distance", &encounterFramingSettings.backDistanceBoost, 0.25f, 0.0f, 20.0f, "%.1f");
+        ImGui::DragFloat("Encounter Lateral Dampen", &encounterFramingSettings.lateralDampen, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Encounter Roll Dampen", &encounterFramingSettings.rollDampen, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Encounter Fire Hold", &encounterFramingSettings.fireHoldDuration, 0.01f, 0.0f, 1.5f, "%.2f");
+
+        encounterFramingSettings.blendInRate = (std::max)(0.0f, encounterFramingSettings.blendInRate);
+        encounterFramingSettings.blendOutRate = (std::max)(0.0f, encounterFramingSettings.blendOutRate);
+        encounterFramingSettings.waveHoldDuration = (std::max)(0.0f, encounterFramingSettings.waveHoldDuration);
+        encounterFramingSettings.bossHoldDuration = (std::max)(0.0f, encounterFramingSettings.bossHoldDuration);
+        encounterFramingSettings.obstacleHoldDuration =
+            (std::max)(0.0f, encounterFramingSettings.obstacleHoldDuration);
+        encounterFramingSettings.maxForwardDistance =
+            (std::max)(encounterFramingSettings.minForwardDistance + 1.0f, encounterFramingSettings.maxForwardDistance);
+        encounterFramingSettings.minActiveEnemyFocus =
+            (std::max)(0.0f, encounterFramingSettings.minActiveEnemyFocus);
+        encounterFramingSettings.enemyCountForFullWide =
+            (std::max)(encounterFramingSettings.minActiveEnemyFocus + 1.0f, encounterFramingSettings.enemyCountForFullWide);
+        encounterFramingSettings.enemySpreadForFullWide =
+            (std::max)(1.0f, encounterFramingSettings.enemySpreadForFullWide);
+        encounterFramingSettings.bossFocusBoost =
+            (std::clamp)(encounterFramingSettings.bossFocusBoost, 0.0f, 1.0f);
+        encounterFramingSettings.fovExpandDeg = (std::max)(0.0f, encounterFramingSettings.fovExpandDeg);
+        encounterFramingSettings.bossFovExpandDeg = (std::max)(0.0f, encounterFramingSettings.bossFovExpandDeg);
+        encounterFramingSettings.maxFovDeg = (std::max)(40.0f, encounterFramingSettings.maxFovDeg);
+        encounterFramingSettings.lookAheadBoost = (std::max)(0.0f, encounterFramingSettings.lookAheadBoost);
+        encounterFramingSettings.backDistanceBoost = (std::max)(0.0f, encounterFramingSettings.backDistanceBoost);
+        encounterFramingSettings.lateralDampen =
+            (std::clamp)(encounterFramingSettings.lateralDampen, 0.0f, 1.0f);
+        encounterFramingSettings.rollDampen =
+            (std::clamp)(encounterFramingSettings.rollDampen, 0.0f, 1.0f);
+        encounterFramingSettings.fireHoldDuration = (std::max)(0.0f, encounterFramingSettings.fireHoldDuration);
+        ImGui::TextUnformatted("Frames wave/boss entries before aim focus, composition safety, collision, and LOS polish run.");
+    }
+
+    if (ImGui::CollapsingHeader("AimFocus Camera Stabilization P1-B-3", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("AimFocus Enabled", &aimFocusSettings.enabled);
+        ImGui::Text(
+            "active=%s blend=%.2f strength=%.2f lockHeld=%s tokens=%d/%d reticleVel=(%.1f, %.1f)",
+            cameraFrame.lockCameraStabilized ? "true" : "false",
+            cameraFrame.aimFocusBlend,
+            cameraFrame.aimFocusStrength,
+            reticle.lockHeld ? "true" : "false",
+            static_cast<int>(debug.tokens.size()),
+            settings.maxLocks,
+            reticle.velocity.x,
+            reticle.velocity.y);
+        ImGui::Text(
+            "fov=%.1f deg roll=%.1f deg shake=%.2f stable=%s",
+            cameraFrame.fovY * 180.0f / 3.14159265358979323846f,
+            cameraFrame.rollDeg,
+            cameraFrame.shakeAmount,
+            cameraFrame.stableForAiming ? "true" : "false");
+        ImGui::DragFloat("Blend In Rate", &aimFocusSettings.blendInRate, 0.1f, 0.0f, 30.0f, "%.2f");
+        ImGui::DragFloat("Blend Out Rate", &aimFocusSettings.blendOutRate, 0.1f, 0.0f, 30.0f, "%.2f");
+        ImGui::DragFloat(
+            "Full Focus Reticle Velocity",
+            &aimFocusSettings.maxReticleVelocityForFullFocus,
+            10.0f,
+            60.0f,
+            2400.0f,
+            "%.1f px/s");
+        ImGui::DragFloat("FOV Offset", &aimFocusSettings.fovOffsetDeg, 0.1f, -12.0f, 8.0f, "%.1f deg");
+        ImGui::DragFloat(
+            "Max Lock FOV Offset",
+            &aimFocusSettings.maxLockFovOffsetDeg,
+            0.1f,
+            -10.0f,
+            8.0f,
+            "%.1f deg");
+        ImGui::DragFloat("Roll Suppression", &aimFocusSettings.rollSuppression, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Shake Suppression", &aimFocusSettings.shakeSuppression, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Lateral Suppression", &aimFocusSettings.lateralSuppression, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("LookAhead Boost", &aimFocusSettings.lookAheadBoost, 0.1f, 0.0f, 40.0f, "%.1f");
+        ImGui::DragFloat("Back Distance Boost", &aimFocusSettings.backDistanceBoost, 0.1f, -8.0f, 16.0f, "%.1f");
+
+        aimFocusSettings.blendInRate = (std::max)(0.0f, aimFocusSettings.blendInRate);
+        aimFocusSettings.blendOutRate = (std::max)(0.0f, aimFocusSettings.blendOutRate);
+        aimFocusSettings.maxReticleVelocityForFullFocus =
+            (std::max)(60.0f, aimFocusSettings.maxReticleVelocityForFullFocus);
+        aimFocusSettings.rollSuppression = (std::clamp)(aimFocusSettings.rollSuppression, 0.0f, 1.0f);
+        aimFocusSettings.shakeSuppression = (std::clamp)(aimFocusSettings.shakeSuppression, 0.0f, 1.0f);
+        aimFocusSettings.lateralSuppression = (std::clamp)(aimFocusSettings.lateralSuppression, 0.0f, 1.0f);
+        aimFocusSettings.lookAheadBoost = (std::max)(0.0f, aimFocusSettings.lookAheadBoost);
+        ImGui::TextUnformatted("Uses previous-frame lock state so camera stabilization blends instead of snapping.");
+    }
+
+    if (ImGui::CollapsingHeader("Input Routes P0-D-4", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Text(
+            "Scene=%s railInput=%s",
+            currentSceneName,
+            railInputRouteDebug_.railSceneActive ? "active" : "inactive");
+        ImGui::Text(
+            "HUD Renderer=RenderGraph UI pass atlasVertices=%u imguiOverlay=%s",
+            railLockOnHudAtlasVertexCount_,
+            "debug panel only");
+        const char* normalShotState =
+            !railInputRouteDebug_.normalShotEnabled ? "suppressed by lock hold" :
+            railInputRouteDebug_.normalShotBlockedByUi ? "blocked by UI" :
+            railInputRouteDebug_.normalShotHeld ? "firing" :
+            "ready";
+        ImGui::Text(
+            "Normal Shot=%s held=%s pressed=%s shots=%u hits=%u aim=(%.1f, %.1f)",
+            normalShotState,
+            railInputRouteDebug_.normalShotHeld ? "true" : "false",
+            railInputRouteDebug_.normalShotPressed ? "true" : "false",
+            railInputRouteDebug_.normalShotsFired,
+            railInputRouteDebug_.normalShotHits,
+            railInputRouteDebug_.normalAimLateral,
+            railInputRouteDebug_.normalAimVertical);
+        ImGui::Text(
+            "Aim Assist=%s",
+            railInputRouteDebug_.aimAssistEnabled ? "active for normal shot" : "disabled by lock hold");
+        ImGui::Text(
+            "Lock Input held=%s pressed=%s released=%s",
+            railInputRouteDebug_.lockHeld ? "true" : "false",
+            railInputRouteDebug_.lockPressed ? "true" : "false",
+            railInputRouteDebug_.lockReleased ? "true" : "false");
+        ImGui::Text(
+            "Release Fire=%s tokens=%u hits=%d",
+            railInputRouteDebug_.releaseFireTriggered ? "fired" : "idle",
+            railInputRouteDebug_.releaseTokenCount,
+            railInputRouteDebug_.releaseHitCount);
+        const char* showcaseRoute =
+            railInputRouteDebug_.showcaseClickBlockedInRail
+                ? "blocked in RailShooter"
+                : (railInputRouteDebug_.showcaseClickToFireEnabled ? "allowed in VFX preview" : "disabled");
+        ImGui::Text(
+            "Showcase Ice LeftClick=%s leftMouse=%s fired=%s imguiCapture=%s",
+            showcaseRoute,
+            railInputRouteDebug_.leftMouseDown ? "down" : "up",
+            railInputRouteDebug_.showcaseClickFired ? "true" : "false",
+            railInputRouteDebug_.showcaseClickIgnoredByImgui ? "true" : "false");
+        if (railInputRouteDebug_.showcaseClickBlockedInRail) {
+            ImGui::TextColored(
+                ImVec4(1.0f, 0.78f, 0.25f, 1.0f),
+                "RailShooter validation uses lock release VFX only; showcase left-click is isolated.");
+        }
+    }
 
     if (ImGui::CollapsingHeader("Lock-On VFX Tuning", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::DragFloat("Travel Min", &settings.lockVfxTravelDurationMin, 0.01f, 0.03f, 2.0f, "%.2f");
@@ -1581,6 +3314,67 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
             settings.lockVfxMaxConcurrentShots,
             1,
             static_cast<int>(runtimeState_.vfx.iceProjectileShots.size()));
+    }
+
+    if (ImGui::CollapsingHeader("Lock Priority Scoring P0-E", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::DragFloat("Reticle Weight", &settings.lockPriorityReticleWeight, 0.01f, 0.0f, 3.0f, "%.2f");
+        ImGui::DragFloat("Screen Center Weight", &settings.lockPriorityCenterWeight, 0.01f, 0.0f, 3.0f, "%.2f");
+        ImGui::DragFloat("Forward Threat Weight", &settings.lockPriorityForwardThreatWeight, 0.01f, 0.0f, 3.0f, "%.2f");
+        ImGui::DragFloat("Anchor Value Weight", &settings.lockPriorityAnchorWeight, 0.01f, 0.0f, 3.0f, "%.2f");
+        ImGui::DragFloat("Enemy Bonus", &settings.lockPriorityEnemyBonus, 0.01f, -1.0f, 2.0f, "%.2f");
+        ImGui::DragFloat("Obstacle Bonus", &settings.lockPriorityObstacleBonus, 0.01f, -1.0f, 2.0f, "%.2f");
+        ImGui::DragFloat("Distance Tie Break", &settings.lockPriorityDistanceTieBreak, 0.0005f, 0.0f, 0.05f, "%.4f");
+
+        settings.lockPriorityReticleWeight = (std::max)(0.0f, settings.lockPriorityReticleWeight);
+        settings.lockPriorityCenterWeight = (std::max)(0.0f, settings.lockPriorityCenterWeight);
+        settings.lockPriorityForwardThreatWeight = (std::max)(0.0f, settings.lockPriorityForwardThreatWeight);
+        settings.lockPriorityAnchorWeight = (std::max)(0.0f, settings.lockPriorityAnchorWeight);
+        settings.lockPriorityDistanceTieBreak = (std::max)(0.0f, settings.lockPriorityDistanceTieBreak);
+        ImGui::TextUnformatted("Higher score wins. Reticle remains dominant; center/threat/value create commercial target intent.");
+    }
+
+    if (ImGui::CollapsingHeader("Aim Feel Assist P0-F", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Enabled", &settings.lockAimFeelEnabled);
+        ImGui::DragFloat("Magnet Radius", &settings.lockAimMagnetRadius, 1.0f, 0.0f, 260.0f, "%.1f");
+        ImGui::DragFloat("Magnet Strength", &settings.lockAimMagnetStrength, 0.01f, 0.0f, 1.5f, "%.2f");
+        ImGui::DragFloat("Max Pull Speed", &settings.lockAimMaxPullSpeed, 5.0f, 0.0f, 2400.0f, "%.1f");
+        ImGui::DragFloat("Dead Zone", &settings.lockAimDeadZone, 0.25f, 0.0f, 48.0f, "%.1f");
+        ImGui::DragFloat("Target Blend", &settings.lockAimTargetBlend, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Reticle Intent", &settings.lockAimReticleIntentWeight, 0.01f, 0.0f, 3.0f, "%.2f");
+        ImGui::DragFloat("Center Intent", &settings.lockAimCenterIntentWeight, 0.01f, 0.0f, 3.0f, "%.2f");
+        ImGui::DragFloat("Forward Intent", &settings.lockAimForwardIntentWeight, 0.01f, 0.0f, 3.0f, "%.2f");
+
+        settings.lockAimMagnetRadius = (std::max)(0.0f, settings.lockAimMagnetRadius);
+        settings.lockAimMagnetStrength = (std::max)(0.0f, settings.lockAimMagnetStrength);
+        settings.lockAimMaxPullSpeed = (std::max)(0.0f, settings.lockAimMaxPullSpeed);
+        settings.lockAimDeadZone = (std::max)(0.0f, settings.lockAimDeadZone);
+        settings.lockAimTargetBlend = (std::clamp)(settings.lockAimTargetBlend, 0.0f, 1.0f);
+        settings.lockAimReticleIntentWeight = (std::max)(0.0f, settings.lockAimReticleIntentWeight);
+        settings.lockAimCenterIntentWeight = (std::max)(0.0f, settings.lockAimCenterIntentWeight);
+        settings.lockAimForwardIntentWeight = (std::max)(0.0f, settings.lockAimForwardIntentWeight);
+        ImGui::TextUnformatted("Applies only while lock input is held, before lock resolution.");
+    }
+
+    if (ImGui::CollapsingHeader("HUD Commercial Polish P1-A", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Polish Enabled", &settings.lockHudPolishEnabled);
+        ImGui::DragFloat("HUD Scale", &settings.lockHudScale, 0.01f, 0.65f, 1.70f, "%.2f");
+        ImGui::DragFloat("HUD Opacity", &settings.lockHudOpacity, 0.01f, 0.15f, 1.00f, "%.2f");
+        ImGui::DragFloat("HUD Safe Area", &settings.lockHudSafeArea, 1.0f, 12.0f, 96.0f, "%.1f");
+        ImGui::DragFloat("Target Score Alpha", &settings.lockHudTargetScoreAlpha, 0.01f, 0.0f, 1.25f, "%.2f");
+        ImGui::DragFloat("Reticle Glow Scale", &settings.lockHudReticleGlowScale, 0.01f, 0.20f, 2.20f, "%.2f");
+        ImGui::DragFloat("Release Flash", &settings.lockHudReleaseFlash, 0.01f, 0.0f, 0.55f, "%.2f");
+
+        settings.lockHudScale = (std::clamp)(settings.lockHudScale, 0.65f, 1.70f);
+        settings.lockHudOpacity = (std::clamp)(settings.lockHudOpacity, 0.15f, 1.0f);
+        settings.lockHudSafeArea = (std::max)(12.0f, settings.lockHudSafeArea);
+        settings.lockHudTargetScoreAlpha = (std::max)(0.0f, settings.lockHudTargetScoreAlpha);
+        settings.lockHudReticleGlowScale = (std::clamp)(settings.lockHudReticleGlowScale, 0.20f, 2.20f);
+        settings.lockHudReleaseFlash = (std::max)(0.0f, settings.lockHudReleaseFlash);
+        ImGui::Text(
+            "Atlas vertices=%u renderer=%s releasedFlash=%d",
+            railLockOnHudAtlasVertexCount_,
+            "single UI.RailLockOnHud pass",
+            debug.releasedThisFrame);
     }
 
     if (ImGui::CollapsingHeader("Tokens", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1630,11 +3424,17 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
                 break;
             }
             ImGui::BulletText(
-                "%s actor=%u lockable=%s reason=%s forward=%.1f screen=(%.1f, %.1f) dist=%.1f radius=%.1f",
+                "%s actor=%u lockable=%s reason=%s score=%.3f r=%.2f c=%.2f f=%.2f kind=%.2f val=%.2f forward=%.1f screen=(%.1f, %.1f) dist=%.1f radius=%.1f",
                 candidate.anchor.label.c_str(),
                 candidate.anchor.target.actorId,
                 candidate.lockable ? "true" : "false",
                 reasonLabel(candidate.rejectReason),
+                candidate.score,
+                candidate.reticlePriorityScore,
+                candidate.centerPriorityScore,
+                candidate.forwardPriorityScore,
+                candidate.kindPriorityScore,
+                candidate.anchorPriorityScore,
                 candidate.anchor.forwardDistance,
                 candidate.anchor.screenPosition.x,
                 candidate.anchor.screenPosition.y,
@@ -1642,6 +3442,7 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
                 candidate.anchor.screenRadius);
         }
     }
+    DrawRailVisibilityDebugOverlay();
     ImGui::End();
 #endif
 }
@@ -1700,6 +3501,12 @@ void AppRunLoop::QueueRailLockIceProjectile(const Vector3& start, const Vector3&
         distance * (std::max)(0.0f, settings.lockVfxImpactScalePerDistance),
         impactMin,
         impactMax);
+}
+
+bool AppRunLoop::IsRailShooterSceneActive() const {
+    const IAppSceneState* currentState = sceneStateManager_.CurrentState();
+    const char* sceneName = currentState != nullptr ? currentState->Name() : nullptr;
+    return sceneName != nullptr && std::strcmp(sceneName, "RailShooter") == 0;
 }
 
 int AppRunLoop::ProcessRailLockOnRelease(const Vector3& muzzlePosition) {
@@ -1896,6 +3703,8 @@ void AppRunLoop::EnterRailShooterScene() {
     railShooterFrameIndex_ = 0;
     railShooterInitialized_ = true;
     railShooterLockOnSystem_.Reset();
+    railShooterSpeedDirector_.Reset(
+        railPath_.Length() > 0.0f ? railPath_.Evaluate(railShooterDistance_).speed : 0.0f);
 
     runtimeState_.terrain.enabled = true;
     runtimeState_.terrain.autoAdvancePreview = false;
@@ -1946,6 +3755,11 @@ void AppRunLoop::EnterRailShooterScene() {
 
 void AppRunLoop::UpdateRailShooterFrame() {
     const auto updateStart = RailPerfClock::now();
+    railInputRouteDebug_.railSceneActive = true;
+    railInputRouteDebug_.releaseFireTriggered = false;
+    railInputRouteDebug_.releaseTokenCount = 0;
+    railInputRouteDebug_.releaseHitCount = 0;
+    railInputRouteDebug_.showcaseClickToFireEnabled = runtimeState_.vfx.iceProjectileClickToFire;
     if (RailShaderHotReloadEnabled() || imguiLayer_.WantsDeveloperDiagnostics()) {
         appPipelines_.HotReloadIfNeeded(dev_.GetDevice());
     }
@@ -1955,6 +3769,18 @@ void AppRunLoop::UpdateRailShooterFrame() {
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.begin");
 
     constexpr float kFixedGameplayDeltaTime = 0.016f;
+    for (RailNormalShotLine& line : railNormalShotLines_) {
+        line.age += kFixedGameplayDeltaTime;
+    }
+    railNormalShotLines_.erase(
+        std::remove_if(
+            railNormalShotLines_.begin(),
+            railNormalShotLines_.end(),
+            [](const RailNormalShotLine& line) {
+                return line.age >= line.lifetime;
+            }),
+        railNormalShotLines_.end());
+
     if (!railShooterInitialized_) {
         EnterRailShooterScene();
     }
@@ -1962,8 +3788,15 @@ void AppRunLoop::UpdateRailShooterFrame() {
         ApplyRailShooterCourse();
     }
 
+    RailSpeedDirectorFrameInput speedInput{};
+    speedInput.course = &railShooterCourse_;
+    speedInput.railPath = &railPath_;
+    speedInput.section = railShooterCourseRuntime_.CurrentSection();
+    speedInput.distance = railShooterCourseRuntime_.Distance();
+    speedInput.deltaTime = kFixedGameplayDeltaTime;
+    const RailSpeedDirectorFrame speedFrame = railShooterSpeedDirector_.Evaluate(speedInput);
     const std::vector<CourseEventMarker> triggeredEvents =
-        railShooterCourseRuntime_.Advance(kFixedGameplayDeltaTime, railPath_);
+        railShooterCourseRuntime_.Advance(kFixedGameplayDeltaTime, railPath_, speedFrame.smoothedSpeed);
     railShooterDistance_ = railShooterCourseRuntime_.Distance();
     EncounterDirectorFrameInput encounterInput{};
     encounterInput.deltaTime = kFixedGameplayDeltaTime;
@@ -1974,12 +3807,21 @@ void AppRunLoop::UpdateRailShooterFrame() {
         railShooterEncounterDirector_.Update(std::move(encounterInput));
     LogCourseEvents(encounterOutput.dispatchEvents);
     railShooterCameraDirector_.NotifyCourseEvents(encounterOutput.dispatchEvents);
+    railShooterSpeedDirector_.NotifyCourseEvents(encounterOutput.dispatchEvents);
     railShooterCheckpointSystem_.Update(&railShooterCourse_, railShooterDistance_);
     railShooterEventDispatcher_.Dispatch(
         encounterOutput.dispatchEvents,
         railShooterSpawnRuntime_,
         railShooterDistance_);
-    railShooterSpawnRuntime_.Update(kFixedGameplayDeltaTime);
+    const RailCameraDirectorFrame& previousCameraSafetyFrame = railShooterCameraDirector_.LastFrame();
+    CourseEnemyFireSafetyFrameInput fireSafetyInput{};
+    fireSafetyInput.cameraAllowsEnemyFire = previousCameraSafetyFrame.allowEnemyFire;
+    fireSafetyInput.cameraStableForAiming = previousCameraSafetyFrame.stableForAiming;
+    fireSafetyInput.cameraHardTransition = previousCameraSafetyFrame.hardTransition;
+    fireSafetyInput.playerDistance = railShooterDistance_;
+    fireSafetyInput.deltaTime = kFixedGameplayDeltaTime;
+    fireSafetyInput.cameraReason = previousCameraSafetyFrame.comfortReason;
+    railShooterSpawnRuntime_.Update(kFixedGameplayDeltaTime, fireSafetyInput);
     CourseCollisionFrameInput collisionInput{};
     collisionInput.deltaTime = kFixedGameplayDeltaTime;
     collisionInput.course = &railShooterCourse_;
@@ -1990,10 +3832,14 @@ void AppRunLoop::UpdateRailShooterFrame() {
     collisionInput.player.hitPoints = 100.0f;
     CourseCollisionWeaponState baseWeapon{};
     baseWeapon.enabled = true;
-    baseWeapon.shotInterval = 0.12f;
-    baseWeapon.range = 96.0f;
-    baseWeapon.radius = 2.2f;
-    baseWeapon.damage = 18.0f;
+    baseWeapon.shotInterval = 0.085f;
+    baseWeapon.range = 92.0f;
+    baseWeapon.radius = 1.65f;
+    baseWeapon.damage = 12.0f;
+    baseWeapon.muzzleForwardOffset = 3.4f;
+    baseWeapon.tracerForwardDistance = 30.0f;
+    baseWeapon.muzzleRadius = 0.72f;
+    baseWeapon.tracerRadius = 0.82f;
     runtimeState_.terrain.previewDistance = railShooterDistance_;
     const auto visualPresetStart = RailPerfClock::now();
     ApplyRailShooterVisualPresets(railShooterDistance_);
@@ -2006,6 +3852,19 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraInput.section = railShooterCourseRuntime_.CurrentSection();
     cameraInput.distance = railShooterDistance_;
     cameraInput.deltaTime = kFixedGameplayDeltaTime;
+    cameraInput.railSpeed = speedFrame.smoothedSpeed;
+    cameraInput.lockHeld = railShooterLockOnSystem_.Reticle().lockHeld;
+    cameraInput.lockPressed = railShooterLockOnSystem_.Reticle().lockPressed;
+    cameraInput.lockReleased = railShooterLockOnSystem_.Reticle().lockReleased;
+    cameraInput.lockAimFeelActive = railShooterLockOnSystem_.Reticle().aimFeelActive;
+    cameraInput.lockTokenCount = static_cast<int>(railShooterLockOnSystem_.Tokens().size());
+    cameraInput.maxLockCount = railShooterLockOnSystem_.Settings().maxLocks;
+    cameraInput.reticleVelocity = railShooterLockOnSystem_.Reticle().velocity;
+    cameraInput.spawnRuntime = &railShooterSpawnRuntime_;
+    cameraInput.lockTokens = &railShooterLockOnSystem_.Tokens();
+    cameraInput.viewportWidth = windowWidth_;
+    cameraInput.viewportHeight = windowHeight_;
+    cameraInput.nearClipDistance = runtimeState_.camera.nearZ;
     const RailCameraDirectorFrame directedCamera =
         railShooterCameraDirector_.Evaluate(cameraInput);
     const Vector3& cameraPosition = directedCamera.position;
@@ -2036,6 +3895,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     lockOnInput.viewProjection = &frameState_.viewProjectionMatrix;
     lockOnInput.railPath = &railPath_;
     lockOnInput.spawnRuntime = &railShooterSpawnRuntime_;
+    lockOnInput.cameraPosition = cameraPosition;
     railShooterLockOnSystem_.Update(lockOnInput);
     if (railShooterLockOnSystem_.DebugFrame().acceptedThisFrame > 0) {
         railShooterCameraDirector_.AddFeedbackImpulse(0.075f, -0.0012f, 0.0007f);
@@ -2049,6 +3909,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const int lockReleaseHits = ProcessRailLockOnRelease(railLockMuzzle);
     const uint32_t lockReleaseTokenCount =
         static_cast<uint32_t>(railShooterLockOnSystem_.LastRelease().tokens.size());
+    railInputRouteDebug_.releaseFireTriggered = lockReleaseTokenCount > 0;
+    railInputRouteDebug_.releaseTokenCount = lockReleaseTokenCount;
+    railInputRouteDebug_.releaseHitCount = lockReleaseHits;
     if (lockReleaseTokenCount > 0) {
         railShooterCombatFeelSystem_.ApplyLockOnRelease(
             lockReleaseTokenCount,
@@ -2060,7 +3923,56 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
 
     const bool lockModeActive = railShooterLockOnSystem_.Reticle().lockHeld;
+    const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    const bool wasLeftMouseDown = previousLeftMouseDown_;
+    previousLeftMouseDown_ = leftMouseDown;
+    bool normalShotBlockedByUi = false;
+#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
+    normalShotBlockedByUi = ImGui::GetIO().WantCaptureMouse;
+#endif
+    const bool normalShotPressed = leftMouseDown && !wasLeftMouseDown;
+    const bool normalShotReleased = !leftMouseDown && wasLeftMouseDown;
+    const bool normalShotTriggerHeld = leftMouseDown && !normalShotBlockedByUi && !lockModeActive;
+    const bool normalShotTriggerPressed = normalShotPressed && !normalShotBlockedByUi && !lockModeActive;
+
+    railInputRouteDebug_.lockHeld = lockModeActive;
+    railInputRouteDebug_.lockPressed = railShooterLockOnSystem_.Reticle().lockPressed;
+    railInputRouteDebug_.lockReleased = railShooterLockOnSystem_.Reticle().lockReleased;
     baseWeapon.enabled = !lockModeActive;
+    baseWeapon.triggerHeld = normalShotTriggerHeld;
+    baseWeapon.triggerPressed = normalShotTriggerPressed;
+    baseWeapon.triggerReleased = normalShotReleased;
+    railInputRouteDebug_.normalShotEnabled = baseWeapon.enabled;
+    railInputRouteDebug_.normalShotHeld = normalShotTriggerHeld;
+    railInputRouteDebug_.normalShotPressed = normalShotTriggerPressed;
+    railInputRouteDebug_.normalShotBlockedByUi = normalShotBlockedByUi;
+    railInputRouteDebug_.leftMouseDown = leftMouseDown;
+
+    const RailReticleState& normalReticle = railShooterLockOnSystem_.Reticle();
+    const float viewportWidth = (std::max)(1.0f, static_cast<float>(windowWidth_));
+    const float viewportHeight = (std::max)(1.0f, static_cast<float>(windowHeight_));
+    const float reticleNormX = (std::clamp)(
+        (normalReticle.currentScreenPosition.x / viewportWidth - 0.5f) * 2.0f,
+        -1.15f,
+        1.15f);
+    const float reticleNormY = (std::clamp)(
+        (0.5f - normalReticle.currentScreenPosition.y / viewportHeight) * 2.0f,
+        -1.15f,
+        1.15f);
+    const float aimForwardDistance = 38.0f;
+    const float tanHalfY = std::tan(runtimeState_.camera.fovY * 0.5f);
+    const float tanHalfX = tanHalfY * aspectRatio;
+    const float normalAimLateral = (std::clamp)(
+        reticleNormX * tanHalfX * aimForwardDistance * 0.74f,
+        -15.0f,
+        15.0f);
+    const float normalAimVertical = (std::clamp)(
+        collisionInput.player.verticalOffset + reticleNormY * tanHalfY * aimForwardDistance * 0.74f,
+        -2.0f,
+        17.0f);
+    railInputRouteDebug_.normalAimLateral = normalAimLateral;
+    railInputRouteDebug_.normalAimVertical = normalAimVertical;
+
     PlayerCombatFeelFrameInput combatFeelInput{};
     combatFeelInput.deltaTime = kFixedGameplayDeltaTime;
     combatFeelInput.playerDistance = railShooterDistance_;
@@ -2069,10 +3981,60 @@ void AppRunLoop::UpdateRailShooterFrame() {
     combatFeelInput.baseWeapon = baseWeapon;
     combatFeelInput.spawnRuntime = &railShooterSpawnRuntime_;
     combatFeelInput.allowAimAssist = !lockModeActive;
+    combatFeelInput.hasReticleAim = true;
+    combatFeelInput.reticleAimLateralOffset = normalAimLateral;
+    combatFeelInput.reticleAimVerticalOffset = normalAimVertical;
+    railInputRouteDebug_.aimAssistEnabled = combatFeelInput.allowAimAssist;
     collisionInput.weapon = railShooterCombatFeelSystem_.BuildWeaponState(combatFeelInput);
     const auto collisionStart = RailPerfClock::now();
     const CourseCollisionFrameStats collisionStats =
         railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput);
+    railInputRouteDebug_.normalShotsFired = collisionStats.playerShotsFired;
+    railInputRouteDebug_.normalShotHits =
+        collisionStats.playerShotEnemyHits + collisionStats.playerShotObstacleHits;
+    if (collisionStats.playerShotsFired > 0 &&
+        railShooterCollisionSystem_.LastShotVisible() &&
+        railPath_.Length() > 0.0f) {
+        const CourseCollisionWeaponState& visualWeapon = railShooterCollisionSystem_.Weapon();
+        const Vector3 muzzleWorld = RailLocalPoint(
+            railPath_,
+            railShooterDistance_,
+            collisionInput.player.lateralOffset,
+            collisionInput.player.verticalOffset,
+            visualWeapon.muzzleForwardOffset);
+        const Vector3 hitWorld = RailLocalPoint(
+            railPath_,
+            railShooterCollisionSystem_.LastShotDistance(),
+            railShooterCollisionSystem_.LastShotLateralOffset(),
+            railShooterCollisionSystem_.LastShotVerticalOffset(),
+            0.0f);
+        RailOverlayProjectedPoint muzzleScreen =
+            ProjectRailOverlayPoint(muzzleWorld, frameState_.viewProjectionMatrix, windowWidth_, windowHeight_);
+        RailOverlayProjectedPoint hitScreen =
+            ProjectRailOverlayPoint(hitWorld, frameState_.viewProjectionMatrix, windowWidth_, windowHeight_);
+        if (!muzzleScreen.inDepth) {
+            muzzleScreen.screen = {
+                static_cast<float>(windowWidth_) * 0.5f,
+                static_cast<float>(windowHeight_) * 0.78f};
+            muzzleScreen.inDepth = true;
+        }
+        if (hitScreen.inDepth) {
+            RailNormalShotLine line{};
+            line.start = muzzleScreen.screen;
+            line.end = hitScreen.screen;
+            line.lifetime = 0.070f;
+            line.thickness = railInputRouteDebug_.normalShotHits > 0 ? 2.4f : 1.5f;
+            line.hit = railInputRouteDebug_.normalShotHits > 0;
+            railNormalShotLines_.push_back(line);
+            constexpr size_t kMaxNormalShotLines = 18;
+            if (railNormalShotLines_.size() > kMaxNormalShotLines) {
+                railNormalShotLines_.erase(
+                    railNormalShotLines_.begin(),
+                    railNormalShotLines_.begin() + static_cast<std::ptrdiff_t>(
+                        railNormalShotLines_.size() - kMaxNormalShotLines));
+            }
+        }
+    }
     railShooterCombatFeelSystem_.ApplyCollisionStats(collisionStats);
     railShooterCombatFeelSystem_.Update(kFixedGameplayDeltaTime);
     gRailPerfFrame.collisionMs = ElapsedMs(collisionStart, RailPerfClock::now());
@@ -3473,12 +5435,24 @@ void AppRunLoop::ProcessReleaseShowcaseControls(float deltaTime) {
 }
 
 void AppRunLoop::ProcessIceProjectileMouseLaunch() {
+    const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    railInputRouteDebug_.leftMouseDown = leftMouseDown;
+    railInputRouteDebug_.railSceneActive = IsRailShooterSceneActive();
+    railInputRouteDebug_.showcaseClickToFireEnabled = runtimeState_.vfx.iceProjectileClickToFire;
+    railInputRouteDebug_.showcaseClickBlockedInRail = false;
+    railInputRouteDebug_.showcaseClickFired = false;
+    railInputRouteDebug_.showcaseClickIgnoredByImgui = false;
+
     if (!runtimeState_.vfx.iceProjectileClickToFire || hwnd_ == nullptr) {
-        previousLeftMouseDown_ = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        previousLeftMouseDown_ = leftMouseDown;
+        return;
+    }
+    if (railInputRouteDebug_.railSceneActive) {
+        railInputRouteDebug_.showcaseClickBlockedInRail = true;
+        previousLeftMouseDown_ = leftMouseDown;
         return;
     }
 
-    const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
     const bool clicked = leftMouseDown && !previousLeftMouseDown_;
     previousLeftMouseDown_ = leftMouseDown;
     if (!clicked) {
@@ -3486,6 +5460,7 @@ void AppRunLoop::ProcessIceProjectileMouseLaunch() {
     }
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
     if (ImGui::GetIO().WantCaptureMouse) {
+        railInputRouteDebug_.showcaseClickIgnoredByImgui = true;
         return;
     }
 #endif
@@ -3579,6 +5554,7 @@ void AppRunLoop::ProcessIceProjectileMouseLaunch() {
     slot->rotationZ = std::atan2(cursorNdcY - launchNdc.y, cursorNdcX - launchNdc.x);
     slot->start = shotStart;
     slot->target = shotTarget;
+    railInputRouteDebug_.showcaseClickFired = true;
 }
 
 void AppRunLoop::RenderVfxPreviewFrame() {
@@ -3708,7 +5684,6 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 emitterState.frequencyTime = runtimeState_.emitter.frequencyTime;
                 particleSystem_.Emit(emitterState);
             }});
-    DrawRailLockOnHud();
     DrawRailLockOnDebugPanel();
     imguiLayer_.EndFrame();
     gRailPerfFrame.imguiMs = ElapsedMs(imguiStart, RailPerfClock::now());
@@ -3749,6 +5724,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         commandList.Get(),
         scene_,
         spriteTextureHandle);
+    RegisterRailLockOnHudPass(commandList.Get());
     gRailPerfFrame.registerPassesMs = ElapsedMs(registerPassesStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterRegisterPasses");
     const auto prepareGraphStart = RailPerfClock::now();
@@ -3874,6 +5850,11 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     const HRESULT presentHr = swapChain_.Present(dev_, 1);
     gRailPerfFrame.presentMs = ElapsedMs(presentStart, RailPerfClock::now());
     gRailPerfFrame.renderMs = ElapsedMs(renderStart, RailPerfClock::now());
+    RecordRailCameraTuningSample(
+        frameState_.deltaTime,
+        railShooterSpeedDirector_.LastFrame(),
+        railShooterCameraDirector_.LastFrame(),
+        railShooterCollisionSystem_.LastFrameStats());
     CaptureRailGpuTimingCpuMetadata(backBufferIndex);
     LogRailShooterPerfSpike();
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterPresent");

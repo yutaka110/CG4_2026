@@ -17,6 +17,35 @@ enum class CourseEnemyFirePattern {
     BossArc,
 };
 
+struct CourseEnemyFireSafetySettings {
+    bool enabled = true;
+    bool requireCameraAllowsFire = true;
+    float minForwardDistance = 6.0f;
+    float maxForwardDistance = 150.0f;
+    float minVisibleBeforeFire = 0.22f;
+    float blockedRetryDelay = 0.05f;
+};
+
+struct CourseEnemyFireSafetyFrameInput {
+    bool cameraAllowsEnemyFire = true;
+    bool cameraStableForAiming = true;
+    bool cameraHardTransition = false;
+    float playerDistance = 0.0f;
+    float deltaTime = 0.016f;
+    std::string cameraReason = "stable";
+};
+
+struct CourseEnemyFireSafetyStats {
+    uint32_t activeEnemies = 0;
+    uint32_t allowedEnemies = 0;
+    uint32_t blockedByCamera = 0;
+    uint32_t blockedByRange = 0;
+    uint32_t blockedByVisibilityTime = 0;
+    uint32_t bulletsEmitted = 0;
+    std::string lastBlockedReason = "-";
+    std::string lastAllowedReason = "-";
+};
+
 struct CourseEnemyActorDesc {
     std::string waveId;
     std::string actorAssetId;
@@ -79,6 +108,9 @@ struct CourseEnemyActor {
     CourseEnemyActorDesc desc;
     float age = 0.0f;
     float fireTimer = 0.0f;
+    float fireVisibleTime = 0.0f;
+    bool fireSafetyAllowed = false;
+    std::string fireSafetyReason = "not evaluated";
     uint32_t actorId = 0;
 };
 
@@ -116,6 +148,7 @@ class CourseSpawnRuntime {
 public:
     void Reset();
     void Update(float deltaTime);
+    void Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput);
 
     void SpawnEnemyActor(CourseEnemyActorDesc desc);
     void SpawnObstacle(CourseObstacleActorDesc desc);
@@ -134,13 +167,19 @@ public:
     const std::vector<CourseObstacleActor>& Obstacles() const { return obstacles_; }
     std::vector<CourseObstacleActor>& MutableObstacles() { return obstacles_; }
     void PruneDestroyedActors();
+    const CourseEnemyFireSafetySettings& FireSafetySettings() const { return fireSafetySettings_; }
+    CourseEnemyFireSafetySettings& MutableFireSafetySettings() { return fireSafetySettings_; }
+    const CourseEnemyFireSafetyStats& LastFireSafetyStats() const { return fireSafetyStats_; }
 
 private:
-    void EmitEnemyBullets(const CourseEnemyActor& enemy);
+    bool CanEnemyFire(CourseEnemyActor& enemy, const CourseEnemyFireSafetyFrameInput& safetyInput, float dt);
+    uint32_t EmitEnemyBullets(const CourseEnemyActor& enemy);
 
     std::vector<CourseEnemyActor> enemies_;
     std::vector<CourseBulletActor> bullets_;
     std::vector<CourseObstacleActor> obstacles_;
     std::vector<CourseVfxCue> vfxCues_;
+    CourseEnemyFireSafetySettings fireSafetySettings_{};
+    CourseEnemyFireSafetyStats fireSafetyStats_{};
     uint32_t nextActorId_ = 1;
 };

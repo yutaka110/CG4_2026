@@ -775,6 +775,48 @@ void DrawVisualPresetTable(const CourseAsset& course, float currentDistance) {
         ImGui::Text("sun %.2f  fog %.2f %.0f-%.0f", preset.sunIntensity, preset.fogIntensity, preset.fogStart, preset.fogEnd);
     }
 
+    for (const CourseCameraShotPreset& preset : course.cameraShotPresets) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("Shot Preset");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("asset");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("-");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("-");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(preset.id.c_str());
+        ImGui::TableNextColumn();
+        ImGui::Text(
+            "%s  fov %.1f  roll %.1f  shake %.2f",
+            preset.mode.c_str(),
+            preset.fovOffset * 180.0f / 3.14159265358979323846f,
+            preset.rollOffset * 180.0f / 3.14159265358979323846f,
+            preset.shakeAmount);
+    }
+
+    for (const CourseCameraBlendAsset& blend : course.cameraBlendAssets) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("Blend Asset");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("asset");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("-");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("-");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(blend.id.c_str());
+        ImGui::TableNextColumn();
+        ImGui::Text(
+            "in %.0f out %.0f curve %s weight %.2f",
+            blend.blendInDistance,
+            blend.blendOutDistance,
+            blend.curve.c_str(),
+            blend.weightScale);
+    }
+
     for (const CourseCinematicCameraShot& shot : course.cinematicCameraShots) {
         const bool active = currentDistance >= shot.startDistance && currentDistance <= shot.endDistance;
         ImGui::TableNextRow();
@@ -792,7 +834,13 @@ void DrawVisualPresetTable(const CourseAsset& course, float currentDistance) {
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(shot.id.c_str());
         ImGui::TableNextColumn();
-        ImGui::Text("%s  fov %.1f  roll %.1f", shot.mode.c_str(), shot.fovOffset * 180.0f / 3.14159265358979323846f, shot.rollOffset * 180.0f / 3.14159265358979323846f);
+        ImGui::Text(
+            "%s  preset %s blend %s  fov %.1f  roll %.1f",
+            shot.mode.c_str(),
+            shot.presetId.empty() ? "-" : shot.presetId.c_str(),
+            shot.blendAssetId.empty() ? "-" : shot.blendAssetId.c_str(),
+            shot.fovOffset * 180.0f / 3.14159265358979323846f,
+            shot.rollOffset * 180.0f / 3.14159265358979323846f);
     }
 
     for (const CourseTerrainMaterialPreset& preset : course.terrainMaterialPresets) {

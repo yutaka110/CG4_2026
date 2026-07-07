@@ -76,6 +76,14 @@ bool IsBlankReference(const std::string& value) {
     return value.empty() || value == "-";
 }
 
+bool IsKnownCameraBlendCurve(const std::string& value) {
+    return value == "linear" ||
+        value == "smoothstep" ||
+        value == "ease_in" ||
+        value == "ease_out" ||
+        value == "cinematic_hold";
+}
+
 float ResolveRailLength(const CourseAsset& course, float optionLength) {
     if (optionLength > 0.0f) {
         return optionLength;
@@ -332,6 +340,42 @@ CourseValidationReport ValidateCourseAsset(
         }
     }
 
+    std::unordered_set<std::string> cameraShotPresetIds;
+    for (size_t index = 0; index < course.cameraShotPresets.size(); ++index) {
+        const CourseCameraShotPreset& preset = course.cameraShotPresets[index];
+        if (!preset.id.empty()) {
+            cameraShotPresetIds.insert(preset.id);
+        }
+        const std::string subject = "camera_shot_preset[" + std::to_string(index) + "]";
+        if (preset.id.empty()) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Camera shot preset id is empty.");
+        }
+        if (preset.mode.empty()) {
+            AddIssue(report, CourseValidationSeverity::Info, subject, "Camera shot preset mode is empty.");
+        }
+    }
+
+    std::unordered_set<std::string> cameraBlendAssetIds;
+    for (size_t index = 0; index < course.cameraBlendAssets.size(); ++index) {
+        const CourseCameraBlendAsset& blend = course.cameraBlendAssets[index];
+        if (!blend.id.empty()) {
+            cameraBlendAssetIds.insert(blend.id);
+        }
+        const std::string subject = "camera_blend_asset[" + std::to_string(index) + "]";
+        if (blend.id.empty()) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Camera blend asset id is empty.");
+        }
+        if (blend.blendInDistance < 0.0f || blend.blendOutDistance < 0.0f) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Camera blend distances should be non-negative.");
+        }
+        if (!IsKnownCameraBlendCurve(blend.curve)) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Unknown camera blend curve: " + blend.curve);
+        }
+        if (blend.weightScale < 0.0f) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Camera blend weight scale should be non-negative.");
+        }
+    }
+
     std::unordered_set<std::string> cameraShotIds;
     for (size_t index = 0; index < course.cinematicCameraShots.size(); ++index) {
         const CourseCinematicCameraShot& shot = course.cinematicCameraShots[index];
@@ -347,6 +391,17 @@ CourseValidationReport ValidateCourseAsset(
         }
         if (shot.startDistance < 0.0f || (railLength > 0.0f && shot.endDistance > railLength + 0.01f)) {
             AddIssue(report, CourseValidationSeverity::Warning, subject, "Camera shot extends outside rail length.", shot.startDistance);
+        }
+        if (!IsBlankReference(shot.presetId) &&
+            cameraShotPresetIds.find(shot.presetId) == cameraShotPresetIds.end()) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Missing camera shot preset: " + shot.presetId, shot.startDistance);
+        }
+        if (!IsBlankReference(shot.blendAssetId) &&
+            cameraBlendAssetIds.find(shot.blendAssetId) == cameraBlendAssetIds.end()) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Missing camera blend asset: " + shot.blendAssetId, shot.startDistance);
+        }
+        if (shot.weightScale < 0.0f) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject, "Camera shot weight scale should be non-negative.", shot.startDistance);
         }
     }
 

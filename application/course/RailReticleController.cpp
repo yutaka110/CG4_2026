@@ -2,8 +2,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
+struct ProjectedPoint {
+    Vector2 screen{};
+    float depth = 0.0f;
+    bool behind = false;
+};
+
 bool KeyDown(int virtualKey) {
     return (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
 }
@@ -36,6 +43,68 @@ bool CursorInClient(HWND hwnd, uint32_t width, uint32_t height, Vector2& outPosi
     outPosition = {static_cast<float>(cursor.x), static_cast<float>(cursor.y)};
     return true;
 }
+
+ProjectedPoint ProjectToScreen(
+    const Vector3& point,
+    const Matrix4x4& matrix,
+    uint32_t width,
+    uint32_t height) {
+    const float x =
+        point.x * matrix.m[0][0] + point.y * matrix.m[1][0] + point.z * matrix.m[2][0] + matrix.m[3][0];
+    const float y =
+        point.x * matrix.m[0][1] + point.y * matrix.m[1][1] + point.z * matrix.m[2][1] + matrix.m[3][1];
+    const float z =
+        point.x * matrix.m[0][2] + point.y * matrix.m[1][2] + point.z * matrix.m[2][2] + matrix.m[3][2];
+    const float w =
+        point.x * matrix.m[0][3] + point.y * matrix.m[1][3] + point.z * matrix.m[2][3] + matrix.m[3][3];
+
+    ProjectedPoint result{};
+    if (w <= 0.00001f) {
+        result.behind = true;
+        return result;
+    }
+    const float ndcX = x / w;
+    const float ndcY = y / w;
+    result.depth = z / w;
+    result.screen = {
+        (ndcX * 0.5f + 0.5f) * static_cast<float>(width),
+        (1.0f - (ndcY * 0.5f + 0.5f)) * static_cast<float>(height),
+    };
+    return result;
+}
+
+float Clamp01(float value) {
+    return (std::clamp)(value, 0.0f, 1.0f);
+}
+
+float Distance(Vector2 a, Vector2 b) {
+    const float dx = a.x - b.x;
+    const float dy = a.y - b.y;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+float SafeRange01(float value, float minValue, float maxValue) {
+    const float range = maxValue - minValue;
+    if (range <= 0.0001f) {
+        return 0.0f;
+    }
+    return Clamp01((value - minValue) / range);
+}
+
+Vector2 PullToward(Vector2 current, Vector2 target, float pullPixels) {
+    const float dx = target.x - current.x;
+    const float dy = target.y - current.y;
+    const float distance = std::sqrt(dx * dx + dy * dy);
+    if (distance <= 0.0001f || pullPixels <= 0.0f) {
+        return current;
+    }
+    const float amount = (std::min)(pullPixels, distance);
+    const float invDistance = 1.0f / distance;
+    return {
+        current.x + dx * invDistance * amount,
+        current.y + dy * invDistance * amount,
+    };
+}
 } // namespace
 
 void RailReticleController::Reset() {
@@ -53,6 +122,10 @@ void RailReticleController::Update(const RailReticleFrameInput& input) {
 
     const bool wasHeld = state_.lockHeld;
     state_.previousScreenPosition = state_.currentScreenPosition;
+    state_.aimFeelActive = false;
+    state_.aimFeelStrength = 0.0f;
+    state_.aimFeelPullPixels = 0.0f;
+    state_.aimFeelTargetScore = 0.0f;
 
     Vector2 next = state_.currentScreenPosition;
     Vector2 cursor{};
@@ -71,15 +144,98 @@ void RailReticleController::Update(const RailReticleFrameInput& input) {
     }
 
     next = ClampToViewport(next, input.viewportWidth, input.viewportHeight);
+    state_.lockHeld = KeyDown(VK_LSHIFT) || KeyDown(VK_RSHIFT) || KeyDown(VK_RBUTTON);
+    state_.lockPressed = state_.lockHeld && !wasHeld;
+    state_.lockReleased = !state_.lockHeld && wasHeld;
+
+    if (state_.lockHeld &&
+        input.settings.lockAimFeelEnabled &&
+        input.anchors != nullptr &&
+        input.viewProjection != nullptr &&
+        input.viewportWidth > 0 &&
+        input.viewportHeight > 0) {
+        const Vector2 screenCenter{
+            static_cast<float>(input.viewportWidth) * 0.5f,
+            static_cast<float>(input.viewportHeight) * 0.5f};
+        const float halfDiagonal = (std::max)(
+            1.0f,
+            std::sqrt(screenCenter.x * screenCenter.x + screenCenter.y * screenCenter.y));
+        const float dt = (std::max)(input.deltaTime, 0.0f);
+        const float intentTotal = (std::max)(
+            0.0001f,
+            input.settings.lockAimReticleIntentWeight +
+                input.settings.lockAimCenterIntentWeight +
+                input.settings.lockAimForwardIntentWeight +
+                input.settings.lockPriorityAnchorWeight * 0.20f);
+
+        Vector2 bestTarget{};
+        float bestDistance = 0.0f;
+        float bestScore = -(std::numeric_limits<float>::max)();
+        bool hasBest = false;
+
+        for (const RailLockAnchor& anchor : *input.anchors) {
+            if (anchor.forwardDistance < input.settings.minForwardDistance ||
+                anchor.forwardDistance > input.settings.maxForwardDistance) {
+                continue;
+            }
+
+            const ProjectedPoint projected =
+                ProjectToScreen(anchor.worldPosition, *input.viewProjection, input.viewportWidth, input.viewportHeight);
+            if (projected.behind || projected.depth < 0.0f || projected.depth > 1.0f) {
+                continue;
+            }
+
+            const float magnetRadius =
+                (std::max)(1.0f, anchor.screenRadius + input.settings.assistRadius + input.settings.lockAimMagnetRadius);
+            const float reticleDistance = Distance(next, projected.screen);
+            if (reticleDistance > magnetRadius) {
+                continue;
+            }
+
+            const float reticleScore = 1.0f - Clamp01(reticleDistance / magnetRadius);
+            const float centerScore = 1.0f - Clamp01(Distance(projected.screen, screenCenter) / halfDiagonal);
+            const float forwardScore =
+                1.0f - SafeRange01(anchor.forwardDistance, input.settings.minForwardDistance, input.settings.maxForwardDistance);
+            const float anchorScore = Clamp01(anchor.priority);
+            const float score =
+                (reticleScore * input.settings.lockAimReticleIntentWeight +
+                 centerScore * input.settings.lockAimCenterIntentWeight +
+                 forwardScore * input.settings.lockAimForwardIntentWeight +
+                 anchorScore * input.settings.lockPriorityAnchorWeight * 0.20f) /
+                intentTotal;
+
+            if (!hasBest || score > bestScore) {
+                hasBest = true;
+                bestScore = score;
+                bestTarget = projected.screen;
+                bestDistance = reticleDistance;
+            }
+        }
+
+        if (hasBest && bestDistance > input.settings.lockAimDeadZone) {
+            const float normalizedScore = Clamp01(bestScore);
+            const float strength = normalizedScore * input.settings.lockAimMagnetStrength;
+            const float pullByFeel =
+                (bestDistance - input.settings.lockAimDeadZone) *
+                strength *
+                input.settings.lockAimTargetBlend;
+            const float pullBySpeed = input.settings.lockAimMaxPullSpeed * dt;
+            const float pullPixels = (std::max)(0.0f, (std::min)(pullByFeel, pullBySpeed));
+            next = PullToward(next, bestTarget, pullPixels);
+            next = ClampToViewport(next, input.viewportWidth, input.viewportHeight);
+            state_.aimFeelActive = pullPixels > 0.0001f;
+            state_.aimFeelTargetScreenPosition = bestTarget;
+            state_.aimFeelStrength = strength;
+            state_.aimFeelPullPixels = pullPixels;
+            state_.aimFeelTargetScore = normalizedScore;
+        }
+    }
+
     const float dt = (std::max)(input.deltaTime, 0.0001f);
     state_.velocity = {
         (next.x - state_.currentScreenPosition.x) / dt,
         (next.y - state_.currentScreenPosition.y) / dt,
     };
     state_.currentScreenPosition = next;
-
-    state_.lockHeld = KeyDown(VK_LSHIFT) || KeyDown(VK_RSHIFT) || KeyDown(VK_RBUTTON);
-    state_.lockPressed = state_.lockHeld && !wasHeld;
-    state_.lockReleased = !state_.lockHeld && wasHeld;
 }
 
