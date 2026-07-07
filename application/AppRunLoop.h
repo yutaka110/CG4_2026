@@ -123,6 +123,15 @@ private:
     bool EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList);
     bool BuildRailLockOnHudAtlasQuads();
     void RegisterRailLockOnHudPass(ID3D12GraphicsCommandList* commandList);
+    void StartRailCameraTuningRecording();
+    void StopRailCameraTuningRecording();
+    void ClearRailCameraTuningRecording();
+    bool ExportRailCameraTuningCsv(std::string* outPath = nullptr);
+    void RecordRailCameraTuningSample(
+        float deltaTime,
+        const RailSpeedDirectorFrame& speedFrame,
+        const RailCameraDirectorFrame& cameraFrame,
+        const CourseCollisionFrameStats& collisionStats);
     int ProcessRailLockOnRelease(const Vector3& muzzlePosition);
     void QueueRailLockIceProjectile(const Vector3& start, const Vector3& target, int shotIndex);
     bool IsRailShooterSceneActive() const;
@@ -251,6 +260,71 @@ private:
         float warningZoneHeight = 0.78f;
     };
     RailVisibilityDebugOverlaySettings railVisibilityDebugOverlay_{};
+    struct RailCameraTuningSample {
+        uint32_t frame = 0;
+        float timeSeconds = 0.0f;
+        float distance = 0.0f;
+        std::string sectionName;
+        std::string speedMode;
+        std::string speedReason;
+        float baseSpeed = 0.0f;
+        float targetSpeed = 0.0f;
+        float smoothedSpeed = 0.0f;
+        float zoneMultiplier = 1.0f;
+        float eventMultiplier = 1.0f;
+        std::string cameraMode;
+        std::string cameraModeKind;
+        std::string comfortReason;
+        float fovYDeg = 0.0f;
+        float rollDeg = 0.0f;
+        float angularVelocityDeg = 0.0f;
+        float angularAccelerationDeg = 0.0f;
+        float fovChangeRateDeg = 0.0f;
+        float linearSpeed = 0.0f;
+        float stabilityScore = 1.0f;
+        float shakeAmount = 0.0f;
+        bool stableForAiming = true;
+        bool hardTransition = false;
+        bool allowEnemyFire = true;
+        float aimFocusBlend = 0.0f;
+        float lookAtBlend = 0.0f;
+        float compositionRisk = 0.0f;
+        float compositionSafetyBlend = 0.0f;
+        bool compositionSafe = true;
+        bool lineOfSightSafe = true;
+        bool cameraCollisionSafe = true;
+        bool segmentTransitionActive = false;
+        float segmentTransitionBlend = 1.0f;
+        bool encounterFramingActive = false;
+        float encounterFramingBlend = 0.0f;
+        float encounterFramingSpread = 0.0f;
+        int encounterFramingEnemyCount = 0;
+        int encounterFramingBossCount = 0;
+        uint32_t activeEnemies = 0;
+        uint32_t activeBullets = 0;
+        uint32_t activeObstacles = 0;
+        uint32_t lockTokenCount = 0;
+        bool lockHeld = false;
+        bool normalShotHeld = false;
+        uint32_t normalShotsFired = 0;
+        uint32_t normalShotHits = 0;
+        float playerDamage = 0.0f;
+        double updateMs = 0.0;
+        double renderMs = 0.0;
+        double presentMs = 0.0;
+    };
+    struct RailCameraTuningRecorderState {
+        bool recording = false;
+        uint32_t sampleStride = 1;
+        uint32_t maxSamples = 7200;
+        uint32_t recordedSamples = 0;
+        uint32_t droppedSamples = 0;
+        float recordingTimeSeconds = 0.0f;
+        std::string status = "idle";
+        std::string lastExportPath;
+        std::vector<RailCameraTuningSample> samples;
+    };
+    RailCameraTuningRecorderState railCameraTuningRecorder_{};
     struct RailInputRouteDebugState {
         bool railSceneActive = false;
         bool lockHeld = false;

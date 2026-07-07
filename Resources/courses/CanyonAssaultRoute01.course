@@ -7,7 +7,9 @@
 # terrain|distance|layer|id|meshId|lateralOffset|verticalOffset|forwardOffset|scaleX|scaleY|scaleZ|pitchDeg|yawDeg|rollDeg|collisionMode|renderPriority|cullBehind|cullAhead
 # rock_cluster|distance|id|meshId|anchor|type|count|minScale|maxScale|spreadX|spreadY|spreadZ|clearLaneRadius|cullBehind|cullAhead
 # lighting|distance|id|blendDistance|sunR|sunG|sunB|sunIntensity|sunDirX|sunDirY|sunDirZ|ambientR|ambientG|ambientB|fogR|fogG|fogB|fogIntensity|fogStart|fogEnd|fogDensity|backlitFogLift|openingGlow|foregroundSilhouette|lowFogLayer|coolFloorHaze
-# camera_shot|start|end|id|mode|blendIn|blendOut|backOffset|verticalOffset|lateralOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake
+# camera_shot_preset|id|mode|backOffset|verticalOffset|lateralOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake
+# camera_blend_asset|id|blendIn|blendOut|curve|weightScale
+# camera_shot|start|end|id|mode|blendIn|blendOut|backOffset|verticalOffset|lateralOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake|presetId|blendAssetId|weightScale
 # terrain_material|distance|id|blendDistance|baseR|baseG|baseB|brightness|noise|strata|breakup|specular|rim|backlight|floorShadow|detailNormal|microDetail|cavityAo|skyFill
 # cinematic_shot_set|start|end|id|label|heroLandmarksCsv|vistaLandmarksCsv|lightingId|cameraShotId|terrainMaterialId|fogMood|compositionNotes
 # event|distance|type|id|payload
@@ -93,15 +95,34 @@ lighting|1280|gatekeeper_shadow|110|0.90|0.48|0.36|2.45|-0.54|-0.42|0.72|0.10|0.
 lighting|1680|escape_blooming_exit|120|1.00|0.76|0.56|3.00|-0.38|-0.40|0.84|0.18|0.16|0.14|0.46|0.38|0.34|0.36|210|1380|0.16|0.44|0.88|0.78|0.12|0.10
 lighting|2100|final_gate_silhouette|160|1.00|0.66|0.46|2.45|-0.50|-0.34|0.80|0.07|0.06|0.055|0.36|0.30|0.28|0.38|240|1120|0.18|0.42|0.68|1.00|0.14|0.10
 
-# CinematicCameraShot: additive shot accents over the authored camera rail.
-camera_shot|25|170|intro_arch_reveal|Arch Reveal|34|42|10|8|0|28|4|14|7|-1|0.04
-camera_shot|205|350|first_contact_readable_lane|Combat Readability|30|34|2|1|1|10|0|3|-3|1|0.04
-camera_shot|430|650|crossfire_wall_scrape|Wall Scrape|32|42|-2|-1|5|2|-1|7|3|5|0.08
-camera_shot|735|930|tunnel_dive_compression|Tunnel Compression|28|36|-4|-2|0|-10|-1|6|7|0|0.18
-camera_shot|990|1235|falling_spire_reveal|Falling Spire Reveal|35|52|8|5|-6|22|4|8|3|-4|0.18
-camera_shot|1265|1460|gatekeeper_shadow_pass|Boss Shadow Pass|36|44|6|2|4|18|3|6|-5|4|0.22
-camera_shot|1690|1880|escape_speed_widen|Escape Speed|24|38|-6|-2|0|20|-1|8|9|0|0.16
-camera_shot|2110|2380|final_gate_silhouette_hold|Final Gate Silhouette|36|48|4|2|5|12|2|8|-4|2|0.10
+# CameraShotPreset / BlendAsset: reusable camera shot shapes and authored blend behavior.
+camera_shot_preset|intro_arch_reveal_preset|Arch Reveal|10|8|0|28|4|14|7|-1|0.04
+camera_shot_preset|first_contact_readable_lane_preset|Combat Readability|2|1|1|10|0|3|-3|1|0.04
+camera_shot_preset|crossfire_wall_scrape_preset|Wall Scrape|-2|-1|5|2|-1|7|3|5|0.08
+camera_shot_preset|tunnel_dive_compression_preset|Tunnel Compression|-4|-2|0|-10|-1|6|7|0|0.18
+camera_shot_preset|falling_spire_reveal_preset|Falling Spire Reveal|8|5|-6|22|4|8|3|-4|0.18
+camera_shot_preset|gatekeeper_shadow_pass_preset|Boss Shadow Pass|6|2|4|18|3|6|-5|4|0.22
+camera_shot_preset|escape_speed_widen_preset|Escape Speed|-6|-2|0|20|-1|8|9|0|0.16
+camera_shot_preset|final_gate_silhouette_hold_preset|Final Gate Silhouette|4|2|5|12|2|8|-4|2|0.10
+
+camera_blend_asset|reveal_linear_34_42|34|42|linear|1.00
+camera_blend_asset|combat_linear_30_34|30|34|linear|1.00
+camera_blend_asset|scrape_linear_32_42|32|42|linear|1.00
+camera_blend_asset|tunnel_linear_28_36|28|36|linear|1.00
+camera_blend_asset|spire_linear_35_52|35|52|linear|1.00
+camera_blend_asset|boss_linear_36_44|36|44|linear|1.00
+camera_blend_asset|escape_linear_24_38|24|38|linear|1.00
+camera_blend_asset|finale_linear_36_48|36|48|linear|1.00
+
+# CinematicCameraShot: shot instances bind distance ranges to presets and blend assets.
+camera_shot|25|170|intro_arch_reveal|-|0|0|0|0|0|0|0|0|0|0|0|intro_arch_reveal_preset|reveal_linear_34_42|1.00
+camera_shot|205|350|first_contact_readable_lane|-|0|0|0|0|0|0|0|0|0|0|0|first_contact_readable_lane_preset|combat_linear_30_34|1.00
+camera_shot|430|650|crossfire_wall_scrape|-|0|0|0|0|0|0|0|0|0|0|0|crossfire_wall_scrape_preset|scrape_linear_32_42|1.00
+camera_shot|735|930|tunnel_dive_compression|-|0|0|0|0|0|0|0|0|0|0|0|tunnel_dive_compression_preset|tunnel_linear_28_36|1.00
+camera_shot|990|1235|falling_spire_reveal|-|0|0|0|0|0|0|0|0|0|0|0|falling_spire_reveal_preset|spire_linear_35_52|1.00
+camera_shot|1265|1460|gatekeeper_shadow_pass|-|0|0|0|0|0|0|0|0|0|0|0|gatekeeper_shadow_pass_preset|boss_linear_36_44|1.00
+camera_shot|1690|1880|escape_speed_widen|-|0|0|0|0|0|0|0|0|0|0|0|escape_speed_widen_preset|escape_linear_24_38|1.00
+camera_shot|2110|2380|final_gate_silhouette_hold|-|0|0|0|0|0|0|0|0|0|0|0|final_gate_silhouette_hold_preset|finale_linear_36_48|1.00
 
 # TerrainMaterialPreset: authored terrain surface response by section.
 terrain_material|0|intro_wet_organic_rock|0|0.46|0.39|0.35|0.54|1.22|1.28|1.16|0.12|1.48|1.18|0.72|1.48|1.34|1.28|0.05

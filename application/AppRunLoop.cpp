@@ -11,9 +11,11 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <memory>
 #include <sstream>
 #include <thread>
+#include <ctime>
 #include <utility>
 
 #include "AppFrameRenderer.h"
@@ -217,6 +219,47 @@ void LogRailFrameStage(uint32_t frameIndex, float distance, const char* stage) {
     if (log) {
         log << line.str();
     }
+}
+
+std::string CsvEscape(const std::string& value) {
+    bool needsQuote = false;
+    for (char c : value) {
+        if (c == ',' || c == '"' || c == '\n' || c == '\r') {
+            needsQuote = true;
+            break;
+        }
+    }
+    if (!needsQuote) {
+        return value;
+    }
+
+    std::string escaped;
+    escaped.reserve(value.size() + 2);
+    escaped.push_back('"');
+    for (char c : value) {
+        if (c == '"') {
+            escaped.push_back('"');
+        }
+        escaped.push_back(c);
+    }
+    escaped.push_back('"');
+    return escaped;
+}
+
+const char* BoolCsv(bool value) {
+    return value ? "1" : "0";
+}
+
+std::string BuildRailTuningCsvPath() {
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
+    std::tm localTime{};
+    localtime_s(&localTime, &nowTime);
+    std::ostringstream name;
+    name << "logs/rail_camera_tuning_"
+         << std::put_time(&localTime, "%Y%m%d_%H%M%S")
+         << ".csv";
+    return name.str();
 }
 
 Vector3 NormalizeOr(const Vector3& value, const Vector3& fallback) {
@@ -1265,6 +1308,197 @@ void AppRunLoop::LogCourseEvents(const std::vector<CourseEventMarker>& events) {
             log << line.str();
         }
     }
+}
+
+void AppRunLoop::StartRailCameraTuningRecording() {
+    railCameraTuningRecorder_.samples.clear();
+    railCameraTuningRecorder_.recording = true;
+    railCameraTuningRecorder_.recordedSamples = 0;
+    railCameraTuningRecorder_.droppedSamples = 0;
+    railCameraTuningRecorder_.recordingTimeSeconds = 0.0f;
+    railCameraTuningRecorder_.status = "recording";
+}
+
+void AppRunLoop::StopRailCameraTuningRecording() {
+    railCameraTuningRecorder_.recording = false;
+    railCameraTuningRecorder_.status = railCameraTuningRecorder_.samples.empty()
+        ? "stopped, no samples"
+        : "stopped";
+}
+
+void AppRunLoop::ClearRailCameraTuningRecording() {
+    railCameraTuningRecorder_.samples.clear();
+    railCameraTuningRecorder_.recordedSamples = 0;
+    railCameraTuningRecorder_.droppedSamples = 0;
+    railCameraTuningRecorder_.recordingTimeSeconds = 0.0f;
+    railCameraTuningRecorder_.status = railCameraTuningRecorder_.recording ? "recording, cleared" : "cleared";
+}
+
+bool AppRunLoop::ExportRailCameraTuningCsv(std::string* outPath) {
+    if (railCameraTuningRecorder_.samples.empty()) {
+        railCameraTuningRecorder_.status = "export skipped, no samples";
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories("logs", ec);
+    const std::string path = BuildRailTuningCsvPath();
+    std::ofstream csv(path, std::ios::out | std::ios::trunc);
+    if (!csv) {
+        railCameraTuningRecorder_.status = "export failed";
+        return false;
+    }
+
+    csv << "frame,timeSeconds,distance,sectionName,speedMode,speedReason,"
+        << "baseSpeed,targetSpeed,smoothedSpeed,zoneMultiplier,eventMultiplier,"
+        << "cameraMode,cameraModeKind,comfortReason,fovYDeg,rollDeg,angularVelocityDeg,"
+        << "angularAccelerationDeg,fovChangeRateDeg,linearSpeed,stabilityScore,shakeAmount,"
+        << "stableForAiming,hardTransition,allowEnemyFire,aimFocusBlend,lookAtBlend,"
+        << "compositionRisk,compositionSafetyBlend,compositionSafe,lineOfSightSafe,"
+        << "cameraCollisionSafe,segmentTransitionActive,segmentTransitionBlend,"
+        << "encounterFramingActive,encounterFramingBlend,encounterFramingSpread,"
+        << "encounterFramingEnemyCount,encounterFramingBossCount,activeEnemies,"
+        << "activeBullets,activeObstacles,lockTokenCount,lockHeld,normalShotHeld,"
+        << "normalShotsFired,normalShotHits,playerDamage,updateMs,renderMs,presentMs\n";
+    csv << std::fixed << std::setprecision(4);
+    for (const RailCameraTuningSample& s : railCameraTuningRecorder_.samples) {
+        csv << s.frame << ','
+            << s.timeSeconds << ','
+            << s.distance << ','
+            << CsvEscape(s.sectionName) << ','
+            << CsvEscape(s.speedMode) << ','
+            << CsvEscape(s.speedReason) << ','
+            << s.baseSpeed << ','
+            << s.targetSpeed << ','
+            << s.smoothedSpeed << ','
+            << s.zoneMultiplier << ','
+            << s.eventMultiplier << ','
+            << CsvEscape(s.cameraMode) << ','
+            << CsvEscape(s.cameraModeKind) << ','
+            << CsvEscape(s.comfortReason) << ','
+            << s.fovYDeg << ','
+            << s.rollDeg << ','
+            << s.angularVelocityDeg << ','
+            << s.angularAccelerationDeg << ','
+            << s.fovChangeRateDeg << ','
+            << s.linearSpeed << ','
+            << s.stabilityScore << ','
+            << s.shakeAmount << ','
+            << BoolCsv(s.stableForAiming) << ','
+            << BoolCsv(s.hardTransition) << ','
+            << BoolCsv(s.allowEnemyFire) << ','
+            << s.aimFocusBlend << ','
+            << s.lookAtBlend << ','
+            << s.compositionRisk << ','
+            << s.compositionSafetyBlend << ','
+            << BoolCsv(s.compositionSafe) << ','
+            << BoolCsv(s.lineOfSightSafe) << ','
+            << BoolCsv(s.cameraCollisionSafe) << ','
+            << BoolCsv(s.segmentTransitionActive) << ','
+            << s.segmentTransitionBlend << ','
+            << BoolCsv(s.encounterFramingActive) << ','
+            << s.encounterFramingBlend << ','
+            << s.encounterFramingSpread << ','
+            << s.encounterFramingEnemyCount << ','
+            << s.encounterFramingBossCount << ','
+            << s.activeEnemies << ','
+            << s.activeBullets << ','
+            << s.activeObstacles << ','
+            << s.lockTokenCount << ','
+            << BoolCsv(s.lockHeld) << ','
+            << BoolCsv(s.normalShotHeld) << ','
+            << s.normalShotsFired << ','
+            << s.normalShotHits << ','
+            << s.playerDamage << ','
+            << s.updateMs << ','
+            << s.renderMs << ','
+            << s.presentMs << '\n';
+    }
+
+    railCameraTuningRecorder_.lastExportPath = path;
+    railCameraTuningRecorder_.status = "exported " + path;
+    if (outPath != nullptr) {
+        *outPath = path;
+    }
+    return true;
+}
+
+void AppRunLoop::RecordRailCameraTuningSample(
+    float deltaTime,
+    const RailSpeedDirectorFrame& speedFrame,
+    const RailCameraDirectorFrame& cameraFrame,
+    const CourseCollisionFrameStats& collisionStats) {
+    if (!railCameraTuningRecorder_.recording || !IsRailShooterSceneActive()) {
+        return;
+    }
+
+    railCameraTuningRecorder_.recordingTimeSeconds += (std::max)(0.0f, deltaTime);
+    const uint32_t stride = (std::max)(1u, railCameraTuningRecorder_.sampleStride);
+    if ((railShooterFrameIndex_ % stride) != 0u) {
+        return;
+    }
+    if (railCameraTuningRecorder_.samples.size() >= railCameraTuningRecorder_.maxSamples) {
+        ++railCameraTuningRecorder_.droppedSamples;
+        railCameraTuningRecorder_.status = "recording, buffer full";
+        return;
+    }
+
+    RailCameraTuningSample sample{};
+    sample.frame = railShooterFrameIndex_;
+    sample.timeSeconds = railCameraTuningRecorder_.recordingTimeSeconds;
+    sample.distance = railShooterDistance_;
+    sample.sectionName = speedFrame.sectionName;
+    sample.speedMode = speedFrame.modeName;
+    sample.speedReason = speedFrame.reason;
+    sample.baseSpeed = speedFrame.baseSpeed;
+    sample.targetSpeed = speedFrame.targetSpeed;
+    sample.smoothedSpeed = speedFrame.smoothedSpeed;
+    sample.zoneMultiplier = speedFrame.zoneMultiplier;
+    sample.eventMultiplier = speedFrame.eventMultiplier;
+    sample.cameraMode = cameraFrame.mode;
+    sample.cameraModeKind = ToRailCameraDirectorModeString(cameraFrame.modeKind);
+    sample.comfortReason = cameraFrame.comfortReason;
+    sample.fovYDeg = cameraFrame.fovY * 180.0f / 3.14159265358979323846f;
+    sample.rollDeg = cameraFrame.rollDeg;
+    sample.angularVelocityDeg = cameraFrame.angularVelocityDeg;
+    sample.angularAccelerationDeg = cameraFrame.angularAccelerationDeg;
+    sample.fovChangeRateDeg = cameraFrame.fovChangeRateDeg;
+    sample.linearSpeed = cameraFrame.linearSpeed;
+    sample.stabilityScore = cameraFrame.stabilityScore;
+    sample.shakeAmount = cameraFrame.shakeAmount;
+    sample.stableForAiming = cameraFrame.stableForAiming;
+    sample.hardTransition = cameraFrame.hardTransition;
+    sample.allowEnemyFire = cameraFrame.allowEnemyFire;
+    sample.aimFocusBlend = cameraFrame.aimFocusBlend;
+    sample.lookAtBlend = cameraFrame.lookAtBlend;
+    sample.compositionRisk = cameraFrame.compositionRisk;
+    sample.compositionSafetyBlend = cameraFrame.compositionSafetyBlend;
+    sample.compositionSafe = cameraFrame.compositionSafeForAiming;
+    sample.lineOfSightSafe = cameraFrame.lineOfSightSafeForAiming;
+    sample.cameraCollisionSafe = cameraFrame.cameraCollisionSafe;
+    sample.segmentTransitionActive = cameraFrame.segmentTransitionActive;
+    sample.segmentTransitionBlend = cameraFrame.segmentTransitionBlend;
+    sample.encounterFramingActive = cameraFrame.encounterFramingActive;
+    sample.encounterFramingBlend = cameraFrame.encounterFramingBlend;
+    sample.encounterFramingSpread = cameraFrame.encounterFramingThreatSpread;
+    sample.encounterFramingEnemyCount = cameraFrame.encounterFramingEnemyCount;
+    sample.encounterFramingBossCount = cameraFrame.encounterFramingBossCount;
+    sample.activeEnemies = static_cast<uint32_t>(railShooterSpawnRuntime_.ActiveEnemyCount());
+    sample.activeBullets = static_cast<uint32_t>(railShooterSpawnRuntime_.ActiveBulletCount());
+    sample.activeObstacles = static_cast<uint32_t>(railShooterSpawnRuntime_.ActiveObstacleCount());
+    sample.lockTokenCount = static_cast<uint32_t>(railShooterLockOnSystem_.Tokens().size());
+    sample.lockHeld = railShooterLockOnSystem_.Reticle().lockHeld;
+    sample.normalShotHeld = railInputRouteDebug_.normalShotHeld;
+    sample.normalShotsFired = collisionStats.playerShotsFired;
+    sample.normalShotHits = collisionStats.playerShotEnemyHits + collisionStats.playerShotObstacleHits;
+    sample.playerDamage = collisionStats.playerDamage;
+    sample.updateMs = gRailPerfFrame.updateMs;
+    sample.renderMs = gRailPerfFrame.renderMs;
+    sample.presentMs = gRailPerfFrame.presentMs;
+
+    railCameraTuningRecorder_.samples.push_back(std::move(sample));
+    ++railCameraTuningRecorder_.recordedSamples;
+    railCameraTuningRecorder_.status = "recording";
 }
 
 void AppRunLoop::ApplyRailShooterVisualPresets(float distance) {
@@ -2319,6 +2553,8 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
         railShooterCameraDirector_.MutableCollisionProtectionSettings();
     RailCameraSegmentTransitionSettings& segmentTransitionSettings =
         railShooterCameraDirector_.MutableSegmentTransitionSettings();
+    RailCameraEncounterFramingSettings& encounterFramingSettings =
+        railShooterCameraDirector_.MutableEncounterFramingSettings();
     const RailCameraDirectorFrame& cameraFrame = railShooterCameraDirector_.LastFrame();
     CourseEnemyFireSafetySettings& fireSafetySettings = railShooterSpawnRuntime_.MutableFireSafetySettings();
     const CourseEnemyFireSafetyStats& fireSafetyStats = railShooterSpawnRuntime_.LastFireSafetyStats();
@@ -2366,6 +2602,48 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
         reticle.aimFeelStrength,
         reticle.aimFeelPullPixels,
         reticle.aimFeelTargetScore);
+
+    if (ImGui::CollapsingHeader("Camera/Rail Tuning Recorder P1-B-12", ImGuiTreeNodeFlags_DefaultOpen)) {
+        bool recording = railCameraTuningRecorder_.recording;
+        if (ImGui::Checkbox("Record Camera/Rail CSV", &recording)) {
+            if (recording) {
+                StartRailCameraTuningRecording();
+            } else {
+                StopRailCameraTuningRecording();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Export CSV")) {
+            std::string exportedPath;
+            ExportRailCameraTuningCsv(&exportedPath);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear Buffer")) {
+            ClearRailCameraTuningRecording();
+        }
+
+        int sampleStride = static_cast<int>(railCameraTuningRecorder_.sampleStride);
+        int maxSamples = static_cast<int>(railCameraTuningRecorder_.maxSamples);
+        ImGui::DragInt("Sample Stride", &sampleStride, 1.0f, 1, 60);
+        ImGui::DragInt("Max Samples", &maxSamples, 100.0f, 300, 60000);
+        railCameraTuningRecorder_.sampleStride = static_cast<uint32_t>((std::clamp)(sampleStride, 1, 60));
+        railCameraTuningRecorder_.maxSamples = static_cast<uint32_t>((std::clamp)(maxSamples, 300, 60000));
+
+        ImGui::Text(
+            "status=%s samples=%zu recorded=%u dropped=%u time=%.2f sec",
+            railCameraTuningRecorder_.status.c_str(),
+            railCameraTuningRecorder_.samples.size(),
+            railCameraTuningRecorder_.recordedSamples,
+            railCameraTuningRecorder_.droppedSamples,
+            railCameraTuningRecorder_.recordingTimeSeconds);
+        ImGui::Text(
+            "lastExport=%s",
+            railCameraTuningRecorder_.lastExportPath.empty()
+                ? "-"
+                : railCameraTuningRecorder_.lastExportPath.c_str());
+        ImGui::Text(
+            "captures speed/camera/comfort/composition/encounter/input/collision/frame timing into logs/rail_camera_tuning_*.csv");
+    }
 
     if (ImGui::CollapsingHeader("Rail Speed Director P1-B-1", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("Speed Director Enabled", &speedSettings.enabled);
@@ -2430,6 +2708,13 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
             cameraFrame.linearSpeed,
             cameraFrame.stabilityScore,
             cameraFrame.shakeAmount);
+        ImGui::Text(
+            "shot=%s preset=%s blend=%s curve=%s weight=%.2f",
+            cameraFrame.cinematicShotId.c_str(),
+            cameraFrame.cinematicShotPresetId.c_str(),
+            cameraFrame.cinematicShotBlendAssetId.c_str(),
+            cameraFrame.cinematicShotBlendCurve.c_str(),
+            cameraFrame.cinematicShotWeight);
         ImGui::Text(
             "angularVel=%.1f deg/s angularAccel=%.1f deg/s2 fovRate=%.1f deg/s roll=%.1f deg",
             cameraFrame.angularVelocityDeg,
@@ -2828,6 +3113,71 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
         segmentTransitionSettings.comfortGraceMultiplier =
             (std::max)(1.0f, segmentTransitionSettings.comfortGraceMultiplier);
         ImGui::TextUnformatted("Blends camera output across section changes and briefly gates enemy fire at transition entry.");
+    }
+
+    if (ImGui::CollapsingHeader("Encounter Framing Rules P1-B-11", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Encounter Framing Enabled", &encounterFramingSettings.enabled);
+        ImGui::Text(
+            "active=%s blend=%.2f remain=%.2f reason=%s",
+            cameraFrame.encounterFramingActive ? "true" : "false",
+            cameraFrame.encounterFramingBlend,
+            cameraFrame.encounterFramingRemaining,
+            cameraFrame.encounterFramingReason.c_str());
+        ImGui::Text(
+            "enemies=%d bosses=%d spread=%.2f fov+=%.2f deg enemyFire=%s comfort=%s",
+            cameraFrame.encounterFramingEnemyCount,
+            cameraFrame.encounterFramingBossCount,
+            cameraFrame.encounterFramingThreatSpread,
+            cameraFrame.encounterFramingFovOffsetDeg,
+            cameraFrame.allowEnemyFire ? "allowed" : "blocked",
+            cameraFrame.comfortReason.c_str());
+        ImGui::DragFloat("Encounter Blend In", &encounterFramingSettings.blendInRate, 0.1f, 0.0f, 30.0f, "%.2f");
+        ImGui::DragFloat("Encounter Blend Out", &encounterFramingSettings.blendOutRate, 0.1f, 0.0f, 30.0f, "%.2f");
+        ImGui::DragFloat("Wave Hold", &encounterFramingSettings.waveHoldDuration, 0.01f, 0.0f, 5.0f, "%.2f");
+        ImGui::DragFloat("Boss Hold", &encounterFramingSettings.bossHoldDuration, 0.01f, 0.0f, 6.0f, "%.2f");
+        ImGui::DragFloat("Obstacle Hold", &encounterFramingSettings.obstacleHoldDuration, 0.01f, 0.0f, 3.0f, "%.2f");
+        ImGui::DragFloat("Min Forward", &encounterFramingSettings.minForwardDistance, 1.0f, -80.0f, 80.0f, "%.1f");
+        ImGui::DragFloat("Max Forward", &encounterFramingSettings.maxForwardDistance, 1.0f, 20.0f, 420.0f, "%.1f");
+        ImGui::DragFloat("Min Active Enemy Focus", &encounterFramingSettings.minActiveEnemyFocus, 0.1f, 0.0f, 12.0f, "%.1f");
+        ImGui::DragFloat("Enemies For Full Wide", &encounterFramingSettings.enemyCountForFullWide, 0.1f, 1.0f, 20.0f, "%.1f");
+        ImGui::DragFloat("Spread For Full Wide", &encounterFramingSettings.enemySpreadForFullWide, 0.25f, 1.0f, 80.0f, "%.1f");
+        ImGui::DragFloat("Boss Focus Boost", &encounterFramingSettings.bossFocusBoost, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Encounter FOV Expand", &encounterFramingSettings.fovExpandDeg, 0.1f, 0.0f, 18.0f, "%.1f");
+        ImGui::DragFloat("Boss FOV Expand", &encounterFramingSettings.bossFovExpandDeg, 0.1f, 0.0f, 18.0f, "%.1f");
+        ImGui::DragFloat("Encounter Max FOV", &encounterFramingSettings.maxFovDeg, 0.5f, 40.0f, 92.0f, "%.1f");
+        ImGui::DragFloat("Encounter Look Ahead", &encounterFramingSettings.lookAheadBoost, 0.25f, 0.0f, 30.0f, "%.1f");
+        ImGui::DragFloat("Encounter Back Distance", &encounterFramingSettings.backDistanceBoost, 0.25f, 0.0f, 20.0f, "%.1f");
+        ImGui::DragFloat("Encounter Lateral Dampen", &encounterFramingSettings.lateralDampen, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Encounter Roll Dampen", &encounterFramingSettings.rollDampen, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Encounter Fire Hold", &encounterFramingSettings.fireHoldDuration, 0.01f, 0.0f, 1.5f, "%.2f");
+
+        encounterFramingSettings.blendInRate = (std::max)(0.0f, encounterFramingSettings.blendInRate);
+        encounterFramingSettings.blendOutRate = (std::max)(0.0f, encounterFramingSettings.blendOutRate);
+        encounterFramingSettings.waveHoldDuration = (std::max)(0.0f, encounterFramingSettings.waveHoldDuration);
+        encounterFramingSettings.bossHoldDuration = (std::max)(0.0f, encounterFramingSettings.bossHoldDuration);
+        encounterFramingSettings.obstacleHoldDuration =
+            (std::max)(0.0f, encounterFramingSettings.obstacleHoldDuration);
+        encounterFramingSettings.maxForwardDistance =
+            (std::max)(encounterFramingSettings.minForwardDistance + 1.0f, encounterFramingSettings.maxForwardDistance);
+        encounterFramingSettings.minActiveEnemyFocus =
+            (std::max)(0.0f, encounterFramingSettings.minActiveEnemyFocus);
+        encounterFramingSettings.enemyCountForFullWide =
+            (std::max)(encounterFramingSettings.minActiveEnemyFocus + 1.0f, encounterFramingSettings.enemyCountForFullWide);
+        encounterFramingSettings.enemySpreadForFullWide =
+            (std::max)(1.0f, encounterFramingSettings.enemySpreadForFullWide);
+        encounterFramingSettings.bossFocusBoost =
+            (std::clamp)(encounterFramingSettings.bossFocusBoost, 0.0f, 1.0f);
+        encounterFramingSettings.fovExpandDeg = (std::max)(0.0f, encounterFramingSettings.fovExpandDeg);
+        encounterFramingSettings.bossFovExpandDeg = (std::max)(0.0f, encounterFramingSettings.bossFovExpandDeg);
+        encounterFramingSettings.maxFovDeg = (std::max)(40.0f, encounterFramingSettings.maxFovDeg);
+        encounterFramingSettings.lookAheadBoost = (std::max)(0.0f, encounterFramingSettings.lookAheadBoost);
+        encounterFramingSettings.backDistanceBoost = (std::max)(0.0f, encounterFramingSettings.backDistanceBoost);
+        encounterFramingSettings.lateralDampen =
+            (std::clamp)(encounterFramingSettings.lateralDampen, 0.0f, 1.0f);
+        encounterFramingSettings.rollDampen =
+            (std::clamp)(encounterFramingSettings.rollDampen, 0.0f, 1.0f);
+        encounterFramingSettings.fireHoldDuration = (std::max)(0.0f, encounterFramingSettings.fireHoldDuration);
+        ImGui::TextUnformatted("Frames wave/boss entries before aim focus, composition safety, collision, and LOS polish run.");
     }
 
     if (ImGui::CollapsingHeader("AimFocus Camera Stabilization P1-B-3", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -5500,6 +5850,11 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     const HRESULT presentHr = swapChain_.Present(dev_, 1);
     gRailPerfFrame.presentMs = ElapsedMs(presentStart, RailPerfClock::now());
     gRailPerfFrame.renderMs = ElapsedMs(renderStart, RailPerfClock::now());
+    RecordRailCameraTuningSample(
+        frameState_.deltaTime,
+        railShooterSpeedDirector_.LastFrame(),
+        railShooterCameraDirector_.LastFrame(),
+        railShooterCollisionSystem_.LastFrameStats());
     CaptureRailGpuTimingCpuMetadata(backBufferIndex);
     LogRailShooterPerfSpike();
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterPresent");

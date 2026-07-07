@@ -133,6 +133,29 @@ struct RailCameraSegmentTransitionSettings {
     float comfortGraceMultiplier = 1.35f;
 };
 
+struct RailCameraEncounterFramingSettings {
+    bool enabled = true;
+    float blendInRate = 6.8f;
+    float blendOutRate = 3.4f;
+    float waveHoldDuration = 1.15f;
+    float bossHoldDuration = 2.20f;
+    float obstacleHoldDuration = 0.70f;
+    float minForwardDistance = -6.0f;
+    float maxForwardDistance = 175.0f;
+    float minActiveEnemyFocus = 2.0f;
+    float enemyCountForFullWide = 6.0f;
+    float enemySpreadForFullWide = 14.0f;
+    float bossFocusBoost = 0.42f;
+    float fovExpandDeg = 5.0f;
+    float bossFovExpandDeg = 3.0f;
+    float maxFovDeg = 76.0f;
+    float lookAheadBoost = 4.0f;
+    float backDistanceBoost = 2.0f;
+    float lateralDampen = 0.70f;
+    float rollDampen = 0.65f;
+    float fireHoldDuration = 0.28f;
+};
+
 struct RailCameraDirectorFrameInput {
     const CourseAsset* course = nullptr;
     const RailPath* railPath = nullptr;
@@ -184,6 +207,11 @@ struct RailCameraDirectorFrame {
     float cameraCollisionFovOffsetDeg = 0.0f;
     float segmentTransitionBlend = 1.0f;
     float segmentTransitionRemaining = 0.0f;
+    float encounterFramingBlend = 0.0f;
+    float encounterFramingFovOffsetDeg = 0.0f;
+    float encounterFramingThreatSpread = 0.0f;
+    float encounterFramingRemaining = 0.0f;
+    float cinematicShotWeight = 0.0f;
     Vector2 compositionCorrection{};
     int lookAtCandidateCount = 0;
     int compositionCandidateCount = 0;
@@ -192,6 +220,8 @@ struct RailCameraDirectorFrame {
     int lineOfSightCandidateCount = 0;
     int lineOfSightBlockedCount = 0;
     int cameraCollisionObstacleCount = 0;
+    int encounterFramingEnemyCount = 0;
+    int encounterFramingBossCount = 0;
     uint32_t lineOfSightOccluderActorId = 0;
     uint32_t cameraCollisionObstacleActorId = 0;
     bool lockCameraStabilized = false;
@@ -199,6 +229,7 @@ struct RailCameraDirectorFrame {
     bool lineOfSightSafeForAiming = true;
     bool cameraCollisionSafe = true;
     bool segmentTransitionActive = false;
+    bool encounterFramingActive = false;
     bool stableForAiming = true;
     bool hardTransition = false;
     bool allowEnemyFire = true;
@@ -211,6 +242,11 @@ struct RailCameraDirectorFrame {
     std::string lineOfSightReason = "clear";
     std::string cameraCollisionReason = "clear";
     std::string segmentTransitionReason = "stable section";
+    std::string encounterFramingReason = "no encounter framing";
+    std::string cinematicShotId = "-";
+    std::string cinematicShotPresetId = "-";
+    std::string cinematicShotBlendAssetId = "-";
+    std::string cinematicShotBlendCurve = "-";
     std::string previousSectionName = "-";
     std::string currentSectionName = "-";
 };
@@ -236,11 +272,18 @@ public:
     RailCameraCollisionProtectionSettings& MutableCollisionProtectionSettings() { return collisionProtectionSettings_; }
     const RailCameraSegmentTransitionSettings& SegmentTransitionSettings() const { return segmentTransitionSettings_; }
     RailCameraSegmentTransitionSettings& MutableSegmentTransitionSettings() { return segmentTransitionSettings_; }
+    const RailCameraEncounterFramingSettings& EncounterFramingSettings() const { return encounterFramingSettings_; }
+    RailCameraEncounterFramingSettings& MutableEncounterFramingSettings() { return encounterFramingSettings_; }
 
 private:
     CourseCameraKey SmoothRig(const CourseCameraKey& target, float deltaTime);
     float UpdateAimFocusBlend(const RailCameraDirectorFrameInput& input);
     void ApplyAimFocusStabilization(
+        CourseCameraKey& rig,
+        const RailCameraDirectorFrameInput& input,
+        std::string& mode,
+        RailCameraDirectorFrame& frame);
+    void ApplyEncounterFramingRules(
         CourseCameraKey& rig,
         const RailCameraDirectorFrameInput& input,
         std::string& mode,
@@ -286,6 +329,7 @@ private:
     RailCameraLineOfSightSettings lineOfSightSettings_{};
     RailCameraCollisionProtectionSettings collisionProtectionSettings_{};
     RailCameraSegmentTransitionSettings segmentTransitionSettings_{};
+    RailCameraEncounterFramingSettings encounterFramingSettings_{};
     RailCameraDirectorFrame lastFrame_{};
     bool hasSmoothedRig_ = false;
     bool hasPreviousComfortFrame_ = false;
@@ -295,6 +339,10 @@ private:
     float previousRoll_ = 0.0f;
     float previousAngularVelocityDeg_ = 0.0f;
     float aimFocusBlend_ = 0.0f;
+    float encounterFramingBlend_ = 0.0f;
+    float encounterFramingHoldRemaining_ = 0.0f;
+    float encounterFireHoldRemaining_ = 0.0f;
+    std::string encounterFramingReason_ = "no encounter";
     float lookAtBlend_ = 0.0f;
     float compositionSafetyBlend_ = 0.0f;
     Vector2 smoothedCompositionCorrection_{};

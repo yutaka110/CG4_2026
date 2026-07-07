@@ -363,6 +363,7 @@ RailCameraDirectorMode ClassifyMode(const std::string& mode) {
     if (ContainsInsensitive(mode, "combat") ||
         ContainsInsensitive(mode, "contact") ||
         ContainsInsensitive(mode, "crossfire") ||
+        ContainsInsensitive(mode, "encounter framing") ||
         ContainsInsensitive(mode, "readability") ||
         ContainsInsensitive(mode, "composition safety") ||
         ContainsInsensitive(mode, "line-of-sight") ||
@@ -433,6 +434,10 @@ void RailCameraDirector::Reset() {
     previousRoll_ = 0.0f;
     previousAngularVelocityDeg_ = 0.0f;
     aimFocusBlend_ = 0.0f;
+    encounterFramingBlend_ = 0.0f;
+    encounterFramingHoldRemaining_ = 0.0f;
+    encounterFireHoldRemaining_ = 0.0f;
+    encounterFramingReason_ = "no encounter";
     lookAtBlend_ = 0.0f;
     smoothedLookAtTarget_ = {};
     hasSmoothedLookAtTarget_ = false;
@@ -451,6 +456,40 @@ void RailCameraDirector::Reset() {
 
 void RailCameraDirector::NotifyCourseEvents(const std::vector<CourseEventMarker>& events) {
     for (const CourseEventMarker& event : events) {
+        if (encounterFramingSettings_.enabled) {
+            const std::string eventName = event.id.empty() ? event.type : event.id;
+            if (event.type == "enemy_wave") {
+                encounterFramingHoldRemaining_ = (std::max)(
+                    encounterFramingHoldRemaining_,
+                    (std::max)(0.0f, encounterFramingSettings_.waveHoldDuration));
+                encounterFireHoldRemaining_ = (std::max)(
+                    encounterFireHoldRemaining_,
+                    (std::max)(0.0f, encounterFramingSettings_.fireHoldDuration));
+                encounterFramingReason_ = "enemy wave: " + eventName;
+            } else if (event.type == "boss") {
+                encounterFramingHoldRemaining_ = (std::max)(
+                    encounterFramingHoldRemaining_,
+                    (std::max)(0.0f, encounterFramingSettings_.bossHoldDuration));
+                encounterFireHoldRemaining_ = (std::max)(
+                    encounterFireHoldRemaining_,
+                    (std::max)(0.0f, encounterFramingSettings_.fireHoldDuration));
+                encounterFramingReason_ = "boss entry: " + eventName;
+            } else if (event.type == "boss_phase") {
+                encounterFramingHoldRemaining_ = (std::max)(
+                    encounterFramingHoldRemaining_,
+                    (std::max)(0.0f, encounterFramingSettings_.bossHoldDuration * 0.62f));
+                encounterFireHoldRemaining_ = (std::max)(
+                    encounterFireHoldRemaining_,
+                    (std::max)(0.0f, encounterFramingSettings_.fireHoldDuration));
+                encounterFramingReason_ = "boss phase: " + eventName;
+            } else if (event.type == "obstacle") {
+                encounterFramingHoldRemaining_ = (std::max)(
+                    encounterFramingHoldRemaining_,
+                    (std::max)(0.0f, encounterFramingSettings_.obstacleHoldDuration));
+                encounterFramingReason_ = "obstacle reveal: " + eventName;
+            }
+        }
+
         if (event.type == "boss") {
             fovKick_ -= Degrees(5.0f);
             rollKick_ += Degrees(2.0f);
@@ -498,6 +537,7 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
     ApplySectionDirecting(targetRig, input.section, frame.mode);
     ApplyCinematicShotDirecting(targetRig, input.course, input.distance, frame.mode, frame);
     ApplyEventDirecting(targetRig, input.deltaTime, frame.mode);
+    ApplyEncounterFramingRules(targetRig, input, frame.mode, frame);
     ApplyAimFocusStabilization(targetRig, input, frame.mode, frame);
     frame.rig = SmoothRig(targetRig, input.deltaTime);
 
@@ -579,6 +619,141 @@ float RailCameraDirector::UpdateAimFocusBlend(const RailCameraDirectorFrameInput
     }
     aimFocusBlend_ = (std::clamp)(aimFocusBlend_, 0.0f, 1.0f);
     return aimFocusBlend_;
+}
+
+void RailCameraDirector::ApplyEncounterFramingRules(
+    CourseCameraKey& rig,
+    const RailCameraDirectorFrameInput& input,
+    std::string& mode,
+    RailCameraDirectorFrame& frame) {
+    const float dt = (std::max)(0.0f, input.deltaTime);
+    encounterFramingHoldRemaining_ = (std::max)(0.0f, encounterFramingHoldRemaining_ - dt);
+    encounterFireHoldRemaining_ = (std::max)(0.0f, encounterFireHoldRemaining_ - dt);
+
+    frame.encounterFramingActive = false;
+    frame.encounterFramingBlend = encounterFramingBlend_;
+    frame.encounterFramingFovOffsetDeg = 0.0f;
+    frame.encounterFramingThreatSpread = 0.0f;
+    frame.encounterFramingRemaining = encounterFramingHoldRemaining_;
+    frame.encounterFramingEnemyCount = 0;
+    frame.encounterFramingBossCount = 0;
+    frame.encounterFramingReason = "no encounter framing";
+
+    if (!encounterFramingSettings_.enabled) {
+        const float releaseT =
+            1.0f - std::exp(-dt * (std::max)(0.0f, encounterFramingSettings_.blendOutRate));
+        encounterFramingBlend_ = Lerp(encounterFramingBlend_, 0.0f, (std::clamp)(releaseT, 0.0f, 1.0f));
+        frame.encounterFramingBlend = encounterFramingBlend_;
+        frame.encounterFramingReason = "encounter framing disabled";
+        return;
+    }
+
+    float minLateral = 9999.0f;
+    float maxLateral = -9999.0f;
+    float minVertical = 9999.0f;
+    float maxVertical = -9999.0f;
+    float closestForward = 9999.0f;
+    bool hasRuntimeThreat = false;
+
+    if (input.spawnRuntime != nullptr) {
+        for (const CourseEnemyActor& enemy : input.spawnRuntime->Enemies()) {
+            const float actorDistance = ActorDistance(enemy.desc.spawnDistance, enemy.desc.distanceOffset);
+            const float forward = actorDistance - input.distance;
+            if (forward < encounterFramingSettings_.minForwardDistance ||
+                forward > encounterFramingSettings_.maxForwardDistance) {
+                continue;
+            }
+
+            hasRuntimeThreat = true;
+            ++frame.encounterFramingEnemyCount;
+            if (RoleLooksBoss(enemy.desc.role)) {
+                ++frame.encounterFramingBossCount;
+            }
+            minLateral = (std::min)(minLateral, enemy.desc.lateralOffset);
+            maxLateral = (std::max)(maxLateral, enemy.desc.lateralOffset);
+            minVertical = (std::min)(minVertical, enemy.desc.verticalOffset);
+            maxVertical = (std::max)(maxVertical, enemy.desc.verticalOffset);
+            closestForward = (std::min)(closestForward, forward);
+        }
+    }
+
+    const float lateralSpread = hasRuntimeThreat ? (maxLateral - minLateral) : 0.0f;
+    const float verticalSpread = hasRuntimeThreat ? (maxVertical - minVertical) : 0.0f;
+    const float spread = std::sqrt(lateralSpread * lateralSpread + verticalSpread * verticalSpread);
+    frame.encounterFramingThreatSpread = spread;
+
+    const float enemyPressure = frame.encounterFramingEnemyCount > 0
+        ? (std::clamp)(
+              (static_cast<float>(frame.encounterFramingEnemyCount) -
+                  (std::max)(0.0f, encounterFramingSettings_.minActiveEnemyFocus)) /
+                  (std::max)(
+                      1.0f,
+                      encounterFramingSettings_.enemyCountForFullWide -
+                          encounterFramingSettings_.minActiveEnemyFocus),
+              0.0f,
+              1.0f)
+        : 0.0f;
+    const float spreadPressure = (std::clamp)(
+        spread / (std::max)(1.0f, encounterFramingSettings_.enemySpreadForFullWide),
+        0.0f,
+        1.0f);
+    const float bossPressure = frame.encounterFramingBossCount > 0
+        ? (std::clamp)(encounterFramingSettings_.bossFocusBoost, 0.0f, 1.0f)
+        : 0.0f;
+    const float entryPressure = encounterFramingHoldRemaining_ > 0.0f ? 0.55f : 0.0f;
+    float targetBlend = (std::max)((std::max)(enemyPressure, spreadPressure), bossPressure);
+    targetBlend = (std::max)(targetBlend, entryPressure);
+
+    if (!hasRuntimeThreat && encounterFramingHoldRemaining_ <= 0.0f) {
+        targetBlend = 0.0f;
+    }
+
+    const float rate = targetBlend > encounterFramingBlend_
+        ? encounterFramingSettings_.blendInRate
+        : encounterFramingSettings_.blendOutRate;
+    const float blendT = 1.0f - std::exp(-dt * (std::max)(0.0f, rate));
+    encounterFramingBlend_ = Lerp(encounterFramingBlend_, targetBlend, (std::clamp)(blendT, 0.0f, 1.0f));
+    encounterFramingBlend_ = (std::clamp)(encounterFramingBlend_, 0.0f, 1.0f);
+
+    frame.encounterFramingActive = encounterFramingBlend_ > 0.015f;
+    frame.encounterFramingBlend = encounterFramingBlend_;
+    frame.encounterFramingRemaining = encounterFramingHoldRemaining_;
+    if (!frame.encounterFramingActive) {
+        frame.encounterFramingReason = "no encounter framing";
+        return;
+    }
+
+    const bool bossFocus = frame.encounterFramingBossCount > 0;
+    const float fovExpand =
+        (encounterFramingSettings_.fovExpandDeg * (std::max)(enemyPressure, spreadPressure) +
+            encounterFramingSettings_.bossFovExpandDeg * bossPressure +
+            encounterFramingSettings_.fovExpandDeg * 0.35f * entryPressure) *
+        encounterFramingBlend_;
+    rig.fovY = (std::clamp)(
+        rig.fovY + Degrees(fovExpand),
+        Degrees(34.0f),
+        Degrees((std::max)(40.0f, encounterFramingSettings_.maxFovDeg)));
+    rig.lookAheadDistance += encounterFramingSettings_.lookAheadBoost * encounterFramingBlend_;
+    rig.backDistance += encounterFramingSettings_.backDistanceBoost * encounterFramingBlend_;
+    rig.lateralOffset *= 1.0f -
+        (std::clamp)(encounterFramingSettings_.lateralDampen * encounterFramingBlend_, 0.0f, 0.95f);
+    rig.roll *= 1.0f -
+        (std::clamp)(encounterFramingSettings_.rollDampen * encounterFramingBlend_, 0.0f, 0.95f);
+
+    frame.encounterFramingFovOffsetDeg = fovExpand;
+    if (encounterFramingHoldRemaining_ > 0.0f) {
+        frame.encounterFramingReason = encounterFramingReason_;
+    } else if (bossFocus) {
+        frame.encounterFramingReason = "boss threat framing";
+    } else if (spreadPressure >= enemyPressure) {
+        frame.encounterFramingReason = "wide enemy spread";
+    } else {
+        frame.encounterFramingReason = "active enemy count";
+    }
+    if (closestForward < 6.0f && hasRuntimeThreat) {
+        frame.encounterFramingReason += " / close threat";
+    }
+    AppendMode(mode, "Encounter Framing");
 }
 
 void RailCameraDirector::ApplyAimFocusStabilization(
@@ -1527,6 +1702,11 @@ void RailCameraDirector::ApplyCinematicShotDirecting(
 
     const CourseCinematicCameraShot& shot = shotState.shot;
     const float w = (std::clamp)(shotState.weight, 0.0f, 1.0f);
+    frame.cinematicShotWeight = w;
+    frame.cinematicShotId = shot.id.empty() ? "-" : shot.id;
+    frame.cinematicShotPresetId = shotState.presetId.empty() ? "-" : shotState.presetId;
+    frame.cinematicShotBlendAssetId = shotState.blendAssetId.empty() ? "-" : shotState.blendAssetId;
+    frame.cinematicShotBlendCurve = shotState.blendCurve.empty() ? "-" : shotState.blendCurve;
     rig.backDistance += shot.backDistanceOffset * w;
     rig.verticalOffset += shot.verticalOffset * w;
     rig.lateralOffset += shot.lateralOffset * w;
@@ -1675,6 +1855,12 @@ void RailCameraDirector::UpdateComfortMetrics(
         frame.allowEnemyFire = false;
         if (frame.comfortReason == "stable" || frame.comfortReason == "initial frame") {
             frame.comfortReason = "segment transition grace";
+        }
+    }
+    if (encounterFramingSettings_.enabled && encounterFireHoldRemaining_ > 0.0f) {
+        frame.allowEnemyFire = false;
+        if (frame.comfortReason == "stable" || frame.comfortReason == "initial frame") {
+            frame.comfortReason = "encounter framing entry";
         }
     }
 

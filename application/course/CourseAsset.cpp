@@ -88,6 +88,10 @@ float RadiansToDegrees(float radians) {
     return radians * 180.0f / kPi;
 }
 
+bool IsBlankReference(const std::string& value) {
+    return value.empty() || value == "-";
+}
+
 std::vector<CourseRockCluster::InstanceTransformOverride> ParseRockInstanceOverrides(
     const std::string& text) {
     std::vector<CourseRockCluster::InstanceTransformOverride> overrides;
@@ -160,6 +164,28 @@ std::string JoinRockInstanceOverrides(
 
 float Lerp(float a, float b, float t) {
     return a + (b - a) * t;
+}
+
+float SmoothStep(float t) {
+    const float x = (std::clamp)(t, 0.0f, 1.0f);
+    return x * x * (3.0f - 2.0f * x);
+}
+
+float ApplyBlendCurve(float t, const std::string& curve) {
+    const float x = (std::clamp)(t, 0.0f, 1.0f);
+    if (curve == "linear") {
+        return x;
+    }
+    if (curve == "ease_in") {
+        return x * x;
+    }
+    if (curve == "ease_out") {
+        return 1.0f - (1.0f - x) * (1.0f - x);
+    }
+    if (curve == "cinematic_hold") {
+        return SmoothStep((std::clamp)((x - 0.08f) / 0.84f, 0.0f, 1.0f));
+    }
+    return SmoothStep(x);
 }
 
 Vector3 LerpVector3(const Vector3& a, const Vector3& b, float t) {
@@ -240,7 +266,58 @@ CourseTerrainMaterialPreset LerpTerrainMaterial(
     return result;
 }
 
-float EvaluateShotWeight(const CourseCinematicCameraShot& shot, float distance) {
+const CourseCameraShotPreset* FindCameraShotPreset(const CourseAsset& asset, const std::string& id) {
+    if (IsBlankReference(id)) {
+        return nullptr;
+    }
+    for (const CourseCameraShotPreset& preset : asset.cameraShotPresets) {
+        if (preset.id == id) {
+            return &preset;
+        }
+    }
+    return nullptr;
+}
+
+const CourseCameraBlendAsset* FindCameraBlendAsset(const CourseAsset& asset, const std::string& id) {
+    if (IsBlankReference(id)) {
+        return nullptr;
+    }
+    for (const CourseCameraBlendAsset& blend : asset.cameraBlendAssets) {
+        if (blend.id == id) {
+            return &blend;
+        }
+    }
+    return nullptr;
+}
+
+CourseCinematicCameraShot ResolveCameraShot(const CourseAsset& asset, const CourseCinematicCameraShot& shot) {
+    CourseCinematicCameraShot resolved = shot;
+    if (const CourseCameraShotPreset* preset = FindCameraShotPreset(asset, shot.presetId)) {
+        if (IsBlankReference(resolved.mode)) {
+            resolved.mode = preset->mode;
+        }
+        resolved.backDistanceOffset += preset->backDistanceOffset;
+        resolved.verticalOffset += preset->verticalOffset;
+        resolved.lateralOffset += preset->lateralOffset;
+        resolved.lookAheadOffset += preset->lookAheadOffset;
+        resolved.lookUpOffset += preset->lookUpOffset;
+        resolved.lookForwardOffset += preset->lookForwardOffset;
+        resolved.fovOffset += preset->fovOffset;
+        resolved.rollOffset += preset->rollOffset;
+        resolved.shakeAmount = (std::max)(resolved.shakeAmount, preset->shakeAmount);
+    }
+    if (const CourseCameraBlendAsset* blend = FindCameraBlendAsset(asset, shot.blendAssetId)) {
+        resolved.blendInDistance = blend->blendInDistance;
+        resolved.blendOutDistance = blend->blendOutDistance;
+        resolved.weightScale *= blend->weightScale;
+    }
+    return resolved;
+}
+
+float EvaluateShotWeight(
+    const CourseCinematicCameraShot& shot,
+    const CourseCameraBlendAsset* blendAsset,
+    float distance) {
     if (shot.endDistance <= shot.startDistance ||
         distance < shot.startDistance ||
         distance > shot.endDistance) {
@@ -258,7 +335,9 @@ float EvaluateShotWeight(const CourseCinematicCameraShot& shot, float distance) 
             weight,
             (std::clamp)((shot.endDistance - distance) / shot.blendOutDistance, 0.0f, 1.0f));
     }
-    return weight;
+    const std::string curve = blendAsset != nullptr ? blendAsset->curve : std::string{"linear"};
+    const float scale = shot.weightScale;
+    return (std::clamp)(ApplyBlendCurve(weight, curve) * scale, 0.0f, 2.0f);
 }
 
 void SortCourseData(CourseAsset& asset) {
@@ -303,6 +382,18 @@ void SortCourseData(CourseAsset& asset) {
         asset.lightingPresets.end(),
         [](const CourseLightingPreset& a, const CourseLightingPreset& b) {
             return a.distance < b.distance;
+        });
+    std::sort(
+        asset.cameraShotPresets.begin(),
+        asset.cameraShotPresets.end(),
+        [](const CourseCameraShotPreset& a, const CourseCameraShotPreset& b) {
+            return a.id < b.id;
+        });
+    std::sort(
+        asset.cameraBlendAssets.begin(),
+        asset.cameraBlendAssets.end(),
+        [](const CourseCameraBlendAsset& a, const CourseCameraBlendAsset& b) {
+            return a.id < b.id;
         });
     std::sort(
         asset.cinematicCameraShots.begin(),
@@ -610,6 +701,40 @@ bool CourseAsset::LoadFromFile(const std::string& path, std::string* errorMessag
             preset.lowFogLayerStrength = ParseFloatOr(parts, 24, preset.lowFogLayerStrength);
             preset.coolFloorHazeStrength = ParseFloatOr(parts, 25, preset.coolFloorHazeStrength);
             loaded.lightingPresets.push_back(preset);
+        } else if (kind == "camera_shot_preset") {
+            if (parts.size() < 12) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid camera_shot_preset row at line " + std::to_string(lineNumber);
+                }
+                return false;
+            }
+            CourseCameraShotPreset preset{};
+            preset.id = parts[1];
+            preset.mode = parts[2];
+            preset.backDistanceOffset = ParseFloatOr(parts, 3, 0.0f);
+            preset.verticalOffset = ParseFloatOr(parts, 4, 0.0f);
+            preset.lateralOffset = ParseFloatOr(parts, 5, 0.0f);
+            preset.lookAheadOffset = ParseFloatOr(parts, 6, 0.0f);
+            preset.lookUpOffset = ParseFloatOr(parts, 7, 0.0f);
+            preset.lookForwardOffset = ParseFloatOr(parts, 8, 0.0f);
+            preset.fovOffset = DegreesToRadians(ParseFloatOr(parts, 9, 0.0f));
+            preset.rollOffset = DegreesToRadians(ParseFloatOr(parts, 10, 0.0f));
+            preset.shakeAmount = ParseFloatOr(parts, 11, 0.0f);
+            loaded.cameraShotPresets.push_back(preset);
+        } else if (kind == "camera_blend_asset") {
+            if (parts.size() < 6) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid camera_blend_asset row at line " + std::to_string(lineNumber);
+                }
+                return false;
+            }
+            CourseCameraBlendAsset blend{};
+            blend.id = parts[1];
+            blend.blendInDistance = ParseFloatOr(parts, 2, blend.blendInDistance);
+            blend.blendOutDistance = ParseFloatOr(parts, 3, blend.blendOutDistance);
+            blend.curve = parts[4].empty() ? blend.curve : parts[4];
+            blend.weightScale = ParseFloatOr(parts, 5, blend.weightScale);
+            loaded.cameraBlendAssets.push_back(blend);
         } else if (kind == "camera_shot") {
             if (parts.size() < 16) {
                 if (errorMessage != nullptr) {
@@ -633,6 +758,9 @@ bool CourseAsset::LoadFromFile(const std::string& path, std::string* errorMessag
             shot.fovOffset = DegreesToRadians(ParseFloatOr(parts, 13, 0.0f));
             shot.rollOffset = DegreesToRadians(ParseFloatOr(parts, 14, 0.0f));
             shot.shakeAmount = ParseFloatOr(parts, 15, 0.0f);
+            shot.presetId = parts.size() >= 17 ? parts[16] : std::string{};
+            shot.blendAssetId = parts.size() >= 18 ? parts[17] : std::string{};
+            shot.weightScale = ParseFloatOr(parts, 18, shot.weightScale);
             loaded.cinematicCameraShots.push_back(shot);
         } else if (kind == "terrain_material") {
             if (parts.size() < 19) {
@@ -723,7 +851,9 @@ bool CourseAsset::SaveToFile(const std::string& path, std::string* errorMessage)
     file << "# terrain|distance|layer|id|meshId|lateralOffset|verticalOffset|forwardOffset|scaleX|scaleY|scaleZ|pitchDeg|yawDeg|rollDeg|collisionMode|renderPriority|cullBehind|cullAhead\n";
     file << "# rock_cluster|distance|id|meshId|anchor|type|count|minScale|maxScale|spreadX|spreadY|spreadZ|clearLaneRadius|cullBehind|cullAhead|rotX|rotY|rotZ|instanceOverrides\n";
     file << "# lighting|distance|id|blendDistance|sunR|sunG|sunB|sunIntensity|sunDirX|sunDirY|sunDirZ|clearR|clearG|clearB|fogR|fogG|fogB|fogIntensity|fogStart|fogEnd|fogDensity|backlitFogLift|openingGlow|silhouette|lowFog|coolHaze\n";
-    file << "# camera_shot|start|end|id|mode|blendIn|blendOut|backOffset|upOffset|sideOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake\n";
+    file << "# camera_shot_preset|id|mode|backOffset|upOffset|sideOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake\n";
+    file << "# camera_blend_asset|id|blendIn|blendOut|curve|weightScale\n";
+    file << "# camera_shot|start|end|id|mode|blendIn|blendOut|backOffset|upOffset|sideOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake|presetId|blendAssetId|weightScale\n";
     file << "# terrain_material|distance|id|blendDistance|baseR|baseG|baseB|brightness|noise|strata|breakup|specular|rim|backlight|floorShadow|detailNormal|microDetail|cavityAo|skyFill\n";
     file << "# cinematic_shot_set|start|end|id|label|heroLandmarksCsv|vistaLandmarksCsv|lightingId|cameraShotId|terrainMaterialId|fogMood|compositionNotes\n";
     file << "# event|distance|type|id|payload\n\n";
@@ -839,6 +969,32 @@ bool CourseAsset::SaveToFile(const std::string& path, std::string* errorMessage)
              << preset.coolFloorHazeStrength << "\n";
     }
 
+    file << "\n# Camera shot presets are reusable additive shot shapes.\n";
+    for (const CourseCameraShotPreset& preset : saved.cameraShotPresets) {
+        file << "camera_shot_preset|"
+             << preset.id << '|'
+             << preset.mode << '|'
+             << preset.backDistanceOffset << '|'
+             << preset.verticalOffset << '|'
+             << preset.lateralOffset << '|'
+             << preset.lookAheadOffset << '|'
+             << preset.lookUpOffset << '|'
+             << preset.lookForwardOffset << '|'
+             << RadiansToDegrees(preset.fovOffset) << '|'
+             << RadiansToDegrees(preset.rollOffset) << '|'
+             << preset.shakeAmount << "\n";
+    }
+
+    file << "\n# Camera blend assets define distance blends and easing for shot presets.\n";
+    for (const CourseCameraBlendAsset& blend : saved.cameraBlendAssets) {
+        file << "camera_blend_asset|"
+             << blend.id << '|'
+             << blend.blendInDistance << '|'
+             << blend.blendOutDistance << '|'
+             << blend.curve << '|'
+             << blend.weightScale << "\n";
+    }
+
     file << "\n# Cinematic shot accents are additive over the base camera rail.\n";
     for (const CourseCinematicCameraShot& shot : saved.cinematicCameraShots) {
         file << "camera_shot|"
@@ -856,7 +1012,10 @@ bool CourseAsset::SaveToFile(const std::string& path, std::string* errorMessage)
              << shot.lookForwardOffset << '|'
              << RadiansToDegrees(shot.fovOffset) << '|'
              << RadiansToDegrees(shot.rollOffset) << '|'
-             << shot.shakeAmount << "\n";
+             << shot.shakeAmount << '|'
+             << (shot.presetId.empty() ? "-" : shot.presetId) << '|'
+             << (shot.blendAssetId.empty() ? "-" : shot.blendAssetId) << '|'
+             << shot.weightScale << "\n";
     }
 
     file << "\n# Terrain material presets drive authored rock color and detail by distance.\n";
@@ -925,6 +1084,8 @@ void CourseAsset::BuildFallbackCanyon(float corridorRadius) {
     terrainPlacements.clear();
     rockClusters.clear();
     lightingPresets.clear();
+    cameraShotPresets.clear();
+    cameraBlendAssets.clear();
     cinematicCameraShots.clear();
     terrainMaterialPresets.clear();
     cinematicShotSets.clear();
@@ -1001,10 +1162,15 @@ CourseLightingPreset CourseAsset::EvaluateLightingPreset(float distance) const {
 CourseCameraShotState CourseAsset::EvaluateCinematicCameraShot(float distance) const {
     CourseCameraShotState result{};
     for (const CourseCinematicCameraShot& shot : cinematicCameraShots) {
-        const float weight = EvaluateShotWeight(shot, distance);
+        const CourseCameraBlendAsset* blendAsset = FindCameraBlendAsset(*this, shot.blendAssetId);
+        const CourseCinematicCameraShot resolvedShot = ResolveCameraShot(*this, shot);
+        const float weight = EvaluateShotWeight(resolvedShot, blendAsset, distance);
         if (weight > result.weight) {
             result.weight = weight;
-            result.shot = shot;
+            result.shot = resolvedShot;
+            result.presetId = shot.presetId;
+            result.blendAssetId = shot.blendAssetId;
+            result.blendCurve = blendAsset != nullptr ? blendAsset->curve : std::string{"linear"};
         }
     }
     return result;
