@@ -36,6 +36,7 @@
 #include "AppSceneState.h"
 #include "AppSceneStateManager.h"
 #include "VfxEngine.h"
+#include "editor/EditorTransactionStack.h"
 
 class AppFrameRenderer;
 class AppImGuiLayer;
@@ -96,6 +97,7 @@ private:
     bool FlushGpu();
     void ProcessCourseObjectViewportEditing();
     CourseObjectEditSnapshot CaptureCourseObjectSnapshot() const;
+    std::string BuildCourseObjectSnapshotSummary(const CourseObjectEditSnapshot& snapshot) const;
     void RestoreCourseObjectSnapshot(const CourseObjectEditSnapshot& snapshot);
     void EnsureCourseObjectHistoryBaseline();
     void CommitCourseObjectHistoryIfNeeded();
@@ -376,6 +378,7 @@ private:
     };
     std::vector<CourseObjectEditSnapshot> courseObjectUndoStack_;
     std::vector<CourseObjectEditSnapshot> courseObjectRedoStack_;
+    editor::EditorTransactionStack courseObjectTransactions_{};
     CourseObjectEditSnapshot courseObjectHistoryBaseline_{};
     uint32_t courseObjectHistoryRevision_ = 0;
     bool courseObjectHistoryInitialized_ = false;

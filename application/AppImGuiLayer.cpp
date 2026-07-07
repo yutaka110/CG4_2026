@@ -21,6 +21,30 @@
 #include "AppFrameState.h"
 #include "EffectRuntime.h"
 #include "PostProcessStack.h"
+#include "editor/CourseMeshAssetAdapter.h"
+#include "editor/CourseEditorCommandProvider.h"
+#include "editor/CourseObjectPropertyAdapter.h"
+#include "editor/CourseObjectValidationAdapter.h"
+#include "editor/EffectAssetDiagnosticsAdapter.h"
+#include "editor/EditorAssetBrowserPanel.h"
+#include "editor/EditorBuiltinCommandProvider.h"
+#include "editor/EditorAssetFolderIndexer.h"
+#include "editor/EditorCommandContext.h"
+#include "editor/EditorContext.h"
+#include "editor/EditorCommandInputRouter.h"
+#include "editor/EditorCommandPanel.h"
+#include "editor/EditorCommandPalette.h"
+#include "editor/EditorCommandRegistry.h"
+#include "editor/EditorDetailsPanel.h"
+#include "editor/EditorDiagnosticsPanel.h"
+#include "editor/EditorMenuBar.h"
+#include "editor/EditorPropertyRegistryPanel.h"
+#include "editor/EditorSelectionPanel.h"
+#include "editor/EditorToolbar.h"
+#include "editor/EditorTransactionPanel.h"
+#include "editor/EditorValidationService.h"
+#include "editor/ExistingFeatureProtection.h"
+#include "editor/ExistingFeatureProtectionPanel.h"
 #include "vfx/DistortionRenderer.h"
 #include "vfx/ParticleRenderer.h"
 #include "vfx/TrailRenderer.h"
@@ -33,9 +57,118 @@
 #include <array>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
+editor::EditorObjectHandle MakeIndexedHandle(
+    editor::EditorDomainId domain,
+    const char* stablePrefix,
+    uint64_t index,
+    uint32_t generation,
+    std::string displayName) {
+    editor::EditorObjectHandle handle{};
+    handle.domain = domain;
+    handle.stableId = editor::BuildStableIndexedId(stablePrefix, index);
+    handle.localIndex = index;
+    handle.generation = generation;
+    handle.displayName = std::move(displayName);
+    return handle;
+}
+
+void SyncEditorSelectionFromFrame(
+    editor::EditorSelection& selection,
+    const AppRuntimeState& runtimeState,
+    uint32_t selectedEffectInstanceId) {
+    std::vector<editor::EditorObjectHandle> handles;
+    const TerrainAuthoringState& terrain = runtimeState.terrain;
+
+    if (terrain.selectedCourseTerrainPlacement >= 0) {
+        const uint64_t index = static_cast<uint64_t>(terrain.selectedCourseTerrainPlacement);
+        handles.push_back(
+            MakeIndexedHandle(
+                editor::EditorDomainId::CourseTerrainPlacement,
+                "course-terrain",
+                index,
+                terrain.courseObjectEditRevision,
+                "Course Terrain #" + std::to_string(index)));
+    }
+
+    if (terrain.selectedCourseRockCluster >= 0) {
+        const uint64_t index = static_cast<uint64_t>(terrain.selectedCourseRockCluster);
+        handles.push_back(
+            MakeIndexedHandle(
+                editor::EditorDomainId::CourseRockCluster,
+                "course-rock",
+                index,
+                terrain.courseObjectEditRevision,
+                "Course Rock Cluster #" + std::to_string(index)));
+    }
+
+    if (selectedEffectInstanceId != 0) {
+        const uint64_t index = static_cast<uint64_t>(selectedEffectInstanceId);
+        handles.push_back(
+            MakeIndexedHandle(
+                editor::EditorDomainId::VfxEffectInstance,
+                "vfx-instance",
+                index,
+                0,
+                "VFX Instance #" + std::to_string(index)));
+    }
+
+    selection.Set(std::move(handles));
+}
+
+void SyncEditorTransactionsFromFrame(
+    editor::EditorTransactionStack& transactions,
+    const AppRuntimeState& runtimeState) {
+    const TerrainAuthoringState& terrain = runtimeState.terrain;
+    transactions.SetLegacyMirror(
+        "Course Object History",
+        terrain.courseObjectUndoDepth,
+        terrain.courseObjectRedoDepth,
+        terrain.courseObjectEditRevision);
+}
+
+void RegisterFrameEditorCommands(
+    editor::EditorContext& editorContext,
+    const AppImGuiFrameContext& context,
+    AppRuntimeState& runtimeState) {
+    if (editorContext.commands == nullptr) {
+        return;
+    }
+
+    editor::EditorCommandRegistry& registry = *editorContext.commands;
+    registry.Clear();
+
+    const editor::CourseEditorCommandProvider courseProvider(
+        editor::CourseEditorCommandProviderInput{
+            context.onSaveCourse,
+            context.onApplyCourse,
+            context.onReloadCourse,
+            context.onTeleportCourseToDistance,
+            context.courseDistance});
+    courseProvider.RegisterCommands(editorContext);
+
+    const editor::EditorBuiltinCommandProvider builtinProvider(
+        editor::EditorBuiltinCommandProviderInput{
+            [&runtimeState]() {
+                if (runtimeState.terrain.courseObjectUndoDepth == 0) {
+                    return editor::EditorCommandResult{false, "Undo stack is empty."};
+                }
+                runtimeState.terrain.courseObjectUndoRequested = true;
+                return editor::EditorCommandResult{true, "Queued course object undo."};
+            },
+            [&runtimeState]() {
+                if (runtimeState.terrain.courseObjectRedoDepth == 0) {
+                    return editor::EditorCommandResult{false, "Redo stack is empty."};
+                }
+                runtimeState.terrain.courseObjectRedoRequested = true;
+                return editor::EditorCommandResult{true, "Queued course object redo."};
+            }});
+    builtinProvider.RegisterCommands(editorContext);
+}
+
 float ClampUiDimension(float value, float minimum, float maximum) {
     if (value < minimum) {
         return minimum;
@@ -53,22 +186,25 @@ struct AppImGuiEditorLayout {
     ImVec2 diagnosticsSize{};
 };
 
-AppImGuiEditorLayout BuildAppImGuiEditorLayout() {
+AppImGuiEditorLayout BuildAppImGuiEditorLayout(float topReservedHeight = 0.0f) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const ImVec2 workPos = viewport ? viewport->WorkPos : ImVec2(0.0f, 0.0f);
     const ImVec2 workSize = viewport ? viewport->WorkSize : ImGui::GetIO().DisplaySize;
+    const float reservedTop = ClampUiDimension(topReservedHeight, 0.0f, workSize.y * 0.25f);
+    const ImVec2 contentPos(workPos.x, workPos.y + reservedTop);
+    const ImVec2 contentSize(workSize.x, workSize.y - reservedTop);
 
-    float inspectorWidth = ClampUiDimension(workSize.x * 0.28f, 340.0f, 460.0f);
-    inspectorWidth = ClampUiDimension(inspectorWidth, 280.0f, workSize.x * 0.42f);
+    float inspectorWidth = ClampUiDimension(contentSize.x * 0.28f, 340.0f, 460.0f);
+    inspectorWidth = ClampUiDimension(inspectorWidth, 280.0f, contentSize.x * 0.42f);
 
-    float diagnosticsHeight = ClampUiDimension(workSize.y * 0.28f, 220.0f, 360.0f);
-    diagnosticsHeight = ClampUiDimension(diagnosticsHeight, 160.0f, workSize.y * 0.42f);
+    float diagnosticsHeight = ClampUiDimension(contentSize.y * 0.28f, 220.0f, 360.0f);
+    diagnosticsHeight = ClampUiDimension(diagnosticsHeight, 160.0f, contentSize.y * 0.42f);
 
     AppImGuiEditorLayout layout{};
-    layout.inspectorPos = ImVec2(workPos.x + workSize.x - inspectorWidth, workPos.y);
-    layout.inspectorSize = ImVec2(inspectorWidth, workSize.y);
-    layout.diagnosticsPos = ImVec2(workPos.x, workPos.y + workSize.y - diagnosticsHeight);
-    layout.diagnosticsSize = ImVec2(workSize.x - inspectorWidth, diagnosticsHeight);
+    layout.inspectorPos = ImVec2(contentPos.x + contentSize.x - inspectorWidth, contentPos.y);
+    layout.inspectorSize = ImVec2(inspectorWidth, contentSize.y);
+    layout.diagnosticsPos = ImVec2(contentPos.x, contentPos.y + contentSize.y - diagnosticsHeight);
+    layout.diagnosticsSize = ImVec2(contentSize.x - inspectorWidth, diagnosticsHeight);
     return layout;
 }
 
@@ -596,6 +732,59 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     AppRuntimeState& runtimeState = *context.runtimeState;
     EffectRuntime& effectRuntime = *context.effectRuntime;
     PostProcessStack& postProcessStack = *context.postProcessStack;
+    editor::EditorTransactionStack& editorTransactions =
+        context.editorTransactions != nullptr ? *context.editorTransactions : editorTransactions_;
+    if (editorPropertyRegistry_.Count() == 0) {
+        editor::RegisterBuiltInCourseObjectProperties(editorPropertyRegistry_);
+    }
+    if (!editorAssetRegistryInitialized_) {
+        editorAssetRegistry_.Clear();
+        editor::IndexEditorAssetsFromFolder(editorAssetRegistry_, "Resources");
+        editor::CourseMeshAssetAdapter courseMeshAssetAdapter;
+        courseMeshAssetAdapter.RegisterAssets(editorAssetRegistry_);
+        editorAssetRegistryInitialized_ = true;
+    }
+    SyncEditorSelectionFromFrame(editorSelection_, runtimeState, selectedEffectInstanceId_);
+    SyncEditorTransactionsFromFrame(editorTransactions, runtimeState);
+    editor::CourseObjectPropertyAdapter coursePropertyAdapter(context.course, &runtimeState);
+    editor::CourseObjectValidationAdapter courseValidationAdapter(context.course, &editorAssetRegistry_);
+    editor::EffectAssetDiagnosticsAdapter effectDiagnosticsAdapter(context.loadedEffectAssets);
+    editor::EditorValidationService editorValidationService;
+    editorValidationService.AddAdapter(&courseValidationAdapter);
+    editorValidationService.AddAdapter(&effectDiagnosticsAdapter);
+    const editor::EditorValidationReport editorValidationReport = editorValidationService.Validate();
+    const editor::EditorCommandContext editorCommandContext =
+        editor::BuildEditorCommandContext(
+            editor::EditorCommandContextInput{
+                &editorSelection_,
+                &editorAssetSelection_,
+                &editorPropertyRegistry_,
+                &coursePropertyAdapter,
+                &editorTransactions,
+                showDeveloperTools_});
+    editor::EditorCommandRegistry editorCommandRegistry;
+    editor::EditorContext editorContext{
+        &editorSelection_,
+        &editorTransactions,
+        &editorAssetRegistry_,
+        &editorAssetSelection_,
+        &editorPropertyRegistry_,
+        &coursePropertyAdapter,
+        &editorValidationReport,
+        &editorCommandRegistry,
+        &editorCommandContext,
+        &editorCommandInputRouter_,
+        &editorCommandPalette_,
+        showDeveloperTools_};
+    RegisterFrameEditorCommands(editorContext, context, runtimeState);
+    editorCommandInputRouter_.Dispatch(
+        editorContext,
+        editor::EditorCommandInputRouterOptions{
+            showDeveloperTools_,
+            true});
+    editorCommandPalette_.Draw(editorContext);
+    editor::DrawEditorMenuBar(editorContext);
+    editor::DrawEditorToolbar(editorContext);
 
     const AppVfxDebugDataBuilderContext vfxDebugDataContext{
         context.appPipelines,
@@ -608,7 +797,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         context.depthTextureHandle,
         context.renderPassDebugInfo
     };
-    const AppImGuiEditorLayout layout = BuildAppImGuiEditorLayout();
+    const AppImGuiEditorLayout layout =
+        BuildAppImGuiEditorLayout(showDeveloperTools_ ? editor::EditorToolbarHeight() : 0.0f);
     constexpr ImGuiWindowFlags editorWindowFlags = ImGuiWindowFlags_NoCollapse;
     const AppVfxRuntimeStatusPanelInput runtimeStatusInput{
         &runtimeState,
@@ -718,6 +908,84 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 ImGui::EndTabItem();
             }
 
+            if (ImGui::BeginTabItem("Feature Guard")) {
+                const editor::ExistingFeatureProtectionReport protectionReport =
+                    editor::BuildExistingFeatureProtectionReport(
+                        editor::ExistingFeatureProtectionInput{
+                            &runtimeState,
+                            &effectRuntime,
+                            &editorPropertyRegistry_,
+                            &coursePropertyAdapter,
+                            &editorAssetRegistry_,
+                            &editorAssetSelection_,
+                            &editorSelection_,
+                            &editorTransactions,
+                            &editorValidationReport,
+                            context.loadedEffectAssets,
+                            context.renderGraphDescription,
+                            context.renderGraphError,
+                            context.renderPassDebugInfo,
+                            context.course,
+                            context.courseLoadStatus,
+                            context.coursePath,
+                            context.courseRailLength,
+                            static_cast<bool>(context.onSaveCourse),
+                            static_cast<bool>(context.onApplyCourse),
+                            static_cast<bool>(context.onReloadCourse),
+                            static_cast<bool>(context.onTeleportCourseToDistance)});
+                editor::DrawExistingFeatureProtectionPanel(protectionReport);
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Editor Selection")) {
+                editor::DrawEditorSelectionPanel(editorSelection_);
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Editor Details")) {
+                editor::DrawEditorDetailsPanel(
+                    editor::EditorDetailsPanelContext{
+                        &editorSelection_,
+                        &editorPropertyRegistry_,
+                        &coursePropertyAdapter,
+                        &editorTransactions,
+                        &editorAssetRegistry_,
+                        &editorAssetSelection_,
+                        &editorValidationReport});
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Editor Diagnostics")) {
+                editor::DrawEditorDiagnosticsPanel(
+                    editor::EditorDiagnosticsPanelContext{
+                        &editorValidationReport,
+                        &editorSelection_});
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Editor Commands")) {
+                editor::DrawEditorCommandPanel(editorContext);
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Editor Properties")) {
+                editor::DrawEditorPropertyRegistryPanel(editorPropertyRegistry_, &editorTransactions);
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Editor Assets")) {
+                editor::DrawEditorAssetBrowserPanel(
+                    editor::EditorAssetBrowserPanelContext{
+                        &editorAssetRegistry_,
+                        &editorAssetSelection_});
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Editor Transactions")) {
+                editor::DrawEditorTransactionPanel(editorTransactions);
+                ImGui::EndTabItem();
+            }
+
             if (ImGui::BeginTabItem("Runtime Status")) {
                 DrawVfxRuntimeStatusPanel(runtimeStatusInput);
                 ImGui::EndTabItem();
@@ -765,7 +1033,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         context.onSaveCourse,
                         context.onApplyCourse,
                         context.onReloadCourse,
-                        context.onTeleportCourseToDistance});
+                        context.onTeleportCourseToDistance,
+                        &editorTransactions});
                 ImGui::EndTabItem();
             }
 

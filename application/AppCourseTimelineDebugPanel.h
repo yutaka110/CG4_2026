@@ -10,6 +10,10 @@ class SectionCheckpointSystem;
 struct AppRuntimeState;
 struct CourseAsset;
 
+namespace editor {
+class EditorTransactionStack;
+}
+
 struct CourseTimelineDebugPanelInput {
     CourseAsset* course = nullptr;
     const CourseSpawnRuntime* spawnRuntime = nullptr;
@@ -25,6 +29,7 @@ struct CourseTimelineDebugPanelInput {
     std::function<void()> onApplyCourse;
     std::function<void()> onReloadCourse;
     std::function<void(float)> onTeleportToDistance;
+    editor::EditorTransactionStack* editorTransactions = nullptr;
 };
 
 void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input);

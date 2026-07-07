@@ -1242,6 +1242,7 @@ void AppRunLoop::ApplyRailShooterCourse() {
             : 0.0f);
     courseObjectUndoStack_.clear();
     courseObjectRedoStack_.clear();
+    courseObjectTransactions_.Clear();
     courseObjectHistoryInitialized_ = false;
     runtimeState_.terrain.courseObjectUndoDepth = 0;
     runtimeState_.terrain.courseObjectRedoDepth = 0;
@@ -4767,6 +4768,16 @@ AppRunLoop::CourseObjectEditSnapshot AppRunLoop::CaptureCourseObjectSnapshot() c
     return snapshot;
 }
 
+std::string AppRunLoop::BuildCourseObjectSnapshotSummary(const CourseObjectEditSnapshot& snapshot) const {
+    std::ostringstream stream;
+    stream << "terrain=" << snapshot.terrainPlacements.size()
+           << " rockClusters=" << snapshot.rockClusters.size()
+           << " selectionType=" << snapshot.selectionType
+           << " selectedTerrain=" << snapshot.selectedTerrainPlacement
+           << " selectedRock=" << snapshot.selectedRockCluster;
+    return stream.str();
+}
+
 void AppRunLoop::RestoreCourseObjectSnapshot(const CourseObjectEditSnapshot& snapshot) {
     railShooterCourse_.terrainPlacements = snapshot.terrainPlacements;
     railShooterCourse_.rockClusters = snapshot.rockClusters;
@@ -4796,12 +4807,42 @@ void AppRunLoop::CommitCourseObjectHistoryIfNeeded() {
     }
 
     constexpr size_t kMaxCourseObjectUndo = 96;
+    const CourseObjectEditSnapshot beforeSnapshot = courseObjectHistoryBaseline_;
+    const CourseObjectEditSnapshot afterSnapshot = CaptureCourseObjectSnapshot();
     courseObjectUndoStack_.push_back(courseObjectHistoryBaseline_);
     if (courseObjectUndoStack_.size() > kMaxCourseObjectUndo) {
         courseObjectUndoStack_.erase(courseObjectUndoStack_.begin());
     }
+    courseObjectTransactions_.SetMaxHistory(kMaxCourseObjectUndo);
+    if (courseObjectTransactions_.HasStagedPropertyDelta()) {
+        editor::EditorPropertyChange propertyChange = courseObjectTransactions_.ConsumeStagedPropertyDelta();
+        if (propertyChange.target.domain == editor::EditorDomainId::Unknown) {
+            propertyChange.target.domain = editor::EditorDomainId::CourseTerrainPlacement;
+            propertyChange.target.stableId = "course-object-history";
+            propertyChange.target.displayName = "Course Object History";
+        }
+        propertyChange.target.generation = editor.courseObjectEditRevision;
+        courseObjectTransactions_.PushPropertyDelta(
+            propertyChange.displayName.empty() ? "Course Property Edit" : propertyChange.displayName,
+            std::move(propertyChange.target),
+            std::move(propertyChange.propertyPath),
+            std::move(propertyChange.valueType),
+            std::move(propertyChange.beforeValue),
+            std::move(propertyChange.afterValue));
+    } else {
+        editor::EditorObjectHandle transactionTarget{};
+        transactionTarget.domain = editor::EditorDomainId::CourseTerrainPlacement;
+        transactionTarget.stableId = "course-object-history";
+        transactionTarget.displayName = "Course Object History";
+        transactionTarget.generation = editor.courseObjectEditRevision;
+        courseObjectTransactions_.PushSnapshot(
+            "Course Object Edit",
+            std::move(transactionTarget),
+            BuildCourseObjectSnapshotSummary(beforeSnapshot),
+            BuildCourseObjectSnapshotSummary(afterSnapshot));
+    }
     courseObjectRedoStack_.clear();
-    courseObjectHistoryBaseline_ = CaptureCourseObjectSnapshot();
+    courseObjectHistoryBaseline_ = afterSnapshot;
     courseObjectHistoryRevision_ = editor.courseObjectEditRevision;
     editor.courseObjectUndoDepth = static_cast<uint32_t>(courseObjectUndoStack_.size());
     editor.courseObjectRedoDepth = 0;
@@ -4813,7 +4854,23 @@ void AppRunLoop::ProcessCourseObjectUndoRedo() {
 
     if (editor.courseObjectUndoRequested) {
         editor.courseObjectUndoRequested = false;
-        if (!courseObjectUndoStack_.empty()) {
+        if (!courseObjectUndoStack_.empty() &&
+            courseObjectTransactions_.Undo(
+                [this, &editor](const editor::EditorTransactionRecord&, editor::EditorTransactionApplyMode) {
+                    if (courseObjectUndoStack_.empty()) {
+                        return false;
+                    }
+                    courseObjectRedoStack_.push_back(CaptureCourseObjectSnapshot());
+                    const CourseObjectEditSnapshot snapshot = courseObjectUndoStack_.back();
+                    courseObjectUndoStack_.pop_back();
+                    RestoreCourseObjectSnapshot(snapshot);
+                    courseObjectHistoryBaseline_ = snapshot;
+                    ++editor.courseObjectEditRevision;
+                    courseObjectHistoryRevision_ = editor.courseObjectEditRevision;
+                    return true;
+                })) {
+            // Applied through EditorTransactionStack bridge.
+        } else if (!courseObjectUndoStack_.empty()) {
             courseObjectRedoStack_.push_back(CaptureCourseObjectSnapshot());
             const CourseObjectEditSnapshot snapshot = courseObjectUndoStack_.back();
             courseObjectUndoStack_.pop_back();
@@ -4826,7 +4883,23 @@ void AppRunLoop::ProcessCourseObjectUndoRedo() {
 
     if (editor.courseObjectRedoRequested) {
         editor.courseObjectRedoRequested = false;
-        if (!courseObjectRedoStack_.empty()) {
+        if (!courseObjectRedoStack_.empty() &&
+            courseObjectTransactions_.Redo(
+                [this, &editor](const editor::EditorTransactionRecord&, editor::EditorTransactionApplyMode) {
+                    if (courseObjectRedoStack_.empty()) {
+                        return false;
+                    }
+                    courseObjectUndoStack_.push_back(CaptureCourseObjectSnapshot());
+                    const CourseObjectEditSnapshot snapshot = courseObjectRedoStack_.back();
+                    courseObjectRedoStack_.pop_back();
+                    RestoreCourseObjectSnapshot(snapshot);
+                    courseObjectHistoryBaseline_ = snapshot;
+                    ++editor.courseObjectEditRevision;
+                    courseObjectHistoryRevision_ = editor.courseObjectEditRevision;
+                    return true;
+                })) {
+            // Applied through EditorTransactionStack bridge.
+        } else if (!courseObjectRedoStack_.empty()) {
             courseObjectUndoStack_.push_back(CaptureCourseObjectSnapshot());
             const CourseObjectEditSnapshot snapshot = courseObjectRedoStack_.back();
             courseObjectRedoStack_.pop_back();
@@ -5683,7 +5756,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 emitterState.frequency = runtimeState_.emitter.frequency;
                 emitterState.frequencyTime = runtimeState_.emitter.frequencyTime;
                 particleSystem_.Emit(emitterState);
-            }});
+            },
+            &courseObjectTransactions_});
     DrawRailLockOnDebugPanel();
     imguiLayer_.EndFrame();
     gRailPerfFrame.imguiMs = ElapsedMs(imguiStart, RailPerfClock::now());

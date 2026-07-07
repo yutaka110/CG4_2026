@@ -8,6 +8,9 @@ This repository is organized around the following top-level areas:
 - `externals/`: vendored third-party dependencies.
 - `lib/`: small library integrations that are kept separate from the engine/application layers.
 - `docs/`: project notes and technical documentation.
+- `docs/EditorCoreDesign.md`: shared editor architecture plan for incremental
+  Unreal-style editor features while preserving existing VFX and authoring
+  tools.
 - `docs/debug/`: debugging notes and investigation records.
 - `capture/screenshots/`: UI and runtime verification screenshots.
 - `capture/media/`: captured or sample media files used during experiments.

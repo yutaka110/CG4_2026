@@ -6,6 +6,13 @@
 #include <d3d12.h>
 
 #include "graphics/RenderGraph.h"
+#include "editor/EditorAssetSelection.h"
+#include "editor/EditorCommandContext.h"
+#include "editor/EditorCommandInputRouter.h"
+#include "editor/EditorCommandPalette.h"
+#include "editor/EditorPropertyRegistry.h"
+#include "editor/EditorSelection.h"
+#include "editor/EditorTransactionStack.h"
 
 struct AppRuntimeState;
 struct FrameLoopState;
@@ -64,6 +71,7 @@ struct AppImGuiFrameContext {
     std::function<void()> onReloadCourse;
     std::function<void(float)> onTeleportCourseToDistance;
     std::function<void()> onAddParticle;
+    editor::EditorTransactionStack* editorTransactions = nullptr;
 };
 
 class AppImGuiLayer {
@@ -105,4 +113,12 @@ private:
     uint32_t beamDedicatedStableFrames_ = 0;
     uint32_t beamDedicatedActiveStableFrames_ = 0;
     uint32_t hiddenRuntimeTelemetryFrame_ = 0;
+    editor::EditorPropertyRegistry editorPropertyRegistry_{};
+    editor::EditorAssetRegistry editorAssetRegistry_{};
+    editor::EditorAssetSelection editorAssetSelection_{};
+    editor::EditorCommandInputRouter editorCommandInputRouter_{};
+    editor::EditorCommandPalette editorCommandPalette_{};
+    editor::EditorSelection editorSelection_{};
+    editor::EditorTransactionStack editorTransactions_{};
+    bool editorAssetRegistryInitialized_ = false;
 };
