@@ -20,6 +20,8 @@ void EditorAssetSelection::SetPrimary(EditorAssetHandle handle) {
         primary_.displayName == handle.displayName &&
         primary_.sourcePath == handle.sourcePath &&
         primary_.metadataPath == handle.metadataPath &&
+        primary_.thumbnailKey == handle.thumbnailKey &&
+        primary_.sourceTimestamp == handle.sourceTimestamp &&
         primary_.referenceable == handle.referenceable &&
         primary_.missing == handle.missing &&
         primary_.hasMetadata == handle.hasMetadata &&
@@ -50,12 +52,56 @@ EditorAssetHandle MakeEditorAssetHandle(
     handle.displayName = record.displayName;
     handle.sourcePath = record.sourcePath;
     handle.metadataPath = record.metadataPath;
+    handle.thumbnailKey = record.thumbnailKey;
+    handle.sourceTimestamp = record.sourceTimestamp;
     handle.registryRevision = registryRevision;
     handle.referenceable = record.referenceable;
     handle.missing = record.missing;
     handle.hasMetadata = record.hasMetadata;
     handle.provisionalGuid = record.provisionalGuid;
     return handle;
+}
+
+EditorAssetHandleResolveResult ResolveEditorAssetHandle(
+    const EditorAssetRegistry& registry,
+    const EditorAssetHandle& handle) {
+    EditorAssetHandleResolveResult result{};
+    if (!handle.Valid()) {
+        return result;
+    }
+
+    result.record = registry.Find(handle.kind, handle.id);
+    result.found = result.record != nullptr;
+    result.revisionCurrent = handle.registryRevision == registry.Revision();
+    result.identityCurrent =
+        result.record != nullptr &&
+        (handle.guid.empty() || result.record->guid == handle.guid) &&
+        result.record->logicalPath == handle.logicalPath &&
+        result.record->sourcePath == handle.sourcePath &&
+        result.record->metadataPath == handle.metadataPath &&
+        result.record->thumbnailKey == handle.thumbnailKey &&
+        result.record->sourceTimestamp == handle.sourceTimestamp &&
+        result.record->referenceable == handle.referenceable &&
+        result.record->missing == handle.missing &&
+        result.record->hasMetadata == handle.hasMetadata &&
+        result.record->provisionalGuid == handle.provisionalGuid;
+    return result;
+}
+
+bool IsEditorAssetHandleCurrent(
+    const EditorAssetRegistry& registry,
+    const EditorAssetHandle& handle) {
+    return ResolveEditorAssetHandle(registry, handle).Current();
+}
+
+EditorAssetHandle RefreshEditorAssetHandle(
+    const EditorAssetRegistry& registry,
+    const EditorAssetHandle& handle) {
+    const EditorAssetHandleResolveResult resolved =
+        ResolveEditorAssetHandle(registry, handle);
+    return resolved.record != nullptr
+        ? MakeEditorAssetHandle(*resolved.record, registry.Revision())
+        : EditorAssetHandle{};
 }
 
 } // namespace editor

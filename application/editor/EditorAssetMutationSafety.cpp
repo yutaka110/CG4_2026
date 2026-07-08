@@ -1,15 +1,10 @@
 #include "EditorAssetMutationSafety.h"
 
-#include <algorithm>
 #include <sstream>
 #include <utility>
 
 namespace editor {
 namespace {
-
-std::string DependencyToken(const EditorAssetRecord& record) {
-    return std::string(ToString(record.kind)) + ":" + record.id;
-}
 
 std::string AssetLabel(const EditorAssetRecord& record) {
     return std::string(ToString(record.kind)) + ":" + record.id;
@@ -40,16 +35,9 @@ void AddDependents(
     const EditorAssetRegistry& registry,
     const EditorAssetRecord& target,
     EditorAssetMutationSafetyReport& report) {
-    const std::string token = DependencyToken(target);
-    for (const EditorAssetRecord& candidate : registry.Records()) {
-        if (candidate.kind == target.kind && candidate.id == target.id) {
-            continue;
-        }
-        const bool dependsOnTarget =
-            std::find(candidate.dependencies.begin(), candidate.dependencies.end(), token) !=
-            candidate.dependencies.end();
-        if (dependsOnTarget) {
-            report.dependents.push_back(AssetLabel(candidate));
+    for (const EditorAssetRecord* dependent : registry.FindDependents(target)) {
+        if (dependent != nullptr) {
+            report.dependents.push_back(AssetLabel(*dependent));
         }
     }
     report.dependentCount = report.dependents.size();
@@ -113,8 +101,8 @@ EditorAssetMutationSafetyReport EvaluateEditorAssetMutationSafety(
     } else if (RequiresDurableGuid(kind) && report.dependentCount > 0) {
         AddIssue(
             report,
-            EditorAssetMutationRisk::Blocked,
-            "Rename/Move is blocked while indexed dependents exist; reference rewriting is not enabled yet.");
+            EditorAssetMutationRisk::Warning,
+            "Rename/Move will rewrite indexed dependent references.");
     }
     if (target.runtimeOnly) {
         AddIssue(report, EditorAssetMutationRisk::Blocked, "Runtime-only assets cannot be mutated from the editor.");

@@ -5,6 +5,7 @@ namespace editor {
 class CourseDocumentAdapter;
 class EditorAssetRegistry;
 class EditorAssetSelection;
+class EditorAssetThumbnailService;
 class EditorCommandInputRouter;
 class EditorCommandPalette;
 class EditorCommandRegistry;
@@ -15,6 +16,7 @@ class EditorModalConfirmService;
 class EditorNotificationCenter;
 class EditorPanelLayoutService;
 class EditorPropertyAccessor;
+class EditorPropertyEditService;
 class EditorPropertyRegistry;
 class EditorPlaySessionState;
 class EditorRailRuntimePause;
@@ -33,9 +35,11 @@ struct EditorContext {
     EditorTransactionStack* transactions = nullptr;
     EditorAssetRegistry* assets = nullptr;
     EditorAssetSelection* assetSelection = nullptr;
+    EditorAssetThumbnailService* assetThumbnails = nullptr;
     const CourseDocumentAdapter* courseDocument = nullptr;
     EditorPropertyRegistry* propertyRegistry = nullptr;
     EditorPropertyAccessor* propertyAccessor = nullptr;
+    EditorPropertyEditService* propertyEditService = nullptr;
     const EditorValidationReport* validationReport = nullptr;
     EditorDirtyStateService* dirtyState = nullptr;
     EditorDocumentLifecycleService* documentLifecycle = nullptr;

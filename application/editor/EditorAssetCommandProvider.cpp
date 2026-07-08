@@ -2,6 +2,8 @@
 
 #include "EditorAssetRegistry.h"
 #include "EditorAssetSelection.h"
+#include "EditorAssetImportService.h"
+#include "EditorAssetMutationExecutor.h"
 #include "EditorAssetMutationSafety.h"
 #include "EditorCommandContext.h"
 #include "EditorCommandRegistry.h"
@@ -31,7 +33,7 @@ const EditorAssetRecord* SelectedAssetRecord(const EditorContext& context) {
     if (selected == nullptr) {
         return nullptr;
     }
-    return context.assets->Find(selected->kind, selected->id);
+    return ResolveEditorAssetHandle(*context.assets, *selected).record;
 }
 
 bool WriteAssetMetaFile(const EditorAssetRecord& record, std::string* errorMessage) {
@@ -224,36 +226,118 @@ EditorCommandResult RequestDeleteSafetyConfirmation(EditorContext& context) {
         return BuildSafetyCommandResult(report);
     }
 
-    const std::string message =
-        FormatEditorAssetMutationSafetyReport(report) +
-        "\n\nPhase 8-C only performs safety preflight. The asset file is not deleted yet.";
+    const EditorAssetKind targetKind = selected->kind;
+    const std::string targetId = selected->id;
+    const std::string message = FormatEditorAssetMutationSafetyReport(report);
+
+    auto executeDelete =
+        [assets = context.assets,
+         assetSelection = context.assetSelection,
+         transactions = context.transactions,
+         notifications = context.notifications,
+         targetKind,
+         targetId]() {
+            if (assets == nullptr) {
+                return;
+            }
+            EditorAssetMutationExecutor executor(*assets);
+            const EditorAssetMutationResult result =
+                executor.Execute(
+                    EditorAssetMutationRequest{
+                        EditorAssetMutationKind::Delete,
+                        targetKind,
+                        targetId,
+                        {},
+                        {},
+                        transactions});
+            if (result.succeeded && assetSelection != nullptr) {
+                assetSelection->Clear();
+            }
+            if (notifications != nullptr) {
+                notifications->Push(
+                    result.succeeded
+                        ? (result.warning ? EditorNotificationSeverity::Warning : EditorNotificationSeverity::Info)
+                        : EditorNotificationSeverity::Error,
+                    "Asset",
+                    result.message);
+            }
+        };
+
     if (context.confirmService == nullptr) {
-        return EditorCommandResult{true, message, true};
+        executeDelete();
+        return EditorCommandResult{true, message, report.HasWarnings()};
     }
 
-    EditorNotificationCenter* notifications = context.notifications;
     EditorModalConfirmRequest request{};
     request.severity = report.HasWarnings()
         ? EditorModalConfirmSeverity::Warning
         : EditorModalConfirmSeverity::Info;
     request.source = "Asset";
-    request.title = "Delete Asset Safety Preflight";
+    request.title = "Delete Asset";
     request.message = message;
-    request.confirmLabel = "Acknowledge";
+    request.confirmLabel = "Delete";
     request.cancelLabel = "Cancel";
-    request.onConfirm = [notifications, message]() {
-        if (notifications != nullptr) {
-            notifications->Push(
-                EditorNotificationSeverity::Info,
-                "Asset",
-                "Delete safety acknowledged. " + message);
-        }
-    };
+    request.onConfirm = std::move(executeDelete);
 
     if (!context.confirmService->Request(std::move(request))) {
         return EditorCommandResult{false, "Could not queue delete safety confirmation."};
     }
-    return EditorCommandResult{true, "Delete safety confirmation requested.", report.HasWarnings()};
+    return EditorCommandResult{true, "Delete asset confirmation requested.", report.HasWarnings()};
+}
+
+EditorCommandResult ReimportSelectedAsset(EditorContext& context) {
+    const EditorAssetRecord* selected = SelectedAssetRecord(context);
+    if (selected == nullptr || context.assets == nullptr) {
+        return EditorCommandResult{false, "No asset is selected."};
+    }
+
+    const EditorAssetKind kind = selected->kind;
+    const std::string id = selected->id;
+    EditorAssetImportService importService(*context.assets, context.assetThumbnails);
+    const EditorAssetImportResult result = importService.Reimport(kind, id);
+    if (result.succeeded &&
+        context.assetSelection != nullptr &&
+        result.record.kind != EditorAssetKind::Unknown &&
+        !result.record.id.empty()) {
+        context.assetSelection->SetPrimary(
+            MakeEditorAssetHandle(result.record, context.assets->Revision()));
+    }
+    if (context.notifications != nullptr) {
+        context.notifications->Push(
+            result.succeeded
+                ? (result.warning ? EditorNotificationSeverity::Warning : EditorNotificationSeverity::Info)
+                : EditorNotificationSeverity::Error,
+            "Asset",
+            result.message);
+    }
+    return EditorCommandResult{result.succeeded, result.message, result.warning};
+}
+
+EditorCommandResult BatchMigrateAssetMetadata(EditorContext& context) {
+    if (context.assets == nullptr) {
+        return EditorCommandResult{false, "Asset registry is unavailable."};
+    }
+
+    EditorAssetImportService importService(*context.assets, context.assetThumbnails);
+    const EditorAssetImportResult result = importService.BatchMigrateMetadata();
+    if (context.assetSelection != nullptr) {
+        if (const EditorAssetHandle* selected = context.assetSelection->Primary()) {
+            const EditorAssetHandle refreshed =
+                RefreshEditorAssetHandle(*context.assets, *selected);
+            if (refreshed.Valid()) {
+                context.assetSelection->SetPrimary(refreshed);
+            }
+        }
+    }
+    if (context.notifications != nullptr) {
+        context.notifications->Push(
+            result.succeeded
+                ? (result.warning ? EditorNotificationSeverity::Warning : EditorNotificationSeverity::Info)
+                : EditorNotificationSeverity::Error,
+            "Asset",
+            result.message);
+    }
+    return EditorCommandResult{result.succeeded, result.message, result.warning};
 }
 
 } // namespace
@@ -381,6 +465,59 @@ void EditorAssetCommandProvider::RegisterCommands(EditorContext& context) const 
             },
             [&context]() {
                 return RequestDeleteSafetyConfirmation(context);
+            }});
+
+    registry.Register(
+        EditorCommand{
+            "asset.reimport",
+            "Reimport Selected Asset",
+            "Asset",
+            "",
+            [&context, &commandContext]() {
+                return commandContext.developerToolsVisible &&
+                    commandContext.canMutateAuthoring &&
+                    SelectedAssetRecord(context) != nullptr;
+            },
+            [&context, &commandContext]() {
+                if (!commandContext.developerToolsVisible) {
+                    return std::string("Developer tools are hidden.");
+                }
+                if (!commandContext.canMutateAuthoring) {
+                    return std::string("Authoring is locked during Play/Sim.");
+                }
+                return SelectedAssetRecord(context) != nullptr
+                    ? std::string()
+                    : std::string("No asset is selected.");
+            },
+            [&context]() {
+                return ReimportSelectedAsset(context);
+            }});
+
+    registry.Register(
+        EditorCommand{
+            "asset.batchMigrateMetadata",
+            "Batch Migrate Asset Metadata",
+            "Asset",
+            "",
+            [&context, &commandContext]() {
+                return commandContext.developerToolsVisible &&
+                    commandContext.canMutateAuthoring &&
+                    context.assets != nullptr &&
+                    context.assets->Count() > 0;
+            },
+            [&context, &commandContext]() {
+                if (!commandContext.developerToolsVisible) {
+                    return std::string("Developer tools are hidden.");
+                }
+                if (!commandContext.canMutateAuthoring) {
+                    return std::string("Authoring is locked during Play/Sim.");
+                }
+                return context.assets != nullptr && context.assets->Count() > 0
+                    ? std::string()
+                    : std::string("No assets are registered.");
+            },
+            [&context]() {
+                return BatchMigrateAssetMetadata(context);
             }});
 
     registry.Register(

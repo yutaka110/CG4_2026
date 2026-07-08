@@ -15,8 +15,24 @@ void DrawTransactionPropertyLookup(
 
     const EditorTransactionRecord* last = transactions->LastTransaction();
     if (last == nullptr ||
-        last->payload.kind != EditorTransactionPayloadKind::PropertyDelta) {
+        (last->payload.kind != EditorTransactionPayloadKind::PropertyDelta &&
+            last->payload.kind != EditorTransactionPayloadKind::MultiPropertyDelta)) {
         ImGui::TextUnformatted("Last property transaction: none");
+        return;
+    }
+
+    if (last->payload.kind == EditorTransactionPayloadKind::MultiPropertyDelta) {
+        ImGui::Text(
+            "Last property transaction: batch (%u)",
+            static_cast<unsigned int>(last->payload.propertyChanges.size()));
+        for (const EditorPropertyChange& change : last->payload.propertyChanges) {
+            const EditorPropertyDescriptor* descriptor =
+                registry.Find(change.target.domain, change.propertyPath);
+            ImGui::BulletText(
+                "%s: %s",
+                change.propertyPath.c_str(),
+                descriptor != nullptr ? "resolved" : "descriptor missing");
+        }
         return;
     }
 

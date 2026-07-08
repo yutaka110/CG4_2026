@@ -3,10 +3,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <optional>
 #include <string>
 #include <vector>
 
+#include "EditorAssetMutationSafety.h"
 #include "EditorSelection.h"
 
 namespace editor {
@@ -14,19 +14,13 @@ namespace editor {
 enum class EditorTransactionPayloadKind {
     Snapshot,
     PropertyDelta,
+    MultiPropertyDelta,
+    AssetMutation,
 };
 
 enum class EditorTransactionApplyMode {
     Undo,
     Redo,
-};
-
-struct EditorTransactionPayload {
-    EditorTransactionPayloadKind kind = EditorTransactionPayloadKind::Snapshot;
-    std::string propertyPath;
-    std::string valueType;
-    std::string beforeSummary;
-    std::string afterSummary;
 };
 
 struct EditorPropertyChange {
@@ -37,6 +31,32 @@ struct EditorPropertyChange {
     std::string beforeValue;
     std::string afterValue;
     uint32_t sourceRevision = 0;
+};
+
+struct EditorAssetDependencyRewrite {
+    EditorAssetRecord beforeRecord;
+    EditorAssetRecord afterRecord;
+};
+
+struct EditorAssetMutationChange {
+    EditorAssetMutationKind kind = EditorAssetMutationKind::Rename;
+    EditorAssetRecord beforeRecord;
+    EditorAssetRecord afterRecord;
+    std::vector<EditorAssetDependencyRewrite> dependencyRewrites;
+    bool sourceSnapshotValid = false;
+    bool metadataSnapshotValid = false;
+    std::vector<uint8_t> sourceBytes;
+    std::vector<uint8_t> metadataBytes;
+};
+
+struct EditorTransactionPayload {
+    EditorTransactionPayloadKind kind = EditorTransactionPayloadKind::Snapshot;
+    std::string propertyPath;
+    std::string valueType;
+    std::string beforeSummary;
+    std::string afterSummary;
+    std::vector<EditorPropertyChange> propertyChanges;
+    EditorAssetMutationChange assetMutation;
 };
 
 struct EditorTransactionRecord {
@@ -74,14 +94,28 @@ public:
         std::string valueType,
         std::string beforeValue,
         std::string afterValue);
+    void PushMultiPropertyDelta(
+        std::string label,
+        EditorObjectHandle target,
+        std::vector<EditorPropertyChange> changes);
+    void PushAssetMutation(
+        std::string label,
+        EditorObjectHandle target,
+        EditorAssetMutationChange change);
 
     void StagePropertyDelta(EditorPropertyChange change);
-    bool HasStagedPropertyDelta() const { return stagedPropertyChange_.has_value(); }
+    void StagePropertyDeltas(std::vector<EditorPropertyChange> changes);
+    bool HasStagedPropertyDelta() const { return !stagedPropertyChanges_.empty(); }
+    std::size_t StagedPropertyDeltaCount() const { return stagedPropertyChanges_.size(); }
     const EditorPropertyChange* StagedPropertyDelta() const;
+    const std::vector<EditorPropertyChange>& StagedPropertyDeltas() const { return stagedPropertyChanges_; }
     EditorPropertyChange ConsumeStagedPropertyDelta();
+    std::vector<EditorPropertyChange> ConsumeStagedPropertyDeltas();
 
     bool CanUndo() const { return !undoStack_.empty(); }
     bool CanRedo() const { return !redoStack_.empty(); }
+    const EditorTransactionRecord* NextUndoTransaction() const;
+    const EditorTransactionRecord* NextRedoTransaction() const;
     bool Undo(const ApplyCallback& apply);
     bool Redo(const ApplyCallback& apply);
 
@@ -107,7 +141,7 @@ private:
     uint64_t nextId_ = 1;
     uint32_t revision_ = 0;
     EditorTransactionLegacyMirror legacyMirror_{};
-    std::optional<EditorPropertyChange> stagedPropertyChange_;
+    std::vector<EditorPropertyChange> stagedPropertyChanges_;
 };
 
 const char* ToString(EditorTransactionPayloadKind kind);

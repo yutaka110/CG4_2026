@@ -1,6 +1,9 @@
 #include "ExistingFeatureProtection.h"
 
+#include "EditorAssetThumbnailService.h"
+
 #include <sstream>
+#include <string>
 
 #include "CourseDocumentAdapter.h"
 #include "EditorPropertyAccessor.h"
@@ -225,9 +228,13 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             input.assetRegistry->Count(EditorAssetKind::Mesh) > 0
                 ? detail.str()
                 : detail.str() + " / mesh asset candidates are empty");
-        const bool identityReady =
-            input.assetRegistry->Count() > 0 &&
-            input.assetRegistry->CountWithProvisionalGuid() <= input.assetRegistry->Count();
+        std::size_t migrationDebt = 0;
+        for (const EditorAssetRecord& record : input.assetRegistry->Records()) {
+            if (!record.runtimeOnly && (!record.hasMetadata || record.provisionalGuid)) {
+                ++migrationDebt;
+            }
+        }
+        const bool identityReady = input.assetRegistry->Count() > 0 && migrationDebt == 0;
         AddCheck(
             report,
             identityReady
@@ -235,7 +242,9 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
                 : ExistingFeatureStatus::Attention,
             "Editor Core",
             "Asset identity metadata",
-            detail.str() + " / GUID identity is available with path fallback.");
+            identityReady
+                ? detail.str() + " / durable metadata is available."
+                : detail.str() + " / migration debt " + std::to_string(migrationDebt));
         if (input.assetRegistry->CountMissing() > 0) {
             AddCheck(
                 report,
@@ -253,17 +262,57 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             "EditorAssetRegistry is missing; AssetRef properties cannot be resolved safely.");
     }
 
+    if (input.assetThumbnails != nullptr) {
+        std::ostringstream detail;
+        detail << input.assetThumbnails->Count()
+               << " thumbnails, ready "
+               << input.assetThumbnails->Count(EditorAssetThumbnailStatus::Ready)
+               << ", icon "
+               << input.assetThumbnails->Count(EditorAssetThumbnailStatus::Unsupported)
+               << ", failed "
+               << input.assetThumbnails->Count(EditorAssetThumbnailStatus::Failed)
+               << ", missing "
+               << input.assetThumbnails->Count(EditorAssetThumbnailStatus::Missing)
+               << ", revision "
+               << input.assetThumbnails->Revision();
+        AddCheck(
+            report,
+            input.assetThumbnails->Count(EditorAssetThumbnailStatus::Failed) == 0
+                ? ExistingFeatureStatus::Ok
+                : ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Asset thumbnail cache",
+            detail.str());
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Asset thumbnail cache",
+            "EditorAssetThumbnailService is missing; Content Browser can only show text rows.");
+    }
+
     if (input.assetSelection != nullptr) {
         std::ostringstream detail;
         detail << "Revision " << input.assetSelection->Revision();
+        ExistingFeatureStatus assetSelectionStatus = ExistingFeatureStatus::Ok;
         if (const EditorAssetHandle* selected = input.assetSelection->Primary()) {
             detail << " / selected " << ToString(selected->kind) << ":" << selected->id;
+            if (input.assetRegistry != nullptr) {
+                const EditorAssetHandleResolveResult resolved =
+                    ResolveEditorAssetHandle(*input.assetRegistry, *selected);
+                detail << " / handle "
+                       << (resolved.Current() ? "current" : (resolved.found ? "stale" : "missing"));
+                if (!resolved.Current()) {
+                    assetSelectionStatus = ExistingFeatureStatus::Attention;
+                }
+            }
         } else {
             detail << " / no asset selected";
         }
         AddCheck(
             report,
-            ExistingFeatureStatus::Ok,
+            assetSelectionStatus,
             "Editor Core",
             "Asset selection",
             detail.str());
@@ -329,6 +378,17 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             "Validation service",
             "EditorValidationService report is missing; Details edits are not being validated.");
     }
+
+    AddCheck(
+        report,
+        input.propertyEditService != nullptr
+            ? ExistingFeatureStatus::Ok
+            : ExistingFeatureStatus::Attention,
+        "Editor Core",
+        "Property edit service",
+        input.propertyEditService != nullptr
+            ? "EditorPropertyEditService is connected as the shared authoring mutation path."
+            : "EditorPropertyEditService is missing; property edits may bypass transaction, dirty, or notification policy.");
 
     if (input.dirtyState != nullptr) {
         std::ostringstream detail;
@@ -488,6 +548,8 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
     }
 
     if (input.panelRegistry != nullptr) {
+        const std::size_t viewportCount =
+            input.panelRegistry->Count(EditorPanelHostArea::Viewport);
         const std::size_t leftCount =
             input.panelRegistry->Count(EditorPanelHostArea::LeftSidebar);
         const std::size_t inspectorCount =
@@ -497,7 +559,9 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
         const std::size_t bottomCount =
             input.panelRegistry->Count(EditorPanelHostArea::BottomDock);
         std::ostringstream detail;
-        detail << "left "
+        detail << "viewport "
+               << viewportCount
+               << ", left "
                << leftCount
                << ", right "
                << inspectorCount
@@ -511,12 +575,12 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
                << input.panelRegistry->Revision();
         AddCheck(
             report,
-            leftCount > 0 && inspectorCount > 0 && contentCount > 0 && bottomCount > 0
+            viewportCount > 0 && leftCount > 0 && inspectorCount > 0 && contentCount > 0 && bottomCount > 0
                 ? ExistingFeatureStatus::Ok
                 : ExistingFeatureStatus::Attention,
             "Editor Core",
             "Panel host multi-area registry",
-            leftCount > 0 && inspectorCount > 0 && contentCount > 0 && bottomCount > 0
+            viewportCount > 0 && leftCount > 0 && inspectorCount > 0 && contentCount > 0 && bottomCount > 0
                 ? detail.str()
                 : detail.str() + " / one or more editor host areas have no panels");
     } else {
@@ -813,8 +877,8 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
         const EditorTransactionLegacyMirror& mirror = input.transactions->LegacyMirror();
         const bool bridgeDepthMatches =
             !mirror.active ||
-            (mirror.undoDepth == input.transactions->UndoDepth() &&
-                mirror.redoDepth == input.transactions->RedoDepth());
+            (mirror.undoDepth <= input.transactions->UndoDepth() &&
+                mirror.redoDepth <= input.transactions->RedoDepth());
         bool propertyLookupOk = true;
         std::ostringstream detail;
         detail << "Editor undo " << input.transactions->UndoDepth()
@@ -835,13 +899,24 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
                     input.propertyRegistry->Find(last->target.domain, last->payload.propertyPath) != nullptr;
                 detail << (resolved ? " resolved" : " descriptor-missing");
                 propertyLookupOk = propertyLookupOk && resolved;
+            } else if (last->payload.kind == EditorTransactionPayloadKind::MultiPropertyDelta) {
+                detail << " changes " << last->payload.propertyChanges.size();
+                for (const EditorPropertyChange& change : last->payload.propertyChanges) {
+                    const bool resolved =
+                        input.propertyRegistry != nullptr &&
+                        input.propertyRegistry->Find(change.target.domain, change.propertyPath) != nullptr;
+                    propertyLookupOk = propertyLookupOk && resolved;
+                    if (!resolved) {
+                        detail << " missing " << change.propertyPath;
+                    }
+                }
             }
         }
-        if (const EditorPropertyChange* staged = input.transactions->StagedPropertyDelta()) {
-            detail << " / staged " << staged->propertyPath;
+        for (const EditorPropertyChange& staged : input.transactions->StagedPropertyDeltas()) {
+            detail << " / staged " << staged.propertyPath;
             const bool resolved =
                 input.propertyRegistry != nullptr &&
-                input.propertyRegistry->Find(staged->target.domain, staged->propertyPath) != nullptr;
+                input.propertyRegistry->Find(staged.target.domain, staged.propertyPath) != nullptr;
             detail << (resolved ? " resolved" : " descriptor-missing");
             propertyLookupOk = propertyLookupOk && resolved;
         }

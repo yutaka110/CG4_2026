@@ -16,8 +16,10 @@ namespace editor {
 class CourseDocumentAdapter;
 class EditorPropertyRegistry;
 class EditorPropertyAccessor;
+class EditorPropertyEditService;
 class EditorAssetRegistry;
 class EditorAssetSelection;
+class EditorAssetThumbnailService;
 class EditorDirtyStateService;
 class EditorDocumentLifecycleService;
 class EditorLayoutService;
@@ -64,6 +66,7 @@ struct ExistingFeatureProtectionInput {
     const EffectRuntime* effectRuntime = nullptr;
     const EditorPropertyRegistry* propertyRegistry = nullptr;
     const EditorPropertyAccessor* propertyAccessor = nullptr;
+    const EditorPropertyEditService* propertyEditService = nullptr;
     const EditorAssetRegistry* assetRegistry = nullptr;
     const EditorAssetSelection* assetSelection = nullptr;
     const CourseDocumentAdapter* courseDocument = nullptr;
@@ -98,6 +101,7 @@ struct ExistingFeatureProtectionInput {
     bool hasReloadCourseCommand = false;
     bool hasTeleportCourseCommand = false;
     bool hasFreezeCourseCommand = false;
+    const EditorAssetThumbnailService* assetThumbnails = nullptr;
 };
 
 ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(

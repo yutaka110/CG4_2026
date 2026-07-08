@@ -36,10 +36,6 @@ bool AppendUnique(std::vector<std::string>& values, const std::string& value) {
     return true;
 }
 
-std::string DependencyToken(const EditorAssetRecord& record) {
-    return std::string(ToString(record.kind)) + ":" + record.id;
-}
-
 std::string ReadSmallTextFile(const std::filesystem::path& path) {
     constexpr std::uintmax_t kMaxScanBytes = 2u * 1024u * 1024u;
     std::error_code error;
@@ -155,6 +151,26 @@ bool EditorAssetRegistry::Replace(
     return true;
 }
 
+bool EditorAssetRegistry::Remove(EditorAssetKind kind, std::string_view id) {
+    if (id.empty() || kind == EditorAssetKind::Unknown) {
+        return false;
+    }
+
+    const auto it = std::find_if(
+        records_.begin(),
+        records_.end(),
+        [&](const EditorAssetRecord& record) {
+            return record.kind == kind && record.id == id;
+        });
+    if (it == records_.end()) {
+        return false;
+    }
+
+    records_.erase(it);
+    Touch();
+    return true;
+}
+
 const EditorAssetRecord* EditorAssetRegistry::Find(EditorAssetKind kind, std::string_view id) const {
     const auto it = std::find_if(
         records_.begin(),
@@ -186,6 +202,68 @@ std::vector<const EditorAssetRecord*> EditorAssetRegistry::List(EditorAssetKind 
         }
     }
     return results;
+}
+
+std::vector<const EditorAssetRecord*> EditorAssetRegistry::FindDependencies(
+    const EditorAssetRecord& record) const {
+    std::vector<const EditorAssetRecord*> results;
+    for (const std::string& dependency : record.dependencies) {
+        EditorAssetDependencyToken token{};
+        if (!ParseEditorAssetDependencyToken(dependency, token)) {
+            continue;
+        }
+        if (const EditorAssetRecord* dependencyRecord = Find(token.kind, token.id)) {
+            results.push_back(dependencyRecord);
+        }
+    }
+    return results;
+}
+
+std::vector<const EditorAssetRecord*> EditorAssetRegistry::FindDependents(
+    const EditorAssetRecord& record) const {
+    const std::string token = BuildEditorAssetDependencyToken(record);
+    std::vector<const EditorAssetRecord*> results;
+    for (const EditorAssetRecord& candidate : records_) {
+        if (candidate.kind == record.kind && candidate.id == record.id) {
+            continue;
+        }
+        if (std::find(candidate.dependencies.begin(), candidate.dependencies.end(), token) !=
+            candidate.dependencies.end()) {
+            results.push_back(&candidate);
+        }
+    }
+    return results;
+}
+
+std::vector<std::string> EditorAssetRegistry::FindMissingDependencyTokens(
+    const EditorAssetRecord& record) const {
+    std::vector<std::string> results;
+    for (const std::string& dependency : record.dependencies) {
+        EditorAssetDependencyToken token{};
+        if (!ParseEditorAssetDependencyToken(dependency, token)) {
+            continue;
+        }
+        if (Find(token.kind, token.id) == nullptr) {
+            results.push_back(dependency);
+        }
+    }
+    return results;
+}
+
+std::vector<std::string> EditorAssetRegistry::FindMalformedDependencyTokens(
+    const EditorAssetRecord& record) const {
+    std::vector<std::string> results;
+    for (const std::string& dependency : record.dependencies) {
+        EditorAssetDependencyToken token{};
+        if (!ParseEditorAssetDependencyToken(dependency, token)) {
+            results.push_back(dependency);
+        }
+    }
+    return results;
+}
+
+std::size_t EditorAssetRegistry::CountDependents(const EditorAssetRecord& record) const {
+    return FindDependents(record).size();
 }
 
 std::size_t EditorAssetRegistry::Count(EditorAssetKind kind) const {
@@ -255,7 +333,7 @@ void EditorAssetRegistry::ScanDependencies() {
             const bool referencesLogical =
                 !candidate.logicalPath.empty() && text.find(candidate.logicalPath) != std::string::npos;
             if (referencesId || referencesPath || referencesLogical) {
-                changed = AppendUnique(record.dependencies, DependencyToken(candidate)) || changed;
+                changed = AppendUnique(record.dependencies, BuildEditorAssetDependencyToken(candidate)) || changed;
             }
         }
     }
@@ -286,6 +364,45 @@ const char* ToString(EditorAssetKind kind) {
     return "Unknown";
 }
 
+std::string BuildEditorAssetDependencyToken(EditorAssetKind kind, std::string_view id) {
+    std::string token = ToString(kind);
+    token += ':';
+    token.append(id.data(), id.size());
+    return token;
+}
+
+std::string BuildEditorAssetDependencyToken(const EditorAssetRecord& record) {
+    return BuildEditorAssetDependencyToken(record.kind, record.id);
+}
+
+bool ParseEditorAssetDependencyToken(
+    std::string_view token,
+    EditorAssetDependencyToken& outToken) {
+    const std::size_t separator = token.find(':');
+    if (separator == std::string_view::npos) {
+        return false;
+    }
+
+    const std::string_view kindText = token.substr(0, separator);
+    if (kindText == ToString(EditorAssetKind::Mesh)) {
+        outToken.kind = EditorAssetKind::Mesh;
+    } else if (kindText == ToString(EditorAssetKind::Effect)) {
+        outToken.kind = EditorAssetKind::Effect;
+    } else if (kindText == ToString(EditorAssetKind::Course)) {
+        outToken.kind = EditorAssetKind::Course;
+    } else if (kindText == ToString(EditorAssetKind::Texture)) {
+        outToken.kind = EditorAssetKind::Texture;
+    } else if (kindText == ToString(EditorAssetKind::Audio)) {
+        outToken.kind = EditorAssetKind::Audio;
+    } else {
+        outToken.kind = EditorAssetKind::Unknown;
+    }
+
+    const std::string_view id = token.substr(separator + 1);
+    outToken.id.assign(id.data(), id.size());
+    return outToken.kind != EditorAssetKind::Unknown && !outToken.id.empty();
+}
+
 std::string BuildEditorAssetProvisionalGuid(EditorAssetKind kind, std::string_view stableKey) {
     std::string seedText = ToString(kind);
     seedText += ':';
@@ -305,6 +422,16 @@ void EnsureEditorAssetIdentity(EditorAssetRecord& record) {
     if (record.guid.empty()) {
         record.guid = BuildEditorAssetProvisionalGuid(record.kind, StableKeyForRecord(record));
         record.provisionalGuid = true;
+    }
+    if (record.thumbnailKey.empty()) {
+        record.thumbnailKey = "thumb:";
+        record.thumbnailKey += ToString(record.kind);
+        record.thumbnailKey += ':';
+        if (!record.guid.empty()) {
+            record.thumbnailKey += record.guid;
+        } else {
+            record.thumbnailKey += StableKeyForRecord(record);
+        }
     }
 }
 

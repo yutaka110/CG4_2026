@@ -17,6 +17,14 @@ struct DetailsDeltaView {
     const char* afterValue = "";
 };
 
+struct DetailsPropertyWidgetResult {
+    bool changed = false;
+    bool activated = false;
+    bool active = false;
+    bool deactivatedAfterEdit = false;
+    bool commitImmediately = false;
+};
+
 bool MatchesProperty(
     const EditorObjectHandle& target,
     const std::string& propertyPath,
@@ -34,11 +42,11 @@ DetailsDeltaView FindDeltaView(
         return view;
     }
 
-    if (const EditorPropertyChange* staged = transactions->StagedPropertyDelta()) {
-        if (MatchesProperty(staged->target, staged->propertyPath, selected, descriptor)) {
+    for (const EditorPropertyChange& staged : transactions->StagedPropertyDeltas()) {
+        if (MatchesProperty(staged.target, staged.propertyPath, selected, descriptor)) {
             view.state = "staged";
-            view.beforeValue = staged->beforeValue.c_str();
-            view.afterValue = staged->afterValue.c_str();
+            view.beforeValue = staged.beforeValue.c_str();
+            view.afterValue = staged.afterValue.c_str();
             return view;
         }
     }
@@ -50,6 +58,16 @@ DetailsDeltaView FindDeltaView(
             view.beforeValue = last->payload.beforeSummary.c_str();
             view.afterValue = last->payload.afterSummary.c_str();
             return view;
+        }
+        if (last->payload.kind == EditorTransactionPayloadKind::MultiPropertyDelta) {
+            for (const EditorPropertyChange& change : last->payload.propertyChanges) {
+                if (MatchesProperty(change.target, change.propertyPath, selected, descriptor)) {
+                    view.state = "last batch";
+                    view.beforeValue = change.beforeValue.c_str();
+                    view.afterValue = change.afterValue.c_str();
+                    return view;
+                }
+            }
         }
     }
 
@@ -136,20 +154,37 @@ void DrawSelectedValidationIssues(
     ImGui::EndTable();
 }
 
-bool DrawPropertyEditor(
+DetailsPropertyWidgetResult CaptureContinuousWidgetResult(bool changed) {
+    DetailsPropertyWidgetResult result{};
+    result.changed = changed;
+    result.activated = ImGui::IsItemActivated();
+    result.active = ImGui::IsItemActive();
+    result.deactivatedAfterEdit = ImGui::IsItemDeactivatedAfterEdit();
+    return result;
+}
+
+DetailsPropertyWidgetResult CaptureImmediateWidgetResult(bool changed) {
+    DetailsPropertyWidgetResult result{};
+    result.changed = changed;
+    result.commitImmediately = changed;
+    return result;
+}
+
+DetailsPropertyWidgetResult DrawPropertyEditor(
     const EditorPropertyDescriptor& descriptor,
     EditorPropertyValue& value,
     const EditorAssetRegistry* assetRegistry) {
     switch (descriptor.kind) {
     case EditorPropertyKind::Bool:
-        return ImGui::Checkbox("##value", &value.boolValue);
+        return CaptureImmediateWidgetResult(ImGui::Checkbox("##value", &value.boolValue));
     case EditorPropertyKind::Int:
-        return ImGui::DragInt(
-            "##value",
-            &value.intValue,
-            1.0f,
-            descriptor.hasRange ? static_cast<int>(descriptor.minValue) : 0,
-            descriptor.hasRange ? static_cast<int>(descriptor.maxValue) : 0);
+        return CaptureContinuousWidgetResult(
+            ImGui::DragInt(
+                "##value",
+                &value.intValue,
+                1.0f,
+                descriptor.hasRange ? static_cast<int>(descriptor.minValue) : 0,
+                descriptor.hasRange ? static_cast<int>(descriptor.maxValue) : 0));
     case EditorPropertyKind::UInt: {
         int editValue = static_cast<int>(value.uintValue);
         const bool changed = ImGui::DragInt(
@@ -161,16 +196,17 @@ bool DrawPropertyEditor(
         if (changed) {
             value.uintValue = static_cast<uint32_t>((std::max)(editValue, 0));
         }
-        return changed;
+        return CaptureContinuousWidgetResult(changed);
     }
     case EditorPropertyKind::Float:
-        return ImGui::DragFloat(
-            "##value",
-            &value.floatValue,
-            0.1f,
-            descriptor.hasRange ? descriptor.minValue : 0.0f,
-            descriptor.hasRange ? descriptor.maxValue : 0.0f,
-            "%.3f");
+        return CaptureContinuousWidgetResult(
+            ImGui::DragFloat(
+                "##value",
+                &value.floatValue,
+                0.1f,
+                descriptor.hasRange ? descriptor.minValue : 0.0f,
+                descriptor.hasRange ? descriptor.maxValue : 0.0f,
+                "%.3f"));
     case EditorPropertyKind::Vec2:
     case EditorPropertyKind::Vec3:
     case EditorPropertyKind::Vec4:
@@ -186,7 +222,7 @@ bool DrawPropertyEditor(
         if (changed) {
             value.vec3Value = {values[0], values[1], values[2]};
         }
-        return changed;
+        return CaptureContinuousWidgetResult(changed);
     }
     case EditorPropertyKind::AssetRef:
         if (assetRegistry != nullptr && descriptor.assetKind != EditorAssetKind::Unknown) {
@@ -234,7 +270,7 @@ bool DrawPropertyEditor(
                     }
                     ImGui::EndCombo();
                 }
-                return changed;
+                return CaptureImmediateWidgetResult(changed);
             }
         }
         [[fallthrough]];
@@ -244,9 +280,9 @@ bool DrawPropertyEditor(
         std::snprintf(buffer.data(), buffer.size(), "%s", value.stringValue.c_str());
         if (ImGui::InputText("##value", buffer.data(), buffer.size())) {
             value.stringValue = buffer.data();
-            return true;
+            return CaptureContinuousWidgetResult(true);
         }
-        return false;
+        return CaptureContinuousWidgetResult(false);
     }
     case EditorPropertyKind::Enum:
         if (!descriptor.enumOptions.empty()) {
@@ -265,71 +301,18 @@ bool DrawPropertyEditor(
                 }
                 ImGui::EndCombo();
             }
-            return changed;
+            return CaptureImmediateWidgetResult(changed);
         } else {
             std::array<char, 256> buffer{};
             std::snprintf(buffer.data(), buffer.size(), "%s", value.stringValue.c_str());
             if (ImGui::InputText("##value", buffer.data(), buffer.size())) {
                 value.stringValue = buffer.data();
-                return true;
+                return CaptureContinuousWidgetResult(true);
             }
-            return false;
+            return CaptureContinuousWidgetResult(false);
         }
     }
-    return false;
-}
-
-void StageDetailsPropertyDelta(
-    EditorTransactionStack* transactions,
-    const EditorObjectHandle& selected,
-    const EditorPropertyDescriptor& descriptor,
-    const EditorPropertyValue& beforeValue,
-    const EditorPropertyValue& afterValue) {
-    if (transactions == nullptr) {
-        return;
-    }
-
-    const std::string beforeSummary = FormatEditorPropertyValue(descriptor, beforeValue);
-    const std::string afterSummary = FormatEditorPropertyValue(descriptor, afterValue);
-    if (beforeSummary == afterSummary) {
-        return;
-    }
-
-    EditorPropertyChange change{};
-    change.target = selected;
-    change.propertyPath = descriptor.name;
-    change.displayName = descriptor.displayName;
-    change.valueType = descriptor.valueType;
-    change.beforeValue = beforeSummary;
-    change.afterValue = afterSummary;
-    change.sourceRevision = selected.generation;
-    transactions->StagePropertyDelta(std::move(change));
-}
-
-bool ApplyDetailsPropertyValue(
-    const EditorDetailsPanelContext& context,
-    const EditorObjectHandle& selected,
-    const EditorPropertyDescriptor& descriptor,
-    const EditorPropertyValue& beforeValue,
-    const EditorPropertyValue& requestedValue,
-    std::string* errorMessage) {
-    if (context.propertyAccessor == nullptr) {
-        return false;
-    }
-    if (!context.propertyAccessor->Set(selected, descriptor, requestedValue, errorMessage)) {
-        return false;
-    }
-
-    EditorPropertyValue afterValue{};
-    if (context.propertyAccessor->Get(selected, descriptor, afterValue)) {
-        StageDetailsPropertyDelta(
-            context.transactions,
-            selected,
-            descriptor,
-            beforeValue,
-            afterValue);
-    }
-    return true;
+    return DetailsPropertyWidgetResult{};
 }
 
 bool DrawSelectedAssetApplyButton(
@@ -372,6 +355,26 @@ bool DrawSelectedAssetApplyButton(
     return false;
 }
 
+EditorDetailsEditControllerContext MakeDetailsEditControllerContext(
+    const EditorDetailsPanelContext& context) {
+    return EditorDetailsEditControllerContext{
+        context.propertyEditSession,
+        context.propertyAccessor,
+        context.previewPropertyAccessor,
+        context.transactions,
+        context.dirtyState,
+        context.notifications,
+        context.canMutateAuthoring,
+        true,
+        "editor.details"};
+}
+
+void DrawDetailsEditFailureTooltip(const EditorPropertyEditSessionResult& result) {
+    if (!result.applied && !result.message.empty() && ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", result.message.c_str());
+    }
+}
+
 } // namespace
 
 void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context) {
@@ -387,11 +390,26 @@ void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context) {
         ImGui::TextUnformatted("Property accessor unavailable.");
         return;
     }
+    if (context.propertyEditSession == nullptr) {
+        ImGui::TextUnformatted("Property edit session unavailable.");
+        return;
+    }
 
     const EditorObjectHandle* selected = context.selection->Primary();
     if (selected == nullptr) {
+        if (context.propertyEditSession->IsActive()) {
+            CancelEditorDetailsPropertyEdit(MakeDetailsEditControllerContext(context));
+        }
         ImGui::TextUnformatted("No editor object selected.");
         return;
+    }
+    if (context.propertyEditSession->IsActive() &&
+        !context.propertyEditSession->Target().SameObject(*selected)) {
+        CancelEditorDetailsPropertyEdit(MakeDetailsEditControllerContext(context));
+    }
+    if (context.propertyEditSession->IsActive() &&
+        (!context.canMutateAuthoring || ImGui::IsKeyPressed(ImGuiKey_Escape))) {
+        CancelEditorDetailsPropertyEdit(MakeDetailsEditControllerContext(context));
     }
 
     const std::vector<const EditorPropertyDescriptor*> properties =
@@ -456,20 +474,44 @@ void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context) {
             ImGui::TextUnformatted(displayValue.c_str());
         } else {
             EditorPropertyValue editedValue = value;
-            bool applyRequested = DrawPropertyEditor(*descriptor, editedValue, context.assetRegistry);
-            applyRequested = DrawSelectedAssetApplyButton(context, *descriptor, value, editedValue) || applyRequested;
-            if (applyRequested) {
-                std::string errorMessage;
-                if (!ApplyDetailsPropertyValue(
-                        context,
+            const EditorDetailsEditControllerContext editContext =
+                MakeDetailsEditControllerContext(context);
+            const DetailsPropertyWidgetResult editResult =
+                DrawPropertyEditor(*descriptor, editedValue, context.assetRegistry);
+            if (editResult.activated) {
+                const EditorPropertyEditSessionResult beginResult =
+                    BeginEditorDetailsPropertyEdit(editContext, *selected, *descriptor);
+                DrawDetailsEditFailureTooltip(beginResult);
+            }
+            if (editResult.changed) {
+                const EditorPropertyEditSessionResult mutationResult =
+                    editResult.commitImmediately
+                        ? ApplyEditorDetailsImmediatePropertyEdit(
+                            editContext,
+                            *selected,
+                            *descriptor,
+                            editedValue)
+                        : PreviewEditorDetailsPropertyEdit(
+                            editContext,
+                            *selected,
+                            *descriptor,
+                            editedValue);
+                DrawDetailsEditFailureTooltip(mutationResult);
+            }
+            if (editResult.deactivatedAfterEdit && context.propertyEditSession->IsActive()) {
+                const EditorPropertyEditSessionResult commitResult =
+                    CommitEditorDetailsPropertyEdit(editContext);
+                DrawDetailsEditFailureTooltip(commitResult);
+            }
+            EditorPropertyValue selectedAssetValue = value;
+            if (DrawSelectedAssetApplyButton(context, *descriptor, value, selectedAssetValue)) {
+                const EditorPropertyEditSessionResult mutationResult =
+                    ApplyEditorDetailsImmediatePropertyEdit(
+                        editContext,
                         *selected,
                         *descriptor,
-                        value,
-                        editedValue,
-                        &errorMessage) &&
-                    !errorMessage.empty()) {
-                    ImGui::SetTooltip("%s", errorMessage.c_str());
-                }
+                        selectedAssetValue);
+                DrawDetailsEditFailureTooltip(mutationResult);
             }
         }
         ImGui::PopID();

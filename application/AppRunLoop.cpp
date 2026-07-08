@@ -26,6 +26,10 @@
 #include "AppRuntimeState.h"
 #include "AppSceneResources.h"
 #include "EngineContext.h"
+#include "editor/CourseObjectPropertyAdapter.h"
+#include "editor/EditorPropertyEditService.h"
+#include "editor/EditorPropertyEditSession.h"
+#include "editor/EditorPropertyRegistry.h"
 #include "editor/EditorViewportOverlay.h"
 #include "utils/dx12/BufferHelper.h"
 
@@ -789,14 +793,150 @@ Vector3 SnapCourseObjectVector(const Vector3& value, float step) {
 
 std::string FormatGizmoFloat(float value) {
     char buffer[64]{};
-    std::snprintf(buffer, sizeof(buffer), "%.3f", value);
+    std::snprintf(buffer, sizeof(buffer), "%.6f", value);
     return buffer;
 }
 
 std::string FormatGizmoVector3(const Vector3& value) {
     char buffer[128]{};
-    std::snprintf(buffer, sizeof(buffer), "%.3f, %.3f, %.3f", value.x, value.y, value.z);
+    std::snprintf(buffer, sizeof(buffer), "%.6f, %.6f, %.6f", value.x, value.y, value.z);
     return buffer;
+}
+
+constexpr float kCourseGizmoPropertyEpsilon = 0.0001f;
+constexpr float kCourseGizmoRadiansToDegrees = 180.0f / 3.14159265358979323846f;
+
+bool CourseGizmoFloatChanged(float before, float after) {
+    return std::fabs(before - after) > kCourseGizmoPropertyEpsilon;
+}
+
+bool CourseGizmoVectorChanged(const Vector3& before, const Vector3& after) {
+    return CourseGizmoFloatChanged(before.x, after.x) ||
+        CourseGizmoFloatChanged(before.y, after.y) ||
+        CourseGizmoFloatChanged(before.z, after.z);
+}
+
+Vector3 CourseGizmoRotationDegrees(const Vector3& radians) {
+    return {
+        radians.x * kCourseGizmoRadiansToDegrees,
+        radians.y * kCourseGizmoRadiansToDegrees,
+        radians.z * kCourseGizmoRadiansToDegrees,
+    };
+}
+
+editor::EditorPropertyValue CourseGizmoFloatValue(float value) {
+    editor::EditorPropertyValue propertyValue{};
+    propertyValue.floatValue = value;
+    return propertyValue;
+}
+
+editor::EditorPropertyValue CourseGizmoVec3Value(const Vector3& value) {
+    editor::EditorPropertyValue propertyValue{};
+    propertyValue.vec3Value = value;
+    return propertyValue;
+}
+
+editor::EditorObjectHandle MakeCourseGizmoHandle(
+    editor::EditorDomainId domain,
+    const char* stablePrefix,
+    const char* displayPrefix,
+    std::size_t index,
+    uint32_t generation) {
+    editor::EditorObjectHandle handle{};
+    handle.domain = domain;
+    handle.stableId = editor::BuildStableIndexedId(stablePrefix, static_cast<uint64_t>(index));
+    handle.localIndex = static_cast<uint64_t>(index);
+    handle.generation = generation;
+    handle.displayName = std::string(displayPrefix) + " #" + std::to_string(index);
+    return handle;
+}
+
+void RegisterCourseObjectViewportGizmoProperties(editor::EditorPropertyRegistry& registry) {
+    const auto registerTransform =
+        [&](editor::EditorDomainId domain,
+            const char* propertyPath,
+            const char* displayName) {
+            editor::EditorPropertyDescriptor descriptor{};
+            descriptor.domain = domain;
+            descriptor.name = propertyPath;
+            descriptor.displayName = displayName;
+            descriptor.kind = editor::EditorPropertyKind::String;
+            descriptor.category = "Viewport Gizmo";
+            descriptor.valueType = "transform";
+            registry.Register(std::move(descriptor));
+        };
+
+    registerTransform(
+        editor::EditorDomainId::CourseTerrainPlacement,
+        "CourseTerrainPlacement.transform.translate",
+        "Transform Gizmo Translate");
+    registerTransform(
+        editor::EditorDomainId::CourseTerrainPlacement,
+        "CourseTerrainPlacement.transform.scale",
+        "Transform Gizmo Scale");
+    registerTransform(
+        editor::EditorDomainId::CourseTerrainPlacement,
+        "CourseTerrainPlacement.transform.rotation",
+        "Transform Gizmo Rotate");
+    registerTransform(
+        editor::EditorDomainId::CourseRockCluster,
+        "CourseRockCluster.transform.translate",
+        "Transform Gizmo Translate");
+    registerTransform(
+        editor::EditorDomainId::CourseRockCluster,
+        "CourseRockCluster.transform.scale",
+        "Transform Gizmo Scale");
+    registerTransform(
+        editor::EditorDomainId::CourseRockCluster,
+        "CourseRockCluster.transform.rotation",
+        "Transform Gizmo Rotate");
+}
+
+std::vector<editor::EditorPropertyEditSessionProperty> BuildCourseGizmoSessionProperties(
+    const editor::EditorPropertyRegistry& registry,
+    const editor::EditorObjectHandle& target,
+    int type,
+    int gizmoMode) {
+    std::vector<editor::EditorPropertyEditSessionProperty> properties;
+    const auto addProperty =
+        [&](const char* propertyPath) {
+            const editor::EditorPropertyDescriptor* descriptor =
+                registry.Find(target.domain, propertyPath);
+            if (descriptor == nullptr) {
+                return;
+            }
+            properties.push_back(
+                editor::EditorPropertyEditSessionProperty{
+                    target,
+                    *descriptor});
+        };
+
+    const bool scaleMode = gizmoMode == 1;
+    const bool rotateMode = gizmoMode == 2;
+    if (type == 0) {
+        if (rotateMode) {
+            addProperty("CourseTerrainPlacement.rotation");
+        } else if (scaleMode) {
+            addProperty("CourseTerrainPlacement.scale");
+        } else {
+            addProperty("CourseTerrainPlacement.lateralOffset");
+            addProperty("CourseTerrainPlacement.verticalOffset");
+            addProperty("CourseTerrainPlacement.forwardOffset");
+        }
+    } else if (type == 1) {
+        if (rotateMode) {
+            addProperty("CourseRockCluster.rotation");
+        } else if (scaleMode) {
+            addProperty("CourseRockCluster.minScale");
+            addProperty("CourseRockCluster.maxScale");
+            addProperty("CourseRockCluster.spread");
+        } else {
+            addProperty("CourseRockCluster.clearLaneRadius");
+            addProperty("CourseRockCluster.distance");
+            addProperty("CourseRockCluster.spread");
+        }
+    }
+    return properties;
 }
 
 std::string FormatGizmoTerrainTransform(
@@ -5061,6 +5201,313 @@ void AppRunLoop::RestoreCourseObjectSnapshot(const CourseObjectEditSnapshot& sna
     runtimeState_.terrain.selectedCourseRockCluster = snapshot.selectedRockCluster;
 }
 
+bool AppRunLoop::BeginCourseObjectGizmoEditSession() {
+    if (!courseObjectDrag_.active || courseObjectDrag_.index < 0) {
+        return false;
+    }
+
+    const std::size_t index = static_cast<std::size_t>(courseObjectDrag_.index);
+    editor::EditorObjectHandle target{};
+    if (courseObjectDrag_.type == 0 &&
+        courseObjectDrag_.index < static_cast<int>(railShooterCourse_.terrainPlacements.size())) {
+        target =
+            MakeCourseGizmoHandle(
+                editor::EditorDomainId::CourseTerrainPlacement,
+                "course-terrain",
+                "Course Terrain",
+                index,
+                runtimeState_.terrain.courseObjectEditRevision);
+    } else if (
+        courseObjectDrag_.type == 1 &&
+        courseObjectDrag_.index < static_cast<int>(railShooterCourse_.rockClusters.size())) {
+        target =
+            MakeCourseGizmoHandle(
+                editor::EditorDomainId::CourseRockCluster,
+                "course-rock",
+                "Course Rock Cluster",
+                index,
+                runtimeState_.terrain.courseObjectEditRevision);
+    } else {
+        return false;
+    }
+
+    editor::EditorPropertyRegistry propertyRegistry;
+    editor::RegisterBuiltInCourseObjectProperties(propertyRegistry);
+    std::vector<editor::EditorPropertyEditSessionProperty> properties =
+        BuildCourseGizmoSessionProperties(
+            propertyRegistry,
+            target,
+            courseObjectDrag_.type,
+            courseObjectDrag_.gizmoMode);
+    if (properties.empty()) {
+        return false;
+    }
+
+    editor::CourseObjectPropertyAdapter previewAccessor(&railShooterCourse_, &runtimeState_, false);
+    const editor::EditorPropertyEditSessionResult result =
+        courseObjectGizmoEditSession_.Begin(
+            editor::EditorPropertyEditSessionBeginRequest{
+                &previewAccessor,
+                std::move(properties),
+                CourseGizmoLabel(courseObjectDrag_.gizmoMode),
+                target,
+                true,
+                false,
+                "viewport.gizmo"});
+    return result.applied;
+}
+
+bool AppRunLoop::PreviewCourseObjectGizmoEditSession(
+    std::vector<editor::EditorPropertyEditSessionValue> values) {
+    if (!courseObjectGizmoEditSession_.IsActive()) {
+        return false;
+    }
+    editor::CourseObjectPropertyAdapter previewAccessor(&railShooterCourse_, &runtimeState_, false);
+    const editor::EditorPropertyEditSessionResult result =
+        courseObjectGizmoEditSession_.Preview(
+            editor::EditorPropertyEditSessionPreviewRequest{
+                &previewAccessor,
+                std::move(values),
+                true,
+                false,
+                "viewport.gizmo"});
+    return result.applied && result.changed;
+}
+
+bool AppRunLoop::CancelCourseObjectDragIfNeeded() {
+    if (!courseObjectDrag_.active) {
+        return false;
+    }
+
+    if (courseObjectGizmoEditSession_.IsActive()) {
+        editor::CourseObjectPropertyAdapter previewAccessor(&railShooterCourse_, &runtimeState_, false);
+        courseObjectGizmoEditSession_.Cancel(
+            editor::EditorPropertyEditSessionCancelRequest{
+                &previewAccessor,
+                false,
+                "viewport.gizmo"});
+    }
+    courseObjectDrag_.active = false;
+    courseObjectDrag_.changed = false;
+    runtimeState_.terrain.courseObjectActiveAxis = -1;
+    return true;
+}
+
+bool AppRunLoop::ApplyCourseObjectGizmoEditThroughServiceIfPossible() {
+    if (!courseObjectDrag_.changed || courseObjectDrag_.index < 0) {
+        return false;
+    }
+
+    editor::EditorPropertyRegistry propertyRegistry;
+    editor::RegisterBuiltInCourseObjectProperties(propertyRegistry);
+    editor::CourseObjectPropertyAdapter propertyAccessor(&railShooterCourse_, &runtimeState_);
+    editor::EditorPropertyEditService propertyEditService;
+
+    std::vector<editor::EditorPropertyBatchEdit> edits;
+    const auto addFloatEdit =
+        [&](const editor::EditorObjectHandle& target,
+            const char* propertyPath,
+            float beforeValue,
+            float afterValue) {
+            if (!CourseGizmoFloatChanged(beforeValue, afterValue)) {
+                return;
+            }
+            const editor::EditorPropertyDescriptor* descriptor =
+                propertyRegistry.Find(target.domain, propertyPath);
+            if (descriptor == nullptr) {
+                return;
+            }
+            edits.push_back(
+                editor::EditorPropertyBatchEdit{
+                    target,
+                    descriptor,
+                    CourseGizmoFloatValue(afterValue)});
+        };
+    const auto addVec3Edit =
+        [&](const editor::EditorObjectHandle& target,
+            const char* propertyPath,
+            const Vector3& beforeValue,
+            const Vector3& afterValue) {
+            if (!CourseGizmoVectorChanged(beforeValue, afterValue)) {
+                return;
+            }
+            const editor::EditorPropertyDescriptor* descriptor =
+                propertyRegistry.Find(target.domain, propertyPath);
+            if (descriptor == nullptr) {
+                return;
+            }
+            edits.push_back(
+                editor::EditorPropertyBatchEdit{
+                    target,
+                    descriptor,
+                    CourseGizmoVec3Value(afterValue)});
+        };
+
+    const bool scaleMode = courseObjectDrag_.gizmoMode == 1;
+    const bool rotateMode = courseObjectDrag_.gizmoMode == 2;
+    editor::EditorObjectHandle transactionTarget{};
+
+    if (courseObjectDrag_.type == 0 &&
+        courseObjectDrag_.index < static_cast<int>(railShooterCourse_.terrainPlacements.size())) {
+        const std::size_t index = static_cast<std::size_t>(courseObjectDrag_.index);
+        CourseTerrainPlacement& placement = railShooterCourse_.terrainPlacements[index];
+        const editor::EditorObjectHandle target =
+            MakeCourseGizmoHandle(
+                editor::EditorDomainId::CourseTerrainPlacement,
+                "course-terrain",
+                "Course Terrain",
+                index,
+                runtimeState_.terrain.courseObjectEditRevision);
+        transactionTarget = target;
+
+        if (rotateMode) {
+            addVec3Edit(
+                target,
+                "CourseTerrainPlacement.rotation",
+                CourseGizmoRotationDegrees(courseObjectDrag_.startRotation),
+                CourseGizmoRotationDegrees(placement.rotation));
+        } else if (scaleMode) {
+            addVec3Edit(
+                target,
+                "CourseTerrainPlacement.scale",
+                courseObjectDrag_.startScale,
+                placement.scale);
+        } else {
+            addFloatEdit(
+                target,
+                "CourseTerrainPlacement.lateralOffset",
+                courseObjectDrag_.startLateral,
+                placement.lateralOffset);
+            addFloatEdit(
+                target,
+                "CourseTerrainPlacement.verticalOffset",
+                courseObjectDrag_.startVertical,
+                placement.verticalOffset);
+            addFloatEdit(
+                target,
+                "CourseTerrainPlacement.forwardOffset",
+                courseObjectDrag_.startForward,
+                placement.forwardOffset);
+        }
+
+        const CourseTerrainPlacement finalPlacement = placement;
+        placement.distance = courseObjectDrag_.startDistance;
+        placement.lateralOffset = courseObjectDrag_.startLateral;
+        placement.verticalOffset = courseObjectDrag_.startVertical;
+        placement.forwardOffset = courseObjectDrag_.startForward;
+        placement.scale = courseObjectDrag_.startScale;
+        placement.rotation = courseObjectDrag_.startRotation;
+        if (edits.empty()) {
+            placement = finalPlacement;
+            return false;
+        }
+        const editor::EditorPropertyBatchEditResult result =
+            propertyEditService.ApplyBatch(
+                editor::EditorPropertyBatchEditRequest{
+                    &propertyAccessor,
+                    &courseObjectTransactions_,
+                    nullptr,
+                    nullptr,
+                    std::move(edits),
+                    CourseGizmoLabel(courseObjectDrag_.gizmoMode),
+                    transactionTarget,
+                    true,
+                    false,
+                    "viewport.gizmo"});
+        if (result.applied && result.changed) {
+            return true;
+        }
+        placement = finalPlacement;
+        return false;
+    }
+
+    if (courseObjectDrag_.type == 1 &&
+        courseObjectDrag_.index < static_cast<int>(railShooterCourse_.rockClusters.size())) {
+        const std::size_t index = static_cast<std::size_t>(courseObjectDrag_.index);
+        CourseRockCluster& cluster = railShooterCourse_.rockClusters[index];
+        const editor::EditorObjectHandle target =
+            MakeCourseGizmoHandle(
+                editor::EditorDomainId::CourseRockCluster,
+                "course-rock",
+                "Course Rock Cluster",
+                index,
+                runtimeState_.terrain.courseObjectEditRevision);
+        transactionTarget = target;
+
+        if (rotateMode) {
+            addVec3Edit(
+                target,
+                "CourseRockCluster.rotation",
+                CourseGizmoRotationDegrees(courseObjectDrag_.startRotation),
+                CourseGizmoRotationDegrees(cluster.rotation));
+        } else if (scaleMode) {
+            addFloatEdit(
+                target,
+                "CourseRockCluster.minScale",
+                courseObjectDrag_.startMinScale,
+                cluster.minScale);
+            addFloatEdit(
+                target,
+                "CourseRockCluster.maxScale",
+                courseObjectDrag_.startMaxScale,
+                cluster.maxScale);
+            addVec3Edit(
+                target,
+                "CourseRockCluster.spread",
+                courseObjectDrag_.startSpread,
+                cluster.spread);
+        } else {
+            addFloatEdit(
+                target,
+                "CourseRockCluster.clearLaneRadius",
+                courseObjectDrag_.startClearLaneRadius,
+                cluster.clearLaneRadius);
+            addFloatEdit(
+                target,
+                "CourseRockCluster.distance",
+                courseObjectDrag_.startDistance,
+                cluster.distance);
+            addVec3Edit(
+                target,
+                "CourseRockCluster.spread",
+                courseObjectDrag_.startSpread,
+                cluster.spread);
+        }
+
+        const CourseRockCluster finalCluster = cluster;
+        cluster.distance = courseObjectDrag_.startDistance;
+        cluster.minScale = courseObjectDrag_.startMinScale;
+        cluster.maxScale = courseObjectDrag_.startMaxScale;
+        cluster.spread = courseObjectDrag_.startSpread;
+        cluster.clearLaneRadius = courseObjectDrag_.startClearLaneRadius;
+        cluster.rotation = courseObjectDrag_.startRotation;
+        if (edits.empty()) {
+            cluster = finalCluster;
+            return false;
+        }
+        const editor::EditorPropertyBatchEditResult result =
+            propertyEditService.ApplyBatch(
+                editor::EditorPropertyBatchEditRequest{
+                    &propertyAccessor,
+                    &courseObjectTransactions_,
+                    nullptr,
+                    nullptr,
+                    std::move(edits),
+                    CourseGizmoLabel(courseObjectDrag_.gizmoMode),
+                    transactionTarget,
+                    true,
+                    false,
+                    "viewport.gizmo"});
+        if (result.applied && result.changed) {
+            return true;
+        }
+        cluster = finalCluster;
+        return false;
+    }
+
+    return false;
+}
+
 void AppRunLoop::StageCourseObjectGizmoTransactionIfNeeded() {
     if (!courseObjectDrag_.changed || courseObjectDrag_.index < 0) {
         return;
@@ -5142,9 +5589,33 @@ bool AppRunLoop::CommitCourseObjectDragIfNeeded() {
 
     bool committed = false;
     if (courseObjectDrag_.changed) {
-        StageCourseObjectGizmoTransactionIfNeeded();
-        ++runtimeState_.terrain.courseObjectEditRevision;
-        committed = true;
+        if (courseObjectGizmoEditSession_.IsActive()) {
+            editor::CourseObjectPropertyAdapter commitAccessor(&railShooterCourse_, &runtimeState_, true);
+            editor::CourseObjectPropertyAdapter previewAccessor(&railShooterCourse_, &runtimeState_, false);
+            const editor::EditorPropertyEditSessionResult result =
+                courseObjectGizmoEditSession_.Commit(
+                    editor::EditorPropertyEditSessionCommitRequest{
+                        &commitAccessor,
+                        &previewAccessor,
+                        &courseObjectTransactions_,
+                        nullptr,
+                        nullptr,
+                        true,
+                        false,
+                        "viewport.gizmo"});
+            committed = result.applied && result.changed;
+        } else if (!ApplyCourseObjectGizmoEditThroughServiceIfPossible()) {
+            StageCourseObjectGizmoTransactionIfNeeded();
+            ++runtimeState_.terrain.courseObjectEditRevision;
+            committed = true;
+        }
+    } else if (courseObjectGizmoEditSession_.IsActive()) {
+        editor::CourseObjectPropertyAdapter previewAccessor(&railShooterCourse_, &runtimeState_, false);
+        courseObjectGizmoEditSession_.Cancel(
+            editor::EditorPropertyEditSessionCancelRequest{
+                &previewAccessor,
+                false,
+                "viewport.gizmo"});
     }
 
     courseObjectDrag_.active = false;
@@ -5182,20 +5653,39 @@ void AppRunLoop::CommitCourseObjectHistoryIfNeeded() {
     }
     courseObjectTransactions_.SetMaxHistory(kMaxCourseObjectUndo);
     if (courseObjectTransactions_.HasStagedPropertyDelta()) {
-        editor::EditorPropertyChange propertyChange = courseObjectTransactions_.ConsumeStagedPropertyDelta();
-        if (propertyChange.target.domain == editor::EditorDomainId::Unknown) {
-            propertyChange.target.domain = editor::EditorDomainId::CourseTerrainPlacement;
-            propertyChange.target.stableId = "course-object-history";
-            propertyChange.target.displayName = "Course Object History";
+        std::vector<editor::EditorPropertyChange> propertyChanges =
+            courseObjectTransactions_.ConsumeStagedPropertyDeltas();
+        for (editor::EditorPropertyChange& propertyChange : propertyChanges) {
+            if (propertyChange.target.domain == editor::EditorDomainId::Unknown) {
+                propertyChange.target.domain = editor::EditorDomainId::CourseTerrainPlacement;
+                propertyChange.target.stableId = "course-object-history";
+                propertyChange.target.displayName = "Course Object History";
+            }
+            propertyChange.target.generation = editor.courseObjectEditRevision;
         }
-        propertyChange.target.generation = editor.courseObjectEditRevision;
-        courseObjectTransactions_.PushPropertyDelta(
-            propertyChange.displayName.empty() ? "Course Property Edit" : propertyChange.displayName,
-            std::move(propertyChange.target),
-            std::move(propertyChange.propertyPath),
-            std::move(propertyChange.valueType),
-            std::move(propertyChange.beforeValue),
-            std::move(propertyChange.afterValue));
+        if (propertyChanges.size() == 1) {
+            editor::EditorPropertyChange propertyChange = std::move(propertyChanges.front());
+            courseObjectTransactions_.PushPropertyDelta(
+                propertyChange.displayName.empty() ? "Course Property Edit" : propertyChange.displayName,
+                std::move(propertyChange.target),
+                std::move(propertyChange.propertyPath),
+                std::move(propertyChange.valueType),
+                std::move(propertyChange.beforeValue),
+                std::move(propertyChange.afterValue));
+        } else if (!propertyChanges.empty()) {
+            editor::EditorObjectHandle transactionTarget{};
+            transactionTarget.domain = propertyChanges.front().target.domain;
+            transactionTarget.stableId = propertyChanges.front().target.stableId;
+            transactionTarget.localIndex = propertyChanges.front().target.localIndex;
+            transactionTarget.generation = editor.courseObjectEditRevision;
+            transactionTarget.displayName = propertyChanges.front().target.displayName;
+            courseObjectTransactions_.PushMultiPropertyDelta(
+                propertyChanges.front().displayName.empty()
+                    ? "Course Property Batch Edit"
+                    : propertyChanges.front().displayName,
+                std::move(transactionTarget),
+                std::move(propertyChanges));
+        }
     } else {
         editor::EditorObjectHandle transactionTarget{};
         transactionTarget.domain = editor::EditorDomainId::CourseTerrainPlacement;
@@ -5218,12 +5708,65 @@ void AppRunLoop::CommitCourseObjectHistoryIfNeeded() {
 void AppRunLoop::ProcessCourseObjectUndoRedo() {
     EnsureCourseObjectHistoryBaseline();
     TerrainAuthoringState& editor = runtimeState_.terrain;
+    editor::EditorPropertyRegistry propertyRegistry;
+    editor::RegisterBuiltInCourseObjectProperties(propertyRegistry);
+    RegisterCourseObjectViewportGizmoProperties(propertyRegistry);
+    editor::CourseObjectPropertyAdapter propertyAccessor(&railShooterCourse_, &runtimeState_);
+    editor::EditorPropertyEditService propertyEditService;
+
+    const auto applyPropertyDelta =
+        [&](const editor::EditorTransactionRecord& record,
+            editor::EditorTransactionApplyMode mode) {
+            if (record.payload.kind != editor::EditorTransactionPayloadKind::PropertyDelta &&
+                record.payload.kind != editor::EditorTransactionPayloadKind::MultiPropertyDelta) {
+                return false;
+            }
+            if (mode == editor::EditorTransactionApplyMode::Undo && courseObjectUndoStack_.empty()) {
+                return false;
+            }
+            if (mode == editor::EditorTransactionApplyMode::Redo && courseObjectRedoStack_.empty()) {
+                return false;
+            }
+
+            const CourseObjectEditSnapshot currentSnapshot = CaptureCourseObjectSnapshot();
+            const editor::EditorPropertyApplyDeltaResult result =
+                propertyEditService.ApplyDelta(
+                    editor::EditorPropertyApplyDeltaRequest{
+                        &propertyAccessor,
+                        nullptr,
+                        nullptr,
+                        &propertyRegistry,
+                        &record,
+                        mode,
+                        true,
+                        false,
+                        "course.undoRedo"});
+            if (!result.applied) {
+                return false;
+            }
+
+            if (mode == editor::EditorTransactionApplyMode::Undo) {
+                courseObjectRedoStack_.push_back(currentSnapshot);
+                courseObjectUndoStack_.pop_back();
+            } else {
+                courseObjectUndoStack_.push_back(currentSnapshot);
+                courseObjectRedoStack_.pop_back();
+            }
+            courseObjectHistoryBaseline_ = CaptureCourseObjectSnapshot();
+            courseObjectHistoryRevision_ = editor.courseObjectEditRevision;
+            return true;
+        };
 
     if (editor.courseObjectUndoRequested) {
         editor.courseObjectUndoRequested = false;
         if (!courseObjectUndoStack_.empty() &&
             courseObjectTransactions_.Undo(
-                [this, &editor](const editor::EditorTransactionRecord&, editor::EditorTransactionApplyMode) {
+                [this, &editor, &applyPropertyDelta](
+                    const editor::EditorTransactionRecord& record,
+                    editor::EditorTransactionApplyMode mode) {
+                    if (applyPropertyDelta(record, mode)) {
+                        return true;
+                    }
                     if (courseObjectUndoStack_.empty()) {
                         return false;
                     }
@@ -5252,7 +5795,12 @@ void AppRunLoop::ProcessCourseObjectUndoRedo() {
         editor.courseObjectRedoRequested = false;
         if (!courseObjectRedoStack_.empty() &&
             courseObjectTransactions_.Redo(
-                [this, &editor](const editor::EditorTransactionRecord&, editor::EditorTransactionApplyMode) {
+                [this, &editor, &applyPropertyDelta](
+                    const editor::EditorTransactionRecord& record,
+                    editor::EditorTransactionApplyMode mode) {
+                    if (applyPropertyDelta(record, mode)) {
+                        return true;
+                    }
                     if (courseObjectRedoStack_.empty()) {
                         return false;
                     }
@@ -5308,18 +5856,14 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
     if (!inputGuard.CanUseViewportInput(editor.enableCourseObjectViewportEditing) ||
         hwnd_ == nullptr ||
         railPath_.Length() <= 0.0f) {
-        if (CommitCourseObjectDragIfNeeded()) {
-            CommitCourseObjectHistoryIfNeeded();
-        }
+        CancelCourseObjectDragIfNeeded();
         previousCourseEditorLeftMouseDown_ = leftMouseDown;
         return;
     }
 
     POINT cursor{};
     if (!GetCursorPos(&cursor) || !ScreenToClient(hwnd_, &cursor)) {
-        if (CommitCourseObjectDragIfNeeded()) {
-            CommitCourseObjectHistoryIfNeeded();
-        }
+        CancelCourseObjectDragIfNeeded();
         previousCourseEditorLeftMouseDown_ = leftMouseDown;
         return;
     }
@@ -5411,19 +5955,21 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                 courseObjectDrag_.startClearLaneRadius = cluster.clearLaneRadius;
                 courseObjectDrag_.startRotation = cluster.rotation;
             }
+            if (!BeginCourseObjectGizmoEditSession()) {
+                courseObjectDrag_.active = false;
+                editor.courseObjectActiveAxis = -1;
+            }
         } else {
             editor.selectedCourseTerrainPlacement = -1;
             editor.selectedCourseRockCluster = -1;
             editor.courseObjectActiveAxis = -1;
-            courseObjectDrag_.active = false;
+            CancelCourseObjectDragIfNeeded();
         }
     }
 
     if (courseObjectDrag_.active && leftMouseDown) {
         if (!cursorInViewport) {
-            if (CommitCourseObjectDragIfNeeded()) {
-                CommitCourseObjectHistoryIfNeeded();
-            }
+            CancelCourseObjectDragIfNeeded();
             previousCourseEditorLeftMouseDown_ = leftMouseDown;
             return;
         }
@@ -5444,6 +5990,14 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
             courseObjectDrag_.index < static_cast<int>(railShooterCourse_.terrainPlacements.size())) {
             CourseTerrainPlacement& placement =
                 railShooterCourse_.terrainPlacements[static_cast<size_t>(courseObjectDrag_.index)];
+            const std::size_t index = static_cast<std::size_t>(courseObjectDrag_.index);
+            const editor::EditorObjectHandle target =
+                MakeCourseGizmoHandle(
+                    editor::EditorDomainId::CourseTerrainPlacement,
+                    "course-terrain",
+                    "Course Terrain",
+                    index,
+                    runtimeState_.terrain.courseObjectEditRevision);
             if (rotateMode) {
                 Vector3 rotation = courseObjectDrag_.startRotation;
                 float delta = signedDrag * (std::max)(0.0001f, editor.courseObjectRotateSensitivity);
@@ -5464,7 +6018,14 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     placement.rotation.x != rotation.x ||
                     placement.rotation.y != rotation.y ||
                     placement.rotation.z != rotation.z;
-                placement.rotation = rotation;
+                changed =
+                    PreviewCourseObjectGizmoEditSession(
+                        {
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseTerrainPlacement.rotation",
+                                CourseGizmoVec3Value(CourseGizmoRotationDegrees(rotation))},
+                        }) || changed;
             } else if (scaleMode) {
                 Vector3 scale = Scale(courseObjectDrag_.startScale, scaleFactor);
                 if (axis == 0) {
@@ -5487,7 +6048,14 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     placement.scale.x != scale.x ||
                     placement.scale.y != scale.y ||
                     placement.scale.z != scale.z;
-                placement.scale = scale;
+                changed =
+                    PreviewCourseObjectGizmoEditSession(
+                        {
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseTerrainPlacement.scale",
+                                CourseGizmoVec3Value(scale)},
+                        }) || changed;
             } else {
                 float lateral = courseObjectDrag_.startLateral + dx * moveSensitivity;
                 float vertical = courseObjectDrag_.startVertical;
@@ -5517,15 +6085,36 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     placement.lateralOffset != lateral ||
                     placement.verticalOffset != vertical ||
                     placement.forwardOffset != forward;
-                placement.lateralOffset = lateral;
-                placement.verticalOffset = vertical;
-                placement.forwardOffset = forward;
+                changed =
+                    PreviewCourseObjectGizmoEditSession(
+                        {
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseTerrainPlacement.lateralOffset",
+                                CourseGizmoFloatValue(lateral)},
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseTerrainPlacement.verticalOffset",
+                                CourseGizmoFloatValue(vertical)},
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseTerrainPlacement.forwardOffset",
+                                CourseGizmoFloatValue(forward)},
+                        }) || changed;
             }
         } else if (courseObjectDrag_.type == 1 &&
             courseObjectDrag_.index >= 0 &&
             courseObjectDrag_.index < static_cast<int>(railShooterCourse_.rockClusters.size())) {
             CourseRockCluster& cluster =
                 railShooterCourse_.rockClusters[static_cast<size_t>(courseObjectDrag_.index)];
+            const std::size_t index = static_cast<std::size_t>(courseObjectDrag_.index);
+            const editor::EditorObjectHandle target =
+                MakeCourseGizmoHandle(
+                    editor::EditorDomainId::CourseRockCluster,
+                    "course-rock",
+                    "Course Rock Cluster",
+                    index,
+                    runtimeState_.terrain.courseObjectEditRevision);
             if (rotateMode) {
                 Vector3 rotation = courseObjectDrag_.startRotation;
                 float delta = signedDrag * (std::max)(0.0001f, editor.courseObjectRotateSensitivity);
@@ -5546,7 +6135,14 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     cluster.rotation.x != rotation.x ||
                     cluster.rotation.y != rotation.y ||
                     cluster.rotation.z != rotation.z;
-                cluster.rotation = rotation;
+                changed =
+                    PreviewCourseObjectGizmoEditSession(
+                        {
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseRockCluster.rotation",
+                                CourseGizmoVec3Value(CourseGizmoRotationDegrees(rotation))},
+                        }) || changed;
             } else if (scaleMode) {
                 float minScale = courseObjectDrag_.startMinScale * scaleFactor;
                 float maxScale = courseObjectDrag_.startMaxScale * scaleFactor;
@@ -5583,9 +6179,22 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     cluster.spread.x != spread.x ||
                     cluster.spread.y != spread.y ||
                     cluster.spread.z != spread.z;
-                cluster.minScale = minScale;
-                cluster.maxScale = maxScale;
-                cluster.spread = spread;
+                changed =
+                    PreviewCourseObjectGizmoEditSession(
+                        {
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseRockCluster.minScale",
+                                CourseGizmoFloatValue(minScale)},
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseRockCluster.maxScale",
+                                CourseGizmoFloatValue(maxScale)},
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseRockCluster.spread",
+                                CourseGizmoVec3Value(spread)},
+                        }) || changed;
             } else {
                 float clearLane = courseObjectDrag_.startClearLaneRadius + dx * moveSensitivity;
                 float distance = courseObjectDrag_.startDistance;
@@ -5619,9 +6228,22 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     cluster.spread.x != spread.x ||
                     cluster.spread.y != spread.y ||
                     cluster.spread.z != spread.z;
-                cluster.clearLaneRadius = clearLane;
-                cluster.distance = distance;
-                cluster.spread = spread;
+                changed =
+                    PreviewCourseObjectGizmoEditSession(
+                        {
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseRockCluster.clearLaneRadius",
+                                CourseGizmoFloatValue(clearLane)},
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseRockCluster.distance",
+                                CourseGizmoFloatValue(distance)},
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseRockCluster.spread",
+                                CourseGizmoVec3Value(spread)},
+                        }) || changed;
             }
         }
 

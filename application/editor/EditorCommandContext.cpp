@@ -81,8 +81,8 @@ EditorCommandContext BuildEditorCommandContext(const EditorCommandContextInput& 
         const EditorTransactionLegacyMirror& legacyMirror = input.transactions->LegacyMirror();
         context.transactionRevision = input.transactions->Revision();
         if (legacyMirror.active) {
-            context.canUndo = legacyMirror.undoDepth > 0;
-            context.canRedo = legacyMirror.redoDepth > 0;
+            context.canUndo = legacyMirror.undoDepth > 0 || input.transactions->CanUndo();
+            context.canRedo = legacyMirror.redoDepth > 0 || input.transactions->CanRedo();
             context.transactionRevision = legacyMirror.revision;
         } else {
             context.canUndo = input.transactions->CanUndo();

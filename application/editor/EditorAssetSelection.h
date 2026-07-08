@@ -15,6 +15,8 @@ struct EditorAssetHandle {
     std::string displayName;
     std::string sourcePath;
     std::string metadataPath;
+    std::string thumbnailKey;
+    uint64_t sourceTimestamp = 0;
     uint32_t registryRevision = 0;
     bool referenceable = false;
     bool missing = false;
@@ -25,6 +27,15 @@ struct EditorAssetHandle {
     bool SameAsset(const EditorAssetHandle& other) const {
         return kind == other.kind && id == other.id;
     }
+};
+
+struct EditorAssetHandleResolveResult {
+    const EditorAssetRecord* record = nullptr;
+    bool found = false;
+    bool revisionCurrent = false;
+    bool identityCurrent = false;
+
+    bool Current() const { return found && revisionCurrent && identityCurrent; }
 };
 
 class EditorAssetSelection {
@@ -46,5 +57,14 @@ private:
 EditorAssetHandle MakeEditorAssetHandle(
     const EditorAssetRecord& record,
     uint32_t registryRevision);
+EditorAssetHandleResolveResult ResolveEditorAssetHandle(
+    const EditorAssetRegistry& registry,
+    const EditorAssetHandle& handle);
+bool IsEditorAssetHandleCurrent(
+    const EditorAssetRegistry& registry,
+    const EditorAssetHandle& handle);
+EditorAssetHandle RefreshEditorAssetHandle(
+    const EditorAssetRegistry& registry,
+    const EditorAssetHandle& handle);
 
 } // namespace editor

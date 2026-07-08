@@ -4,6 +4,7 @@
 #include <charconv>
 #include <fstream>
 #include <sstream>
+#include <utility>
 
 namespace editor {
 namespace {
@@ -47,6 +48,15 @@ bool ParseBool(std::string_view text, bool& value) {
 
 std::string PathText(const std::filesystem::path& path) {
     return path.generic_string();
+}
+
+bool HasPanel(const EditorPanelRegistry& registry, std::string_view panelId) {
+    for (const EditorPanelDescriptor& panel : registry.AllPanels()) {
+        if (panel.id == panelId && panel.visible) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace
@@ -107,6 +117,62 @@ void EditorLayoutPersistenceService::CaptureLayout(
     Touch();
 }
 
+void EditorLayoutPersistenceService::ApplyWorkspacePreset(std::string_view presetId) {
+    float inspector = inspectorWidthRatio_;
+    float left = leftSidebarWidthRatio_;
+    float diagnostics = diagnosticsHeightRatio_;
+    float content = contentBrowserWidthRatio_;
+    std::string presetName;
+
+    if (presetId == "Authoring") {
+        presetName = "Authoring";
+        inspector = 0.28f;
+        left = 0.16f;
+        diagnostics = 0.28f;
+        content = 0.32f;
+    } else if (presetId == "VFX Debug") {
+        presetName = "VFX Debug";
+        inspector = 0.30f;
+        left = 0.12f;
+        diagnostics = 0.36f;
+        content = 0.40f;
+    } else if (presetId == "Runtime Profiling") {
+        presetName = "Runtime Profiling";
+        inspector = 0.22f;
+        left = 0.10f;
+        diagnostics = 0.42f;
+        content = 0.24f;
+    } else if (presetId == "Minimal Playtest") {
+        presetName = "Minimal Playtest";
+        inspector = 0.18f;
+        left = 0.08f;
+        diagnostics = 0.18f;
+        content = 0.22f;
+    } else {
+        return;
+    }
+
+    inspector = ClampRatio(inspector, inspectorWidthRatio_);
+    left = ClampRatio(left, leftSidebarWidthRatio_);
+    diagnostics = ClampRatio(diagnostics, diagnosticsHeightRatio_);
+    content = ClampRatio(content, contentBrowserWidthRatio_);
+    if (workspacePreset_ == presetName &&
+        inspectorWidthRatio_ == inspector &&
+        leftSidebarWidthRatio_ == left &&
+        diagnosticsHeightRatio_ == diagnostics &&
+        contentBrowserWidthRatio_ == content) {
+        return;
+    }
+
+    workspacePreset_ = std::move(presetName);
+    inspectorWidthRatio_ = inspector;
+    leftSidebarWidthRatio_ = left;
+    diagnosticsHeightRatio_ = diagnostics;
+    contentBrowserWidthRatio_ = content;
+    dirty_ = true;
+    Touch();
+}
+
 void EditorLayoutPersistenceService::CaptureRegistryDefaults(
     const EditorPanelRegistry& registry) {
     bool changed = false;
@@ -121,6 +187,25 @@ void EditorLayoutPersistenceService::CaptureRegistryDefaults(
         dirty_ = true;
         Touch();
     }
+}
+
+bool EditorLayoutPersistenceService::ValidateActivePanels(
+    const EditorPanelRegistry& registry) {
+    bool changed = false;
+    for (auto it = activePanels_.begin(); it != activePanels_.end();) {
+        if (!HasPanel(registry, it->second)) {
+            it = activePanels_.erase(it);
+            changed = true;
+        } else {
+            ++it;
+        }
+    }
+
+    if (changed) {
+        dirty_ = true;
+        Touch();
+    }
+    return !changed;
 }
 
 bool EditorLayoutPersistenceService::IsPanelVisible(
@@ -225,6 +310,9 @@ bool EditorLayoutPersistenceService::Load() {
             } else {
                 ++ignoredLines;
             }
+        } else if (key == "workspacePreset") {
+            workspacePreset_ = value.empty() ? std::string("Authoring") : value;
+            ++parsedLines;
         } else if (key == "version") {
             ++parsedLines;
         } else {
@@ -277,6 +365,7 @@ bool EditorLayoutPersistenceService::Save() {
     output << "leftSidebarWidthRatio=" << leftSidebarWidthRatio_ << "\n";
     output << "diagnosticsHeightRatio=" << diagnosticsHeightRatio_ << "\n";
     output << "contentBrowserWidthRatio=" << contentBrowserWidthRatio_ << "\n";
+    output << "workspacePreset=" << workspacePreset_ << "\n";
     for (const auto& entry : activePanels_) {
         output << "active."
                << AreaKey(entry.first)
@@ -367,6 +456,7 @@ void EditorLayoutPersistenceService::ResetToDefaults() {
     leftSidebarWidthRatio_ = 0.16f;
     diagnosticsHeightRatio_ = 0.28f;
     contentBrowserWidthRatio_ = 0.32f;
+    workspacePreset_ = "Authoring";
     panelVisibility_.clear();
     activePanels_.clear();
 }

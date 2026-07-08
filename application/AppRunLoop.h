@@ -36,6 +36,7 @@
 #include "AppSceneState.h"
 #include "AppSceneStateManager.h"
 #include "VfxEngine.h"
+#include "editor/EditorPropertyEditSession.h"
 #include "editor/EditorTransactionStack.h"
 #include "editor/EditorViewportAuthoringInputGuard.h"
 
@@ -107,6 +108,10 @@ private:
     CourseObjectEditSnapshot CaptureCourseObjectSnapshot() const;
     std::string BuildCourseObjectSnapshotSummary(const CourseObjectEditSnapshot& snapshot) const;
     void RestoreCourseObjectSnapshot(const CourseObjectEditSnapshot& snapshot);
+    bool ApplyCourseObjectGizmoEditThroughServiceIfPossible();
+    bool BeginCourseObjectGizmoEditSession();
+    bool PreviewCourseObjectGizmoEditSession(std::vector<editor::EditorPropertyEditSessionValue> values);
+    bool CancelCourseObjectDragIfNeeded();
     void StageCourseObjectGizmoTransactionIfNeeded();
     bool CommitCourseObjectDragIfNeeded();
     void EnsureCourseObjectHistoryBaseline();
@@ -396,6 +401,7 @@ private:
     uint32_t courseObjectHistoryRevision_ = 0;
     bool courseObjectHistoryInitialized_ = false;
     CourseObjectDragState courseObjectDrag_{};
+    editor::EditorPropertyEditSession courseObjectGizmoEditSession_{};
     bool previousCourseEditorLeftMouseDown_ = false;
     bool releaseShowcaseInitialized_ = false;
     bool releaseShowcaseTitleDirty_ = true;

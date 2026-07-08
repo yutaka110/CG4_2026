@@ -21,6 +21,8 @@ public:
     void Apply(EditorPanelLayoutConfig& config) const;
     void CaptureLayout(const EditorPanelLayoutConfig& config);
     void CaptureRegistryDefaults(const EditorPanelRegistry& registry);
+    void ApplyWorkspacePreset(std::string_view presetId);
+    bool ValidateActivePanels(const EditorPanelRegistry& registry);
 
     bool IsPanelVisible(std::string_view panelId, bool fallback = true) const;
     void SetPanelVisible(std::string_view panelId, bool visible);
@@ -38,6 +40,7 @@ public:
     uint32_t Revision() const { return revision_; }
     const std::filesystem::path& Path() const { return path_; }
     const std::string& StatusMessage() const { return statusMessage_; }
+    const std::string& WorkspacePreset() const { return workspacePreset_; }
 
 private:
     static float ClampRatio(float value, float fallback);
@@ -58,6 +61,7 @@ private:
     float leftSidebarWidthRatio_ = 0.16f;
     float diagnosticsHeightRatio_ = 0.28f;
     float contentBrowserWidthRatio_ = 0.32f;
+    std::string workspacePreset_ = "Authoring";
 
     std::unordered_map<std::string, bool> panelVisibility_;
     std::unordered_map<EditorPanelHostArea, std::string> activePanels_;

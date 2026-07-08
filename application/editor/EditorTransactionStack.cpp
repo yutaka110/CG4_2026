@@ -6,10 +6,10 @@
 namespace editor {
 
 void EditorTransactionStack::Clear() {
-    const bool hadState = !undoStack_.empty() || !redoStack_.empty() || stagedPropertyChange_.has_value();
+    const bool hadState = !undoStack_.empty() || !redoStack_.empty() || !stagedPropertyChanges_.empty();
     undoStack_.clear();
     redoStack_.clear();
-    stagedPropertyChange_.reset();
+    stagedPropertyChanges_.clear();
     if (hadState) {
         Touch();
     }
@@ -62,21 +62,86 @@ void EditorTransactionStack::PushPropertyDelta(
     Touch();
 }
 
+void EditorTransactionStack::PushMultiPropertyDelta(
+    std::string label,
+    EditorObjectHandle target,
+    std::vector<EditorPropertyChange> changes) {
+    if (changes.empty()) {
+        return;
+    }
+    if (changes.size() == 1) {
+        EditorPropertyChange change = std::move(changes.front());
+        PushPropertyDelta(
+            std::move(label),
+            std::move(change.target),
+            std::move(change.propertyPath),
+            std::move(change.valueType),
+            std::move(change.beforeValue),
+            std::move(change.afterValue));
+        return;
+    }
+
+    EditorTransactionRecord record{};
+    record.id = nextId_++;
+    record.label = std::move(label);
+    record.target = std::move(target);
+    record.payload.kind = EditorTransactionPayloadKind::MultiPropertyDelta;
+    record.payload.propertyChanges = std::move(changes);
+
+    undoStack_.push_back(std::move(record));
+    TrimUndoHistory();
+    redoStack_.clear();
+    Touch();
+}
+
+void EditorTransactionStack::PushAssetMutation(
+    std::string label,
+    EditorObjectHandle target,
+    EditorAssetMutationChange change) {
+    EditorTransactionRecord record{};
+    record.id = nextId_++;
+    record.label = std::move(label);
+    record.target = std::move(target);
+    record.payload.kind = EditorTransactionPayloadKind::AssetMutation;
+    record.payload.assetMutation = std::move(change);
+    record.payload.beforeSummary = record.payload.assetMutation.beforeRecord.id;
+    record.payload.afterSummary =
+        record.payload.assetMutation.kind == EditorAssetMutationKind::Delete
+            ? std::string("<deleted>")
+            : record.payload.assetMutation.afterRecord.id;
+
+    undoStack_.push_back(std::move(record));
+    TrimUndoHistory();
+    redoStack_.clear();
+    Touch();
+}
+
 void EditorTransactionStack::StagePropertyDelta(EditorPropertyChange change) {
-    stagedPropertyChange_ = std::move(change);
+    stagedPropertyChanges_.clear();
+    stagedPropertyChanges_.push_back(std::move(change));
+}
+
+void EditorTransactionStack::StagePropertyDeltas(std::vector<EditorPropertyChange> changes) {
+    stagedPropertyChanges_ = std::move(changes);
 }
 
 const EditorPropertyChange* EditorTransactionStack::StagedPropertyDelta() const {
-    return stagedPropertyChange_ ? &*stagedPropertyChange_ : nullptr;
+    return stagedPropertyChanges_.empty() ? nullptr : &stagedPropertyChanges_.front();
 }
 
 EditorPropertyChange EditorTransactionStack::ConsumeStagedPropertyDelta() {
     EditorPropertyChange change{};
-    if (stagedPropertyChange_) {
-        change = std::move(*stagedPropertyChange_);
-        stagedPropertyChange_.reset();
+    if (!stagedPropertyChanges_.empty()) {
+        change = std::move(stagedPropertyChanges_.front());
+        stagedPropertyChanges_.clear();
     }
     return change;
+}
+
+std::vector<EditorPropertyChange> EditorTransactionStack::ConsumeStagedPropertyDeltas() {
+    std::vector<EditorPropertyChange> changes = std::move(stagedPropertyChanges_);
+    stagedPropertyChanges_.clear();
+    return changes;
 }
 
 bool EditorTransactionStack::Undo(const ApplyCallback& apply) {
@@ -93,6 +158,14 @@ bool EditorTransactionStack::Undo(const ApplyCallback& apply) {
     redoStack_.push_back(std::move(record));
     Touch();
     return true;
+}
+
+const EditorTransactionRecord* EditorTransactionStack::NextUndoTransaction() const {
+    return undoStack_.empty() ? nullptr : &undoStack_.back();
+}
+
+const EditorTransactionRecord* EditorTransactionStack::NextRedoTransaction() const {
+    return redoStack_.empty() ? nullptr : &redoStack_.back();
 }
 
 bool EditorTransactionStack::Redo(const ApplyCallback& apply) {
@@ -159,6 +232,10 @@ const char* ToString(EditorTransactionPayloadKind kind) {
         return "Snapshot";
     case EditorTransactionPayloadKind::PropertyDelta:
         return "PropertyDelta";
+    case EditorTransactionPayloadKind::MultiPropertyDelta:
+        return "MultiPropertyDelta";
+    case EditorTransactionPayloadKind::AssetMutation:
+        return "AssetMutation";
     }
     return "Unknown";
 }

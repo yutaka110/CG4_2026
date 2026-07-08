@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <functional>
 
+#include "EditorPanelLayoutService.h"
+
 struct ImDrawList;
 
 namespace editor {
@@ -19,6 +21,10 @@ struct EditorViewportPanelRenderInput {
 
 void DrawEditorViewportPanel(
     EditorContext& context,
+    const EditorViewportPanelRenderInput& renderInput = {});
+void DrawEditorViewportPanelContent(
+    EditorContext& context,
+    const EditorPanelRect& rect,
     const EditorViewportPanelRenderInput& renderInput = {});
 
 } // namespace editor

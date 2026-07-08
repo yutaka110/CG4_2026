@@ -92,6 +92,18 @@ void EditorPanelHost::DrawArea(
     }
     ImGui::PopStyleColor();
 
+    if (area == EditorPanelHostArea::Viewport) {
+        const std::vector<const EditorPanelDescriptor*> panels = registry.Panels(area);
+        if (!panels.empty() && panels.front() != nullptr && panels.front()->draw) {
+            if (persistence != nullptr) {
+                persistence->SetActivePanel(area, panels.front()->id);
+            }
+            panels.front()->draw();
+        }
+        ImGui::End();
+        return;
+    }
+
     const std::string tabBarId =
         std::string(windowId) + "." + ToString(area) + ".tabs";
     if (ImGui::BeginTabBar(tabBarId.c_str())) {

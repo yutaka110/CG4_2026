@@ -721,8 +721,34 @@ Current staged implementation:
   `EditorAssetRegistry`, and refreshes Asset selection. Delete remains
   preflight/confirmation-only until reference rewrite and undoable file
   operations are added.
-- Full rename/move/delete safety, dependency graph navigation, thumbnail
-  generation, and automated asset migration tests remain future Phase 8 work.
+- Phase 8-E promotes asset mutation to formal transactions. Rename, move, and
+  delete operations record before/after asset state, participate in undo/redo,
+  and keep Asset Browser commands on the shared transaction path.
+- Phase 8-F formalizes the dependency graph and Reference Inspector. The
+  registry can navigate direct dependencies, dependents, missing dependency
+  tokens, and malformed dependency tokens, and the Asset Browser exposes this
+  graph for selected assets.
+- Phase 8-G adds `EditorAssetThumbnailService` and thumbnail diagnostics. Asset
+  records carry thumbnail cache keys/source stamps, the Asset Browser can show
+  preview state, and smoke/regression gates protect cache behavior.
+- Phase 8-H formalizes migration and handle stability. Asset handles can be
+  resolved/refreshed after registry mutation, legacy path-fallback assets emit
+  migration warnings until durable `.meta` files exist, and automated pipeline
+  tests cover migration, rename, move, delete, reference rewrites, thumbnails,
+  and transaction undo/redo.
+- Phase 8-I adds `EditorAssetImportService` as the formal import/reimport and
+  batch metadata migration path. Folder indexing, command palette reimport,
+  and bulk `.meta` creation share the same asset kind/id rules, preserve stable
+  GUIDs during reimport, rescan dependencies, refresh thumbnails, and include
+  regression/smoke gates for failed reimport identity safety.
+- Phase 8-J adds external-file import policy and production Asset Browser UI.
+  `ImportExternal` copies supported files into a safe `Resources/` destination,
+  applies rename/skip/overwrite collision policy, rejects unsupported assets
+  before copy, rolls back partial files on failed registration, and routes the
+  result through the same metadata, dependency, thumbnail, selection, and
+  notification path as normal import/reimport.
+- Remaining Phase 8 work is focused on richer asset preview generation and
+  production import UI polish such as native file dialogs and drag-and-drop.
 
 ### Phase 9: Full Details/Reflection Coverage
 

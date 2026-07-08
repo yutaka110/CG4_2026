@@ -9,7 +9,10 @@ namespace editor {
 
 class CourseObjectPropertyAdapter final : public EditorPropertyAccessor {
 public:
-    CourseObjectPropertyAdapter(CourseAsset* course, AppRuntimeState* runtimeState);
+    CourseObjectPropertyAdapter(
+        CourseAsset* course,
+        AppRuntimeState* runtimeState,
+        bool markEdits = true);
 
     bool CanAccess(
         const EditorObjectHandle& object,
@@ -27,6 +30,7 @@ public:
 private:
     CourseAsset* course_ = nullptr;
     AppRuntimeState* runtimeState_ = nullptr;
+    bool markEdits_ = true;
 };
 
 } // namespace editor

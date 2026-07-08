@@ -7,39 +7,6 @@
 namespace editor {
 namespace {
 
-EditorAssetKind ParseAssetKind(std::string_view text) {
-    if (text == ToString(EditorAssetKind::Mesh)) {
-        return EditorAssetKind::Mesh;
-    }
-    if (text == ToString(EditorAssetKind::Effect)) {
-        return EditorAssetKind::Effect;
-    }
-    if (text == ToString(EditorAssetKind::Course)) {
-        return EditorAssetKind::Course;
-    }
-    if (text == ToString(EditorAssetKind::Texture)) {
-        return EditorAssetKind::Texture;
-    }
-    if (text == ToString(EditorAssetKind::Audio)) {
-        return EditorAssetKind::Audio;
-    }
-    return EditorAssetKind::Unknown;
-}
-
-bool ParseDependencyToken(
-    std::string_view token,
-    EditorAssetKind& outKind,
-    std::string_view& outId) {
-    const std::size_t separator = token.find(':');
-    if (separator == std::string_view::npos) {
-        return false;
-    }
-
-    outKind = ParseAssetKind(token.substr(0, separator));
-    outId = token.substr(separator + 1);
-    return outKind != EditorAssetKind::Unknown && !outId.empty();
-}
-
 EditorObjectHandle MakeAssetDiagnosticHandle(const EditorAssetRecord& record) {
     EditorObjectHandle handle{};
     handle.domain = EditorDomainId::Asset;
@@ -78,6 +45,18 @@ void EditorAssetReferenceDiagnosticsAdapter::Validate(EditorValidationReport& re
 
     for (const EditorAssetRecord& record : assetRegistry_->Records()) {
         const EditorObjectHandle target = MakeAssetDiagnosticHandle(record);
+        if (!record.runtimeOnly && (!record.hasMetadata || record.provisionalGuid)) {
+            AddIssue(
+                report,
+                EditorValidationSeverity::Warning,
+                target,
+                "metadataPath",
+                "Asset metadata migration recommended",
+                std::string(ToString(record.kind)) +
+                    ":" +
+                    record.id +
+                    " is using path fallback or provisional GUID metadata. Create a durable .meta file before commercial rename/move workflows.");
+        }
         if (record.missing) {
             AddIssue(
                 report,
@@ -93,9 +72,8 @@ void EditorAssetReferenceDiagnosticsAdapter::Validate(EditorValidationReport& re
         }
 
         for (const std::string& dependency : record.dependencies) {
-            EditorAssetKind dependencyKind = EditorAssetKind::Unknown;
-            std::string_view dependencyId;
-            if (!ParseDependencyToken(dependency, dependencyKind, dependencyId)) {
+            EditorAssetDependencyToken dependencyToken{};
+            if (!ParseEditorAssetDependencyToken(dependency, dependencyToken)) {
                 AddIssue(
                     report,
                     EditorValidationSeverity::Warning,
@@ -107,7 +85,7 @@ void EditorAssetReferenceDiagnosticsAdapter::Validate(EditorValidationReport& re
             }
 
             const EditorAssetRecord* referenced =
-                assetRegistry_->Find(dependencyKind, dependencyId);
+                assetRegistry_->Find(dependencyToken.kind, dependencyToken.id);
             if (referenced == nullptr) {
                 AddIssue(
                     report,

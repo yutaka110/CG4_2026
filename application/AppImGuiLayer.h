@@ -9,6 +9,7 @@ struct ImDrawList;
 
 #include "graphics/RenderGraph.h"
 #include "editor/EditorAssetSelection.h"
+#include "editor/EditorAssetThumbnailService.h"
 #include "editor/EditorCommandContext.h"
 #include "editor/EditorCommandInputRouter.h"
 #include "editor/EditorCommandPalette.h"
@@ -25,6 +26,8 @@ struct ImDrawList;
 #include "editor/EditorPanelRegistry.h"
 #include "editor/EditorPlaySessionIsolationSnapshot.h"
 #include "editor/EditorPlaySessionState.h"
+#include "editor/EditorPropertyEditSession.h"
+#include "editor/EditorPropertyEditService.h"
 #include "editor/EditorPropertyRegistry.h"
 #include "editor/EditorRailRuntimePause.h"
 #include "editor/EditorRuntimeInspector.h"
@@ -142,6 +145,7 @@ private:
     editor::EditorPropertyRegistry editorPropertyRegistry_{};
     editor::EditorAssetRegistry editorAssetRegistry_{};
     editor::EditorAssetSelection editorAssetSelection_{};
+    editor::EditorAssetThumbnailService editorAssetThumbnails_{};
     editor::EditorCommandInputRouter editorCommandInputRouter_{};
     editor::EditorCommandPalette editorCommandPalette_{};
     editor::EditorCommandExecutionStatus editorCommandExecutionStatus_{};
@@ -160,6 +164,8 @@ private:
     editor::EditorNotificationCenter editorNotifications_{};
     editor::EditorPlaySessionIsolationSnapshot editorPlaySessionSnapshot_{};
     editor::EditorPlaySessionState editorPlaySession_{};
+    editor::EditorPropertyEditSession editorDetailsEditSession_{};
+    editor::EditorPropertyEditService editorPropertyEditService_{};
     editor::EditorRailRuntimePause editorRailRuntimePause_{};
     editor::EditorRuntimeInspector editorRuntimeInspector_{};
     editor::EditorSelection editorSelection_{};

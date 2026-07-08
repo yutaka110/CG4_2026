@@ -30,8 +30,10 @@
 #include "editor/EffectAssetDiagnosticsAdapter.h"
 #include "editor/EditorAssetBrowserPanel.h"
 #include "editor/EditorAssetCommandProvider.h"
+#include "editor/EditorAssetMutationExecutor.h"
 #include "editor/EditorBuiltinCommandProvider.h"
 #include "editor/EditorAssetReferenceDiagnosticsAdapter.h"
+#include "editor/EditorAssetThumbnailDiagnosticsAdapter.h"
 #include "editor/EditorAssetFolderIndexer.h"
 #include "editor/EditorCommandContext.h"
 #include "editor/EditorContext.h"
@@ -223,6 +225,178 @@ void AppendRailRuntimePauseInspector(
             state.frozenFrames});
 }
 
+float ClampWorkspaceRatio(float value) {
+    return (std::clamp)(value, 0.05f, 0.85f);
+}
+
+void DrawWorkspaceVerticalSplitter(
+    const char* id,
+    float x,
+    float y,
+    float height,
+    float contentWidth,
+    float direction,
+    float& ratio) {
+    if (height <= 0.0f || contentWidth <= 0.0f) {
+        return;
+    }
+
+    ImGui::SetCursorScreenPos(ImVec2(x - 3.0f, y));
+    ImGui::InvisibleButton(id, ImVec2(6.0f, height));
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        ImGui::GetForegroundDrawList()->AddRectFilled(
+            ImVec2(x - 1.0f, y),
+            ImVec2(x + 1.0f, y + height),
+            IM_COL32(120, 155, 190, 180));
+    }
+    if (ImGui::IsItemActive()) {
+        ratio = ClampWorkspaceRatio(ratio + direction * ImGui::GetIO().MouseDelta.x / contentWidth);
+    }
+}
+
+void DrawWorkspaceHorizontalSplitter(
+    const char* id,
+    float x,
+    float y,
+    float width,
+    float contentHeight,
+    float direction,
+    float& ratio) {
+    if (width <= 0.0f || contentHeight <= 0.0f) {
+        return;
+    }
+
+    ImGui::SetCursorScreenPos(ImVec2(x, y - 3.0f));
+    ImGui::InvisibleButton(id, ImVec2(width, 6.0f));
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+        ImGui::GetForegroundDrawList()->AddRectFilled(
+            ImVec2(x, y - 1.0f),
+            ImVec2(x + width, y + 1.0f),
+            IM_COL32(120, 155, 190, 180));
+    }
+    if (ImGui::IsItemActive()) {
+        ratio = ClampWorkspaceRatio(ratio + direction * ImGui::GetIO().MouseDelta.y / contentHeight);
+    }
+}
+
+bool DrawEditorWorkspaceSplitters(
+    editor::EditorPanelLayoutConfig& config,
+    const editor::EditorPanelLayoutService& layout) {
+    if (!config.developerToolsVisible || !layout.ContentRect().Valid()) {
+        return false;
+    }
+
+    const float beforeLeft = config.leftSidebarWidthRatio;
+    const float beforeInspector = config.inspectorWidthRatio;
+    const float beforeDiagnostics = config.diagnosticsHeightRatio;
+    const float beforeContent = config.contentBrowserWidthRatio;
+    constexpr ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_NoBackground;
+
+    const editor::EditorPanelRect& content = layout.ContentRect();
+    const editor::EditorPanelRect& left = layout.LeftSidebarRect();
+    const editor::EditorPanelRect& inspector = layout.InspectorRect();
+    const editor::EditorPanelRect& viewportRect = layout.ViewportRect();
+    const editor::EditorPanelRect& contentBrowser = layout.ContentBrowserRect();
+
+    ImGui::SetNextWindowPos(ImVec2(left.x + left.width - 3.0f, content.y), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(6.0f, content.height), ImGuiCond_Always);
+    if (ImGui::Begin("Editor Left Splitter", nullptr, flags)) {
+        DrawWorkspaceVerticalSplitter(
+            "##leftSplitter",
+            left.x + left.width,
+            content.y,
+            content.height,
+            content.width,
+            1.0f,
+            config.leftSidebarWidthRatio);
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos(ImVec2(inspector.x - 3.0f, content.y), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(6.0f, content.height), ImGuiCond_Always);
+    if (ImGui::Begin("Editor Right Splitter", nullptr, flags)) {
+        DrawWorkspaceVerticalSplitter(
+            "##rightSplitter",
+            inspector.x,
+            content.y,
+            content.height,
+            content.width,
+            -1.0f,
+            config.inspectorWidthRatio);
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos(
+        ImVec2(viewportRect.x, viewportRect.y + viewportRect.height - 3.0f),
+        ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(viewportRect.width, 6.0f), ImGuiCond_Always);
+    if (ImGui::Begin("Editor Bottom Splitter", nullptr, flags)) {
+        DrawWorkspaceHorizontalSplitter(
+            "##bottomSplitter",
+            viewportRect.x,
+            viewportRect.y + viewportRect.height,
+            viewportRect.width,
+            content.height,
+            -1.0f,
+            config.diagnosticsHeightRatio);
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos(
+        ImVec2(contentBrowser.x + contentBrowser.width - 3.0f, contentBrowser.y),
+        ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(6.0f, contentBrowser.height), ImGuiCond_Always);
+    if (ImGui::Begin("Editor Content Splitter", nullptr, flags)) {
+        DrawWorkspaceVerticalSplitter(
+            "##contentDiagnosticsSplitter",
+            contentBrowser.x + contentBrowser.width,
+            contentBrowser.y,
+            contentBrowser.height,
+            layout.BottomDockRect().width,
+            1.0f,
+            config.contentBrowserWidthRatio);
+    }
+    ImGui::End();
+
+    return beforeLeft != config.leftSidebarWidthRatio ||
+        beforeInspector != config.inspectorWidthRatio ||
+        beforeDiagnostics != config.diagnosticsHeightRatio ||
+        beforeContent != config.contentBrowserWidthRatio;
+}
+
+void DrawEditorWorkspacePanel(editor::EditorLayoutPersistenceService& persistence) {
+    static constexpr std::array<const char*, 4> kWorkspacePresets{{
+        "Authoring",
+        "VFX Debug",
+        "Runtime Profiling",
+        "Minimal Playtest",
+    }};
+
+    const std::string& currentPreset = persistence.WorkspacePreset();
+    const char* preview = currentPreset.empty() ? "Authoring" : currentPreset.c_str();
+    if (ImGui::BeginCombo("Preset", preview)) {
+        for (const char* preset : kWorkspacePresets) {
+            const bool selected = currentPreset == preset;
+            if (ImGui::Selectable(preset, selected)) {
+                persistence.ApplyWorkspacePreset(preset);
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::TextWrapped("Layout: %s", persistence.StatusMessage().c_str());
+}
+
 void RegisterFrameEditorCommands(
     editor::EditorContext& editorContext,
     const AppImGuiFrameContext& context,
@@ -256,14 +430,80 @@ void RegisterFrameEditorCommands(
 
     const editor::EditorBuiltinCommandProvider builtinProvider(
         editor::EditorBuiltinCommandProviderInput{
-            [&runtimeState]() {
+            [&runtimeState,
+             transactions = editorContext.transactions,
+             assets = editorContext.assets,
+             notifications = editorContext.notifications]() {
+                const editor::EditorTransactionRecord* next =
+                    transactions != nullptr ? transactions->NextUndoTransaction() : nullptr;
+                if (next != nullptr &&
+                    next->payload.kind == editor::EditorTransactionPayloadKind::AssetMutation) {
+                    if (assets == nullptr) {
+                        return editor::EditorCommandResult{false, "Asset registry is unavailable."};
+                    }
+                    editor::EditorAssetMutationExecutor executor(*assets);
+                    editor::EditorAssetMutationResult applyResult{};
+                    const bool applied =
+                        transactions->Undo(
+                            [&](const editor::EditorTransactionRecord& record,
+                                editor::EditorTransactionApplyMode mode) {
+                                applyResult = executor.ApplyTransaction(record, mode);
+                                return applyResult.succeeded;
+                            });
+                    if (notifications != nullptr && !applyResult.message.empty()) {
+                        notifications->Push(
+                            applied
+                                ? editor::EditorNotificationSeverity::Info
+                                : editor::EditorNotificationSeverity::Error,
+                            "Asset",
+                            applyResult.message);
+                    }
+                    return editor::EditorCommandResult{
+                        applied,
+                        applyResult.message.empty()
+                            ? std::string("Asset undo failed.")
+                            : applyResult.message};
+                }
                 if (runtimeState.terrain.courseObjectUndoDepth == 0) {
                     return editor::EditorCommandResult{false, "Undo stack is empty."};
                 }
                 runtimeState.terrain.courseObjectUndoRequested = true;
                 return editor::EditorCommandResult{true, "Queued course object undo."};
             },
-            [&runtimeState]() {
+            [&runtimeState,
+             transactions = editorContext.transactions,
+             assets = editorContext.assets,
+             notifications = editorContext.notifications]() {
+                const editor::EditorTransactionRecord* next =
+                    transactions != nullptr ? transactions->NextRedoTransaction() : nullptr;
+                if (next != nullptr &&
+                    next->payload.kind == editor::EditorTransactionPayloadKind::AssetMutation) {
+                    if (assets == nullptr) {
+                        return editor::EditorCommandResult{false, "Asset registry is unavailable."};
+                    }
+                    editor::EditorAssetMutationExecutor executor(*assets);
+                    editor::EditorAssetMutationResult applyResult{};
+                    const bool applied =
+                        transactions->Redo(
+                            [&](const editor::EditorTransactionRecord& record,
+                                editor::EditorTransactionApplyMode mode) {
+                                applyResult = executor.ApplyTransaction(record, mode);
+                                return applyResult.succeeded;
+                            });
+                    if (notifications != nullptr && !applyResult.message.empty()) {
+                        notifications->Push(
+                            applied
+                                ? editor::EditorNotificationSeverity::Info
+                                : editor::EditorNotificationSeverity::Error,
+                            "Asset",
+                            applyResult.message);
+                    }
+                    return editor::EditorCommandResult{
+                        applied,
+                        applyResult.message.empty()
+                            ? std::string("Asset redo failed.")
+                            : applyResult.message};
+                }
                 if (runtimeState.terrain.courseObjectRedoDepth == 0) {
                     return editor::EditorCommandResult{false, "Redo stack is empty."};
                 }
@@ -919,6 +1159,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorAssetRegistry_.ScanDependencies();
         editorAssetRegistryInitialized_ = true;
     }
+    editorAssetThumbnails_.Sync(editorAssetRegistry_);
     if (context.course == nullptr) {
         editorCourseDocumentOpen_ = false;
         editorCourseDocumentPath_.clear();
@@ -973,13 +1214,18 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &editorDirtyState_,
         editableCourse != nullptr);
     editor::CourseObjectPropertyAdapter coursePropertyAdapter(editableCourse, &runtimeState);
+    editor::CourseObjectPropertyAdapter coursePreviewPropertyAdapter(editableCourse, &runtimeState, false);
     editor::CourseObjectValidationAdapter courseValidationAdapter(editableCourse, &editorAssetRegistry_);
     editor::EffectAssetDiagnosticsAdapter effectDiagnosticsAdapter(context.loadedEffectAssets);
     editor::EditorAssetReferenceDiagnosticsAdapter assetReferenceDiagnosticsAdapter(&editorAssetRegistry_);
+    editor::EditorAssetThumbnailDiagnosticsAdapter assetThumbnailDiagnosticsAdapter(
+        &editorAssetRegistry_,
+        &editorAssetThumbnails_);
     editor::EditorValidationService editorValidationService;
     editorValidationService.AddAdapter(&courseValidationAdapter);
     editorValidationService.AddAdapter(&effectDiagnosticsAdapter);
     editorValidationService.AddAdapter(&assetReferenceDiagnosticsAdapter);
+    editorValidationService.AddAdapter(&assetThumbnailDiagnosticsAdapter);
     const editor::EditorValidationReport editorValidationReport = editorValidationService.Validate();
     const editor::EditorSaveApplyPolicyInput editorSaveApplyPolicy{
         showDeveloperTools_,
@@ -1007,15 +1253,16 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorViewport ? editorViewport->WorkPos : ImVec2(0.0f, 0.0f);
     const ImVec2 editorWorkSize =
         editorViewport ? editorViewport->WorkSize : ImGui::GetIO().DisplaySize;
-    editorPanelLayout_.Configure(
-        editor::EditorPanelLayoutConfig{
-            showDeveloperTools_,
-            editorWorkPos.x,
-            editorWorkPos.y,
-            editorWorkSize.x,
-            editorWorkSize.y,
-            editorLayout_.TopReservedHeight(),
-            editorLayout_.BottomReservedHeight()});
+    editor::EditorPanelLayoutConfig editorPanelLayoutConfig{
+        showDeveloperTools_,
+        editorWorkPos.x,
+        editorWorkPos.y,
+        editorWorkSize.x,
+        editorWorkSize.y,
+        editorLayout_.TopReservedHeight(),
+        editorLayout_.BottomReservedHeight()};
+    editorLayoutPersistence_.Apply(editorPanelLayoutConfig);
+    editorPanelLayout_.Configure(editorPanelLayoutConfig);
     editorViewportRenderTarget_.Update(
         editor::EditorViewportRenderTargetInput{
             showDeveloperTools_,
@@ -1115,9 +1362,11 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &editorTransactions,
         &editorAssetRegistry_,
         &editorAssetSelection_,
+        &editorAssetThumbnails_,
         &courseDocumentAdapter,
         &editorPropertyRegistry_,
         &coursePropertyAdapter,
+        &editorPropertyEditService_,
         &editorValidationReport,
         &editorDirtyState_,
         &editorDocumentLifecycle_,
@@ -1253,15 +1502,35 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
 
     const D3D12_GPU_DESCRIPTOR_HANDLE editorViewportPreview =
         context.postColorPreview.ptr != 0 ? context.postColorPreview : context.sceneColorPreview;
-    editor::DrawEditorViewportPanel(
-        editorContext,
-        editor::EditorViewportPanelRenderInput{
-            editorViewportPreview.ptr,
-            static_cast<float>(editorViewportTarget.renderWidth),
-            static_cast<float>(editorViewportTarget.renderHeight),
-            true,
-            context.onDrawEditorViewportOverlay});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "editor.viewport",
+            "Viewport",
+            "Editor",
+            editor::EditorPanelHostArea::Viewport,
+            panelVisible("editor.viewport"),
+            [&]() {
+                editor::DrawEditorViewportPanelContent(
+                    editorContext,
+                    editorPanelLayout_.ViewportRect(),
+                    editor::EditorViewportPanelRenderInput{
+                        editorViewportPreview.ptr,
+                        static_cast<float>(editorViewportTarget.renderWidth),
+                        static_cast<float>(editorViewportTarget.renderHeight),
+                        true,
+                        context.onDrawEditorViewportOverlay});
+            }});
 
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "editor.workspace",
+            "Workspace",
+            "Editor",
+            editor::EditorPanelHostArea::LeftSidebar,
+            panelVisible("editor.workspace"),
+            [&]() {
+                DrawEditorWorkspacePanel(editorLayoutPersistence_);
+            }});
     editorPanelRegistry_.Register(
         editor::EditorPanelDescriptor{
             "vfx.inspector",
@@ -1320,7 +1589,11 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         &editorSelection_,
                         &editorPropertyRegistry_,
                         &coursePropertyAdapter,
+                        &coursePreviewPropertyAdapter,
+                        &editorDetailsEditSession_,
                         &editorTransactions,
+                        &editorDirtyState_,
+                        &editorNotifications_,
                         &editorAssetRegistry_,
                         &editorAssetSelection_,
                         &editorValidationReport,
@@ -1368,6 +1641,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                     editor::EditorAssetBrowserPanelContext{
                         &editorAssetRegistry_,
                         &editorAssetSelection_,
+                        &editorAssetThumbnails_,
+                        &editorTransactions,
                         &editorNotifications_});
             }});
     editorPanelRegistry_.Register(
@@ -1418,6 +1693,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                             &effectRuntime,
                             &editorPropertyRegistry_,
                             &coursePropertyAdapter,
+                            &editorPropertyEditService_,
                             &editorAssetRegistry_,
                             &editorAssetSelection_,
                             &courseDocumentAdapter,
@@ -1451,7 +1727,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                             static_cast<bool>(context.onApplyCourse),
                             static_cast<bool>(context.onReloadCourse),
                             static_cast<bool>(context.onTeleportCourseToDistance),
-                            true});
+                            true,
+                            &editorAssetThumbnails_});
                 editor::DrawExistingFeatureProtectionPanel(protectionReport);
             }});
     editorPanelRegistry_.Register(
@@ -1466,6 +1743,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                     editor::EditorDiagnosticsPanelContext{
                         &editorValidationReport,
                         &editorSelection_,
+                        &editorAssetRegistry_,
                         &editorAssetSelection_});
             }});
     editorPanelRegistry_.Register(
@@ -1576,6 +1854,13 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             }});
 
     editorLayoutPersistence_.CaptureRegistryDefaults(editorPanelRegistry_);
+    editorLayoutPersistence_.ValidateActivePanels(editorPanelRegistry_);
+    editorPanelHost_.DrawArea(
+        editorPanelRegistry_,
+        editor::EditorPanelHostArea::Viewport,
+        editorPanelLayout_.ViewportRect(),
+        "Editor Viewport Host",
+        &editorLayoutPersistence_);
     editorPanelHost_.DrawArea(
         editorPanelRegistry_,
         editor::EditorPanelHostArea::LeftSidebar,
@@ -1600,6 +1885,18 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorPanelLayout_.DiagnosticsRect(),
         "Editor Bottom Dock",
         &editorLayoutPersistence_);
+    if (DrawEditorWorkspaceSplitters(editorPanelLayoutConfig, editorPanelLayout_)) {
+        editorPanelLayout_.Configure(editorPanelLayoutConfig);
+        editorLayoutPersistence_.CaptureLayout(editorPanelLayoutConfig);
+        editorViewportRenderTarget_.Update(
+            editor::EditorViewportRenderTargetInput{
+                showDeveloperTools_,
+                editorPanelLayout_.ViewportRect(),
+                static_cast<uint32_t>((std::max)(1.0f, editorWorkSize.x)),
+                static_cast<uint32_t>((std::max)(1.0f, editorWorkSize.y))});
+    } else {
+        editorLayoutPersistence_.CaptureLayout(editorPanelLayoutConfig);
+    }
     editorLayoutPersistence_.SaveIfDirty();
 }
 
