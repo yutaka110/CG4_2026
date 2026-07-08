@@ -13,12 +13,25 @@ struct LoadedEffectAsset;
 
 namespace editor {
 
+class CourseDocumentAdapter;
 class EditorPropertyRegistry;
 class EditorPropertyAccessor;
 class EditorAssetRegistry;
 class EditorAssetSelection;
+class EditorDirtyStateService;
+class EditorDocumentLifecycleService;
+class EditorLayoutService;
+class EditorModalConfirmService;
+class EditorNotificationCenter;
+class EditorPanelLayoutService;
+class EditorPlaySessionState;
+class EditorRuntimeInspector;
 class EditorSelection;
+class EditorTransformGizmoService;
 class EditorTransactionStack;
+class EditorViewportInteractionService;
+class EditorViewportSelectionBridge;
+struct EditorSaveApplyPolicyInput;
 struct EditorValidationReport;
 
 enum class ExistingFeatureStatus {
@@ -50,9 +63,22 @@ struct ExistingFeatureProtectionInput {
     const EditorPropertyAccessor* propertyAccessor = nullptr;
     const EditorAssetRegistry* assetRegistry = nullptr;
     const EditorAssetSelection* assetSelection = nullptr;
+    const CourseDocumentAdapter* courseDocument = nullptr;
+    const EditorRuntimeInspector* runtimeInspector = nullptr;
+    const EditorPlaySessionState* playSession = nullptr;
     const EditorSelection* selection = nullptr;
     const EditorTransactionStack* transactions = nullptr;
     const EditorValidationReport* validationReport = nullptr;
+    const EditorDirtyStateService* dirtyState = nullptr;
+    const EditorDocumentLifecycleService* documentLifecycle = nullptr;
+    const EditorLayoutService* layout = nullptr;
+    const EditorPanelLayoutService* panelLayout = nullptr;
+    const EditorViewportInteractionService* viewportInteraction = nullptr;
+    const EditorViewportSelectionBridge* viewportSelectionBridge = nullptr;
+    const EditorTransformGizmoService* transformGizmo = nullptr;
+    const EditorNotificationCenter* notifications = nullptr;
+    const EditorModalConfirmService* confirmService = nullptr;
+    const EditorSaveApplyPolicyInput* saveApplyPolicy = nullptr;
     const std::vector<LoadedEffectAsset>* loadedEffectAssets = nullptr;
     const std::string* renderGraphDescription = nullptr;
     const std::string* renderGraphError = nullptr;

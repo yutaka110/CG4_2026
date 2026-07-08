@@ -17,6 +17,7 @@ struct EditorDetailsPanelContext {
     const EditorAssetRegistry* assetRegistry = nullptr;
     const EditorAssetSelection* assetSelection = nullptr;
     const EditorValidationReport* validationReport = nullptr;
+    bool canMutateAuthoring = true;
 };
 
 void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context);

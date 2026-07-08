@@ -249,6 +249,9 @@
     <ClCompile Include="application\editor\CourseMeshAssetAdapter.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
+    <ClCompile Include="application\editor\CourseDocumentAdapter.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
     <ClCompile Include="application\editor\CourseEditorCommandProvider.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
@@ -297,7 +300,61 @@
     <ClCompile Include="application\editor\EditorDiagnosticsPanel.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
+    <ClCompile Include="application\editor\EditorDirtyStateService.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorDocumentLifecycleService.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorDocumentTabs.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorLayoutService.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorPanelHost.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorPanelLayoutService.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorPanelRegistry.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorTransformGizmoService.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorViewportInteractionService.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorViewportPanel.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorViewportRenderTarget.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorViewportSelectionBridge.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
     <ClCompile Include="application\editor\EditorMenuBar.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorModalConfirmPanel.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorModalConfirmService.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorNotificationCenter.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorNotificationsPanel.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorPlaySessionIsolationSnapshot.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorPlaySessionState.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
     <ClCompile Include="application\editor\EditorPropertyAccessor.cpp">
@@ -309,10 +366,22 @@
     <ClCompile Include="application\editor\EditorPropertyRegistryPanel.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
+    <ClCompile Include="application\editor\EditorRuntimeInspector.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorRuntimeInspectorPanel.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorSaveApplyPolicy.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
     <ClCompile Include="application\editor\EditorSelection.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
     <ClCompile Include="application\editor\EditorSelectionPanel.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorStatusBar.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
     <ClCompile Include="application\editor\EditorToolbar.cpp">
@@ -1077,6 +1146,9 @@
     <ClInclude Include="application\editor\CourseMeshAssetAdapter.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
+    <ClInclude Include="application\editor\CourseDocumentAdapter.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
     <ClInclude Include="application\editor\CourseEditorCommandProvider.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
@@ -1090,6 +1162,9 @@
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\EditorAssetBrowserPanel.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorAuthoringMutationGuard.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\EditorBuiltinCommandProvider.h">
@@ -1116,6 +1191,42 @@
     <ClInclude Include="application\editor\EditorDetailsPanel.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
+    <ClInclude Include="application\editor\EditorDirtyStateService.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorDocumentLifecycleService.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorDocumentTabs.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorLayoutService.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorPanelHost.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorPanelLayoutService.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorPanelRegistry.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorTransformGizmoService.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorViewportInteractionService.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorViewportPanel.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorViewportRenderTarget.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorViewportSelectionBridge.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
     <ClInclude Include="application\editor\EditorAssetFolderIndexer.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
@@ -1134,6 +1245,24 @@
     <ClInclude Include="application\editor\EditorMenuBar.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
+    <ClInclude Include="application\editor\EditorModalConfirmPanel.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorModalConfirmService.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorNotificationCenter.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorNotificationsPanel.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorPlaySessionIsolationSnapshot.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorPlaySessionState.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
     <ClInclude Include="application\editor\EditorPropertyAccessor.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
@@ -1146,10 +1275,22 @@
     <ClInclude Include="application\editor\EditorPropertyRegistryPanel.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
+    <ClInclude Include="application\editor\EditorRuntimeInspector.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorRuntimeInspectorPanel.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorSaveApplyPolicy.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
     <ClInclude Include="application\editor\EditorSelection.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\EditorSelectionPanel.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorStatusBar.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\EditorToolbar.h">
@@ -1165,6 +1306,9 @@
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\EditorValidationService.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorViewportAuthoringInputGuard.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\ExistingFeatureProtection.h">

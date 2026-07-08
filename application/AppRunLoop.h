@@ -37,6 +37,7 @@
 #include "AppSceneStateManager.h"
 #include "VfxEngine.h"
 #include "editor/EditorTransactionStack.h"
+#include "editor/EditorViewportAuthoringInputGuard.h"
 
 class AppFrameRenderer;
 class AppImGuiLayer;
@@ -92,6 +93,12 @@ private:
     void UpdateVfxPreviewFrame() override;
     void RenderVfxPreviewFrame() override;
     void BeginFrameSystems();
+    void ApplyEditorViewportRenderTargetForRender();
+    bool ResolveEditorViewportClientPoint(
+        POINT clientPoint,
+        POINT& outViewportPoint,
+        uint32_t& outViewportWidth,
+        uint32_t& outViewportHeight) const;
     bool WaitForFrameSlot(uint32_t frameIndex);
     bool SignalFrame(uint32_t frameIndex);
     bool FlushGpu();
@@ -124,7 +131,9 @@ private:
     void DrawRailVisibilityDebugOverlay();
     bool EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList);
     bool BuildRailLockOnHudAtlasQuads();
-    void RegisterRailLockOnHudPass(ID3D12GraphicsCommandList* commandList);
+    void RegisterRailLockOnHudPass(
+        ID3D12GraphicsCommandList* commandList,
+        const std::string& targetResourceName);
     void StartRailCameraTuningRecording();
     void StopRailCameraTuningRecording();
     void ClearRailCameraTuningRecording();

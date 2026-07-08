@@ -42,6 +42,35 @@ constexpr DWORD kRailWatchdogStallMs = 3000;
 constexpr double kRailGpuTimingLogThresholdMs = 10.0;
 constexpr double kRailFramePacingLogThresholdMs = 8.0;
 
+struct RenderViewportMetrics {
+    uint32_t width = 1;
+    uint32_t height = 1;
+    bool editorViewport = false;
+
+    float AspectRatio() const {
+        return height > 0
+            ? static_cast<float>(width) / static_cast<float>(height)
+            : 16.0f / 9.0f;
+    }
+};
+
+RenderViewportMetrics ResolveRenderViewportMetrics(
+    const editor::EditorViewportRenderTargetState& editorViewport,
+    uint32_t windowWidth,
+    uint32_t windowHeight) {
+    if (editorViewport.enabled && editorViewport.Valid()) {
+        return {
+            editorViewport.renderWidth,
+            editorViewport.renderHeight,
+            true};
+    }
+
+    return {
+        (std::max)(1u, windowWidth),
+        (std::max)(1u, windowHeight),
+        false};
+}
+
 std::atomic<bool> gRailWatchdogStarted{false};
 std::atomic<uint32_t> gRailStageFrame{0};
 std::atomic<DWORD> gRailStageTick{0};
@@ -2110,7 +2139,14 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     constexpr float kAtlasW = 256.0f;
     constexpr float kAtlasH = 128.0f;
     railLockOnHudAtlasVertexCount_ = 0;
-    if (railLockOnHudAtlasMappedVertices_ == nullptr || windowWidth_ == 0 || windowHeight_ == 0) {
+    const RenderViewportMetrics hudMetrics =
+        ResolveRenderViewportMetrics(
+            imguiLayer_.EditorViewportRenderTargetState(),
+            windowWidth_,
+            windowHeight_);
+    const uint32_t hudWidth = hudMetrics.width;
+    const uint32_t hudHeight = hudMetrics.height;
+    if (railLockOnHudAtlasMappedVertices_ == nullptr || hudWidth == 0 || hudHeight == 0) {
         return false;
     }
 
@@ -2124,8 +2160,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
 
     const auto clip = [&](float x, float y) {
         return Vector4{
-            x / static_cast<float>(windowWidth_) * 2.0f - 1.0f,
-            1.0f - y / static_cast<float>(windowHeight_) * 2.0f,
+            x / static_cast<float>(hudWidth) * 2.0f - 1.0f,
+            1.0f - y / static_cast<float>(hudHeight) * 2.0f,
             0.0f,
             1.0f};
     };
@@ -2281,7 +2317,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const float baseScale = settings.lockHudPolishEnabled
         ? (std::clamp)(settings.lockHudScale, 0.65f, 1.7f)
         : 1.0f;
-    const float responsiveScale = (std::clamp)(static_cast<float>(windowHeight_) / 900.0f, 0.82f, 1.16f);
+    const float responsiveScale = (std::clamp)(static_cast<float>(hudHeight) / 900.0f, 0.82f, 1.16f);
     const float hudScale = baseScale * responsiveScale;
     const float opacity = settings.lockHudPolishEnabled
         ? (std::clamp)(settings.lockHudOpacity, 0.15f, 1.0f)
@@ -2315,7 +2351,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const Vector4 reticleLine = reticle.lockHeld ? lockLine : Vector4{0.76f, 0.86f, 0.92f, opacity * 0.76f};
 
     if (releaseFlash > 0.0f) {
-        addQuad(0.0f, 0.0f, static_cast<float>(windowWidth_), static_cast<float>(windowHeight_), uvWhite, Vector4{0.72f, 0.95f, 1.0f, releaseFlash});
+        addQuad(0.0f, 0.0f, static_cast<float>(hudWidth), static_cast<float>(hudHeight), uvWhite, Vector4{0.72f, 0.95f, 1.0f, releaseFlash});
     }
 
     for (const RailNormalShotLine& shot : railNormalShotLines_) {
@@ -2447,8 +2483,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
 
     const float meterWidth = (static_cast<float>(maxLocks) * 20.0f + 94.0f) * hudScale;
     const float meterHeight = 54.0f * hudScale;
-    const float meterX = static_cast<float>(windowWidth_) * 0.5f - meterWidth * 0.5f;
-    const float meterY = static_cast<float>(windowHeight_) - safeArea - meterHeight;
+    const float meterX = static_cast<float>(hudWidth) * 0.5f - meterWidth * 0.5f;
+    const float meterY = static_cast<float>(hudHeight) - safeArea - meterHeight;
     addQuad(meterX, meterY, meterWidth, meterHeight, uvWhite, panel);
     addQuad(meterX, meterY, meterWidth, 3.0f * hudScale, uvWhite, panelAccent);
     addQuad(meterX + 8.0f * hudScale, meterY + meterHeight - 7.0f * hudScale, meterWidth - 16.0f * hudScale, 2.0f * hudScale, uvWhite, glass);
@@ -2483,7 +2519,13 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     return railLockOnHudAtlasVertexCount_ > 0;
 }
 
-void AppRunLoop::RegisterRailLockOnHudPass(ID3D12GraphicsCommandList* commandList) {
+void AppRunLoop::RegisterRailLockOnHudPass(
+    ID3D12GraphicsCommandList* commandList,
+    const std::string& targetResourceName) {
+    if (targetResourceName.empty()) {
+        return;
+    }
+
     const bool atlasReady =
         EnsureRailLockOnHudAtlas(commandList) &&
         BuildRailLockOnHudAtlasQuads() &&
@@ -2496,7 +2538,7 @@ void AppRunLoop::RegisterRailLockOnHudPass(ID3D12GraphicsCommandList* commandLis
         "UI.RailLockOnHud",
         ge3::graphics::RenderPassLayer::Ui,
         {
-            {"BackBuffer", ge3::graphics::RenderResourceAccessType::WriteRtv},
+            {targetResourceName, ge3::graphics::RenderResourceAccessType::WriteRtv},
         },
         "",
         [this](ge3::graphics::RenderPassContext& passContext) {
@@ -2561,7 +2603,6 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
     const CourseEnemyFireSafetyStats& fireSafetyStats = railShooterSpawnRuntime_.LastFireSafetyStats();
     const IAppSceneState* currentScene = sceneStateManager_.CurrentState();
     const char* currentSceneName = currentScene != nullptr ? currentScene->Name() : "-";
-    ImGui::Begin("Rail Lock-On P1-A");
     ImGui::Text(
         "Reticle prev=(%.1f, %.1f) current=(%.1f, %.1f)",
         reticle.previousScreenPosition.x,
@@ -3444,7 +3485,6 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
         }
     }
     DrawRailVisibilityDebugOverlay();
-    ImGui::End();
 #endif
 }
 
@@ -3764,7 +3804,12 @@ void AppRunLoop::UpdateRailShooterFrame() {
     if (RailShaderHotReloadEnabled() || imguiLayer_.WantsDeveloperDiagnostics()) {
         appPipelines_.HotReloadIfNeeded(dev_.GetDevice());
     }
-    ConfigureViewportAndScissor(runtimeState_, windowWidth_, windowHeight_);
+    const RenderViewportMetrics metrics =
+        ResolveRenderViewportMetrics(
+            imguiLayer_.EditorViewportRenderTargetState(),
+            windowWidth_,
+            windowHeight_);
+    ConfigureViewportAndScissor(runtimeState_, metrics.width, metrics.height);
     ++railShooterFrameIndex_;
     ResetRailPerfFrame(railShooterFrameIndex_, railShooterDistance_);
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.begin");
@@ -3863,8 +3908,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraInput.reticleVelocity = railShooterLockOnSystem_.Reticle().velocity;
     cameraInput.spawnRuntime = &railShooterSpawnRuntime_;
     cameraInput.lockTokens = &railShooterLockOnSystem_.Tokens();
-    cameraInput.viewportWidth = windowWidth_;
-    cameraInput.viewportHeight = windowHeight_;
+    cameraInput.viewportWidth = metrics.width;
+    cameraInput.viewportHeight = metrics.height;
     cameraInput.nearClipDistance = runtimeState_.camera.nearZ;
     const RailCameraDirectorFrame directedCamera =
         railShooterCameraDirector_.Evaluate(cameraInput);
@@ -3873,9 +3918,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const Vector3& forward = directedCamera.forward;
     const Vector3& cameraUp = directedCamera.up;
 
-    const float aspectRatio = windowHeight_ > 0
-        ? static_cast<float>(windowWidth_) / static_cast<float>(windowHeight_)
-        : 16.0f / 9.0f;
+    const float aspectRatio = metrics.AspectRatio();
     runtimeState_.camera.fovY = directedCamera.fovY;
     frameState_.viewMatrix = MakeLookAtMatrix(cameraPosition, lookTarget, cameraUp);
     frameState_.projMatrix = MakePerspectiveFovMatrix(
@@ -3891,8 +3934,29 @@ void AppRunLoop::UpdateRailShooterFrame() {
     lockOnInput.hwnd = hwnd_;
     lockOnInput.deltaTime = kFixedGameplayDeltaTime;
     lockOnInput.playerDistance = railShooterDistance_;
-    lockOnInput.viewportWidth = windowWidth_;
-    lockOnInput.viewportHeight = windowHeight_;
+    lockOnInput.viewportWidth = metrics.width;
+    lockOnInput.viewportHeight = metrics.height;
+    const editor::EditorViewportRenderTargetState& editorViewportTarget =
+        imguiLayer_.EditorViewportRenderTargetState();
+    if (editorViewportTarget.enabled) {
+        POINT cursor{};
+        POINT viewportCursor{};
+        uint32_t viewportCursorWidth = 0;
+        uint32_t viewportCursorHeight = 0;
+        lockOnInput.hasCursorPosition = true;
+        lockOnInput.cursorPosition = railShooterLockOnSystem_.Reticle().currentScreenPosition;
+        if (GetCursorPos(&cursor) &&
+            ScreenToClient(hwnd_, &cursor) &&
+            ResolveEditorViewportClientPoint(
+                cursor,
+                viewportCursor,
+                viewportCursorWidth,
+                viewportCursorHeight)) {
+            lockOnInput.cursorPosition = {
+                static_cast<float>(viewportCursor.x),
+                static_cast<float>(viewportCursor.y)};
+        }
+    }
     lockOnInput.viewProjection = &frameState_.viewProjectionMatrix;
     lockOnInput.railPath = &railPath_;
     lockOnInput.spawnRuntime = &railShooterSpawnRuntime_;
@@ -3950,8 +4014,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     railInputRouteDebug_.leftMouseDown = leftMouseDown;
 
     const RailReticleState& normalReticle = railShooterLockOnSystem_.Reticle();
-    const float viewportWidth = (std::max)(1.0f, static_cast<float>(windowWidth_));
-    const float viewportHeight = (std::max)(1.0f, static_cast<float>(windowHeight_));
+    const float viewportWidth = (std::max)(1.0f, static_cast<float>(metrics.width));
+    const float viewportHeight = (std::max)(1.0f, static_cast<float>(metrics.height));
     const float reticleNormX = (std::clamp)(
         (normalReticle.currentScreenPosition.x / viewportWidth - 0.5f) * 2.0f,
         -1.15f,
@@ -4084,11 +4148,14 @@ void AppRunLoop::RenderRailShooterFrame() {
 
 void AppRunLoop::UpdateVfxPreviewFrame() {
     appPipelines_.HotReloadIfNeeded(dev_.GetDevice());
-    ConfigureViewportAndScissor(runtimeState_, windowWidth_, windowHeight_);
+    const RenderViewportMetrics metrics =
+        ResolveRenderViewportMetrics(
+            imguiLayer_.EditorViewportRenderTargetState(),
+            windowWidth_,
+            windowHeight_);
+    ConfigureViewportAndScissor(runtimeState_, metrics.width, metrics.height);
 
-    const float aspectRatio = windowHeight_ > 0
-        ? static_cast<float>(windowWidth_) / static_cast<float>(windowHeight_)
-        : 16.0f / 9.0f;
+    const float aspectRatio = metrics.AspectRatio();
     debugCamera_.SetInputEnabled(runtimeState_.camera.enableDebugInput);
     debugCamera_.SetMoveSpeed(runtimeState_.camera.debugMoveSpeed);
     debugCamera_.SetRotateSpeed(runtimeState_.camera.debugRotateSpeed);
@@ -4131,6 +4198,77 @@ void AppRunLoop::BeginFrameSystems() {
     vfxEngine_.BeginFrame();
     renderGraph_.Clear();
     renderGraph_.ClearResources();
+}
+
+void AppRunLoop::ApplyEditorViewportRenderTargetForRender() {
+    const RenderViewportMetrics metrics =
+        ResolveRenderViewportMetrics(
+            imguiLayer_.EditorViewportRenderTargetState(),
+            windowWidth_,
+            windowHeight_);
+    ConfigureViewportAndScissor(runtimeState_, metrics.width, metrics.height);
+    frameState_.projMatrix = MakePerspectiveFovMatrix(
+        runtimeState_.camera.fovY,
+        metrics.AspectRatio(),
+        runtimeState_.camera.nearZ,
+        runtimeState_.camera.farZ);
+    frameState_.viewProjectionMatrix =
+        Multiply(frameState_.viewMatrix, frameState_.projMatrix);
+    frameState_.drawCount = particleSystem_.UpdateInstances(
+        frameState_.viewProjectionMatrix,
+        frameState_.deltaTime);
+}
+
+bool AppRunLoop::ResolveEditorViewportClientPoint(
+    POINT clientPoint,
+    POINT& outViewportPoint,
+    uint32_t& outViewportWidth,
+    uint32_t& outViewportHeight) const {
+    const editor::EditorViewportRenderTargetState& editorViewport =
+        imguiLayer_.EditorViewportRenderTargetState();
+    if (editorViewport.enabled &&
+        editorViewport.Valid() &&
+        editorViewport.displayRect.Valid()) {
+        const editor::EditorPanelRect& rect = editorViewport.displayRect;
+        if (static_cast<float>(clientPoint.x) < rect.x ||
+            static_cast<float>(clientPoint.y) < rect.y ||
+            static_cast<float>(clientPoint.x) >= rect.x + rect.width ||
+            static_cast<float>(clientPoint.y) >= rect.y + rect.height) {
+            return false;
+        }
+
+        const float localX = static_cast<float>(clientPoint.x) - rect.x;
+        const float localY = static_cast<float>(clientPoint.y) - rect.y;
+        const float scaleX = rect.width > 0.0f
+            ? static_cast<float>(editorViewport.renderWidth) / rect.width
+            : 1.0f;
+        const float scaleY = rect.height > 0.0f
+            ? static_cast<float>(editorViewport.renderHeight) / rect.height
+            : 1.0f;
+        outViewportPoint.x = static_cast<LONG>((std::clamp)(
+            std::lround(localX * scaleX),
+            0l,
+            static_cast<long>((std::max)(1u, editorViewport.renderWidth) - 1u)));
+        outViewportPoint.y = static_cast<LONG>((std::clamp)(
+            std::lround(localY * scaleY),
+            0l,
+            static_cast<long>((std::max)(1u, editorViewport.renderHeight) - 1u)));
+        outViewportWidth = editorViewport.renderWidth;
+        outViewportHeight = editorViewport.renderHeight;
+        return true;
+    }
+
+    if (clientPoint.x < 0 ||
+        clientPoint.y < 0 ||
+        clientPoint.x >= static_cast<LONG>(windowWidth_) ||
+        clientPoint.y >= static_cast<LONG>(windowHeight_)) {
+        return false;
+    }
+
+    outViewportPoint = clientPoint;
+    outViewportWidth = windowWidth_;
+    outViewportHeight = windowHeight_;
+    return outViewportWidth != 0 && outViewportHeight != 0;
 }
 
 bool AppRunLoop::WaitForFrameSlot(uint32_t frameIndex) {
@@ -4916,19 +5054,29 @@ void AppRunLoop::ProcessCourseObjectUndoRedo() {
 
 void AppRunLoop::ProcessCourseObjectViewportEditing() {
     TerrainAuthoringState& editor = runtimeState_.terrain;
+    const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    const editor::EditorViewportAuthoringInputGuard inputGuard =
+        editor::MakeEditorViewportAuthoringInputGuard(!editor.courseObjectAuthoringInputLocked);
+    if (!inputGuard.CanMutate()) {
+        editor.courseObjectUndoRequested = false;
+        editor.courseObjectRedoRequested = false;
+        editor.courseObjectActiveAxis = -1;
+        courseObjectDrag_.active = false;
+        courseObjectDrag_.changed = false;
+        previousCourseEditorLeftMouseDown_ = leftMouseDown;
+        return;
+    }
+
     EnsureCourseObjectHistoryBaseline();
     ProcessCourseObjectUndoRedo();
     CommitCourseObjectHistoryIfNeeded();
 
-    const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
     const bool leftMousePressed = leftMouseDown && !previousCourseEditorLeftMouseDown_;
     const bool leftMouseReleased = !leftMouseDown && previousCourseEditorLeftMouseDown_;
 
-    if (!editor.enableCourseObjectViewportEditing ||
+    if (!inputGuard.CanUseViewportInput(editor.enableCourseObjectViewportEditing) ||
         hwnd_ == nullptr ||
-        railPath_.Length() <= 0.0f ||
-        windowWidth_ == 0 ||
-        windowHeight_ == 0) {
+        railPath_.Length() <= 0.0f) {
         courseObjectDrag_.active = false;
         previousCourseEditorLeftMouseDown_ = leftMouseDown;
         return;
@@ -4941,11 +5089,15 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
         return;
     }
 
+    POINT viewportCursor{};
+    uint32_t viewportWidth = 0;
+    uint32_t viewportHeight = 0;
     const bool cursorInViewport =
-        cursor.x >= 0 &&
-        cursor.y >= 0 &&
-        cursor.x < static_cast<LONG>(windowWidth_) &&
-        cursor.y < static_cast<LONG>(windowHeight_);
+        ResolveEditorViewportClientPoint(
+            cursor,
+            viewportCursor,
+            viewportWidth,
+            viewportHeight);
     bool imguiWantsMouse = false;
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
     imguiWantsMouse = ImGui::GetIO().WantCaptureMouse;
@@ -4958,9 +5110,9 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
         int pickedAxis = -1;
         bool picked = false;
         if (MakeScreenRay(
-                cursor,
-                windowWidth_,
-                windowHeight_,
+                viewportCursor,
+                viewportWidth,
+                viewportHeight,
                 frameState_.viewProjectionMatrix,
                 rayOrigin,
                 rayDirection)) {
@@ -4999,7 +5151,7 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
             courseObjectDrag_.type = hit.type;
             courseObjectDrag_.index = hit.index;
             courseObjectDrag_.axis = pickedAxis;
-            courseObjectDrag_.startMouse = cursor;
+            courseObjectDrag_.startMouse = viewportCursor;
             if (hit.type == 0 &&
                 hit.index >= 0 &&
                 hit.index < static_cast<int>(railShooterCourse_.terrainPlacements.size())) {
@@ -5032,8 +5184,13 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
     }
 
     if (courseObjectDrag_.active && leftMouseDown) {
-        const float dx = static_cast<float>(cursor.x - courseObjectDrag_.startMouse.x);
-        const float dy = static_cast<float>(cursor.y - courseObjectDrag_.startMouse.y);
+        if (!cursorInViewport) {
+            courseObjectDrag_.active = false;
+            previousCourseEditorLeftMouseDown_ = leftMouseDown;
+            return;
+        }
+        const float dx = static_cast<float>(viewportCursor.x - courseObjectDrag_.startMouse.x);
+        const float dy = static_cast<float>(viewportCursor.y - courseObjectDrag_.startMouse.y);
         const bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
         const float moveSensitivity = (std::max)(0.001f, editor.courseObjectMoveSensitivity);
         const float scaleSensitivity = (std::max)(0.0001f, editor.courseObjectScaleSensitivity);
@@ -5542,18 +5699,22 @@ void AppRunLoop::ProcessIceProjectileMouseLaunch() {
     if (!GetCursorPos(&cursor) || !ScreenToClient(hwnd_, &cursor)) {
         return;
     }
-    if (cursor.x < 0 ||
-        cursor.y < 0 ||
-        cursor.x >= static_cast<LONG>(windowWidth_) ||
-        cursor.y >= static_cast<LONG>(windowHeight_)) {
+    POINT viewportCursor{};
+    uint32_t viewportWidth = 0;
+    uint32_t viewportHeight = 0;
+    if (!ResolveEditorViewportClientPoint(
+            cursor,
+            viewportCursor,
+            viewportWidth,
+            viewportHeight)) {
         return;
     }
 
     Vector3 target{};
     if (!IntersectScreenPointWithZPlane(
-            cursor,
-            windowWidth_,
-            windowHeight_,
+            viewportCursor,
+            viewportWidth,
+            viewportHeight,
             frameState_.viewProjectionMatrix,
             0.0f,
             target)) {
@@ -5617,9 +5778,9 @@ void AppRunLoop::ProcessIceProjectileMouseLaunch() {
     const Vector3 shotTarget = {target.x, target.y, 0.42f};
     const Vector3 launchNdc = TransformCoord(shotStart, frameState_.viewProjectionMatrix);
     const float cursorNdcX =
-        (static_cast<float>(cursor.x) / static_cast<float>(windowWidth_)) * 2.0f - 1.0f;
+        (static_cast<float>(viewportCursor.x) / static_cast<float>(viewportWidth)) * 2.0f - 1.0f;
     const float cursorNdcY =
-        1.0f - (static_cast<float>(cursor.y) / static_cast<float>(windowHeight_)) * 2.0f;
+        1.0f - (static_cast<float>(viewportCursor.y) / static_cast<float>(viewportHeight)) * 2.0f;
 
     *slot = {};
     slot->active = true;
@@ -5634,6 +5795,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     const auto renderStart = RailPerfClock::now();
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.begin");
     BeginFrameSystems();
+    imguiLayer_.RefreshEditorViewportRenderTargetLayout();
+    ApplyEditorViewportRenderTargetForRender();
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterBeginFrameSystems");
 
     UINT backBufferIndex = swapChain_.CurrentIndex();
@@ -5757,11 +5920,29 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 emitterState.frequencyTime = runtimeState_.emitter.frequencyTime;
                 particleSystem_.Emit(emitterState);
             },
+            [&]() {
+                DrawRailLockOnDebugPanel();
+            },
             &courseObjectTransactions_});
-    DrawRailLockOnDebugPanel();
     imguiLayer_.EndFrame();
     gRailPerfFrame.imguiMs = ElapsedMs(imguiStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterImgui");
+
+    ApplyEditorViewportRenderTargetForRender();
+    scene_.UpdateTransforms(
+        runtimeState_,
+        wvpData_,
+        frameState_.viewMatrix,
+        frameState_.projMatrix,
+        static_cast<uint32_t>(runtimeState_.viewport.Width),
+        static_cast<uint32_t>(runtimeState_.viewport.Height));
+    scene_.SyncCourseMeshRenderQueue(
+        railShooterSpawnRuntime_,
+        &railShooterCourse_,
+        railShooterCourseRuntime_.Distance(),
+        railPath_,
+        frameState_.viewMatrix,
+        frameState_.projMatrix);
 
     ProcessCourseObjectViewportEditing();
     ProcessIceProjectileMouseLaunch();
@@ -5791,6 +5972,13 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     graphContext.depthTextureHandle = engineContext_.GetDepthSrvGpuHandle();
     graphContext.terrainChunkManager = &terrainChunkManager_;
     const auto registerPassesStart = RailPerfClock::now();
+    const std::string railHudTargetResource =
+        imguiLayer_.WantsDeveloperDiagnostics()
+            ? (postExecutionPlan.finalOutputResource.empty()
+                ? std::string("SceneColor")
+                : postExecutionPlan.finalOutputResource)
+            : std::string("BackBuffer");
+    RegisterRailLockOnHudPass(commandList.Get(), railHudTargetResource);
     vfxEngine_.RegisterRenderPasses(
         frameGraphBuilder_,
         graphContext,
@@ -5798,17 +5986,21 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         commandList.Get(),
         scene_,
         spriteTextureHandle);
-    RegisterRailLockOnHudPass(commandList.Get());
     gRailPerfFrame.registerPassesMs = ElapsedMs(registerPassesStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterRegisterPasses");
     const auto prepareGraphStart = RailPerfClock::now();
+    const RenderViewportMetrics renderTargetMetrics =
+        ResolveRenderViewportMetrics(
+            imguiLayer_.EditorViewportRenderTargetState(),
+            windowWidth_,
+            windowHeight_);
     const VfxGraphResourceStats vfxGraphResourceStats = vfxEngine_.PrepareGraphResources(
         dev_.GetDevice(),
         heaps_,
         resourceRegistry_,
         renderGraph_,
-        windowWidth_,
-        windowHeight_);
+        renderTargetMetrics.width,
+        renderTargetMetrics.height);
     gRailPerfFrame.prepareGraphResourcesMs = ElapsedMs(prepareGraphStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterPrepareGraphResources");
 

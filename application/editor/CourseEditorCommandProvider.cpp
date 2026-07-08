@@ -1,8 +1,12 @@
 #include "CourseEditorCommandProvider.h"
 
+#include "EditorAuthoringMutationGuard.h"
 #include "EditorCommandContext.h"
 #include "EditorCommandRegistry.h"
 #include "EditorContext.h"
+#include "EditorDirtyStateService.h"
+#include "EditorDocumentLifecycleService.h"
+#include "EditorSaveApplyPolicy.h"
 
 namespace editor {
 
@@ -17,7 +21,19 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
 
     EditorCommandRegistry& registry = *context.commands;
     const EditorCommandContext& commandContext = *context.commandContext;
+    const EditorAuthoringMutationGuard mutationGuard =
+        MakeEditorAuthoringMutationGuard(context.playSession);
+    EditorDirtyStateService* dirtyState = context.dirtyState;
+    EditorDocumentLifecycleService* documentLifecycle = context.documentLifecycle;
     const CourseEditorCommandProviderInput input = input_;
+    const EditorSaveApplyPolicyInput policyInput{
+        commandContext.developerToolsVisible,
+        static_cast<bool>(input.saveCourse),
+        static_cast<bool>(input.applyCourse),
+        static_cast<bool>(input.reloadCourse),
+        dirtyState,
+        context.validationReport,
+        context.playSession};
 
     registry.Register(
         EditorCommand{
@@ -25,18 +41,22 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
             "Save Course",
             "Course",
             "Ctrl+S",
-            [input, &commandContext]() {
-                return commandContext.developerToolsVisible && static_cast<bool>(input.saveCourse);
+            [policyInput]() {
+                return EvaluateEditorSaveApplyPolicy(
+                    EditorSaveApplyAction::SaveCourse,
+                    policyInput).allowed;
             },
-            [input, &commandContext]() {
-                if (!commandContext.developerToolsVisible) {
-                    return std::string("Developer tools are hidden.");
-                }
-                return input.saveCourse ? std::string() : std::string("Save callback is unavailable.");
+            [policyInput]() {
+                return EvaluateEditorSaveApplyPolicy(
+                    EditorSaveApplyAction::SaveCourse,
+                    policyInput).reason;
             },
-            [input]() {
+            [input, dirtyState]() {
                 std::string error;
                 const bool saved = input.saveCourse && input.saveCourse(&error);
+                if (saved && dirtyState != nullptr) {
+                    dirtyState->ClearDomain(EditorDirtyDomain::CourseAuthoring);
+                }
                 return EditorCommandResult{
                     saved,
                     saved ? std::string("Saved course.") : (error.empty() ? std::string("Save failed.") : error)};
@@ -48,14 +68,15 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
             "Apply Course",
             "Course",
             "",
-            [input, &commandContext]() {
-                return commandContext.developerToolsVisible && static_cast<bool>(input.applyCourse);
+            [policyInput]() {
+                return EvaluateEditorSaveApplyPolicy(
+                    EditorSaveApplyAction::ApplyCourse,
+                    policyInput).allowed;
             },
-            [input, &commandContext]() {
-                if (!commandContext.developerToolsVisible) {
-                    return std::string("Developer tools are hidden.");
-                }
-                return input.applyCourse ? std::string() : std::string("Apply callback is unavailable.");
+            [policyInput]() {
+                return EvaluateEditorSaveApplyPolicy(
+                    EditorSaveApplyAction::ApplyCourse,
+                    policyInput).reason;
             },
             [input]() {
                 if (!input.applyCourse) {
@@ -71,21 +92,116 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
             "Reload Course",
             "Course",
             "",
-            [input, &commandContext]() {
-                return commandContext.developerToolsVisible && static_cast<bool>(input.reloadCourse);
-            },
-            [input, &commandContext]() {
-                if (!commandContext.developerToolsVisible) {
-                    return std::string("Developer tools are hidden.");
+            [documentLifecycle, input, policyInput]() {
+                if (documentLifecycle != nullptr) {
+                    return documentLifecycle->CanReloadCourse(static_cast<bool>(input.reloadCourse));
                 }
-                return input.reloadCourse ? std::string() : std::string("Reload callback is unavailable.");
+                return EvaluateEditorSaveApplyPolicy(
+                    EditorSaveApplyAction::ReloadCourse,
+                    policyInput).allowed;
             },
-            [input]() {
+            [documentLifecycle, input, policyInput]() {
+                if (documentLifecycle != nullptr) {
+                    return documentLifecycle->ReloadCourseDisabledReason(
+                        static_cast<bool>(input.reloadCourse));
+                }
+                return EvaluateEditorSaveApplyPolicy(
+                    EditorSaveApplyAction::ReloadCourse,
+                    policyInput).reason;
+            },
+            [input, dirtyState, documentLifecycle]() {
                 if (!input.reloadCourse) {
                     return EditorCommandResult{false, "Reload callback is unavailable."};
                 }
+                if (documentLifecycle != nullptr) {
+                    const EditorDocumentLifecycleResult result =
+                        documentLifecycle->RequestReloadCourse(input.reloadCourse);
+                    return EditorCommandResult{
+                        result.accepted,
+                        result.message,
+                        result.warning};
+                }
                 input.reloadCourse();
+                if (dirtyState != nullptr) {
+                    dirtyState->ClearDomain(EditorDirtyDomain::CourseAuthoring);
+                }
                 return EditorCommandResult{true, "Reloaded course from disk."};
+            }});
+
+    registry.Register(
+        EditorCommand{
+            "course.close",
+            "Close Course",
+            "Course",
+            "",
+            [documentLifecycle, input, policyInput]() {
+                if (documentLifecycle != nullptr) {
+                    return documentLifecycle->CanCloseCourse(static_cast<bool>(input.closeCourse));
+                }
+                return EvaluateEditorSaveApplyPolicy(
+                    EditorSaveApplyAction::CloseCourse,
+                    policyInput).allowed &&
+                    static_cast<bool>(input.closeCourse);
+            },
+            [documentLifecycle, input, policyInput]() {
+                if (documentLifecycle != nullptr) {
+                    return documentLifecycle->CloseCourseDisabledReason(
+                        static_cast<bool>(input.closeCourse));
+                }
+                if (!input.closeCourse) {
+                    return std::string("Close course document callback is unavailable.");
+                }
+                return EvaluateEditorSaveApplyPolicy(
+                    EditorSaveApplyAction::CloseCourse,
+                    policyInput).reason;
+            },
+            [input, documentLifecycle]() {
+                if (!input.closeCourse) {
+                    return EditorCommandResult{false, "Close course document callback is unavailable."};
+                }
+                if (documentLifecycle != nullptr) {
+                    const EditorDocumentLifecycleResult result =
+                        documentLifecycle->RequestCloseCourse(input.closeCourse);
+                    return EditorCommandResult{
+                        result.accepted,
+                        result.message,
+                        result.warning};
+                }
+                input.closeCourse();
+                return EditorCommandResult{true, "Closed course document."};
+            }});
+
+    registry.Register(
+        EditorCommand{
+            "course.reopen",
+            "Reopen Course",
+            "Course",
+            "",
+            [documentLifecycle, input]() {
+                return documentLifecycle != nullptr &&
+                    documentLifecycle->CanReopenCourse(static_cast<bool>(input.reopenCourse));
+            },
+            [documentLifecycle, input]() {
+                if (documentLifecycle == nullptr) {
+                    return std::string("Document lifecycle service is unavailable.");
+                }
+                return documentLifecycle->ReopenCourseDisabledReason(
+                    static_cast<bool>(input.reopenCourse));
+            },
+            [input, documentLifecycle]() {
+                if (!input.reopenCourse) {
+                    return EditorCommandResult{false, "Reopen course document callback is unavailable."};
+                }
+                if (documentLifecycle != nullptr) {
+                    const EditorDocumentLifecycleResult result =
+                        documentLifecycle->RequestReopenCourse(input.reopenCourse);
+                    return EditorCommandResult{
+                        result.accepted,
+                        result.message,
+                        result.warning};
+                }
+                input.reopenCourse();
+                return EditorCommandResult{true, "Reopened course document."};
             }});
 
     registry.Register(
@@ -94,12 +210,17 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
             "Teleport Course",
             "Course",
             "",
-            [input, &commandContext]() {
-                return commandContext.developerToolsVisible && static_cast<bool>(input.teleportCourseToDistance);
+            [input, &commandContext, mutationGuard]() {
+                return commandContext.developerToolsVisible &&
+                    mutationGuard.CanMutate() &&
+                    static_cast<bool>(input.teleportCourseToDistance);
             },
-            [input, &commandContext]() {
+            [input, &commandContext, mutationGuard]() {
                 if (!commandContext.developerToolsVisible) {
                     return std::string("Developer tools are hidden.");
+                }
+                if (mutationGuard.LockedByPlaySession()) {
+                    return std::string(mutationGuard.DisabledReason());
                 }
                 return input.teleportCourseToDistance ? std::string() : std::string("Teleport callback is unavailable.");
             },

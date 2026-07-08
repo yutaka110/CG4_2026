@@ -9,7 +9,11 @@
 #include "course/PlayerCombatFeelSystem.h"
 #include "course/SectionCheckpointSystem.h"
 #include "AppRuntimeState.h"
+#include "editor/EditorDirtyStateService.h"
+#include "editor/EditorDocumentLifecycleService.h"
+#include "editor/EditorModalConfirmService.h"
 #include "editor/EditorTransactionStack.h"
+#include "editor/EditorViewportAuthoringInputGuard.h"
 
 #include "../../externals/imgui/imgui.h"
 
@@ -22,6 +26,115 @@
 #include <utility>
 
 namespace {
+constexpr const char* kCourseAuthoringDirtyId = "course.authoring";
+
+uint32_t CourseAuthoringRevision(const CourseTimelineDebugPanelInput& input) {
+    return input.runtimeState != nullptr
+        ? input.runtimeState->terrain.courseObjectEditRevision
+        : 0u;
+}
+
+void MarkCourseAuthoringDirty(
+    const CourseTimelineDebugPanelInput& input,
+    const char* reason) {
+    if (input.dirtyState == nullptr) {
+        return;
+    }
+    input.dirtyState->MarkDirty(
+        editor::EditorDirtyDomain::CourseAuthoring,
+        kCourseAuthoringDirtyId,
+        "Course Authoring",
+        reason != nullptr ? reason : "Course authoring changed.",
+        CourseAuthoringRevision(input));
+}
+
+void ClearCourseAuthoringDirty(const CourseTimelineDebugPanelInput& input) {
+    if (input.dirtyState == nullptr) {
+        return;
+    }
+    input.dirtyState->ClearDomain(editor::EditorDirtyDomain::CourseAuthoring);
+}
+
+void RequestCourseReloadConfirmation(
+    const CourseTimelineDebugPanelInput& input,
+    std::string& authoringStatus) {
+    if (input.documentLifecycle == nullptr || !input.onReloadCourse) {
+        return;
+    }
+
+    const editor::EditorDocumentLifecycleResult result =
+        input.documentLifecycle->RequestReloadCourse(input.onReloadCourse);
+    authoringStatus = result.message;
+}
+
+void RequestTerrainPlacementDeleteConfirmation(
+    const CourseTimelineDebugPanelInput& input,
+    CourseAsset& course,
+    int terrainIndex) {
+    if (input.confirmService == nullptr) {
+        return;
+    }
+
+    CourseAsset* coursePtr = &course;
+    editor::EditorModalConfirmRequest request{};
+    request.severity = editor::EditorModalConfirmSeverity::Warning;
+    request.source = "Course Object";
+    request.title = "Delete Terrain Placement";
+    request.message = "Delete the selected course terrain placement? This cannot be undone after the confirmation is accepted.";
+    request.confirmLabel = "Delete";
+    request.cancelLabel = "Cancel";
+    request.onConfirm = [input, coursePtr, terrainIndex]() {
+        if (input.runtimeState == nullptr || coursePtr == nullptr) {
+            return;
+        }
+        TerrainAuthoringState& editor = input.runtimeState->terrain;
+        if (terrainIndex < 0 ||
+            terrainIndex >= static_cast<int>(coursePtr->terrainPlacements.size())) {
+            return;
+        }
+        coursePtr->terrainPlacements.erase(
+            coursePtr->terrainPlacements.begin() + terrainIndex);
+        editor.selectedCourseTerrainPlacement = -1;
+        ++editor.courseObjectEditRevision;
+        MarkCourseAuthoringDirty(input, "Course terrain placement deleted.");
+    };
+    input.confirmService->Request(std::move(request));
+}
+
+void RequestRockClusterDeleteConfirmation(
+    const CourseTimelineDebugPanelInput& input,
+    CourseAsset& course,
+    int clusterIndex) {
+    if (input.confirmService == nullptr) {
+        return;
+    }
+
+    CourseAsset* coursePtr = &course;
+    editor::EditorModalConfirmRequest request{};
+    request.severity = editor::EditorModalConfirmSeverity::Warning;
+    request.source = "Course Object";
+    request.title = "Delete Rock Cluster";
+    request.message = "Delete the selected course rock cluster? This cannot be undone after the confirmation is accepted.";
+    request.confirmLabel = "Delete";
+    request.cancelLabel = "Cancel";
+    request.onConfirm = [input, coursePtr, clusterIndex]() {
+        if (input.runtimeState == nullptr || coursePtr == nullptr) {
+            return;
+        }
+        TerrainAuthoringState& editor = input.runtimeState->terrain;
+        if (clusterIndex < 0 ||
+            clusterIndex >= static_cast<int>(coursePtr->rockClusters.size())) {
+            return;
+        }
+        coursePtr->rockClusters.erase(
+            coursePtr->rockClusters.begin() + clusterIndex);
+        editor.selectedCourseRockCluster = -1;
+        ++editor.courseObjectEditRevision;
+        MarkCourseAuthoringDirty(input, "Course rock cluster deleted.");
+    };
+    input.confirmService->Request(std::move(request));
+}
+
 ImU32 ColorForEventType(const std::string& type) {
     if (type == "enemy_wave") {
         return IM_COL32(255, 92, 48, 255);
@@ -1364,7 +1477,15 @@ bool DrawCourseObjectEditor(const CourseTimelineDebugPanelInput& input, CourseAs
     }
 
     TerrainAuthoringState& editor = input.runtimeState->terrain;
+    const editor::EditorViewportAuthoringInputGuard inputGuard =
+        editor::MakeEditorViewportAuthoringInputGuard(input.canMutateAuthoring);
+    const bool canMutate = inputGuard.CanMutate();
     bool changed = false;
+    ImGui::Text("Authoring input: %s", inputGuard.StateLabel());
+    if (!canMutate) {
+        ImGui::TextDisabled("%s", inputGuard.DisabledReason());
+    }
+    ImGui::BeginDisabled(!canMutate);
     ImGui::Checkbox("Viewport Pick", &editor.enableCourseObjectViewportEditing);
     ImGui::SameLine();
     const char* gizmoModes[] = {"Move", "Scale", "Rotate"};
@@ -1439,6 +1560,7 @@ bool DrawCourseObjectEditor(const CourseTimelineDebugPanelInput& input, CourseAs
         editor.selectedCourseTerrainPlacement = -1;
         changed = true;
     }
+    ImGui::EndDisabled();
 
     ImGui::Separator();
     ImGui::BeginChild("CourseObjectOutliner", ImVec2(0.0f, 240.0f), true);
@@ -1523,6 +1645,7 @@ bool DrawCourseObjectEditor(const CourseTimelineDebugPanelInput& input, CourseAs
             editor.courseObjectEditRevision,
             "Course Terrain");
         ImGui::PushID("TerrainDetails");
+        ImGui::BeginDisabled(!canMutate);
         changed |= TrackedInputString<128>(input, propertyTarget, "Id", "CourseTerrainPlacement.id", placement.id);
         changed |= TrackedInputString<128>(input, propertyTarget, "Mesh", "CourseTerrainPlacement.meshId", placement.meshId);
         const CourseTerrainLayer beforeLayer = placement.layer;
@@ -1584,10 +1707,18 @@ bool DrawCourseObjectEditor(const CourseTimelineDebugPanelInput& input, CourseAs
         }
         ImGui::SameLine();
         if (ImGui::Button("Delete Object")) {
-            removeTerrain = editor.selectedCourseTerrainPlacement;
+            if (input.confirmService != nullptr) {
+                RequestTerrainPlacementDeleteConfirmation(
+                    input,
+                    course,
+                    editor.selectedCourseTerrainPlacement);
+            } else {
+                removeTerrain = editor.selectedCourseTerrainPlacement;
+            }
         }
         ImGui::SeparatorText("Material");
         changed |= DrawTerrainMaterialPresetDetails(course, placement.distance);
+        ImGui::EndDisabled();
         ImGui::PopID();
     } else if (editor.courseObjectSelectionType == 1 &&
         editor.selectedCourseRockCluster >= 0 &&
@@ -1602,6 +1733,7 @@ bool DrawCourseObjectEditor(const CourseTimelineDebugPanelInput& input, CourseAs
             editor.courseObjectEditRevision,
             "Course Rock Cluster");
         ImGui::PushID("RockClusterDetails");
+        ImGui::BeginDisabled(!canMutate);
         changed |= TrackedInputString<128>(input, propertyTarget, "Id", "CourseRockCluster.id", cluster.id);
         changed |= TrackedInputString<128>(input, propertyTarget, "Mesh", "CourseRockCluster.meshId", cluster.meshId);
         const CourseRockClusterAnchor beforeAnchor = cluster.anchor;
@@ -1676,7 +1808,14 @@ bool DrawCourseObjectEditor(const CourseTimelineDebugPanelInput& input, CourseAs
         }
         ImGui::SameLine();
         if (ImGui::Button("Delete Cluster")) {
-            removeRock = editor.selectedCourseRockCluster;
+            if (input.confirmService != nullptr) {
+                RequestRockClusterDeleteConfirmation(
+                    input,
+                    course,
+                    editor.selectedCourseRockCluster);
+            } else {
+                removeRock = editor.selectedCourseRockCluster;
+            }
         }
         ImGui::SeparatorText("Instance Overrides");
         if (ImGui::Button("Add Instance Override")) {
@@ -1785,25 +1924,30 @@ bool DrawCourseObjectEditor(const CourseTimelineDebugPanelInput& input, CourseAs
         }
         ImGui::SeparatorText("Material");
         changed |= DrawTerrainMaterialPresetDetails(course, cluster.distance);
+        ImGui::EndDisabled();
         ImGui::PopID();
     } else {
         ImGui::TextUnformatted("No object selected.");
     }
 
-    if (removeTerrain >= 0 && removeTerrain < static_cast<int>(course.terrainPlacements.size())) {
+    if (canMutate &&
+        removeTerrain >= 0 &&
+        removeTerrain < static_cast<int>(course.terrainPlacements.size())) {
         course.terrainPlacements.erase(course.terrainPlacements.begin() + removeTerrain);
         editor.selectedCourseTerrainPlacement = -1;
         changed = true;
     }
-    if (removeRock >= 0 && removeRock < static_cast<int>(course.rockClusters.size())) {
+    if (canMutate &&
+        removeRock >= 0 &&
+        removeRock < static_cast<int>(course.rockClusters.size())) {
         course.rockClusters.erase(course.rockClusters.begin() + removeRock);
         editor.selectedCourseRockCluster = -1;
         changed = true;
     }
-    if (changed) {
+    if (changed && canMutate) {
         ++editor.courseObjectEditRevision;
     }
-    return changed;
+    return changed && canMutate;
 }
 
 void DrawCourseAuthoring(
@@ -1816,9 +1960,20 @@ void DrawCourseAuthoring(
     if (input.coursePath != nullptr) {
         ImGui::Text("Path: %s", input.coursePath->c_str());
     }
+    const editor::EditorViewportAuthoringInputGuard inputGuard =
+        editor::MakeEditorViewportAuthoringInputGuard(input.canMutateAuthoring);
+    const bool canMutate = inputGuard.CanMutate();
+    if (!canMutate) {
+        ImGui::TextDisabled("%s", inputGuard.DisabledReason());
+    }
+    if (input.dirtyState != nullptr) {
+        dirty = input.dirtyState->HasDirtyDomain(editor::EditorDirtyDomain::CourseAuthoring);
+    }
     bool changed = false;
+    ImGui::BeginDisabled(!canMutate);
     ImGui::SetNextItemWidth(340.0f);
     changed |= InputString<160>("Course Name", course.name);
+    ImGui::EndDisabled();
 
     if (ImGui::Button("Validate")) {
         validationReport = BuildValidationReport(input, course);
@@ -1826,6 +1981,7 @@ void DrawCourseAuthoring(
         authoringStatus = validationReport.HasErrors() ? "Validation failed." : "Validation passed.";
     }
     ImGui::SameLine();
+    ImGui::BeginDisabled(!canMutate);
     if (ImGui::Button("Apply")) {
         course.SortForRuntime();
         if (input.onApplyCourse) {
@@ -1834,6 +1990,7 @@ void DrawCourseAuthoring(
         validationReport = BuildValidationReport(input, course);
         validationReady = true;
         dirty = false;
+        ClearCourseAuthoringDirty(input);
         authoringStatus = "Applied course to runtime.";
     }
     ImGui::SameLine();
@@ -1843,6 +2000,7 @@ void DrawCourseAuthoring(
             validationReport = BuildValidationReport(input, course);
             validationReady = true;
             dirty = false;
+            ClearCourseAuthoringDirty(input);
             authoringStatus = "Saved course.";
         } else {
             validationReport = BuildValidationReport(input, course);
@@ -1852,14 +2010,21 @@ void DrawCourseAuthoring(
     }
     ImGui::SameLine();
     if (ImGui::Button("Reload")) {
-        if (input.onReloadCourse) {
+        if (input.documentLifecycle != nullptr && input.onReloadCourse) {
+            RequestCourseReloadConfirmation(input, authoringStatus);
+            if (input.dirtyState != nullptr) {
+                dirty = input.dirtyState->HasDirtyDomain(editor::EditorDirtyDomain::CourseAuthoring);
+            }
+        } else if (input.onReloadCourse) {
             input.onReloadCourse();
+            validationReport = BuildValidationReport(input, course);
+            validationReady = true;
+            dirty = false;
+            ClearCourseAuthoringDirty(input);
+            authoringStatus = "Reloaded course from disk.";
         }
-        validationReport = BuildValidationReport(input, course);
-        validationReady = true;
-        dirty = false;
-        authoringStatus = "Reloaded course from disk.";
     }
+    ImGui::EndDisabled();
 
     if (!authoringStatus.empty()) {
         ImGui::TextUnformatted(authoringStatus.c_str());
@@ -1868,10 +2033,13 @@ void DrawCourseAuthoring(
         ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.22f, 1.0f), "Unsaved authoring changes.");
     }
 
+    ImGui::BeginDisabled(!canMutate);
     changed |= DrawAuthoringTimeline(input, course, authoringStatus);
+    ImGui::EndDisabled();
 
     if (ImGui::BeginTabBar("CourseAuthoringTabs")) {
         if (ImGui::BeginTabItem("Events")) {
+            ImGui::BeginDisabled(!canMutate);
             if (ImGui::Button("Add Event")) {
                 course.events.push_back({input.currentDistance, "enemy_wave", "new_wave", {}});
                 changed = true;
@@ -1882,9 +2050,11 @@ void DrawCourseAuthoring(
                 changed = true;
             }
             changed |= DrawEventAuthoringTable(course);
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Sections")) {
+            ImGui::BeginDisabled(!canMutate);
             if (ImGui::Button("Add Section")) {
                 course.sections.push_back({input.currentDistance, input.currentDistance + 120.0f, "New Section", "Authoring"});
                 changed = true;
@@ -1895,9 +2065,11 @@ void DrawCourseAuthoring(
                 changed = true;
             }
             changed |= DrawSectionAuthoringTable(input, course);
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Camera")) {
+            ImGui::BeginDisabled(!canMutate);
             if (ImGui::Button("Add Camera Key")) {
                 course.cameraKeys.push_back({input.currentDistance});
                 changed = true;
@@ -1908,6 +2080,7 @@ void DrawCourseAuthoring(
                 changed = true;
             }
             changed |= DrawCameraAuthoringTable(course);
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Validation")) {
@@ -1921,9 +2094,10 @@ void DrawCourseAuthoring(
         ImGui::EndTabBar();
     }
 
-    if (changed) {
+    if (changed && canMutate) {
         dirty = true;
         validationReady = false;
+        MarkCourseAuthoringDirty(input, "Course authoring fields changed.");
     }
 }
 } // namespace
@@ -1945,11 +2119,16 @@ void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input) {
     static uint32_t seenCourseObjectEditRevision = 0;
     static std::string authoringStatus;
 
+    if (input.dirtyState != nullptr &&
+        input.dirtyState->HasDirtyDomain(editor::EditorDirtyDomain::CourseAuthoring)) {
+        dirty = true;
+    }
     if (input.runtimeState != nullptr &&
         input.runtimeState->terrain.courseObjectEditRevision != seenCourseObjectEditRevision) {
         seenCourseObjectEditRevision = input.runtimeState->terrain.courseObjectEditRevision;
         dirty = true;
         validationReady = false;
+        MarkCourseAuthoringDirty(input, "Course object edit revision changed.");
         authoringStatus = "Viewport object edit pending.";
     }
 
@@ -2051,6 +2230,7 @@ void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input) {
             if (DrawCourseObjectEditor(input, course)) {
                 dirty = true;
                 validationReady = false;
+                MarkCourseAuthoringDirty(input, "Course object editor changed.");
             }
             ImGui::EndTabItem();
         }

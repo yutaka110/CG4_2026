@@ -11,6 +11,8 @@ struct CourseEditorCommandProviderInput {
     std::function<bool(std::string*)> saveCourse;
     std::function<void()> applyCourse;
     std::function<void()> reloadCourse;
+    std::function<void()> closeCourse;
+    std::function<void()> reopenCourse;
     std::function<void(float)> teleportCourseToDistance;
     float courseDistance = 0.0f;
 };

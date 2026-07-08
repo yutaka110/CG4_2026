@@ -2,6 +2,7 @@
 
 #include "EditorCommandRegistry.h"
 #include "EditorContext.h"
+#include "EditorLayoutService.h"
 
 #include "../../externals/imgui/imgui.h"
 
@@ -18,7 +19,10 @@ struct ToolbarCommand {
     const char* label = nullptr;
 };
 
-constexpr std::array<ToolbarCommand, 6> kToolbarCommands{{
+constexpr std::array<ToolbarCommand, 9> kToolbarCommands{{
+    {"editor.play", "Play"},
+    {"editor.simulate", "Sim"},
+    {"editor.stop", "Stop"},
     {"course.save", "Save"},
     {"course.apply", "Apply"},
     {"course.reload", "Reload"},
@@ -28,7 +32,7 @@ constexpr std::array<ToolbarCommand, 6> kToolbarCommands{{
 }};
 
 bool NeedsSeparatorAfter(std::string_view id) {
-    return id == "course.reload" || id == "editor.redo";
+    return id == "editor.stop" || id == "course.reload" || id == "editor.redo";
 }
 
 void DrawDisabledReasonTooltip(EditorCommandRegistry& registry, const EditorCommand& command, bool enabled) {
@@ -75,8 +79,16 @@ void DrawEditorToolbar(EditorContext& context) {
         ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoScrollWithMouse;
 
-    ImGui::SetNextWindowPos(workPos, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(workSize.x, EditorToolbarHeight()), ImGuiCond_Always);
+    const float toolbarHeight =
+        context.layout != nullptr ? context.layout->ToolbarHeight() : EditorToolbarHeight();
+    const float toolbarTop =
+        context.layout != nullptr ? context.layout->ToolbarTopOffset() : 0.0f;
+    if (toolbarHeight <= 0.0f) {
+        return;
+    }
+
+    ImGui::SetNextWindowPos(ImVec2(workPos.x, workPos.y + toolbarTop), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(workSize.x, toolbarHeight), ImGuiCond_Always);
     if (!ImGui::Begin("Editor Toolbar", nullptr, flags)) {
         ImGui::End();
         return;

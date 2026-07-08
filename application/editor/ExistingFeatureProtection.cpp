@@ -2,13 +2,28 @@
 
 #include <sstream>
 
+#include "CourseDocumentAdapter.h"
 #include "EditorPropertyAccessor.h"
 #include "EditorPropertyRegistry.h"
 #include "EditorAssetRegistry.h"
 #include "EditorAssetSelection.h"
+#include "EditorAuthoringMutationGuard.h"
+#include "EditorDirtyStateService.h"
+#include "EditorDocumentLifecycleService.h"
+#include "EditorLayoutService.h"
+#include "EditorModalConfirmService.h"
+#include "EditorNotificationCenter.h"
+#include "EditorPanelLayoutService.h"
+#include "EditorPlaySessionState.h"
+#include "EditorRuntimeInspector.h"
+#include "EditorSaveApplyPolicy.h"
 #include "EditorSelection.h"
+#include "EditorTransformGizmoService.h"
 #include "EditorTransactionStack.h"
 #include "EditorValidation.h"
+#include "EditorViewportAuthoringInputGuard.h"
+#include "EditorViewportInteractionService.h"
+#include "EditorViewportSelectionBridge.h"
 #include "../AppRuntimeState.h"
 #include "../EffectAssetLoader.h"
 #include "../EffectRuntime.h"
@@ -231,6 +246,35 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             "EditorAssetSelection is missing; AssetBrowser cannot drive Details AssetRef edits.");
     }
 
+    if (input.courseDocument != nullptr) {
+        const CourseDocumentState& state = input.courseDocument->State();
+        std::ostringstream detail;
+        detail << (state.open ? "open" : "closed")
+               << ", "
+               << (state.dirty ? "dirty" : "clean")
+               << ", "
+               << (state.reopenAvailable ? "reopen-ready" : "reopen-unavailable");
+        if (!state.displayName.empty()) {
+            detail << ", " << state.displayName;
+        }
+        if (!state.path.empty()) {
+            detail << ", path " << state.path;
+        }
+        AddCheck(
+            report,
+            state.open ? ExistingFeatureStatus::Ok : ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Course document adapter",
+            detail.str());
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Course document adapter",
+            "CourseDocumentAdapter is missing; Course document open/close state is not visible to Editor Core.");
+    }
+
     if (input.validationReport != nullptr) {
         std::ostringstream detail;
         detail << "Issues " << input.validationReport->issues.size()
@@ -254,6 +298,383 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             "Editor Core",
             "Validation service",
             "EditorValidationService report is missing; Details edits are not being validated.");
+    }
+
+    if (input.dirtyState != nullptr) {
+        std::ostringstream detail;
+        detail << input.dirtyState->Count()
+               << " dirty records, revision "
+               << input.dirtyState->Revision()
+               << ", summary "
+               << input.dirtyState->Summary();
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Ok,
+            "Editor Core",
+            "Dirty state service",
+            detail.str());
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Dirty state service",
+            "EditorDirtyStateService is missing; save/apply state cannot be shared.");
+    }
+
+    if (input.documentLifecycle != nullptr) {
+        std::ostringstream detail;
+        detail << "revision "
+               << input.documentLifecycle->Revision()
+               << ", last action "
+               << ToString(input.documentLifecycle->LastAction());
+        if (!input.documentLifecycle->LastMessage().empty()) {
+            detail << ", "
+                   << input.documentLifecycle->LastMessage();
+        }
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Ok,
+            "Editor Core",
+            "Document lifecycle",
+            detail.str());
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Document lifecycle",
+            "EditorDocumentLifecycleService is missing; dirty document operations are not centralized.");
+    }
+
+    if (input.layout != nullptr) {
+        std::ostringstream detail;
+        detail << "top reserved "
+               << input.layout->TopReservedHeight()
+               << ", bottom reserved "
+               << input.layout->BottomReservedHeight()
+               << ", toolbar "
+               << (input.layout->ToolbarVisible() ? "visible" : "hidden")
+               << ", tabs "
+               << (input.layout->DocumentTabsVisible() ? "visible" : "hidden")
+               << ", status "
+               << (input.layout->StatusBarVisible() ? "visible" : "hidden");
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Ok,
+            "Editor Core",
+            "Layout service",
+            detail.str());
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Layout service",
+            "EditorLayoutService is missing; editor chrome reservation is not centralized.");
+    }
+
+    if (input.panelLayout != nullptr) {
+        const EditorPanelRect& content = input.panelLayout->ContentRect();
+        const EditorPanelRect& inspector = input.panelLayout->InspectorRect();
+        const EditorPanelRect& diagnostics = input.panelLayout->DiagnosticsRect();
+        const EditorPanelRect& viewport = input.panelLayout->ViewportRect();
+        std::ostringstream detail;
+        detail << "content "
+               << content.width
+               << "x"
+               << content.height
+               << ", inspector "
+               << inspector.width
+               << "x"
+               << inspector.height
+               << ", diagnostics "
+               << diagnostics.width
+               << "x"
+               << diagnostics.height
+               << ", viewport "
+               << viewport.width
+               << "x"
+               << viewport.height;
+        AddCheck(
+            report,
+            content.Valid() && viewport.Valid()
+                ? ExistingFeatureStatus::Ok
+                : ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Panel layout service",
+            content.Valid() && viewport.Valid()
+                ? detail.str()
+                : detail.str() + " / content or viewport rect is unavailable");
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Panel layout service",
+            "EditorPanelLayoutService is missing; inspector and diagnostics layout is not centralized.");
+    }
+
+    if (input.notifications != nullptr) {
+        std::ostringstream detail;
+        detail << input.notifications->Count()
+               << " notifications, revision "
+               << input.notifications->Revision();
+        if (const EditorNotification* latest = input.notifications->Latest()) {
+            detail << ", latest "
+                   << ToString(latest->severity)
+                   << " "
+                   << latest->source;
+        }
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Ok,
+            "Editor Core",
+            "Notification center",
+            detail.str());
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Notification center",
+            "EditorNotificationCenter is missing; command and policy results are not retained.");
+    }
+
+    if (input.confirmService != nullptr) {
+        std::ostringstream detail;
+        detail << "revision "
+               << input.confirmService->Revision()
+               << ", "
+               << (input.confirmService->HasPending() ? "pending confirmation" : "idle");
+        if (const EditorModalConfirmRequest* pending = input.confirmService->Pending()) {
+            detail << ", "
+                   << ToString(pending->severity)
+                   << " "
+                   << pending->title;
+        }
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Ok,
+            "Editor Core",
+            "Modal confirmation service",
+            detail.str());
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Modal confirmation service",
+            "EditorModalConfirmService is missing; destructive editor operations cannot be gated.");
+    }
+
+    if (input.saveApplyPolicy != nullptr) {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Ok,
+            "Editor Core",
+            "Save/apply policy",
+            BuildEditorSaveApplyPolicySummary(*input.saveApplyPolicy));
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Save/apply policy",
+            "EditorSaveApplyPolicy input is missing; commands may diverge from status/guard display.");
+    }
+
+    if (input.runtimeInspector != nullptr) {
+        std::ostringstream detail;
+        detail << input.runtimeInspector->Count()
+               << " runtime watch records, revision "
+               << input.runtimeInspector->Revision()
+               << ", mode "
+               << (input.runtimeInspector->ReadOnly() ? "read-only" : "editable");
+        AddCheck(
+            report,
+            input.runtimeInspector->ReadOnly() ? ExistingFeatureStatus::Ok : ExistingFeatureStatus::Blocked,
+            "Editor Core",
+            "Runtime inspector",
+            input.runtimeInspector->ReadOnly()
+                ? detail.str()
+                : detail.str() + " / runtime inspector must not mutate authoring or runtime state");
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Runtime inspector",
+            "EditorRuntimeInspector is missing; runtime watch data is not unified.");
+    }
+
+    if (input.playSession != nullptr) {
+        const EditorAuthoringMutationGuard mutationGuard =
+            MakeEditorAuthoringMutationGuard(input.playSession);
+        const char* isolationState = "inactive";
+        if (input.playSession->RuntimeIsolationSnapshotActive()) {
+            isolationState = "snapshot-active";
+        } else if (input.playSession->RuntimeIsolationPending()) {
+            isolationState = "pending";
+        } else if (input.playSession->RuntimeIsolationRestored()) {
+            isolationState = "restored";
+        }
+        std::ostringstream detail;
+        detail << "Mode " << ToString(input.playSession->Mode())
+               << ", serial " << input.playSession->SessionSerial()
+               << ", frames " << input.playSession->FrameCount()
+               << ", runtime isolation " << isolationState
+               << ", authoring mutation "
+               << (mutationGuard.CanMutate() ? "open" : "locked");
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Ok,
+            "Editor Core",
+            "Play session boundary",
+            detail.str());
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Play session boundary",
+            "EditorPlaySessionState is missing; PIE/SIM boundary is not visible to editor services.");
+    }
+
+    if (input.runtimeState != nullptr) {
+        const EditorViewportAuthoringInputGuard inputGuard =
+            MakeEditorViewportAuthoringInputGuard(
+                !input.runtimeState->terrain.courseObjectAuthoringInputLocked);
+        const bool playActive =
+            input.playSession != nullptr && input.playSession->IsActive();
+        const bool protectedState =
+            playActive ? !inputGuard.CanMutate() : inputGuard.CanMutate();
+        std::ostringstream detail;
+        detail << "Course object viewport authoring input "
+               << inputGuard.StateLabel()
+               << ", play active "
+               << (playActive ? "yes" : "no");
+        AddCheck(
+            report,
+            protectedState ? ExistingFeatureStatus::Ok : ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Viewport authoring input",
+            protectedState
+                ? detail.str()
+                : detail.str() + " / expected lock state does not match Play/Sim boundary");
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Viewport authoring input",
+            "Runtime state is missing; viewport authoring input guard cannot be observed.");
+    }
+
+    if (input.viewportInteraction != nullptr) {
+        const EditorViewportInteractionState& state = input.viewportInteraction->State();
+        const bool lockMatchesRuntime =
+            input.runtimeState == nullptr ||
+            input.runtimeState->terrain.courseObjectAuthoringInputLocked ==
+                input.viewportInteraction->AuthoringInputLocked();
+        std::ostringstream detail;
+        detail << input.viewportInteraction->BoundaryLabel()
+               << ", "
+               << input.viewportInteraction->ViewportInputLabel()
+               << ", "
+               << input.viewportInteraction->AuthoringLabel()
+               << ", mouse "
+               << state.mouseX
+               << ","
+               << state.mouseY
+               << ", revision "
+               << state.revision;
+        AddCheck(
+            report,
+            input.viewportInteraction->ViewportAvailable() && lockMatchesRuntime
+                ? ExistingFeatureStatus::Ok
+                : ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Viewport interaction service",
+            input.viewportInteraction->ViewportAvailable() && lockMatchesRuntime
+                ? detail.str()
+                : detail.str() + " / viewport boundary or runtime lock needs attention");
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Viewport interaction service",
+            "EditorViewportInteractionService is missing; viewport input boundary is not centralized.");
+    }
+
+    if (input.viewportSelectionBridge != nullptr) {
+        const EditorViewportSelectionBridgeState& state =
+            input.viewportSelectionBridge->State();
+        std::ostringstream detail;
+        detail << input.viewportSelectionBridge->BoundaryLabel()
+               << ", "
+               << input.viewportSelectionBridge->CourseSelectionLabel()
+               << ", "
+               << input.viewportSelectionBridge->RequestLabel()
+               << ", picks "
+               << state.pickResultCount
+               << ", handles "
+               << state.bridgedHandleCount
+               << ", primary "
+               << ToString(state.primaryPickSource)
+               << ", revision "
+               << state.revision;
+        AddCheck(
+            report,
+            state.selectionConnected && state.viewportBoundaryConnected
+                ? ExistingFeatureStatus::Ok
+                : ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Viewport selection bridge",
+            state.selectionConnected && state.viewportBoundaryConnected
+                ? detail.str()
+                : detail.str() + " / selection or viewport boundary is not connected");
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Viewport selection bridge",
+            "EditorViewportSelectionBridge is missing; viewport picks are not routed through EditorSelection.");
+    }
+
+    if (input.transformGizmo != nullptr) {
+        const EditorTransformGizmoState& state = input.transformGizmo->State();
+        std::ostringstream detail;
+        detail << input.transformGizmo->TargetLabel()
+               << ", "
+               << input.transformGizmo->ModeLabel()
+               << ", "
+               << input.transformGizmo->AxisLabel()
+               << ", "
+               << input.transformGizmo->ManipulationLabel()
+               << ", snap "
+               << (state.snapEnabled ? "on" : "off")
+               << ", revision "
+               << state.revision;
+        AddCheck(
+            report,
+            state.selectionConnected && state.viewportBoundaryConnected && state.selectionRequestConnected
+                ? ExistingFeatureStatus::Ok
+                : ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Transform gizmo service",
+            state.selectionConnected && state.viewportBoundaryConnected && state.selectionRequestConnected
+                ? detail.str()
+                : detail.str() + " / selection, request, or viewport boundary is not connected");
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Transform gizmo service",
+            "EditorTransformGizmoService is missing; transform gizmo state is not centralized.");
     }
 
     AddBooleanCheck(

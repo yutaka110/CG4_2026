@@ -423,6 +423,7 @@ void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context) {
             FindDeltaView(context.transactions, *selected, *descriptor);
         EditorPropertyValue value{};
         const bool canAccess = context.propertyAccessor->Get(*selected, *descriptor, value);
+        const bool editLocked = !context.canMutateAuthoring && canAccess && !descriptor->readOnly;
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(descriptor->category.c_str());
@@ -438,7 +439,7 @@ void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context) {
         }
         ImGui::TableNextColumn();
         ImGui::PushID(descriptor->name.c_str());
-        if (!canAccess || descriptor->readOnly) {
+        if (!canAccess || descriptor->readOnly || editLocked) {
             const std::string displayValue =
                 canAccess ? FormatEditorPropertyValue(*descriptor, value) : std::string("unavailable");
             ImGui::TextUnformatted(displayValue.c_str());
@@ -468,7 +469,7 @@ void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context) {
             ImGui::TextUnformatted("-");
         }
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted(delta.state);
+        ImGui::TextUnformatted(editLocked ? "locked by Play/Sim" : delta.state);
     }
 
     ImGui::EndTable();

@@ -9,6 +9,7 @@
 namespace editor {
 
 class EditorAssetSelection;
+class EditorPlaySessionState;
 class EditorPropertyAccessor;
 class EditorPropertyRegistry;
 class EditorTransactionStack;
@@ -19,11 +20,14 @@ struct EditorCommandContextInput {
     const EditorPropertyRegistry* propertyRegistry = nullptr;
     const EditorPropertyAccessor* propertyAccessor = nullptr;
     const EditorTransactionStack* transactions = nullptr;
+    const EditorPlaySessionState* playSession = nullptr;
     bool developerToolsVisible = false;
 };
 
 struct EditorCommandContext {
     bool developerToolsVisible = false;
+    bool canMutateAuthoring = true;
+    bool authoringLockedByPlaySession = false;
 
     bool hasSelectedObject = false;
     EditorDomainId selectedObjectDomain = EditorDomainId::Unknown;

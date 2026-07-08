@@ -1,6 +1,7 @@
 #include "EditorCommandContext.h"
 
 #include "EditorAssetSelection.h"
+#include "EditorAuthoringMutationGuard.h"
 #include "EditorPropertyAccessor.h"
 #include "EditorPropertyRegistry.h"
 #include "EditorTransactionStack.h"
@@ -10,6 +11,10 @@ namespace editor {
 EditorCommandContext BuildEditorCommandContext(const EditorCommandContextInput& input) {
     EditorCommandContext context;
     context.developerToolsVisible = input.developerToolsVisible;
+    const EditorAuthoringMutationGuard mutationGuard =
+        MakeEditorAuthoringMutationGuard(input.playSession);
+    context.canMutateAuthoring = mutationGuard.CanMutate();
+    context.authoringLockedByPlaySession = mutationGuard.LockedByPlaySession();
 
     const EditorObjectHandle* selectedObject = nullptr;
     if (input.selection != nullptr) {
@@ -56,11 +61,14 @@ EditorCommandContext BuildEditorCommandContext(const EditorCommandContextInput& 
             context.detailsCanRead = true;
             if (!descriptor->readOnly) {
                 ++context.detailsEditablePropertyCount;
-                context.detailsCanEdit = true;
+                if (context.canMutateAuthoring) {
+                    context.detailsCanEdit = true;
+                }
             }
 
             if (selectedAsset != nullptr &&
                 selectedAsset->referenceable &&
+                context.canMutateAuthoring &&
                 !descriptor->readOnly &&
                 descriptor->kind == EditorPropertyKind::AssetRef &&
                 descriptor->assetKind == selectedAsset->kind) {

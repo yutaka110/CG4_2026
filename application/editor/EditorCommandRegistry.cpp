@@ -1,5 +1,7 @@
 #include "EditorCommandRegistry.h"
 
+#include "EditorNotificationCenter.h"
+
 #include <algorithm>
 #include <utility>
 
@@ -58,15 +60,24 @@ EditorCommand* EditorCommandRegistry::Find(std::string_view id) {
 EditorCommandResult EditorCommandRegistry::Execute(std::string_view id) {
     EditorCommand* command = Find(id);
     if (command == nullptr) {
-        return {false, "Command not found."};
+        const EditorCommandResult result{false, "Command not found."};
+        RecordExecution(id, result);
+        return result;
     }
     if (!IsEnabled(*command)) {
-        return {false, "Command is disabled."};
+        const std::string reason = DisabledReason(*command);
+        const EditorCommandResult result{false, reason.empty() ? std::string("Command is disabled.") : reason};
+        RecordExecution(id, result);
+        return result;
     }
     if (!command->execute) {
-        return {false, "Command has no execute callback."};
+        const EditorCommandResult result{false, "Command has no execute callback."};
+        RecordExecution(id, result);
+        return result;
     }
-    return command->execute();
+    const EditorCommandResult result = command->execute();
+    RecordExecution(id, result);
+    return result;
 }
 
 bool EditorCommandRegistry::IsEnabled(const EditorCommand& command) const {
@@ -85,6 +96,27 @@ std::string EditorCommandRegistry::DisabledReason(const EditorCommand& command) 
 
 void EditorCommandRegistry::Touch() {
     ++revision_;
+}
+
+void EditorCommandRegistry::RecordExecution(std::string_view id, const EditorCommandResult& result) {
+    if (executionStatus_ != nullptr) {
+        executionStatus_->hasResult = true;
+        executionStatus_->commandId = std::string(id);
+        executionStatus_->succeeded = result.succeeded;
+        executionStatus_->message = result.message;
+        ++executionStatus_->revision;
+    }
+
+    if (notifications_ != nullptr) {
+        notifications_->Push(
+            result.succeeded
+                ? (result.warning ? EditorNotificationSeverity::Warning : EditorNotificationSeverity::Info)
+                : EditorNotificationSeverity::Error,
+            std::string(id),
+            result.message.empty()
+                ? (result.succeeded ? std::string("Command succeeded.") : std::string("Command failed."))
+                : result.message);
+    }
 }
 
 } // namespace editor
