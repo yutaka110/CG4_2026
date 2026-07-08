@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "AppFrameGraphBuilder.h"
+#include "AppImGuiLayer.h"
 #include "AppPipelines.h"
 #include "AppVfxRenderTargets.h"
 #include "PostProcessStack.h"
@@ -254,6 +255,12 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                         passParams);
                 }
         }});
+    }
+
+    const bool editorViewportCompositedByImGui =
+        ctx.imguiLayer != nullptr && ctx.imguiLayer->WantsDeveloperDiagnostics();
+    if (editorViewportCompositedByImGui) {
+        return;
     }
 
     ctx.renderGraph->AddPass({

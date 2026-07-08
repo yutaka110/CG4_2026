@@ -6,6 +6,30 @@
 #include <d3d12.h>
 
 #include "graphics/RenderGraph.h"
+#include "editor/EditorAssetSelection.h"
+#include "editor/EditorCommandContext.h"
+#include "editor/EditorCommandInputRouter.h"
+#include "editor/EditorCommandPalette.h"
+#include "editor/EditorCommandRegistry.h"
+#include "editor/CourseDocumentAdapter.h"
+#include "editor/EditorDirtyStateService.h"
+#include "editor/EditorDocumentLifecycleService.h"
+#include "editor/EditorLayoutService.h"
+#include "editor/EditorModalConfirmService.h"
+#include "editor/EditorNotificationCenter.h"
+#include "editor/EditorPanelHost.h"
+#include "editor/EditorPanelLayoutService.h"
+#include "editor/EditorPanelRegistry.h"
+#include "editor/EditorPlaySessionIsolationSnapshot.h"
+#include "editor/EditorPlaySessionState.h"
+#include "editor/EditorPropertyRegistry.h"
+#include "editor/EditorRuntimeInspector.h"
+#include "editor/EditorSelection.h"
+#include "editor/EditorTransformGizmoService.h"
+#include "editor/EditorTransactionStack.h"
+#include "editor/EditorViewportInteractionService.h"
+#include "editor/EditorViewportSelectionBridge.h"
+#include "editor/EditorViewportRenderTarget.h"
 
 struct AppRuntimeState;
 struct FrameLoopState;
@@ -64,6 +88,8 @@ struct AppImGuiFrameContext {
     std::function<void()> onReloadCourse;
     std::function<void(float)> onTeleportCourseToDistance;
     std::function<void()> onAddParticle;
+    std::function<void()> onDrawRailLockOnDebugPanel;
+    editor::EditorTransactionStack* editorTransactions = nullptr;
 };
 
 class AppImGuiLayer {
@@ -73,11 +99,13 @@ public:
 
     void BeginFrame();
     void BuildUi(const AppImGuiFrameContext& context);
+    void RefreshEditorViewportRenderTargetLayout();
     void EndFrame();
 
     void Render(ID3D12GraphicsCommandList* cmdList);
     bool IsEnabled() const;
     bool WantsDeveloperDiagnostics() const;
+    const editor::EditorViewportRenderTargetState& EditorViewportRenderTargetState() const;
 
     void Shutdown();
 
@@ -105,4 +133,32 @@ private:
     uint32_t beamDedicatedStableFrames_ = 0;
     uint32_t beamDedicatedActiveStableFrames_ = 0;
     uint32_t hiddenRuntimeTelemetryFrame_ = 0;
+    editor::EditorPropertyRegistry editorPropertyRegistry_{};
+    editor::EditorAssetRegistry editorAssetRegistry_{};
+    editor::EditorAssetSelection editorAssetSelection_{};
+    editor::EditorCommandInputRouter editorCommandInputRouter_{};
+    editor::EditorCommandPalette editorCommandPalette_{};
+    editor::EditorCommandExecutionStatus editorCommandExecutionStatus_{};
+    editor::EditorDirtyStateService editorDirtyState_{};
+    editor::EditorDocumentLifecycleService editorDocumentLifecycle_{};
+    editor::EditorLayoutService editorLayout_{};
+    editor::EditorPanelHost editorPanelHost_{};
+    editor::EditorPanelLayoutService editorPanelLayout_{};
+    editor::EditorPanelRegistry editorPanelRegistry_{};
+    editor::EditorViewportInteractionService editorViewportInteraction_{};
+    editor::EditorViewportSelectionBridge editorViewportSelectionBridge_{};
+    editor::EditorViewportRenderTarget editorViewportRenderTarget_{};
+    editor::EditorTransformGizmoService editorTransformGizmo_{};
+    editor::EditorModalConfirmService editorConfirmService_{};
+    editor::EditorNotificationCenter editorNotifications_{};
+    editor::EditorPlaySessionIsolationSnapshot editorPlaySessionSnapshot_{};
+    editor::EditorPlaySessionState editorPlaySession_{};
+    editor::EditorRuntimeInspector editorRuntimeInspector_{};
+    editor::EditorSelection editorSelection_{};
+    editor::EditorTransactionStack editorTransactions_{};
+    bool editorCourseDocumentOpen_ = true;
+    std::string editorCourseDocumentPath_;
+    bool editorCourseObjectDirtyRevisionInitialized_ = false;
+    uint32_t editorCourseObjectDirtyRevision_ = 0;
+    bool editorAssetRegistryInitialized_ = false;
 };

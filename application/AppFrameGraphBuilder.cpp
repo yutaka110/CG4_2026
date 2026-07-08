@@ -138,15 +138,29 @@ void AppFrameGraphBuilder::Build(
     }
 
     if (ctx.imguiLayer->IsEnabled()) {
-        ctx.renderGraph->AddPass({
-            "UI.ImGui",
-            ge3::graphics::RenderPassLayer::Ui,
-            {
-                {"BackBuffer", ge3::graphics::RenderResourceAccessType::WriteRtv},
-            },
-            "",
-            [ctx](ge3::graphics::RenderPassContext& passContext) {
-                ctx.imguiLayer->Render(passContext.commandList);
-            }});
+        if (developerDiagnosticsVisible) {
+            ctx.renderGraph->AddPass({
+                "UI.ImGui",
+                ge3::graphics::RenderPassLayer::Ui,
+                {
+                    {"BackBuffer", ge3::graphics::RenderResourceAccessType::WriteRtv},
+                    {finalPostOutput, ge3::graphics::RenderResourceAccessType::ReadSrv},
+                },
+                "",
+                [ctx](ge3::graphics::RenderPassContext& passContext) {
+                    ctx.imguiLayer->Render(passContext.commandList);
+                }});
+        } else {
+            ctx.renderGraph->AddPass({
+                "UI.ImGui",
+                ge3::graphics::RenderPassLayer::Ui,
+                {
+                    {"BackBuffer", ge3::graphics::RenderResourceAccessType::WriteRtv},
+                },
+                "",
+                [ctx](ge3::graphics::RenderPassContext& passContext) {
+                    ctx.imguiLayer->Render(passContext.commandList);
+                }});
+        }
     }
 }

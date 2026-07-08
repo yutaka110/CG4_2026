@@ -10,6 +10,8 @@ struct RailReticleFrameInput {
     float deltaTime = 0.016f;
     uint32_t viewportWidth = 0;
     uint32_t viewportHeight = 0;
+    bool hasCursorPosition = false;
+    Vector2 cursorPosition{};
     const std::vector<RailLockAnchor>* anchors = nullptr;
     const Matrix4x4* viewProjection = nullptr;
     RailLockSettings settings{};

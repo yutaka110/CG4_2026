@@ -9,6 +9,11 @@
 #include "course/PlayerCombatFeelSystem.h"
 #include "course/SectionCheckpointSystem.h"
 #include "AppRuntimeState.h"
+#include "editor/EditorDirtyStateService.h"
+#include "editor/EditorDocumentLifecycleService.h"
+#include "editor/EditorModalConfirmService.h"
+#include "editor/EditorTransactionStack.h"
+#include "editor/EditorViewportAuthoringInputGuard.h"
 
 #include "../../externals/imgui/imgui.h"
 
@@ -18,8 +23,118 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <utility>
 
 namespace {
+constexpr const char* kCourseAuthoringDirtyId = "course.authoring";
+
+uint32_t CourseAuthoringRevision(const CourseTimelineDebugPanelInput& input) {
+    return input.runtimeState != nullptr
+        ? input.runtimeState->terrain.courseObjectEditRevision
+        : 0u;
+}
+
+void MarkCourseAuthoringDirty(
+    const CourseTimelineDebugPanelInput& input,
+    const char* reason) {
+    if (input.dirtyState == nullptr) {
+        return;
+    }
+    input.dirtyState->MarkDirty(
+        editor::EditorDirtyDomain::CourseAuthoring,
+        kCourseAuthoringDirtyId,
+        "Course Authoring",
+        reason != nullptr ? reason : "Course authoring changed.",
+        CourseAuthoringRevision(input));
+}
+
+void ClearCourseAuthoringDirty(const CourseTimelineDebugPanelInput& input) {
+    if (input.dirtyState == nullptr) {
+        return;
+    }
+    input.dirtyState->ClearDomain(editor::EditorDirtyDomain::CourseAuthoring);
+}
+
+void RequestCourseReloadConfirmation(
+    const CourseTimelineDebugPanelInput& input,
+    std::string& authoringStatus) {
+    if (input.documentLifecycle == nullptr || !input.onReloadCourse) {
+        return;
+    }
+
+    const editor::EditorDocumentLifecycleResult result =
+        input.documentLifecycle->RequestReloadCourse(input.onReloadCourse);
+    authoringStatus = result.message;
+}
+
+void RequestTerrainPlacementDeleteConfirmation(
+    const CourseTimelineDebugPanelInput& input,
+    CourseAsset& course,
+    int terrainIndex) {
+    if (input.confirmService == nullptr) {
+        return;
+    }
+
+    CourseAsset* coursePtr = &course;
+    editor::EditorModalConfirmRequest request{};
+    request.severity = editor::EditorModalConfirmSeverity::Warning;
+    request.source = "Course Object";
+    request.title = "Delete Terrain Placement";
+    request.message = "Delete the selected course terrain placement? This cannot be undone after the confirmation is accepted.";
+    request.confirmLabel = "Delete";
+    request.cancelLabel = "Cancel";
+    request.onConfirm = [input, coursePtr, terrainIndex]() {
+        if (input.runtimeState == nullptr || coursePtr == nullptr) {
+            return;
+        }
+        TerrainAuthoringState& editor = input.runtimeState->terrain;
+        if (terrainIndex < 0 ||
+            terrainIndex >= static_cast<int>(coursePtr->terrainPlacements.size())) {
+            return;
+        }
+        coursePtr->terrainPlacements.erase(
+            coursePtr->terrainPlacements.begin() + terrainIndex);
+        editor.selectedCourseTerrainPlacement = -1;
+        ++editor.courseObjectEditRevision;
+        MarkCourseAuthoringDirty(input, "Course terrain placement deleted.");
+    };
+    input.confirmService->Request(std::move(request));
+}
+
+void RequestRockClusterDeleteConfirmation(
+    const CourseTimelineDebugPanelInput& input,
+    CourseAsset& course,
+    int clusterIndex) {
+    if (input.confirmService == nullptr) {
+        return;
+    }
+
+    CourseAsset* coursePtr = &course;
+    editor::EditorModalConfirmRequest request{};
+    request.severity = editor::EditorModalConfirmSeverity::Warning;
+    request.source = "Course Object";
+    request.title = "Delete Rock Cluster";
+    request.message = "Delete the selected course rock cluster? This cannot be undone after the confirmation is accepted.";
+    request.confirmLabel = "Delete";
+    request.cancelLabel = "Cancel";
+    request.onConfirm = [input, coursePtr, clusterIndex]() {
+        if (input.runtimeState == nullptr || coursePtr == nullptr) {
+            return;
+        }
+        TerrainAuthoringState& editor = input.runtimeState->terrain;
+        if (clusterIndex < 0 ||
+            clusterIndex >= static_cast<int>(coursePtr->rockClusters.size())) {
+            return;
+        }
+        coursePtr->rockClusters.erase(
+            coursePtr->rockClusters.begin() + clusterIndex);
+        editor.selectedCourseRockCluster = -1;
+        ++editor.courseObjectEditRevision;
+        MarkCourseAuthoringDirty(input, "Course rock cluster deleted.");
+    };
+    input.confirmService->Request(std::move(request));
+}
+
 ImU32 ColorForEventType(const std::string& type) {
     if (type == "enemy_wave") {
         return IM_COL32(255, 92, 48, 255);
@@ -404,6 +519,165 @@ bool ComboRockType(const char* label, CourseRockClusterType& type) {
         ImGui::EndCombo();
     }
     return changed;
+}
+
+std::string FormatPropertyFloat(float value) {
+    char buffer[64]{};
+    std::snprintf(buffer, sizeof(buffer), "%.3f", value);
+    return buffer;
+}
+
+std::string FormatPropertyInt(int value) {
+    char buffer[32]{};
+    std::snprintf(buffer, sizeof(buffer), "%d", value);
+    return buffer;
+}
+
+std::string FormatPropertyUInt(uint32_t value) {
+    char buffer[32]{};
+    std::snprintf(buffer, sizeof(buffer), "%u", value);
+    return buffer;
+}
+
+std::string FormatPropertyVector3(const Vector3& value) {
+    char buffer[128]{};
+    std::snprintf(buffer, sizeof(buffer), "%.3f, %.3f, %.3f", value.x, value.y, value.z);
+    return buffer;
+}
+
+editor::EditorObjectHandle MakeCourseObjectPropertyTarget(
+    editor::EditorDomainId domain,
+    const char* stablePrefix,
+    size_t index,
+    uint32_t generation,
+    const char* displayPrefix) {
+    editor::EditorObjectHandle handle{};
+    handle.domain = domain;
+    handle.stableId = editor::BuildStableIndexedId(stablePrefix, static_cast<uint64_t>(index));
+    handle.localIndex = static_cast<uint64_t>(index);
+    handle.generation = generation;
+    handle.displayName = std::string(displayPrefix) + " #" + std::to_string(index);
+    return handle;
+}
+
+void StageCoursePropertyDelta(
+    const CourseTimelineDebugPanelInput& input,
+    const editor::EditorObjectHandle& target,
+    const char* propertyPath,
+    const char* displayName,
+    const char* valueType,
+    std::string beforeValue,
+    std::string afterValue) {
+    if (input.editorTransactions == nullptr || beforeValue == afterValue) {
+        return;
+    }
+
+    editor::EditorPropertyChange change{};
+    change.target = target;
+    change.propertyPath = propertyPath != nullptr ? propertyPath : "";
+    const bool hiddenLabel = displayName != nullptr && displayName[0] == '#' && displayName[1] == '#';
+    if (displayName != nullptr && !hiddenLabel) {
+        change.displayName = displayName;
+    } else if (propertyPath != nullptr) {
+        change.displayName = propertyPath;
+    } else {
+        change.displayName = "Course Property Edit";
+    }
+    change.valueType = valueType != nullptr ? valueType : "";
+    change.beforeValue = std::move(beforeValue);
+    change.afterValue = std::move(afterValue);
+    if (input.runtimeState != nullptr) {
+        change.sourceRevision = input.runtimeState->terrain.courseObjectEditRevision;
+    }
+    input.editorTransactions->StagePropertyDelta(std::move(change));
+}
+
+template <size_t Size>
+bool TrackedInputString(
+    const CourseTimelineDebugPanelInput& input,
+    const editor::EditorObjectHandle& target,
+    const char* label,
+    const char* propertyPath,
+    std::string& value) {
+    const std::string before = value;
+    if (!InputString<Size>(label, value)) {
+        return false;
+    }
+    StageCoursePropertyDelta(input, target, propertyPath, label, "string", before, value);
+    return true;
+}
+
+bool TrackedDragFloat(
+    const CourseTimelineDebugPanelInput& input,
+    const editor::EditorObjectHandle& target,
+    const char* label,
+    const char* propertyPath,
+    float& value,
+    float speed,
+    float minValue,
+    float maxValue,
+    const char* format) {
+    const float before = value;
+    if (!ImGui::DragFloat(label, &value, speed, minValue, maxValue, format)) {
+        return false;
+    }
+    StageCoursePropertyDelta(
+        input,
+        target,
+        propertyPath,
+        label,
+        "float",
+        FormatPropertyFloat(before),
+        FormatPropertyFloat(value));
+    return true;
+}
+
+bool TrackedDragInt(
+    const CourseTimelineDebugPanelInput& input,
+    const editor::EditorObjectHandle& target,
+    const char* label,
+    const char* propertyPath,
+    int& value,
+    float speed,
+    int minValue,
+    int maxValue) {
+    const int before = value;
+    if (!ImGui::DragInt(label, &value, speed, minValue, maxValue)) {
+        return false;
+    }
+    StageCoursePropertyDelta(
+        input,
+        target,
+        propertyPath,
+        label,
+        "int",
+        FormatPropertyInt(before),
+        FormatPropertyInt(value));
+    return true;
+}
+
+bool TrackedDragVector3(
+    const CourseTimelineDebugPanelInput& input,
+    const editor::EditorObjectHandle& target,
+    const char* label,
+    const char* propertyPath,
+    Vector3& value,
+    float speed,
+    float minValue,
+    float maxValue) {
+    const Vector3 before = value;
+    if (!DragVector3(label, value, speed, minValue, maxValue)) {
+        return false;
+    }
+    StageCoursePropertyDelta(
+        input,
+        target,
+        propertyPath,
+        label,
+        "vec3",
+        FormatPropertyVector3(before),
+        FormatPropertyVector3(value));
+    return true;
 }
 
 int FindNearestTerrainMaterialPresetIndex(const CourseAsset& course, float distance) {
@@ -1203,7 +1477,15 @@ bool DrawCourseObjectEditor(const CourseTimelineDebugPanelInput& input, CourseAs
     }
 
     TerrainAuthoringState& editor = input.runtimeState->terrain;
+    const editor::EditorViewportAuthoringInputGuard inputGuard =
+        editor::MakeEditorViewportAuthoringInputGuard(input.canMutateAuthoring);
+    const bool canMutate = inputGuard.CanMutate();
     bool changed = false;
+    ImGui::Text("Authoring input: %s", inputGuard.StateLabel());
+    if (!canMutate) {
+        ImGui::TextDisabled("%s", inputGuard.DisabledReason());
+    }
+    ImGui::BeginDisabled(!canMutate);
     ImGui::Checkbox("Viewport Pick", &editor.enableCourseObjectViewportEditing);
     ImGui::SameLine();
     const char* gizmoModes[] = {"Move", "Scale", "Rotate"};
@@ -1278,6 +1560,7 @@ bool DrawCourseObjectEditor(const CourseTimelineDebugPanelInput& input, CourseAs
         editor.selectedCourseTerrainPlacement = -1;
         changed = true;
     }
+    ImGui::EndDisabled();
 
     ImGui::Separator();
     ImGui::BeginChild("CourseObjectOutliner", ImVec2(0.0f, 240.0f), true);
@@ -1354,83 +1637,185 @@ bool DrawCourseObjectEditor(const CourseTimelineDebugPanelInput& input, CourseAs
         editor.selectedCourseTerrainPlacement < static_cast<int>(course.terrainPlacements.size())) {
         CourseTerrainPlacement& placement =
             course.terrainPlacements[static_cast<size_t>(editor.selectedCourseTerrainPlacement)];
+        const size_t placementIndex = static_cast<size_t>(editor.selectedCourseTerrainPlacement);
+        const editor::EditorObjectHandle propertyTarget = MakeCourseObjectPropertyTarget(
+            editor::EditorDomainId::CourseTerrainPlacement,
+            "course-terrain",
+            placementIndex,
+            editor.courseObjectEditRevision,
+            "Course Terrain");
         ImGui::PushID("TerrainDetails");
-        changed |= InputString<128>("Id", placement.id);
-        changed |= InputString<128>("Mesh", placement.meshId);
-        changed |= ComboTerrainLayer("Layer", placement.layer);
-        changed |= ComboCollisionMode("Collision", placement.collisionMode);
-        changed |= ImGui::DragFloat("Distance", &placement.distance, 1.0f, 0.0f, input.railLength, "%.1f");
-        changed |= ImGui::DragFloat("Lateral", &placement.lateralOffset, 0.25f, -500.0f, 500.0f, "%.2f");
-        changed |= ImGui::DragFloat("Vertical", &placement.verticalOffset, 0.25f, -500.0f, 500.0f, "%.2f");
-        changed |= ImGui::DragFloat("Forward", &placement.forwardOffset, 0.25f, -500.0f, 500.0f, "%.2f");
-        changed |= DragVector3("Scale", placement.scale, 0.10f, 0.01f, 200.0f);
+        ImGui::BeginDisabled(!canMutate);
+        changed |= TrackedInputString<128>(input, propertyTarget, "Id", "CourseTerrainPlacement.id", placement.id);
+        changed |= TrackedInputString<128>(input, propertyTarget, "Mesh", "CourseTerrainPlacement.meshId", placement.meshId);
+        const CourseTerrainLayer beforeLayer = placement.layer;
+        if (ComboTerrainLayer("Layer", placement.layer)) {
+            StageCoursePropertyDelta(
+                input,
+                propertyTarget,
+                "CourseTerrainPlacement.layer",
+                "Layer",
+                "enum",
+                ToCourseTerrainLayerString(beforeLayer),
+                ToCourseTerrainLayerString(placement.layer));
+            changed = true;
+        }
+        const CourseTerrainCollisionMode beforeCollision = placement.collisionMode;
+        if (ComboCollisionMode("Collision", placement.collisionMode)) {
+            StageCoursePropertyDelta(
+                input,
+                propertyTarget,
+                "CourseTerrainPlacement.collisionMode",
+                "Collision",
+                "enum",
+                ToCourseTerrainCollisionModeString(beforeCollision),
+                ToCourseTerrainCollisionModeString(placement.collisionMode));
+            changed = true;
+        }
+        changed |= TrackedDragFloat(input, propertyTarget, "Distance", "CourseTerrainPlacement.distance", placement.distance, 1.0f, 0.0f, input.railLength, "%.1f");
+        changed |= TrackedDragFloat(input, propertyTarget, "Lateral", "CourseTerrainPlacement.lateralOffset", placement.lateralOffset, 0.25f, -500.0f, 500.0f, "%.2f");
+        changed |= TrackedDragFloat(input, propertyTarget, "Vertical", "CourseTerrainPlacement.verticalOffset", placement.verticalOffset, 0.25f, -500.0f, 500.0f, "%.2f");
+        changed |= TrackedDragFloat(input, propertyTarget, "Forward", "CourseTerrainPlacement.forwardOffset", placement.forwardOffset, 0.25f, -500.0f, 500.0f, "%.2f");
+        changed |= TrackedDragVector3(input, propertyTarget, "Scale", "CourseTerrainPlacement.scale", placement.scale, 0.10f, 0.01f, 200.0f);
         Vector3 rotationDegrees = {
             placement.rotation.x * 180.0f / 3.14159265358979323846f,
             placement.rotation.y * 180.0f / 3.14159265358979323846f,
             placement.rotation.z * 180.0f / 3.14159265358979323846f,
         };
+        const Vector3 beforeRotationDegrees = rotationDegrees;
         if (DragVector3("Rotation Deg", rotationDegrees, 0.25f, -360.0f, 360.0f)) {
             placement.rotation = {
                 rotationDegrees.x * 3.14159265358979323846f / 180.0f,
                 rotationDegrees.y * 3.14159265358979323846f / 180.0f,
                 rotationDegrees.z * 3.14159265358979323846f / 180.0f,
             };
+            StageCoursePropertyDelta(
+                input,
+                propertyTarget,
+                "CourseTerrainPlacement.rotation",
+                "Rotation Deg",
+                "vec3",
+                FormatPropertyVector3(beforeRotationDegrees),
+                FormatPropertyVector3(rotationDegrees));
             changed = true;
         }
-        changed |= ImGui::DragInt("Render Priority", &placement.renderPriority, 1.0f, -100, 100);
-        changed |= ImGui::DragFloat("Cull Behind", &placement.cullBehindDistance, 1.0f, -1.0f, 2000.0f, "%.1f");
-        changed |= ImGui::DragFloat("Cull Ahead", &placement.cullAheadDistance, 1.0f, -1.0f, 3000.0f, "%.1f");
+        changed |= TrackedDragInt(input, propertyTarget, "Render Priority", "CourseTerrainPlacement.renderPriority", placement.renderPriority, 1.0f, -100, 100);
+        changed |= TrackedDragFloat(input, propertyTarget, "Cull Behind", "CourseTerrainPlacement.cullBehindDistance", placement.cullBehindDistance, 1.0f, -1.0f, 2000.0f, "%.1f");
+        changed |= TrackedDragFloat(input, propertyTarget, "Cull Ahead", "CourseTerrainPlacement.cullAheadDistance", placement.cullAheadDistance, 1.0f, -1.0f, 3000.0f, "%.1f");
         if (ImGui::Button("Teleport To Object") && input.onTeleportToDistance) {
             input.onTeleportToDistance(placement.distance);
         }
         ImGui::SameLine();
         if (ImGui::Button("Delete Object")) {
-            removeTerrain = editor.selectedCourseTerrainPlacement;
+            if (input.confirmService != nullptr) {
+                RequestTerrainPlacementDeleteConfirmation(
+                    input,
+                    course,
+                    editor.selectedCourseTerrainPlacement);
+            } else {
+                removeTerrain = editor.selectedCourseTerrainPlacement;
+            }
         }
         ImGui::SeparatorText("Material");
         changed |= DrawTerrainMaterialPresetDetails(course, placement.distance);
+        ImGui::EndDisabled();
         ImGui::PopID();
     } else if (editor.courseObjectSelectionType == 1 &&
         editor.selectedCourseRockCluster >= 0 &&
         editor.selectedCourseRockCluster < static_cast<int>(course.rockClusters.size())) {
         CourseRockCluster& cluster =
             course.rockClusters[static_cast<size_t>(editor.selectedCourseRockCluster)];
+        const size_t clusterIndex = static_cast<size_t>(editor.selectedCourseRockCluster);
+        const editor::EditorObjectHandle propertyTarget = MakeCourseObjectPropertyTarget(
+            editor::EditorDomainId::CourseRockCluster,
+            "course-rock",
+            clusterIndex,
+            editor.courseObjectEditRevision,
+            "Course Rock Cluster");
         ImGui::PushID("RockClusterDetails");
-        changed |= InputString<128>("Id", cluster.id);
-        changed |= InputString<128>("Mesh", cluster.meshId);
-        changed |= ComboRockAnchor("Anchor", cluster.anchor);
-        changed |= ComboRockType("Type", cluster.type);
+        ImGui::BeginDisabled(!canMutate);
+        changed |= TrackedInputString<128>(input, propertyTarget, "Id", "CourseRockCluster.id", cluster.id);
+        changed |= TrackedInputString<128>(input, propertyTarget, "Mesh", "CourseRockCluster.meshId", cluster.meshId);
+        const CourseRockClusterAnchor beforeAnchor = cluster.anchor;
+        if (ComboRockAnchor("Anchor", cluster.anchor)) {
+            StageCoursePropertyDelta(
+                input,
+                propertyTarget,
+                "CourseRockCluster.anchor",
+                "Anchor",
+                "enum",
+                ToCourseRockClusterAnchorString(beforeAnchor),
+                ToCourseRockClusterAnchorString(cluster.anchor));
+            changed = true;
+        }
+        const CourseRockClusterType beforeType = cluster.type;
+        if (ComboRockType("Type", cluster.type)) {
+            StageCoursePropertyDelta(
+                input,
+                propertyTarget,
+                "CourseRockCluster.type",
+                "Type",
+                "enum",
+                ToCourseRockClusterTypeString(beforeType),
+                ToCourseRockClusterTypeString(cluster.type));
+            changed = true;
+        }
         Vector3 clusterRotationDegrees = {
             cluster.rotation.x * 180.0f / 3.14159265358979323846f,
             cluster.rotation.y * 180.0f / 3.14159265358979323846f,
             cluster.rotation.z * 180.0f / 3.14159265358979323846f,
         };
+        const Vector3 beforeClusterRotationDegrees = clusterRotationDegrees;
         if (DragVector3("Rotation Deg", clusterRotationDegrees, 0.25f, -360.0f, 360.0f)) {
             cluster.rotation = {
                 clusterRotationDegrees.x * 3.14159265358979323846f / 180.0f,
                 clusterRotationDegrees.y * 3.14159265358979323846f / 180.0f,
                 clusterRotationDegrees.z * 3.14159265358979323846f / 180.0f,
             };
+            StageCoursePropertyDelta(
+                input,
+                propertyTarget,
+                "CourseRockCluster.rotation",
+                "Rotation Deg",
+                "vec3",
+                FormatPropertyVector3(beforeClusterRotationDegrees),
+                FormatPropertyVector3(clusterRotationDegrees));
             changed = true;
         }
-        changed |= ImGui::DragFloat("Distance", &cluster.distance, 1.0f, 0.0f, input.railLength, "%.1f");
+        changed |= TrackedDragFloat(input, propertyTarget, "Distance", "CourseRockCluster.distance", cluster.distance, 1.0f, 0.0f, input.railLength, "%.1f");
         int count = static_cast<int>(cluster.count);
         if (ImGui::DragInt("Count", &count, 1.0f, 0, 32)) {
+            const uint32_t beforeCount = cluster.count;
             cluster.count = static_cast<uint32_t>((std::clamp)(count, 0, 32));
+            StageCoursePropertyDelta(
+                input,
+                propertyTarget,
+                "CourseRockCluster.count",
+                "Count",
+                "uint",
+                FormatPropertyUInt(beforeCount),
+                FormatPropertyUInt(cluster.count));
             changed = true;
         }
-        changed |= ImGui::DragFloat("Min Scale", &cluster.minScale, 0.01f, 0.01f, 20.0f, "%.2f");
-        changed |= ImGui::DragFloat("Max Scale", &cluster.maxScale, 0.01f, 0.01f, 20.0f, "%.2f");
-        changed |= DragVector3("Spread", cluster.spread, 0.10f, 0.0f, 500.0f);
-        changed |= ImGui::DragFloat("Clear Lane", &cluster.clearLaneRadius, 0.25f, 0.0f, 200.0f, "%.1f");
-        changed |= ImGui::DragFloat("Cull Behind", &cluster.cullBehindDistance, 1.0f, 0.0f, 2000.0f, "%.1f");
-        changed |= ImGui::DragFloat("Cull Ahead", &cluster.cullAheadDistance, 1.0f, 0.0f, 3000.0f, "%.1f");
+        changed |= TrackedDragFloat(input, propertyTarget, "Min Scale", "CourseRockCluster.minScale", cluster.minScale, 0.01f, 0.01f, 20.0f, "%.2f");
+        changed |= TrackedDragFloat(input, propertyTarget, "Max Scale", "CourseRockCluster.maxScale", cluster.maxScale, 0.01f, 0.01f, 20.0f, "%.2f");
+        changed |= TrackedDragVector3(input, propertyTarget, "Spread", "CourseRockCluster.spread", cluster.spread, 0.10f, 0.0f, 500.0f);
+        changed |= TrackedDragFloat(input, propertyTarget, "Clear Lane", "CourseRockCluster.clearLaneRadius", cluster.clearLaneRadius, 0.25f, 0.0f, 200.0f, "%.1f");
+        changed |= TrackedDragFloat(input, propertyTarget, "Cull Behind", "CourseRockCluster.cullBehindDistance", cluster.cullBehindDistance, 1.0f, 0.0f, 2000.0f, "%.1f");
+        changed |= TrackedDragFloat(input, propertyTarget, "Cull Ahead", "CourseRockCluster.cullAheadDistance", cluster.cullAheadDistance, 1.0f, 0.0f, 3000.0f, "%.1f");
         if (ImGui::Button("Teleport To Cluster") && input.onTeleportToDistance) {
             input.onTeleportToDistance(cluster.distance);
         }
         ImGui::SameLine();
         if (ImGui::Button("Delete Cluster")) {
-            removeRock = editor.selectedCourseRockCluster;
+            if (input.confirmService != nullptr) {
+                RequestRockClusterDeleteConfirmation(
+                    input,
+                    course,
+                    editor.selectedCourseRockCluster);
+            } else {
+                removeRock = editor.selectedCourseRockCluster;
+            }
         }
         ImGui::SeparatorText("Instance Overrides");
         if (ImGui::Button("Add Instance Override")) {
@@ -1465,25 +1850,63 @@ bool DrawCourseObjectEditor(const CourseTimelineDebugPanelInput& input, CourseAs
                 ImGui::TableNextColumn();
                 int instanceIndex = static_cast<int>(transformOverride.index);
                 if (ImGui::DragInt("##Index", &instanceIndex, 1.0f, 0, 31)) {
+                    const uint32_t beforeIndex = transformOverride.index;
                     transformOverride.index = static_cast<uint32_t>((std::clamp)(instanceIndex, 0, 31));
+                    StageCoursePropertyDelta(
+                        input,
+                        propertyTarget,
+                        "CourseRockCluster.instanceOverrides.index",
+                        "Instance Index",
+                        "uint",
+                        FormatPropertyUInt(beforeIndex),
+                        FormatPropertyUInt(transformOverride.index));
                     changed = true;
                 }
                 ImGui::TableNextColumn();
-                changed |= DragVector3("##Offset", transformOverride.localOffset, 0.10f, -500.0f, 500.0f);
+                if (TrackedDragVector3(
+                        input,
+                        propertyTarget,
+                        "##Offset",
+                        "CourseRockCluster.instanceOverrides.localOffset",
+                        transformOverride.localOffset,
+                        0.10f,
+                        -500.0f,
+                        500.0f)) {
+                    changed = true;
+                }
                 ImGui::TableNextColumn();
-                changed |= DragVector3("##Scale", transformOverride.scale, 0.02f, 0.01f, 20.0f);
+                if (TrackedDragVector3(
+                        input,
+                        propertyTarget,
+                        "##Scale",
+                        "CourseRockCluster.instanceOverrides.scale",
+                        transformOverride.scale,
+                        0.02f,
+                        0.01f,
+                        20.0f)) {
+                    changed = true;
+                }
                 ImGui::TableNextColumn();
                 Vector3 overrideRotationDegrees = {
                     transformOverride.rotation.x * 180.0f / 3.14159265358979323846f,
                     transformOverride.rotation.y * 180.0f / 3.14159265358979323846f,
                     transformOverride.rotation.z * 180.0f / 3.14159265358979323846f,
                 };
+                const Vector3 beforeOverrideRotationDegrees = overrideRotationDegrees;
                 if (DragVector3("##Rotation", overrideRotationDegrees, 0.25f, -360.0f, 360.0f)) {
                     transformOverride.rotation = {
                         overrideRotationDegrees.x * 3.14159265358979323846f / 180.0f,
                         overrideRotationDegrees.y * 3.14159265358979323846f / 180.0f,
                         overrideRotationDegrees.z * 3.14159265358979323846f / 180.0f,
                     };
+                    StageCoursePropertyDelta(
+                        input,
+                        propertyTarget,
+                        "CourseRockCluster.instanceOverrides.rotation",
+                        "Instance Rotation",
+                        "vec3",
+                        FormatPropertyVector3(beforeOverrideRotationDegrees),
+                        FormatPropertyVector3(overrideRotationDegrees));
                     changed = true;
                 }
                 ImGui::TableNextColumn();
@@ -1501,25 +1924,30 @@ bool DrawCourseObjectEditor(const CourseTimelineDebugPanelInput& input, CourseAs
         }
         ImGui::SeparatorText("Material");
         changed |= DrawTerrainMaterialPresetDetails(course, cluster.distance);
+        ImGui::EndDisabled();
         ImGui::PopID();
     } else {
         ImGui::TextUnformatted("No object selected.");
     }
 
-    if (removeTerrain >= 0 && removeTerrain < static_cast<int>(course.terrainPlacements.size())) {
+    if (canMutate &&
+        removeTerrain >= 0 &&
+        removeTerrain < static_cast<int>(course.terrainPlacements.size())) {
         course.terrainPlacements.erase(course.terrainPlacements.begin() + removeTerrain);
         editor.selectedCourseTerrainPlacement = -1;
         changed = true;
     }
-    if (removeRock >= 0 && removeRock < static_cast<int>(course.rockClusters.size())) {
+    if (canMutate &&
+        removeRock >= 0 &&
+        removeRock < static_cast<int>(course.rockClusters.size())) {
         course.rockClusters.erase(course.rockClusters.begin() + removeRock);
         editor.selectedCourseRockCluster = -1;
         changed = true;
     }
-    if (changed) {
+    if (changed && canMutate) {
         ++editor.courseObjectEditRevision;
     }
-    return changed;
+    return changed && canMutate;
 }
 
 void DrawCourseAuthoring(
@@ -1532,9 +1960,20 @@ void DrawCourseAuthoring(
     if (input.coursePath != nullptr) {
         ImGui::Text("Path: %s", input.coursePath->c_str());
     }
+    const editor::EditorViewportAuthoringInputGuard inputGuard =
+        editor::MakeEditorViewportAuthoringInputGuard(input.canMutateAuthoring);
+    const bool canMutate = inputGuard.CanMutate();
+    if (!canMutate) {
+        ImGui::TextDisabled("%s", inputGuard.DisabledReason());
+    }
+    if (input.dirtyState != nullptr) {
+        dirty = input.dirtyState->HasDirtyDomain(editor::EditorDirtyDomain::CourseAuthoring);
+    }
     bool changed = false;
+    ImGui::BeginDisabled(!canMutate);
     ImGui::SetNextItemWidth(340.0f);
     changed |= InputString<160>("Course Name", course.name);
+    ImGui::EndDisabled();
 
     if (ImGui::Button("Validate")) {
         validationReport = BuildValidationReport(input, course);
@@ -1542,6 +1981,7 @@ void DrawCourseAuthoring(
         authoringStatus = validationReport.HasErrors() ? "Validation failed." : "Validation passed.";
     }
     ImGui::SameLine();
+    ImGui::BeginDisabled(!canMutate);
     if (ImGui::Button("Apply")) {
         course.SortForRuntime();
         if (input.onApplyCourse) {
@@ -1550,6 +1990,7 @@ void DrawCourseAuthoring(
         validationReport = BuildValidationReport(input, course);
         validationReady = true;
         dirty = false;
+        ClearCourseAuthoringDirty(input);
         authoringStatus = "Applied course to runtime.";
     }
     ImGui::SameLine();
@@ -1559,6 +2000,7 @@ void DrawCourseAuthoring(
             validationReport = BuildValidationReport(input, course);
             validationReady = true;
             dirty = false;
+            ClearCourseAuthoringDirty(input);
             authoringStatus = "Saved course.";
         } else {
             validationReport = BuildValidationReport(input, course);
@@ -1568,14 +2010,21 @@ void DrawCourseAuthoring(
     }
     ImGui::SameLine();
     if (ImGui::Button("Reload")) {
-        if (input.onReloadCourse) {
+        if (input.documentLifecycle != nullptr && input.onReloadCourse) {
+            RequestCourseReloadConfirmation(input, authoringStatus);
+            if (input.dirtyState != nullptr) {
+                dirty = input.dirtyState->HasDirtyDomain(editor::EditorDirtyDomain::CourseAuthoring);
+            }
+        } else if (input.onReloadCourse) {
             input.onReloadCourse();
+            validationReport = BuildValidationReport(input, course);
+            validationReady = true;
+            dirty = false;
+            ClearCourseAuthoringDirty(input);
+            authoringStatus = "Reloaded course from disk.";
         }
-        validationReport = BuildValidationReport(input, course);
-        validationReady = true;
-        dirty = false;
-        authoringStatus = "Reloaded course from disk.";
     }
+    ImGui::EndDisabled();
 
     if (!authoringStatus.empty()) {
         ImGui::TextUnformatted(authoringStatus.c_str());
@@ -1584,10 +2033,13 @@ void DrawCourseAuthoring(
         ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.22f, 1.0f), "Unsaved authoring changes.");
     }
 
+    ImGui::BeginDisabled(!canMutate);
     changed |= DrawAuthoringTimeline(input, course, authoringStatus);
+    ImGui::EndDisabled();
 
     if (ImGui::BeginTabBar("CourseAuthoringTabs")) {
         if (ImGui::BeginTabItem("Events")) {
+            ImGui::BeginDisabled(!canMutate);
             if (ImGui::Button("Add Event")) {
                 course.events.push_back({input.currentDistance, "enemy_wave", "new_wave", {}});
                 changed = true;
@@ -1598,9 +2050,11 @@ void DrawCourseAuthoring(
                 changed = true;
             }
             changed |= DrawEventAuthoringTable(course);
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Sections")) {
+            ImGui::BeginDisabled(!canMutate);
             if (ImGui::Button("Add Section")) {
                 course.sections.push_back({input.currentDistance, input.currentDistance + 120.0f, "New Section", "Authoring"});
                 changed = true;
@@ -1611,9 +2065,11 @@ void DrawCourseAuthoring(
                 changed = true;
             }
             changed |= DrawSectionAuthoringTable(input, course);
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Camera")) {
+            ImGui::BeginDisabled(!canMutate);
             if (ImGui::Button("Add Camera Key")) {
                 course.cameraKeys.push_back({input.currentDistance});
                 changed = true;
@@ -1624,6 +2080,7 @@ void DrawCourseAuthoring(
                 changed = true;
             }
             changed |= DrawCameraAuthoringTable(course);
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Validation")) {
@@ -1637,9 +2094,10 @@ void DrawCourseAuthoring(
         ImGui::EndTabBar();
     }
 
-    if (changed) {
+    if (changed && canMutate) {
         dirty = true;
         validationReady = false;
+        MarkCourseAuthoringDirty(input, "Course authoring fields changed.");
     }
 }
 } // namespace
@@ -1661,11 +2119,16 @@ void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input) {
     static uint32_t seenCourseObjectEditRevision = 0;
     static std::string authoringStatus;
 
+    if (input.dirtyState != nullptr &&
+        input.dirtyState->HasDirtyDomain(editor::EditorDirtyDomain::CourseAuthoring)) {
+        dirty = true;
+    }
     if (input.runtimeState != nullptr &&
         input.runtimeState->terrain.courseObjectEditRevision != seenCourseObjectEditRevision) {
         seenCourseObjectEditRevision = input.runtimeState->terrain.courseObjectEditRevision;
         dirty = true;
         validationReady = false;
+        MarkCourseAuthoringDirty(input, "Course object edit revision changed.");
         authoringStatus = "Viewport object edit pending.";
     }
 
@@ -1767,6 +2230,7 @@ void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input) {
             if (DrawCourseObjectEditor(input, course)) {
                 dirty = true;
                 validationReady = false;
+                MarkCourseAuthoringDirty(input, "Course object editor changed.");
             }
             ImGui::EndTabItem();
         }

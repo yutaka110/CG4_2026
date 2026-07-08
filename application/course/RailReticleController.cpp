@@ -129,7 +129,9 @@ void RailReticleController::Update(const RailReticleFrameInput& input) {
 
     Vector2 next = state_.currentScreenPosition;
     Vector2 cursor{};
-    if (CursorInClient(input.hwnd, input.viewportWidth, input.viewportHeight, cursor)) {
+    if (input.hasCursorPosition) {
+        next = input.cursorPosition;
+    } else if (CursorInClient(input.hwnd, input.viewportWidth, input.viewportHeight, cursor)) {
         next = cursor;
     }
 

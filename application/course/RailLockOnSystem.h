@@ -14,6 +14,8 @@ struct RailLockOnFrameInput {
     float playerDistance = 0.0f;
     uint32_t viewportWidth = 0;
     uint32_t viewportHeight = 0;
+    bool hasCursorPosition = false;
+    Vector2 cursorPosition{};
     const Matrix4x4* viewProjection = nullptr;
     const RailPath* railPath = nullptr;
     const CourseSpawnRuntime* spawnRuntime = nullptr;

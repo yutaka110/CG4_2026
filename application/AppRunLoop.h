@@ -36,6 +36,8 @@
 #include "AppSceneState.h"
 #include "AppSceneStateManager.h"
 #include "VfxEngine.h"
+#include "editor/EditorTransactionStack.h"
+#include "editor/EditorViewportAuthoringInputGuard.h"
 
 class AppFrameRenderer;
 class AppImGuiLayer;
@@ -91,11 +93,18 @@ private:
     void UpdateVfxPreviewFrame() override;
     void RenderVfxPreviewFrame() override;
     void BeginFrameSystems();
+    void ApplyEditorViewportRenderTargetForRender();
+    bool ResolveEditorViewportClientPoint(
+        POINT clientPoint,
+        POINT& outViewportPoint,
+        uint32_t& outViewportWidth,
+        uint32_t& outViewportHeight) const;
     bool WaitForFrameSlot(uint32_t frameIndex);
     bool SignalFrame(uint32_t frameIndex);
     bool FlushGpu();
     void ProcessCourseObjectViewportEditing();
     CourseObjectEditSnapshot CaptureCourseObjectSnapshot() const;
+    std::string BuildCourseObjectSnapshotSummary(const CourseObjectEditSnapshot& snapshot) const;
     void RestoreCourseObjectSnapshot(const CourseObjectEditSnapshot& snapshot);
     void EnsureCourseObjectHistoryBaseline();
     void CommitCourseObjectHistoryIfNeeded();
@@ -122,7 +131,9 @@ private:
     void DrawRailVisibilityDebugOverlay();
     bool EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList);
     bool BuildRailLockOnHudAtlasQuads();
-    void RegisterRailLockOnHudPass(ID3D12GraphicsCommandList* commandList);
+    void RegisterRailLockOnHudPass(
+        ID3D12GraphicsCommandList* commandList,
+        const std::string& targetResourceName);
     void StartRailCameraTuningRecording();
     void StopRailCameraTuningRecording();
     void ClearRailCameraTuningRecording();
@@ -376,6 +387,7 @@ private:
     };
     std::vector<CourseObjectEditSnapshot> courseObjectUndoStack_;
     std::vector<CourseObjectEditSnapshot> courseObjectRedoStack_;
+    editor::EditorTransactionStack courseObjectTransactions_{};
     CourseObjectEditSnapshot courseObjectHistoryBaseline_{};
     uint32_t courseObjectHistoryRevision_ = 0;
     bool courseObjectHistoryInitialized_ = false;

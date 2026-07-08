@@ -27,6 +27,8 @@ void RailLockOnSystem::Update(const RailLockOnFrameInput& input) {
     reticleInput.deltaTime = input.deltaTime;
     reticleInput.viewportWidth = input.viewportWidth;
     reticleInput.viewportHeight = input.viewportHeight;
+    reticleInput.hasCursorPosition = input.hasCursorPosition;
+    reticleInput.cursorPosition = input.cursorPosition;
     reticleInput.anchors = &registry_.Anchors();
     reticleInput.viewProjection = input.viewProjection;
     reticleInput.settings = settings_;
