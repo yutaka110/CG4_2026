@@ -10,6 +10,7 @@ namespace editor {
 
 enum class EditorDomainId : uint32_t {
     Unknown = 0,
+    Asset,
     VfxEffectAsset,
     VfxEffectInstance,
     CourseTerrainPlacement,

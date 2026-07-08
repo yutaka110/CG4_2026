@@ -17,6 +17,7 @@ class EditorPanelLayoutService;
 class EditorPropertyAccessor;
 class EditorPropertyRegistry;
 class EditorPlaySessionState;
+class EditorRailRuntimePause;
 class EditorRuntimeInspector;
 class EditorSelection;
 class EditorTransformGizmoService;
@@ -48,6 +49,7 @@ struct EditorContext {
     const EditorSaveApplyPolicyInput* saveApplyPolicy = nullptr;
     EditorRuntimeInspector* runtimeInspector = nullptr;
     EditorPlaySessionState* playSession = nullptr;
+    EditorRailRuntimePause* railRuntimePause = nullptr;
 
     EditorCommandRegistry* commands = nullptr;
     const EditorCommandContext* commandContext = nullptr;

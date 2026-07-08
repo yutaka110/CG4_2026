@@ -19,10 +19,11 @@ struct ToolbarCommand {
     const char* label = nullptr;
 };
 
-constexpr std::array<ToolbarCommand, 9> kToolbarCommands{{
+constexpr std::array<ToolbarCommand, 10> kToolbarCommands{{
     {"editor.play", "Play"},
     {"editor.simulate", "Sim"},
     {"editor.stop", "Stop"},
+    {"course.previewFreeze", "Freeze"},
     {"course.save", "Save"},
     {"course.apply", "Apply"},
     {"course.reload", "Reload"},

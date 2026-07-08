@@ -1,5 +1,8 @@
 #include "EditorDiagnosticsPanel.h"
 
+#include "EditorAssetReferenceDiagnosticsAdapter.h"
+#include "EditorAssetSelection.h"
+
 #include "../../externals/imgui/imgui.h"
 
 #include <cstdint>
@@ -48,15 +51,23 @@ std::string ObjectLabel(const EditorObjectHandle& handle) {
 
 bool IssueMatchesSelection(
     const EditorValidationIssue& issue,
-    const EditorSelection* selection) {
-    if (selection == nullptr || selection->Empty()) {
-        return false;
-    }
-    for (const EditorObjectHandle& handle : selection->Handles()) {
-        if (handle.SameObject(issue.target)) {
-            return true;
+    const EditorSelection* selection,
+    const EditorAssetSelection* assetSelection) {
+    if (selection != nullptr && !selection->Empty()) {
+        for (const EditorObjectHandle& handle : selection->Handles()) {
+            if (handle.SameObject(issue.target)) {
+                return true;
+            }
         }
     }
+
+    if (issue.target.domain == EditorDomainId::Asset && assetSelection != nullptr) {
+        const EditorAssetHandle* selectedAsset = assetSelection->Primary();
+        return selectedAsset != nullptr &&
+            issue.target.stableId ==
+                BuildEditorAssetDiagnosticStableId(selectedAsset->kind, selectedAsset->id);
+    }
+
     return false;
 }
 
@@ -81,7 +92,7 @@ void DrawEditorDiagnosticsPanel(const EditorDiagnosticsPanelContext& context) {
         report.warningCount,
         report.infoCount);
 
-    ImGui::Checkbox("Selected object only", &selectedOnly);
+    ImGui::Checkbox("Selected subject only", &selectedOnly);
     ImGui::SameLine();
     ImGui::Checkbox("Errors", &showErrors);
     ImGui::SameLine();
@@ -114,7 +125,7 @@ void DrawEditorDiagnosticsPanel(const EditorDiagnosticsPanelContext& context) {
         if (!SeverityEnabled(issue.severity, showErrors, showWarnings, showInfo)) {
             continue;
         }
-        if (selectedOnly && !IssueMatchesSelection(issue, context.selection)) {
+        if (selectedOnly && !IssueMatchesSelection(issue, context.selection, context.assetSelection)) {
             continue;
         }
 

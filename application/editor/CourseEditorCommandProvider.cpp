@@ -231,6 +231,39 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
                 input.teleportCourseToDistance(input.courseDistance);
                 return EditorCommandResult{true, "Teleported course to current editor distance."};
             }});
+
+    registry.Register(
+        EditorCommand{
+            "course.previewFreeze",
+            "Freeze Course Preview",
+            "Course",
+            "",
+            [input, &commandContext]() {
+                return commandContext.developerToolsVisible &&
+                    static_cast<bool>(input.isCoursePreviewFrozen) &&
+                    static_cast<bool>(input.setCoursePreviewFrozen);
+            },
+            [input, &commandContext]() {
+                if (!commandContext.developerToolsVisible) {
+                    return std::string("Developer tools are hidden.");
+                }
+                if (!input.isCoursePreviewFrozen || !input.setCoursePreviewFrozen) {
+                    return std::string("Course preview freeze callback is unavailable.");
+                }
+                return std::string();
+            },
+            [input]() {
+                if (!input.isCoursePreviewFrozen || !input.setCoursePreviewFrozen) {
+                    return EditorCommandResult{false, "Course preview freeze callback is unavailable."};
+                }
+                const bool nextFrozen = !input.isCoursePreviewFrozen();
+                input.setCoursePreviewFrozen(nextFrozen);
+                return EditorCommandResult{
+                    true,
+                    nextFrozen
+                        ? std::string("Course preview frozen.")
+                        : std::string("Course preview resumed.")};
+            }});
 }
 
 } // namespace editor

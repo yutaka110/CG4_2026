@@ -29,7 +29,9 @@
 #include "editor/CourseObjectValidationAdapter.h"
 #include "editor/EffectAssetDiagnosticsAdapter.h"
 #include "editor/EditorAssetBrowserPanel.h"
+#include "editor/EditorAssetCommandProvider.h"
 #include "editor/EditorBuiltinCommandProvider.h"
+#include "editor/EditorAssetReferenceDiagnosticsAdapter.h"
 #include "editor/EditorAssetFolderIndexer.h"
 #include "editor/EditorCommandContext.h"
 #include "editor/EditorContext.h"
@@ -203,6 +205,24 @@ void AppendPlaySessionRuntimeInspector(
             playSession.FrameCount()});
 }
 
+void AppendRailRuntimePauseInspector(
+    editor::EditorRuntimeInspector& inspector,
+    const editor::EditorRailRuntimePause& railPause) {
+    const editor::EditorRailRuntimePauseState& state = railPause.State();
+    std::string detail;
+    detail += "distance=" + std::to_string(state.distance);
+    detail += " speed=" + std::to_string(state.speed);
+    detail += " frozenFrames=" + std::to_string(state.frozenFrames);
+    inspector.AddRecord(
+        editor::EditorRuntimeWatchRecord{
+            "Course Runtime",
+            "Preview Freeze",
+            railPause.StatusLabel(),
+            detail,
+            state.frozen ? editor::EditorRuntimeWatchSeverity::Warning : editor::EditorRuntimeWatchSeverity::Info,
+            state.frozenFrames});
+}
+
 void RegisterFrameEditorCommands(
     editor::EditorContext& editorContext,
     const AppImGuiFrameContext& context,
@@ -225,6 +245,12 @@ void RegisterFrameEditorCommands(
             std::move(closeCourseDocument),
             std::move(reopenCourseDocument),
             context.onTeleportCourseToDistance,
+            [&runtimeState]() {
+                return runtimeState.terrain.freezeCourseRuntime;
+            },
+            [&runtimeState](bool frozen) {
+                runtimeState.terrain.freezeCourseRuntime = frozen;
+            },
             context.courseDistance});
     courseProvider.RegisterCommands(editorContext);
 
@@ -301,6 +327,9 @@ void RegisterFrameEditorCommands(
                 return editor::EditorCommandResult{true, "Stopped Play/Sim and restored authoring snapshot."};
             }});
     builtinProvider.RegisterCommands(editorContext);
+
+    const editor::EditorAssetCommandProvider assetProvider;
+    assetProvider.RegisterCommands(editorContext);
 }
 
 float ClampUiDimension(float value, float minimum, float maximum) {
@@ -828,6 +857,7 @@ void AppImGuiLayer::RefreshEditorViewportRenderTargetLayout() {
         return;
     }
 
+    editorLayoutPersistence_.EnsureLoaded();
     editorLayout_.Configure(
         editor::EditorLayoutConfig{
             showDeveloperTools_,
@@ -842,15 +872,17 @@ void AppImGuiLayer::RefreshEditorViewportRenderTargetLayout() {
         editorViewport ? editorViewport->WorkPos : ImVec2(0.0f, 0.0f);
     const ImVec2 editorWorkSize =
         editorViewport ? editorViewport->WorkSize : ImGui::GetIO().DisplaySize;
-    editorPanelLayout_.Configure(
-        editor::EditorPanelLayoutConfig{
-            showDeveloperTools_,
-            editorWorkPos.x,
-            editorWorkPos.y,
-            editorWorkSize.x,
-            editorWorkSize.y,
-            editorLayout_.TopReservedHeight(),
-            editorLayout_.BottomReservedHeight()});
+    editor::EditorPanelLayoutConfig editorPanelLayoutConfig{
+        showDeveloperTools_,
+        editorWorkPos.x,
+        editorWorkPos.y,
+        editorWorkSize.x,
+        editorWorkSize.y,
+        editorLayout_.TopReservedHeight(),
+        editorLayout_.BottomReservedHeight()};
+    editorLayoutPersistence_.Apply(editorPanelLayoutConfig);
+    editorPanelLayout_.Configure(editorPanelLayoutConfig);
+    editorLayoutPersistence_.CaptureLayout(editorPanelLayoutConfig);
     editorViewportRenderTarget_.Update(
         editor::EditorViewportRenderTargetInput{
             showDeveloperTools_,
@@ -884,6 +916,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editor::IndexEditorAssetsFromFolder(editorAssetRegistry_, "Resources");
         editor::CourseMeshAssetAdapter courseMeshAssetAdapter;
         courseMeshAssetAdapter.RegisterAssets(editorAssetRegistry_);
+        editorAssetRegistry_.ScanDependencies();
         editorAssetRegistryInitialized_ = true;
     }
     if (context.course == nullptr) {
@@ -911,6 +944,13 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorRuntimeInspector_,
         editorPlaySession_,
         editorPlaySessionSnapshot_);
+    editorRailRuntimePause_.Sync(
+        editor::EditorRailRuntimePauseInput{
+            context.course != nullptr,
+            runtimeState.terrain.freezeCourseRuntime,
+            context.courseDistance,
+            context.courseSpeed});
+    AppendRailRuntimePauseInspector(editorRuntimeInspector_, editorRailRuntimePause_);
     const uint32_t courseObjectRevision = runtimeState.terrain.courseObjectEditRevision;
     if (!editorCourseObjectDirtyRevisionInitialized_) {
         editorCourseObjectDirtyRevisionInitialized_ = true;
@@ -935,9 +975,11 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     editor::CourseObjectPropertyAdapter coursePropertyAdapter(editableCourse, &runtimeState);
     editor::CourseObjectValidationAdapter courseValidationAdapter(editableCourse, &editorAssetRegistry_);
     editor::EffectAssetDiagnosticsAdapter effectDiagnosticsAdapter(context.loadedEffectAssets);
+    editor::EditorAssetReferenceDiagnosticsAdapter assetReferenceDiagnosticsAdapter(&editorAssetRegistry_);
     editor::EditorValidationService editorValidationService;
     editorValidationService.AddAdapter(&courseValidationAdapter);
     editorValidationService.AddAdapter(&effectDiagnosticsAdapter);
+    editorValidationService.AddAdapter(&assetReferenceDiagnosticsAdapter);
     const editor::EditorValidationReport editorValidationReport = editorValidationService.Validate();
     const editor::EditorSaveApplyPolicyInput editorSaveApplyPolicy{
         showDeveloperTools_,
@@ -1045,6 +1087,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             &editorSelection_,
             &editorViewportInteraction_,
             &editorViewportSelectionBridge_,
+            &editorTransactions,
             editor::EditorTransformGizmoModeFromIndex(runtimeState.terrain.courseObjectGizmoMode),
             editor::EditorTransformGizmoAxisFromIndex(runtimeState.terrain.courseObjectActiveAxis),
             runtimeState.terrain.courseObjectSnapEnabled});
@@ -1088,6 +1131,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &editorSaveApplyPolicy,
         &editorRuntimeInspector_,
         &editorPlaySession_,
+        &editorRailRuntimePause_,
         &editorCommandRegistry,
         &editorCommandContext,
         &editorCommandInputRouter_,
@@ -1142,16 +1186,18 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         context.depthTextureHandle,
         context.renderPassDebugInfo
     };
-    constexpr ImGuiWindowFlags editorWindowFlags = ImGuiWindowFlags_NoCollapse;
     editorPanelRegistry_.Clear();
+    const auto panelVisible = [this](const char* panelId, bool fallback = true) {
+        return editorLayoutPersistence_.IsPanelVisible(panelId, fallback);
+    };
     if (context.onDrawRailLockOnDebugPanel) {
         editorPanelRegistry_.Register(
             editor::EditorPanelDescriptor{
                 "gameplay.railLockOn",
                 "Rail Lock-On",
                 "Gameplay",
-                editor::EditorPanelHostArea::Diagnostics,
-                true,
+                editor::EditorPanelHostArea::BottomDock,
+                panelVisible("gameplay.railLockOn"),
                 context.onDrawRailLockOnDebugPanel});
     }
     const AppVfxRuntimeStatusPanelInput runtimeStatusInput{
@@ -1213,72 +1259,158 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             editorViewportPreview.ptr,
             static_cast<float>(editorViewportTarget.renderWidth),
             static_cast<float>(editorViewportTarget.renderHeight),
-            true});
+            true,
+            context.onDrawEditorViewportOverlay});
 
-    const editor::EditorPanelRect& inspectorRect = editorPanelLayout_.InspectorRect();
-    ImGui::SetNextWindowPos(ImVec2(inspectorRect.x, inspectorRect.y), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(
-        ImVec2(inspectorRect.width, inspectorRect.height),
-        ImGuiCond_Always);
-    if (ImGui::Begin("VFX Inspector", nullptr, editorWindowFlags)) {
-        if (ImGui::Button("Viewport Focus")) {
-            viewportFocusMode_ = true;
-        }
-        ImGui::Separator();
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "vfx.inspector",
+            "VFX Inspector",
+            "VFX",
+            editor::EditorPanelHostArea::RightInspector,
+            panelVisible("vfx.inspector"),
+            [&]() {
+                if (ImGui::Button("Viewport Focus")) {
+                    viewportFocusMode_ = true;
+                }
+                ImGui::Separator();
 
-        if (ImGui::CollapsingHeader("Runtime Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
-            DrawSkinningTimingPanel(runtimeState);
-            DrawVfxRuntimeControlsPanel(
-                VfxRuntimeControlsPanelInput{
-                    &runtimeState,
-                    &effectRuntime,
-                    &trailMeshStreamStartupTelemetryFrames_});
-        }
+                if (ImGui::CollapsingHeader("Runtime Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    DrawSkinningTimingPanel(runtimeState);
+                    DrawVfxRuntimeControlsPanel(
+                        VfxRuntimeControlsPanelInput{
+                            &runtimeState,
+                            &effectRuntime,
+                            &trailMeshStreamStartupTelemetryFrames_});
+                }
 
-        if (ImGui::CollapsingHeader("Effect Instances", ImGuiTreeNodeFlags_DefaultOpen)) {
-            DrawEffectInstancePanel(
-                EffectInstancePanelInput{
-                    &effectRuntime,
-                    &selectedEffectInstanceId_,
-                    context.loadedEffectAssets,
-                    context.effectAuthoringRegistry});
-        }
+                if (ImGui::CollapsingHeader("Effect Instances", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    DrawEffectInstancePanel(
+                        EffectInstancePanelInput{
+                            &effectRuntime,
+                            &selectedEffectInstanceId_,
+                            context.loadedEffectAssets,
+                            context.effectAuthoringRegistry});
+                }
 
-        if (ImGui::CollapsingHeader("Scene Controls")) {
-            DrawSceneLightingControlsPanel(runtimeState);
-            ImGui::Separator();
-            DrawMaterialSettingsControlsPanel(runtimeState, context.onAddParticle);
-        }
+                if (ImGui::CollapsingHeader("Scene Controls")) {
+                    DrawSceneLightingControlsPanel(runtimeState);
+                    ImGui::Separator();
+                    DrawMaterialSettingsControlsPanel(runtimeState, context.onAddParticle);
+                }
 
-        if (ImGui::CollapsingHeader("Debug Views")) {
-            DrawDebugViewsPanel(runtimeState);
-        }
+                if (ImGui::CollapsingHeader("Debug Views")) {
+                    DrawDebugViewsPanel(runtimeState);
+                }
 
-        if (ImGui::CollapsingHeader("PostProcess")) {
-            DrawPostProcessPanel(postProcessStack);
-        }
-    }
-    ImGui::End();
-
-    const editor::EditorPanelRect& diagnosticsRect = editorPanelLayout_.DiagnosticsRect();
-    ImGui::SetNextWindowPos(ImVec2(diagnosticsRect.x, diagnosticsRect.y), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(
-        ImVec2(diagnosticsRect.width, diagnosticsRect.height),
-        ImGuiCond_Always);
-    if (ImGui::Begin("VFX Diagnostics", nullptr, editorWindowFlags)) {
-        DrawSkinningTimingPanel(runtimeState);
-        ImGui::Separator();
-
-        if (ImGui::BeginTabBar("VfxDiagnosticsTabs")) {
-            if (ImGui::BeginTabItem("Effect Assets")) {
+                if (ImGui::CollapsingHeader("PostProcess")) {
+                    DrawPostProcessPanel(postProcessStack);
+                }
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "editor.details",
+            "Details",
+            "Editor",
+            editor::EditorPanelHostArea::RightInspector,
+            panelVisible("editor.details"),
+            [&]() {
+                editor::DrawEditorDetailsPanel(
+                    editor::EditorDetailsPanelContext{
+                        &editorSelection_,
+                        &editorPropertyRegistry_,
+                        &coursePropertyAdapter,
+                        &editorTransactions,
+                        &editorAssetRegistry_,
+                        &editorAssetSelection_,
+                        &editorValidationReport,
+                        editorCommandContext.canMutateAuthoring});
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "editor.runtimeWatch",
+            "Runtime Watch",
+            "Editor",
+            editor::EditorPanelHostArea::RightInspector,
+            panelVisible("editor.runtimeWatch"),
+            [&]() {
+                editor::DrawEditorRuntimeInspectorPanel(editorRuntimeInspector_);
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "editor.selection",
+            "Selection",
+            "Editor",
+            editor::EditorPanelHostArea::LeftSidebar,
+            panelVisible("editor.selection"),
+            [&]() {
+                editor::DrawEditorSelectionPanel(editorSelection_);
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "editor.commands",
+            "Commands",
+            "Editor",
+            editor::EditorPanelHostArea::LeftSidebar,
+            panelVisible("editor.commands"),
+            [&]() {
+                editor::DrawEditorCommandPanel(editorContext);
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "editor.assets",
+            "Assets",
+            "Editor",
+            editor::EditorPanelHostArea::ContentBrowser,
+            panelVisible("editor.assets"),
+            [&]() {
+                editor::DrawEditorAssetBrowserPanel(
+                    editor::EditorAssetBrowserPanelContext{
+                        &editorAssetRegistry_,
+                        &editorAssetSelection_,
+                        &editorNotifications_});
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "vfx.effectAssets",
+            "Effect Assets",
+            "VFX",
+            editor::EditorPanelHostArea::ContentBrowser,
+            panelVisible("vfx.effectAssets"),
+            [&]() {
                 DrawEffectAssetEditorPanel(
                     effectRuntime,
                     context.effectAuthoringRegistry,
                     context.loadedEffectAssets);
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Feature Guard")) {
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "render.targets",
+            "Render Targets",
+            "Render",
+            editor::EditorPanelHostArea::ContentBrowser,
+            panelVisible("render.targets"),
+            [&]() {
+                DrawRenderTargetPreviewPanel(
+                    RenderTargetPreviewPanelInput{
+                        context.sceneColorPreview,
+                        context.vfxAccumulationPreview,
+                        context.postColorPreview,
+                        context.depthPreview,
+                        context.emissivePreview,
+                        context.terrainHiZPreview,
+                        context.scene != nullptr ? context.scene->cascadeShadowSrvGpuHandles : std::array<D3D12_GPU_DESCRIPTOR_HANDLE, 4>{},
+                        runtimeState.terrain.shadowDebugCascade,
+                        runtimeState.terrain.showShadowDebugView});
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "editor.featureGuard",
+            "Feature Guard",
+            "Editor",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("editor.featureGuard"),
+            [&]() {
                 const editor::ExistingFeatureProtectionReport protectionReport =
                     editor::BuildExistingFeatureProtectionReport(
                         editor::ExistingFeatureProtectionInput{
@@ -1291,13 +1423,16 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                             &courseDocumentAdapter,
                             &editorRuntimeInspector_,
                             &editorPlaySession_,
+                            &editorRailRuntimePause_,
                             &editorSelection_,
                             &editorTransactions,
                             &editorValidationReport,
                             &editorDirtyState_,
                             &editorDocumentLifecycle_,
                             &editorLayout_,
+                            &editorLayoutPersistence_,
                             &editorPanelLayout_,
+                            &editorPanelRegistry_,
                             &editorViewportInteraction_,
                             &editorViewportSelectionBridge_,
                             &editorTransformGizmo_,
@@ -1315,77 +1450,72 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                             static_cast<bool>(context.onSaveCourse),
                             static_cast<bool>(context.onApplyCourse),
                             static_cast<bool>(context.onReloadCourse),
-                            static_cast<bool>(context.onTeleportCourseToDistance)});
+                            static_cast<bool>(context.onTeleportCourseToDistance),
+                            true});
                 editor::DrawExistingFeatureProtectionPanel(protectionReport);
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Editor Selection")) {
-                editor::DrawEditorSelectionPanel(editorSelection_);
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Editor Details")) {
-                editor::DrawEditorDetailsPanel(
-                    editor::EditorDetailsPanelContext{
-                        &editorSelection_,
-                        &editorPropertyRegistry_,
-                        &coursePropertyAdapter,
-                        &editorTransactions,
-                        &editorAssetRegistry_,
-                        &editorAssetSelection_,
-                        &editorValidationReport,
-                        editorCommandContext.canMutateAuthoring});
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Editor Diagnostics")) {
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "editor.diagnostics",
+            "Diagnostics",
+            "Editor",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("editor.diagnostics"),
+            [&]() {
                 editor::DrawEditorDiagnosticsPanel(
                     editor::EditorDiagnosticsPanelContext{
                         &editorValidationReport,
-                        &editorSelection_});
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Runtime Watch")) {
-                editor::DrawEditorRuntimeInspectorPanel(editorRuntimeInspector_);
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Editor Commands")) {
-                editor::DrawEditorCommandPanel(editorContext);
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Editor Notifications")) {
-                editor::DrawEditorNotificationsPanel(editorNotifications_);
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Editor Properties")) {
-                editor::DrawEditorPropertyRegistryPanel(editorPropertyRegistry_, &editorTransactions);
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Editor Assets")) {
-                editor::DrawEditorAssetBrowserPanel(
-                    editor::EditorAssetBrowserPanelContext{
-                        &editorAssetRegistry_,
+                        &editorSelection_,
                         &editorAssetSelection_});
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Editor Transactions")) {
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "editor.notifications",
+            "Notifications",
+            "Editor",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("editor.notifications"),
+            [&]() {
+                editor::DrawEditorNotificationsPanel(editorNotifications_);
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "editor.properties",
+            "Properties",
+            "Editor",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("editor.properties"),
+            [&]() {
+                editor::DrawEditorPropertyRegistryPanel(editorPropertyRegistry_, &editorTransactions);
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "editor.transactions",
+            "Transactions",
+            "Editor",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("editor.transactions"),
+            [&]() {
                 editor::DrawEditorTransactionPanel(editorTransactions);
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Runtime Status")) {
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "vfx.runtimeStatus",
+            "Runtime Status",
+            "VFX",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("vfx.runtimeStatus"),
+            [&]() {
                 DrawVfxRuntimeStatusPanel(runtimeStatusInput);
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Runtime Queues")) {
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "vfx.runtimeQueues",
+            "Runtime Queues",
+            "VFX",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("vfx.runtimeQueues"),
+            [&]() {
                 DrawVfxRuntimeQueuesPanel(
                     VfxRuntimeQueuesPanelInput{
                         &runtimeState,
@@ -1395,14 +1525,15 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         trailMeshStreamHealthFrames_,
                         trailMeshStreamProbeHealthyFrames_,
                         trailMeshStreamActiveHealthyFrames_});
-                ImGui::EndTabItem();
-            }
-
-            editorPanelHost_.DrawTabs(
-                editorPanelRegistry_,
-                editor::EditorPanelHostArea::Diagnostics);
-
-            if (ImGui::BeginTabItem("RenderGraph")) {
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "render.graph",
+            "RenderGraph",
+            "Render",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("render.graph"),
+            [&]() {
                 DrawRenderGraphDebugPanel(
                     RenderGraphDebugPanelInput{
                         context.renderGraphDescription,
@@ -1412,10 +1543,15 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         context.transientTargetStorageCount,
                         context.transientBufferCount,
                         context.transientBufferStorageCount});
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Course Timeline")) {
+            }});
+    editorPanelRegistry_.Register(
+        editor::EditorPanelDescriptor{
+            "course.timeline",
+            "Course Timeline",
+            "Course",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("course.timeline"),
+            [&]() {
                 DrawCourseTimelineDebugPanel(
                     CourseTimelineDebugPanelInput{
                         editableCourse,
@@ -1437,27 +1573,34 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         &editorDocumentLifecycle_,
                         &editorConfirmService_,
                         editorCommandContext.canMutateAuthoring});
-                ImGui::EndTabItem();
-            }
+            }});
 
-            if (ImGui::BeginTabItem("Render Targets")) {
-                DrawRenderTargetPreviewPanel(
-                    RenderTargetPreviewPanelInput{
-                        context.sceneColorPreview,
-                        context.vfxAccumulationPreview,
-                        context.postColorPreview,
-                        context.depthPreview,
-                        context.emissivePreview,
-                        context.terrainHiZPreview,
-                        context.scene != nullptr ? context.scene->cascadeShadowSrvGpuHandles : std::array<D3D12_GPU_DESCRIPTOR_HANDLE, 4>{},
-                        runtimeState.terrain.shadowDebugCascade,
-                        runtimeState.terrain.showShadowDebugView});
-                ImGui::EndTabItem();
-            }
-            ImGui::EndTabBar();
-        }
-    }
-    ImGui::End();
+    editorLayoutPersistence_.CaptureRegistryDefaults(editorPanelRegistry_);
+    editorPanelHost_.DrawArea(
+        editorPanelRegistry_,
+        editor::EditorPanelHostArea::LeftSidebar,
+        editorPanelLayout_.LeftSidebarRect(),
+        "Editor Left Sidebar",
+        &editorLayoutPersistence_);
+    editorPanelHost_.DrawArea(
+        editorPanelRegistry_,
+        editor::EditorPanelHostArea::RightInspector,
+        editorPanelLayout_.InspectorRect(),
+        "Editor Right Inspector",
+        &editorLayoutPersistence_);
+    editorPanelHost_.DrawArea(
+        editorPanelRegistry_,
+        editor::EditorPanelHostArea::ContentBrowser,
+        editorPanelLayout_.ContentBrowserRect(),
+        "Editor Content Browser",
+        &editorLayoutPersistence_);
+    editorPanelHost_.DrawArea(
+        editorPanelRegistry_,
+        editor::EditorPanelHostArea::BottomDock,
+        editorPanelLayout_.DiagnosticsRect(),
+        "Editor Bottom Dock",
+        &editorLayoutPersistence_);
+    editorLayoutPersistence_.SaveIfDirty();
 }
 
 void AppImGuiLayer::EndFrame() {

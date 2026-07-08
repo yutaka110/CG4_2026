@@ -47,6 +47,7 @@ class AppRenderResources;
 struct AppRuntimeState;
 class AppSceneResources;
 class EngineContext;
+struct ImDrawList;
 
 class AppRunLoop : private AppSceneHost {
 public:
@@ -106,6 +107,8 @@ private:
     CourseObjectEditSnapshot CaptureCourseObjectSnapshot() const;
     std::string BuildCourseObjectSnapshotSummary(const CourseObjectEditSnapshot& snapshot) const;
     void RestoreCourseObjectSnapshot(const CourseObjectEditSnapshot& snapshot);
+    void StageCourseObjectGizmoTransactionIfNeeded();
+    bool CommitCourseObjectDragIfNeeded();
     void EnsureCourseObjectHistoryBaseline();
     void CommitCourseObjectHistoryIfNeeded();
     void ProcessCourseObjectUndoRedo();
@@ -128,7 +131,7 @@ private:
     void ApplyRailShooterVisualPresets(float distance);
     void DrawRailLockOnHud();
     void DrawRailLockOnDebugPanel();
-    void DrawRailVisibilityDebugOverlay();
+    void DrawRailVisibilityDebugOverlay(ImDrawList* drawList = nullptr);
     bool EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList);
     bool BuildRailLockOnHudAtlasQuads();
     void RegisterRailLockOnHudPass(
@@ -373,6 +376,7 @@ private:
         int type = -1;
         int index = -1;
         int axis = -1;
+        int gizmoMode = 0;
         POINT startMouse{};
         float startDistance = 0.0f;
         float startLateral = 0.0f;

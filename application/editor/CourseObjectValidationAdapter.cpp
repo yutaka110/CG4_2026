@@ -70,15 +70,26 @@ void ValidateTerrainPlacement(
             "CourseTerrainPlacement.meshId",
             "Missing terrain mesh",
             "Course terrain placement cannot resolve a render mesh.");
-    } else if (assetRegistry != nullptr &&
-        assetRegistry->Find(EditorAssetKind::Mesh, placement.meshId) == nullptr) {
-        AddIssue(
-            report,
-            EditorValidationSeverity::Warning,
-            target,
-            "CourseTerrainPlacement.meshId",
-            "Unresolved terrain mesh",
-            "Course terrain placement references a mesh id that is not registered in EditorAssetRegistry.");
+    } else if (assetRegistry != nullptr) {
+        const EditorAssetRecord* meshAsset = assetRegistry->Find(EditorAssetKind::Mesh, placement.meshId);
+        if (meshAsset == nullptr) {
+            AddIssue(
+                report,
+                EditorValidationSeverity::Warning,
+                target,
+                "CourseTerrainPlacement.meshId",
+                "Unresolved terrain mesh",
+                "Course terrain placement references a mesh id that is not registered in EditorAssetRegistry.");
+        } else if (meshAsset->missing) {
+            AddIssue(
+                report,
+                EditorValidationSeverity::Error,
+                target,
+                "CourseTerrainPlacement.meshId",
+                "Missing terrain mesh file",
+                "Course terrain placement references a registered mesh whose source file is missing: " +
+                    meshAsset->sourcePath);
+        }
     }
     if (placement.distance < 0.0f) {
         AddIssue(
@@ -146,15 +157,26 @@ void ValidateRockCluster(
             "CourseRockCluster.meshId",
             "Missing rock cluster mesh",
             "Course rock cluster cannot resolve a render mesh.");
-    } else if (assetRegistry != nullptr &&
-        assetRegistry->Find(EditorAssetKind::Mesh, cluster.meshId) == nullptr) {
-        AddIssue(
-            report,
-            EditorValidationSeverity::Warning,
-            target,
-            "CourseRockCluster.meshId",
-            "Unresolved rock cluster mesh",
-            "Course rock cluster references a mesh id that is not registered in EditorAssetRegistry.");
+    } else if (assetRegistry != nullptr) {
+        const EditorAssetRecord* meshAsset = assetRegistry->Find(EditorAssetKind::Mesh, cluster.meshId);
+        if (meshAsset == nullptr) {
+            AddIssue(
+                report,
+                EditorValidationSeverity::Warning,
+                target,
+                "CourseRockCluster.meshId",
+                "Unresolved rock cluster mesh",
+                "Course rock cluster references a mesh id that is not registered in EditorAssetRegistry.");
+        } else if (meshAsset->missing) {
+            AddIssue(
+                report,
+                EditorValidationSeverity::Error,
+                target,
+                "CourseRockCluster.meshId",
+                "Missing rock cluster mesh file",
+                "Course rock cluster references a registered mesh whose source file is missing: " +
+                    meshAsset->sourcePath);
+        }
     }
     if (cluster.count == 0) {
         AddIssue(

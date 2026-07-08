@@ -175,6 +175,10 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\editor\CourseObjectValidationAdapter.cpp" />
     <ClCompile Include="application\editor\EffectAssetDiagnosticsAdapter.cpp" />
     <ClCompile Include="application\editor\EditorAssetBrowserPanel.cpp" />
+    <ClCompile Include="application\editor\EditorAssetCommandProvider.cpp" />
+    <ClCompile Include="application\editor\EditorAssetMutationExecutor.cpp" />
+    <ClCompile Include="application\editor\EditorAssetMutationSafety.cpp" />
+    <ClCompile Include="application\editor\EditorAssetReferenceDiagnosticsAdapter.cpp" />
     <ClCompile Include="application\editor\EditorBuiltinCommandProvider.cpp" />
     <ClCompile Include="application\editor\EditorCommandContext.cpp" />
     <ClCompile Include="application\editor\EditorCommandPanel.cpp" />
@@ -185,11 +189,13 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\editor\EditorDocumentLifecycleService.cpp" />
     <ClCompile Include="application\editor\EditorDocumentTabs.cpp" />
     <ClCompile Include="application\editor\EditorLayoutService.cpp" />
+    <ClCompile Include="application\editor\EditorLayoutPersistenceService.cpp" />
     <ClCompile Include="application\editor\EditorPanelHost.cpp" />
     <ClCompile Include="application\editor\EditorPanelLayoutService.cpp" />
     <ClCompile Include="application\editor\EditorPanelRegistry.cpp" />
       <ClCompile Include="application\editor\EditorTransformGizmoService.cpp" />
       <ClCompile Include="application\editor\EditorViewportInteractionService.cpp" />
+      <ClCompile Include="application\editor\EditorViewportOverlay.cpp" />
       <ClCompile Include="application\editor\EditorViewportPanel.cpp" />
       <ClCompile Include="application\editor\EditorViewportRenderTarget.cpp" />
       <ClCompile Include="application\editor\EditorViewportSelectionBridge.cpp" />
@@ -205,6 +211,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\editor\EditorNotificationsPanel.cpp" />
     <ClCompile Include="application\editor\EditorPlaySessionIsolationSnapshot.cpp" />
     <ClCompile Include="application\editor\EditorPlaySessionState.cpp" />
+    <ClCompile Include="application\editor\EditorRailRuntimePause.cpp" />
     <ClCompile Include="application\editor\EditorPropertyAccessor.cpp" />
     <ClCompile Include="application\editor\EditorPropertyRegistry.cpp" />
     <ClCompile Include="application\editor\EditorPropertyRegistryPanel.cpp" />
@@ -741,6 +748,10 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\editor\CourseObjectValidationAdapter.h" />
     <ClInclude Include="application\editor\EffectAssetDiagnosticsAdapter.h" />
     <ClInclude Include="application\editor\EditorAssetBrowserPanel.h" />
+    <ClInclude Include="application\editor\EditorAssetCommandProvider.h" />
+    <ClInclude Include="application\editor\EditorAssetMutationExecutor.h" />
+    <ClInclude Include="application\editor\EditorAssetMutationSafety.h" />
+    <ClInclude Include="application\editor\EditorAssetReferenceDiagnosticsAdapter.h" />
     <ClInclude Include="application\editor\EditorAuthoringMutationGuard.h" />
     <ClInclude Include="application\editor\EditorBuiltinCommandProvider.h" />
     <ClInclude Include="application\editor\EditorCommandContext.h" />
@@ -754,11 +765,13 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\editor\EditorDocumentLifecycleService.h" />
     <ClInclude Include="application\editor\EditorDocumentTabs.h" />
     <ClInclude Include="application\editor\EditorLayoutService.h" />
+    <ClInclude Include="application\editor\EditorLayoutPersistenceService.h" />
     <ClInclude Include="application\editor\EditorPanelHost.h" />
     <ClInclude Include="application\editor\EditorPanelLayoutService.h" />
     <ClInclude Include="application\editor\EditorPanelRegistry.h" />
       <ClInclude Include="application\editor\EditorTransformGizmoService.h" />
       <ClInclude Include="application\editor\EditorViewportInteractionService.h" />
+      <ClInclude Include="application\editor\EditorViewportOverlay.h" />
       <ClInclude Include="application\editor\EditorViewportPanel.h" />
       <ClInclude Include="application\editor\EditorViewportRenderTarget.h" />
       <ClInclude Include="application\editor\EditorViewportSelectionBridge.h" />
@@ -774,6 +787,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\editor\EditorNotificationsPanel.h" />
     <ClInclude Include="application\editor\EditorPlaySessionIsolationSnapshot.h" />
     <ClInclude Include="application\editor\EditorPlaySessionState.h" />
+    <ClInclude Include="application\editor\EditorRailRuntimePause.h" />
     <ClInclude Include="application\editor\EditorPropertyAccessor.h" />
     <ClInclude Include="application\editor\EditorPropertyValue.h" />
     <ClInclude Include="application\editor\EditorPropertyRegistry.h" />

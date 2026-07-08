@@ -21,6 +21,8 @@ new editor services are introduced behind adapters.
 - Provide a practical path toward Unreal-style workflows: viewport, outliner,
   inspector, content browser, PIE/simulate, validation, profiling, and
   extension points.
+- Define measurable completion gates for moving from the current Editor Core
+  foundation to a production-ready commercial editor.
 
 ## Non-goals
 
@@ -31,6 +33,40 @@ new editor services are introduced behind adapters.
 - Do not build Blueprint, Niagara, Sequencer, or a full material graph before the
   editor foundations are stable.
 - Do not make runtime systems depend on editor-only APIs.
+- Do not define "Unreal-level" as copying every Unreal Engine subsystem. For
+  CG4, it means reaching production-grade workflows, data safety, extensibility,
+  and validation for the engine's actual domains.
+
+## Commercial Editor Completion Definition
+
+For this project, "100%" means a CG4-specific commercial editor with Unreal-style
+authoring quality. It does not require feature parity with every Unreal Engine
+tool, but it does require that daily production work can be done through stable,
+discoverable, undoable, validated, and extensible editor workflows.
+
+Completion is measured across ten editor pillars:
+
+| Pillar | 100% completion requirement |
+| --- | --- |
+| Core services | Selection, transactions, commands, context, dirty state, notifications, validation, and document lifecycle are the default path for all authoring edits. |
+| Workspace layout | Main viewport, outliner, details, content browser, diagnostics, runtime inspector, and tool panels are hosted by a persistent dock/layout system. |
+| Viewport authoring | Rendering, camera aspect, picking, gizmo coordinates, HUD composition, focus, and input capture all use the editor viewport boundary. |
+| Property/details | Course, VFX, terrain, post-process, and renderer settings expose typed descriptors, safe accessors, validation, and transaction-backed edits. |
+| Asset/content pipeline | Assets have stable IDs, logical paths, metadata, dependency tracking, missing-reference diagnostics, thumbnails where useful, and safe rename/move flows. |
+| Diagnostics/profiling | Domain diagnostics, RenderGraph issues, VFX loader/runtime warnings, validation errors, and profiling views use common tables with source navigation. |
+| Play/simulate boundary | Play, simulate, pause, stop, and apply/keep-changes flows operate on isolated runtime state and never silently mutate authoring data. |
+| Extensibility | New panels, commands, menus, toolbar actions, asset adapters, validation adapters, and details sections can be registered without central UI rewrites. |
+| Persistence/project UX | Open documents, layout, selection, asset browser filters, editor preferences, recent files, and project settings persist across sessions. |
+| Quality automation | Build, smoke, editor-service unit tests, asset indexing tests, validation tests, and Feature Guard checks protect all critical workflows. |
+
+Use the following maturity scale when reporting progress:
+
+| Maturity | Completion range | Meaning |
+| --- | ---: | --- |
+| Prototype | 0-40% | Feature-specific panels exist, but workflows are local and fragile. |
+| Foundation | 40-70% | Shared services exist and some production flows are routed through them. |
+| Production beta | 70-90% | Most daily authoring tasks use common services, with limited persistence and automation gaps. |
+| Commercial ready | 90-100% | Workflows are persistent, extensible, validated, test-covered, and safe for team production. |
 
 ## Existing Systems To Preserve
 
@@ -458,8 +494,25 @@ The first common layout should be practical and compatible with current panels:
 - Existing Course Timeline tab: kept intact while shared selection/details are
   introduced.
 
-Docking can be introduced later. Fixed ImGui windows are acceptable while the
-core services are being validated.
+The commercial target is a persistent workspace layout:
+
+- Center: `EditorViewportPanel`, with the game/editor render target, transform
+  gizmo, viewport overlays, and PIE/SIM focus controls.
+- Left: outliner, scene hierarchy, course object tree, and optional runtime
+  object tree.
+- Right: details, selected asset properties, runtime watch, and validation
+  details.
+- Bottom: diagnostics, output log, profiling, RenderGraph, VFX telemetry, and
+  timeline tools.
+- Content area: asset browser, thumbnails, filters, dependency view, and
+  reference repair tools.
+- Top chrome: menu bar, document tabs, toolbar, command palette entry points,
+  and status bar.
+
+Fixed ImGui windows are acceptable only during foundation validation. Once a
+panel is stable, it should move behind `EditorPanelRegistry` and be hosted by
+`EditorPanelHost`. Commercial readiness requires layout persistence, predictable
+panel IDs, tab restoration, and safe defaults for missing or renamed panels.
 
 ## Data Safety Rules
 
@@ -568,6 +621,217 @@ Success criteria:
 - Asset records can be searched and filtered by type, path, tag, and diagnostic
   severity.
 
+### Phase 6: Persistent Workspace And Docking
+
+Deliverables:
+
+- Expand `EditorPanelHostArea` beyond diagnostics into viewport, left sidebar,
+  right inspector, bottom tray, content browser, and floating modal areas.
+- Move stable panels behind `EditorPanelRegistry` with persistent panel IDs.
+- Add layout serialization for panel visibility, selected tabs, split ratios,
+  browser filters, and last active document.
+- Provide default layouts for authoring, VFX debugging, runtime profiling, and
+  minimal playtest mode.
+- Keep legacy direct ImGui windows available behind Feature Guard until hosted
+  panel parity is verified.
+
+Success criteria:
+
+- Restarting the editor restores the same workspace.
+- Rail lock-on, VFX diagnostics, details, asset browser, viewport, and runtime
+  inspector can coexist without overlapping the central viewport.
+- Missing panels or renamed panel IDs fall back to a safe default layout instead
+  of corrupting the editor session.
+
+### Phase 7: Production Transform And Viewport Tools
+
+Deliverables:
+
+- Turn `EditorTransformGizmoService` from state reporting into transaction-backed
+  manipulation for translate, rotate, and scale.
+- Add world/local axis modes, snap settings, pivot mode, numeric transform input,
+  and cancel/commit behavior.
+- Route viewport picking through `EditorViewportPickResult` and
+  `EditorSelectionRequest` for all selectable authoring domains.
+- Keep camera aspect, picking rays, gizmo drawing, and HUD overlays based on
+  `EditorViewportRenderTarget`.
+- Draw editor-visible gameplay debug overlays through `EditorViewportOverlay`
+  so render-target coordinates are converted to `viewportRect` display space and
+  clipped before reaching the editor chrome.
+- Add viewport focus mode, input capture, and read-only play/simulate boundaries
+  for all authoring tools.
+
+Success criteria:
+
+- A selected course object can be moved, rotated, scaled, undone, redone, saved,
+  reloaded, and validated through the shared editor path.
+- Mouse position, reticle, picking ray, gizmo handle, and HUD overlay remain
+  aligned after resizing the editor window.
+- Play/simulate locks authoring mutation unless the user explicitly applies
+  runtime changes through a transaction-backed command.
+
+### Phase 8: Asset Identity, Metadata, And Dependencies
+
+Deliverables:
+
+- Extend `EditorAssetRecord` with GUID, logical path, tags, dependencies,
+  dirty/missing flags, source timestamps, and optional thumbnail handles.
+- Add sidecar `.meta` files for new or touched assets while preserving path
+  fallback for legacy assets.
+- Add dependency scanning for course references, VFX references, meshes,
+  textures, audio, shaders, and preset files.
+- Add safe rename/move/delete validation and reference repair commands.
+- Add asset browser search, filters, type grouping, dependency view, and missing
+  reference diagnostics.
+
+Success criteria:
+
+- Assets can be selected, inspected, renamed or moved safely when GUID metadata
+  exists.
+- Path-only references continue to work, but validation reports migration
+  warnings.
+- A missing mesh, effect, texture, course dependency, or pattern file appears in
+  the common diagnostics table with a selectable subject.
+
+Current staged implementation:
+
+- Phase 8-A adds GUID/logical path/sidecar metadata fields to
+  `EditorAssetRecord`, reads simple key-value `.meta` files, and keeps
+  deterministic provisional GUID fallback for legacy assets.
+- Phase 8-B adds an `asset.createMeta` command for the selected asset,
+  lightweight text dependency scanning after folder indexing, dependency counts
+  in the Asset Browser and Feature Guard, and an
+  `asset.repairMissingReference` command that repairs the selected object's
+  first unresolved AssetRef through `EditorPropertyAccessor` and
+  `EditorTransactionStack`.
+- Phase 8-C adds missing asset and dependency diagnostics to the shared
+  Diagnostics table via `EditorAssetReferenceDiagnosticsAdapter`, and lets the
+  Diagnostics selected-subject filter include the selected Asset as well as the
+  selected editor object.
+- Phase 8-C also adds the first rename/move/delete safety preflight:
+  `EditorAssetMutationSafety` evaluates durable `.meta` GUID readiness, missing
+  source files, runtime-only records, and indexed dependents. The Asset Browser
+  shows selected asset safety status, and command palette entries
+  `asset.renameSafety`, `asset.moveSafety`, and `asset.deleteSafety` expose the
+  same checks. Delete uses modal confirmation but does not physically delete
+  files until the later asset mutation executor phase.
+- Phase 8-D adds `EditorAssetMutationExecutor` for guarded rename/move. It
+  executes only after safety preflight passes, moves the asset file and sidecar
+  `.meta`, rewrites metadata with the preserved GUID, updates
+  `EditorAssetRegistry`, and refreshes Asset selection. Delete remains
+  preflight/confirmation-only until reference rewrite and undoable file
+  operations are added.
+- Full rename/move/delete safety, dependency graph navigation, thumbnail
+  generation, and automated asset migration tests remain future Phase 8 work.
+
+### Phase 9: Full Details/Reflection Coverage
+
+Deliverables:
+
+- Register property descriptors for all production authoring targets: course
+  objects, VFX typed settings, terrain, post-process, render presets, camera
+  keys, events, and gameplay tuning data.
+- Support multi-selection intersection editing, per-property read-only reasons,
+  reset-to-default, copy/paste property values, and validation hints.
+- Route every generic details edit through `EditorPropertyAccessor` and
+  `EditorTransactionStack`.
+- Allow domain adapters to provide custom detail sections without bypassing
+  transaction, validation, dirty, or notification services.
+
+Success criteria:
+
+- Details editing can replace most hand-written scalar/vector/enum controls
+  without behavior loss.
+- Invalid edits are blocked or reported before save/apply claims success.
+- Runtime-only fields are visibly read-only and cannot mutate authoring data by
+  accident.
+
+### Phase 10: Play-In-Editor And Runtime Isolation
+
+Deliverables:
+
+- Define a clear authoring world and runtime world boundary for play, simulate,
+  pause, step, stop, and reset.
+- Snapshot or clone all mutable authoring state needed by runtime sessions.
+- Add explicit "apply runtime change to authoring" commands with confirmations,
+  transactions, dirty state updates, and validation.
+- Add runtime inspector watch rows for selected actors, course director state,
+  VFX instances, RenderGraph resources, and gameplay systems.
+
+Success criteria:
+
+- Stopping play restores authoring state unless an explicit apply command was
+  accepted.
+- Runtime inspection remains read-only by default.
+- Dirty state, document lifecycle, and save/apply policy reflect play/simulate
+  state consistently.
+
+### Phase 11: Extensibility And Tool Registration
+
+Deliverables:
+
+- Stabilize provider interfaces for commands, panels, asset adapters, property
+  adapters, validation adapters, runtime inspectors, and menu/toolbar sections.
+- Add versioned registration descriptors so tools can be added without editing
+  `AppImGuiLayer` directly.
+- Add feature flags for experimental tools and migration fallback paths.
+- Add command categories, shortcut conflict detection, palette search metadata,
+  and menu/toolbar placement metadata.
+
+Success criteria:
+
+- A new VFX or Course tool can register a panel, commands, validation, and
+  details support from its own module.
+- Shortcut conflicts are reported before registration succeeds.
+- Disabling an experimental tool leaves the rest of the editor stable.
+
+### Phase 12: Commercial Hardening And Automation
+
+Deliverables:
+
+- Add automated tests for editor services: selection, transactions, asset
+  registry, folder indexing, property descriptors, validation aggregation,
+  command enablement, save/apply policy, document lifecycle, viewport transform
+  coordinate mapping, and Feature Guard checks.
+- Add smoke tests or scripted runs that open the editor, show developer tools,
+  inspect VFX, open diagnostics, index assets, select course objects, edit,
+  undo, redo, save, reload, and enter/exit play.
+- Add performance budgets for asset indexing, validation, details rendering,
+  diagnostics table rendering, and viewport resize.
+- Add crash-safe persistence for layout and editor preferences.
+- Add release checklist documentation and migration notes for legacy panels.
+
+Success criteria:
+
+- A broken core editor service fails a test or Feature Guard check before it
+  reaches daily authoring use.
+- The editor can recover from invalid layout files, missing assets, failed
+  validation, and interrupted play sessions.
+- Daily production workflows are stable enough for team use without relying on
+  hidden debug panels or manual state repair.
+
+## Commercial Completion Scorecard
+
+Use this scorecard to track the path to 100%. Percentages are intentionally
+workflow-based, not file-count based.
+
+| Area | Current target after Phase 5 | 100% requirement |
+| --- | ---: | --- |
+| Core service architecture | 80% | All authoring mutation uses shared context, command, transaction, dirty, validation, and notification services. |
+| Existing feature protection | 85% | Feature Guard covers every migration-sensitive VFX, Course, RenderGraph, runtime, asset, and viewport workflow. |
+| Workspace layout | 45% | Persistent dock layout, panel host areas, restored tabs, default layouts, and overlap-free viewport. |
+| Viewport authoring | 60% | Accurate render target, picking, gizmo manipulation, HUD composition, input capture, and play locks. |
+| Property/details | 65% | Full descriptor coverage, multi-selection, validation hints, reset/copy/paste, and transaction-backed edits. |
+| Asset/content browser | 50% | GUID/meta, dependency graph, thumbnails where useful, safe rename/move/delete, and repair commands. |
+| Diagnostics/profiling | 70% | Unified diagnostics with source navigation, profiling views, severity filters, and domain adapters. |
+| Play/simulate isolation | 60% | Runtime clone/snapshot boundary, explicit apply changes, pause/step, and safe stop restoration. |
+| Extensibility | 50% | Versioned registration APIs for commands, panels, assets, properties, validation, menus, and toolbar entries. |
+| Automation/hardening | 25% | Unit, smoke, regression, performance, and recovery tests covering critical editor workflows. |
+
+The editor should not be called commercial-ready until every area is at least
+90%, no critical area is below 85%, and Feature Guard reports no blocked
+checks in the default editor startup flow.
+
 ## Testing Strategy
 
 Every phase should have a small regression checklist:
@@ -592,6 +856,32 @@ For code-level tests, start with small pure C++ tests where practical:
 - Asset registry indexing from sample paths.
 - Diagnostic severity/count aggregation.
 
+Commercial-readiness testing should add the following gates:
+
+- Layout persistence: save layout, restart, restore panels, recover from invalid
+  layout data.
+- Viewport correctness: resize the editor window and verify render target size,
+  camera aspect, picking ray, gizmo position, HUD composition, and reticle/mouse
+  alignment.
+- Asset safety: index folders, detect missing references, validate path-only
+  references, rename/move GUID-backed assets, and repair references.
+- Details editing: edit scalar/vector/enum/asset reference properties, verify
+  transaction creation, undo, redo, dirty state, validation, save, and reload.
+- Play/simulate isolation: edit authoring data, enter play, mutate runtime,
+  stop, verify authoring restoration, then explicitly apply runtime changes
+  through a command.
+- Feature Guard: startup must report no blocked core services and must keep
+  existing VFX inspector, VFX diagnostics, RenderGraph diagnostics, and Course
+  authoring paths usable.
+- Performance: asset indexing, validation, diagnostics rendering, details
+  drawing, and viewport resize should remain within defined frame or startup
+  budgets for a representative project.
+
+Release candidates must pass the manual checklist, automated editor-service
+tests, Feature Guard checks, and at least one smoke run that covers VFX,
+Course, asset browser, diagnostics, viewport selection, transform editing, and
+play/simulate lifecycle.
+
 ## First Implementation Target
 
 The first useful implementation should be small:
@@ -608,3 +898,24 @@ The first useful implementation should be small:
 This target creates real value without touching VFX runtime/render code. After
 that, VFX can be connected through descriptors and adapters while preserving the
 typed storage and renderer input boundaries described in `docs/VfxEngineFlow.md`.
+
+## Current Next Implementation Targets
+
+After the current Editor Core foundation is in place, implementation should move
+in this order:
+
+1. Expand `EditorPanelRegistry` and `EditorPanelHost` to support viewport,
+   left, right, bottom, content, and diagnostics host areas.
+2. Add layout persistence for panel visibility, active tabs, split ratios, and
+   default workspace presets.
+3. Upgrade `EditorTransformGizmoService` from state synchronization to
+   transaction-backed transform manipulation.
+4. Extend `EditorAssetRecord` with GUID, logical path, dependency, missing,
+   dirty, tag, and metadata fields while keeping path fallback.
+5. Add editor-service tests for transaction, property, asset registry,
+   validation, command enablement, viewport coordinate mapping, and Feature
+   Guard reports.
+
+These targets move the project from "foundation complete" toward "production
+beta". They should be implemented before attempting larger systems such as a
+node graph, material editor, advanced VFX graph, sequencer, or scripting layer.

@@ -267,6 +267,18 @@
     <ClCompile Include="application\editor\EditorAssetBrowserPanel.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
+    <ClCompile Include="application\editor\EditorAssetCommandProvider.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorAssetMutationExecutor.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorAssetMutationSafety.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorAssetReferenceDiagnosticsAdapter.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
     <ClCompile Include="application\editor\EditorBuiltinCommandProvider.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
@@ -312,6 +324,9 @@
     <ClCompile Include="application\editor\EditorLayoutService.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
+    <ClCompile Include="application\editor\EditorLayoutPersistenceService.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
     <ClCompile Include="application\editor\EditorPanelHost.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
@@ -325,6 +340,9 @@
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
     <ClCompile Include="application\editor\EditorViewportInteractionService.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorViewportOverlay.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
     <ClCompile Include="application\editor\EditorViewportPanel.cpp">
@@ -355,6 +373,9 @@
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
     <ClCompile Include="application\editor\EditorPlaySessionState.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorRailRuntimePause.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
     <ClCompile Include="application\editor\EditorPropertyAccessor.cpp">
@@ -1164,6 +1185,18 @@
     <ClInclude Include="application\editor\EditorAssetBrowserPanel.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
+    <ClInclude Include="application\editor\EditorAssetCommandProvider.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorAssetMutationExecutor.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorAssetMutationSafety.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorAssetReferenceDiagnosticsAdapter.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
     <ClInclude Include="application\editor\EditorAuthoringMutationGuard.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
@@ -1203,6 +1236,9 @@
     <ClInclude Include="application\editor\EditorLayoutService.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
+    <ClInclude Include="application\editor\EditorLayoutPersistenceService.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
     <ClInclude Include="application\editor\EditorPanelHost.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
@@ -1216,6 +1252,9 @@
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\EditorViewportInteractionService.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorViewportOverlay.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\EditorViewportPanel.h">
@@ -1261,6 +1300,9 @@
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\EditorPlaySessionState.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorRailRuntimePause.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\EditorPropertyAccessor.h">

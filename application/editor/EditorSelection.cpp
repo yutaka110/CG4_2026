@@ -90,6 +90,8 @@ const char* ToString(EditorDomainId domain) {
     switch (domain) {
     case EditorDomainId::Unknown:
         return "Unknown";
+    case EditorDomainId::Asset:
+        return "Asset";
     case EditorDomainId::VfxEffectAsset:
         return "VFX Effect Asset";
     case EditorDomainId::VfxEffectInstance:

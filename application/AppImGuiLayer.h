@@ -5,6 +5,8 @@
 #include <Windows.h>
 #include <d3d12.h>
 
+struct ImDrawList;
+
 #include "graphics/RenderGraph.h"
 #include "editor/EditorAssetSelection.h"
 #include "editor/EditorCommandContext.h"
@@ -15,6 +17,7 @@
 #include "editor/EditorDirtyStateService.h"
 #include "editor/EditorDocumentLifecycleService.h"
 #include "editor/EditorLayoutService.h"
+#include "editor/EditorLayoutPersistenceService.h"
 #include "editor/EditorModalConfirmService.h"
 #include "editor/EditorNotificationCenter.h"
 #include "editor/EditorPanelHost.h"
@@ -23,6 +26,7 @@
 #include "editor/EditorPlaySessionIsolationSnapshot.h"
 #include "editor/EditorPlaySessionState.h"
 #include "editor/EditorPropertyRegistry.h"
+#include "editor/EditorRailRuntimePause.h"
 #include "editor/EditorRuntimeInspector.h"
 #include "editor/EditorSelection.h"
 #include "editor/EditorTransformGizmoService.h"
@@ -82,6 +86,7 @@ struct AppImGuiFrameContext {
     const std::string* courseLoadStatus = nullptr;
     const std::string* coursePath = nullptr;
     float courseDistance = 0.0f;
+    float courseSpeed = 0.0f;
     float courseRailLength = 0.0f;
     std::function<bool(std::string*)> onSaveCourse;
     std::function<void()> onApplyCourse;
@@ -89,6 +94,7 @@ struct AppImGuiFrameContext {
     std::function<void(float)> onTeleportCourseToDistance;
     std::function<void()> onAddParticle;
     std::function<void()> onDrawRailLockOnDebugPanel;
+    std::function<void(ImDrawList*)> onDrawEditorViewportOverlay;
     editor::EditorTransactionStack* editorTransactions = nullptr;
 };
 
@@ -142,6 +148,7 @@ private:
     editor::EditorDirtyStateService editorDirtyState_{};
     editor::EditorDocumentLifecycleService editorDocumentLifecycle_{};
     editor::EditorLayoutService editorLayout_{};
+    editor::EditorLayoutPersistenceService editorLayoutPersistence_{};
     editor::EditorPanelHost editorPanelHost_{};
     editor::EditorPanelLayoutService editorPanelLayout_{};
     editor::EditorPanelRegistry editorPanelRegistry_{};
@@ -153,6 +160,7 @@ private:
     editor::EditorNotificationCenter editorNotifications_{};
     editor::EditorPlaySessionIsolationSnapshot editorPlaySessionSnapshot_{};
     editor::EditorPlaySessionState editorPlaySession_{};
+    editor::EditorRailRuntimePause editorRailRuntimePause_{};
     editor::EditorRuntimeInspector editorRuntimeInspector_{};
     editor::EditorSelection editorSelection_{};
     editor::EditorTransactionStack editorTransactions_{};

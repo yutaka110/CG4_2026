@@ -46,12 +46,32 @@ std::vector<const EditorPanelDescriptor*> EditorPanelRegistry::Panels(
     return result;
 }
 
+std::size_t EditorPanelRegistry::Count(EditorPanelHostArea area) const {
+    std::size_t count = 0;
+    for (const EditorPanelDescriptor& panel : panels_) {
+        if (panel.area == area && panel.visible) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 void EditorPanelRegistry::Touch() {
     ++revision_;
 }
 
 const char* ToString(EditorPanelHostArea area) {
     switch (area) {
+    case EditorPanelHostArea::Viewport:
+        return "Viewport";
+    case EditorPanelHostArea::LeftSidebar:
+        return "Left Sidebar";
+    case EditorPanelHostArea::RightInspector:
+        return "Right Inspector";
+    case EditorPanelHostArea::BottomDock:
+        return "Bottom Dock";
+    case EditorPanelHostArea::ContentBrowser:
+        return "Content Browser";
     case EditorPanelHostArea::Diagnostics:
         return "Diagnostics";
     }

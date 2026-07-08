@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -26,6 +28,74 @@ std::string NormalizePath(std::filesystem::path path) {
         text.erase(0, 2);
     }
     return text;
+}
+
+std::string Trim(std::string value) {
+    const auto first = std::find_if(
+        value.begin(),
+        value.end(),
+        [](unsigned char ch) {
+            return !std::isspace(ch);
+        });
+    const auto last = std::find_if(
+        value.rbegin(),
+        value.rend(),
+        [](unsigned char ch) {
+            return !std::isspace(ch);
+        }).base();
+    if (first >= last) {
+        return {};
+    }
+    return std::string(first, last);
+}
+
+std::vector<std::string> SplitList(const std::string& text) {
+    std::vector<std::string> values;
+    std::string token;
+    std::stringstream stream(text);
+    while (std::getline(stream, token, ',')) {
+        const std::string trimmed = Trim(token);
+        if (!trimmed.empty()) {
+            values.push_back(trimmed);
+        }
+    }
+    return values;
+}
+
+bool ReadAssetMetadata(
+    const std::filesystem::path& physicalMetaPath,
+    EditorAssetRecord& record) {
+    std::ifstream file(physicalMetaPath);
+    if (!file.is_open()) {
+        return false;
+    }
+
+    std::string line;
+    while (std::getline(file, line)) {
+        const std::size_t comment = line.find('#');
+        if (comment != std::string::npos) {
+            line.erase(comment);
+        }
+        const std::size_t equals = line.find('=');
+        if (equals == std::string::npos) {
+            continue;
+        }
+        const std::string key = Trim(line.substr(0, equals));
+        const std::string value = Trim(line.substr(equals + 1));
+        if (key == "guid") {
+            record.guid = value;
+            record.provisionalGuid = false;
+        } else if (key == "logicalPath") {
+            record.logicalPath = value;
+        } else if (key == "tags") {
+            record.tags = SplitList(value);
+        } else if (key == "dependencies") {
+            record.dependencies = SplitList(value);
+        }
+    }
+
+    record.hasMetadata = true;
+    return true;
 }
 
 EditorAssetKind KindForExtension(
@@ -122,7 +192,13 @@ EditorAssetFolderIndexResult IndexEditorAssetsFromFolder(
         record.id = BuildAssetId(kind, relativePath);
         record.displayName = path.stem().string();
         record.sourcePath = NormalizePath(std::filesystem::path("Resources") / relativePath);
+        record.logicalPath = record.sourcePath;
+        record.metadataPath = record.sourcePath + ".meta";
+        record.missing = !std::filesystem::exists(path, error);
+        error.clear();
         record.referenceable = kind != EditorAssetKind::Mesh;
+        const std::filesystem::path physicalMetaPath = path.string() + ".meta";
+        ReadAssetMetadata(physicalMetaPath, record);
 
         if (registry.Register(std::move(record))) {
             ++result.registeredAssets;

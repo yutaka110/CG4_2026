@@ -5,9 +5,12 @@
 
 namespace editor {
 
+class EditorNotificationCenter;
+
 struct EditorAssetBrowserPanelContext {
-    const EditorAssetRegistry* registry = nullptr;
+    EditorAssetRegistry* registry = nullptr;
     EditorAssetSelection* assetSelection = nullptr;
+    EditorNotificationCenter* notifications = nullptr;
 };
 
 void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context);

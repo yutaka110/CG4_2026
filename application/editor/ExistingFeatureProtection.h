@@ -21,10 +21,13 @@ class EditorAssetSelection;
 class EditorDirtyStateService;
 class EditorDocumentLifecycleService;
 class EditorLayoutService;
+class EditorLayoutPersistenceService;
 class EditorModalConfirmService;
 class EditorNotificationCenter;
 class EditorPanelLayoutService;
+class EditorPanelRegistry;
 class EditorPlaySessionState;
+class EditorRailRuntimePause;
 class EditorRuntimeInspector;
 class EditorSelection;
 class EditorTransformGizmoService;
@@ -66,13 +69,16 @@ struct ExistingFeatureProtectionInput {
     const CourseDocumentAdapter* courseDocument = nullptr;
     const EditorRuntimeInspector* runtimeInspector = nullptr;
     const EditorPlaySessionState* playSession = nullptr;
+    const EditorRailRuntimePause* railRuntimePause = nullptr;
     const EditorSelection* selection = nullptr;
     const EditorTransactionStack* transactions = nullptr;
     const EditorValidationReport* validationReport = nullptr;
     const EditorDirtyStateService* dirtyState = nullptr;
     const EditorDocumentLifecycleService* documentLifecycle = nullptr;
     const EditorLayoutService* layout = nullptr;
+    const EditorLayoutPersistenceService* layoutPersistence = nullptr;
     const EditorPanelLayoutService* panelLayout = nullptr;
+    const EditorPanelRegistry* panelRegistry = nullptr;
     const EditorViewportInteractionService* viewportInteraction = nullptr;
     const EditorViewportSelectionBridge* viewportSelectionBridge = nullptr;
     const EditorTransformGizmoService* transformGizmo = nullptr;
@@ -91,6 +97,7 @@ struct ExistingFeatureProtectionInput {
     bool hasApplyCourseCommand = false;
     bool hasReloadCourseCommand = false;
     bool hasTeleportCourseCommand = false;
+    bool hasFreezeCourseCommand = false;
 };
 
 ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(

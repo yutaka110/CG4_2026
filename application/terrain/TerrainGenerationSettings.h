@@ -73,6 +73,7 @@ struct TerrainAuthoringState {
     bool enableDebrisRendering = true;
     bool showCourseObjectFrame = true;
     bool enableCourseObjectViewportEditing = true;
+    bool freezeCourseRuntime = false;
     bool courseObjectAuthoringInputLocked = false;
     bool courseObjectSnapEnabled = false;
     bool courseObjectFrameDepthTest = false;

@@ -1,6 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+
+struct ImDrawList;
 
 namespace editor {
 
@@ -11,6 +14,7 @@ struct EditorViewportPanelRenderInput {
     float sourceWidth = 0.0f;
     float sourceHeight = 0.0f;
     bool preserveAspect = true;
+    std::function<void(ImDrawList*)> drawOverlay;
 };
 
 void DrawEditorViewportPanel(

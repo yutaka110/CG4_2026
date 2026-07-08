@@ -10,10 +10,16 @@ namespace editor {
 struct EditorAssetHandle {
     EditorAssetKind kind = EditorAssetKind::Unknown;
     std::string id;
+    std::string guid;
+    std::string logicalPath;
     std::string displayName;
     std::string sourcePath;
+    std::string metadataPath;
     uint32_t registryRevision = 0;
     bool referenceable = false;
+    bool missing = false;
+    bool hasMetadata = false;
+    bool provisionalGuid = false;
 
     bool Valid() const { return kind != EditorAssetKind::Unknown && !id.empty(); }
     bool SameAsset(const EditorAssetHandle& other) const {

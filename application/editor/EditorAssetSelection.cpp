@@ -15,9 +15,15 @@ void EditorAssetSelection::Clear() {
 void EditorAssetSelection::SetPrimary(EditorAssetHandle handle) {
     if (primary_.SameAsset(handle) &&
         primary_.registryRevision == handle.registryRevision &&
+        primary_.guid == handle.guid &&
+        primary_.logicalPath == handle.logicalPath &&
         primary_.displayName == handle.displayName &&
         primary_.sourcePath == handle.sourcePath &&
-        primary_.referenceable == handle.referenceable) {
+        primary_.metadataPath == handle.metadataPath &&
+        primary_.referenceable == handle.referenceable &&
+        primary_.missing == handle.missing &&
+        primary_.hasMetadata == handle.hasMetadata &&
+        primary_.provisionalGuid == handle.provisionalGuid) {
         return;
     }
 
@@ -39,10 +45,16 @@ EditorAssetHandle MakeEditorAssetHandle(
     EditorAssetHandle handle{};
     handle.kind = record.kind;
     handle.id = record.id;
+    handle.guid = record.guid;
+    handle.logicalPath = record.logicalPath;
     handle.displayName = record.displayName;
     handle.sourcePath = record.sourcePath;
+    handle.metadataPath = record.metadataPath;
     handle.registryRevision = registryRevision;
     handle.referenceable = record.referenceable;
+    handle.missing = record.missing;
+    handle.hasMetadata = record.hasMetadata;
+    handle.provisionalGuid = record.provisionalGuid;
     return handle;
 }
 

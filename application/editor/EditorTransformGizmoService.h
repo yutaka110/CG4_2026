@@ -8,6 +8,7 @@ namespace editor {
 
 class EditorViewportInteractionService;
 class EditorViewportSelectionBridge;
+class EditorTransactionStack;
 
 enum class EditorTransformGizmoMode {
     Translate,
@@ -26,6 +27,7 @@ struct EditorTransformGizmoInput {
     const EditorSelection* selection = nullptr;
     const EditorViewportInteractionService* viewportInteraction = nullptr;
     const EditorViewportSelectionBridge* selectionBridge = nullptr;
+    const EditorTransactionStack* transactions = nullptr;
     EditorTransformGizmoMode requestedMode = EditorTransformGizmoMode::Translate;
     EditorTransformGizmoAxis activeAxis = EditorTransformGizmoAxis::None;
     bool snapEnabled = false;
@@ -35,9 +37,12 @@ struct EditorTransformGizmoState {
     bool selectionConnected = false;
     bool viewportBoundaryConnected = false;
     bool selectionRequestConnected = false;
+    bool transactionConnected = false;
     bool targetAvailable = false;
     bool canManipulate = false;
     bool snapEnabled = false;
+    uint32_t undoDepth = 0;
+    uint32_t redoDepth = 0;
     EditorTransformGizmoMode mode = EditorTransformGizmoMode::Translate;
     EditorTransformGizmoAxis activeAxis = EditorTransformGizmoAxis::None;
     EditorObjectHandle target{};

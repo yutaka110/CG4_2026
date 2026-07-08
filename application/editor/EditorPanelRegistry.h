@@ -10,6 +10,11 @@
 namespace editor {
 
 enum class EditorPanelHostArea {
+    Viewport,
+    LeftSidebar,
+    RightInspector,
+    BottomDock,
+    ContentBrowser,
     Diagnostics,
 };
 
@@ -28,8 +33,10 @@ public:
     bool Register(EditorPanelDescriptor descriptor);
 
     std::vector<const EditorPanelDescriptor*> Panels(EditorPanelHostArea area) const;
+    std::size_t Count(EditorPanelHostArea area) const;
     std::size_t Count() const { return panels_.size(); }
     uint32_t Revision() const { return revision_; }
+    const std::vector<EditorPanelDescriptor>& AllPanels() const { return panels_; }
 
 private:
     void Touch();

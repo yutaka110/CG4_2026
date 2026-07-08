@@ -210,12 +210,23 @@ bool DrawPropertyEditor(
                             continue;
                         }
                         const bool selected = asset->id == value.stringValue;
+                        if (asset->missing) {
+                            ImGui::BeginDisabled();
+                        }
                         if (ImGui::Selectable(asset->id.c_str(), selected)) {
                             value.stringValue = asset->id;
                             changed = true;
                         }
-                        if (ImGui::IsItemHovered() && !asset->sourcePath.empty()) {
-                            ImGui::SetTooltip("%s", asset->sourcePath.c_str());
+                        if (asset->missing) {
+                            ImGui::EndDisabled();
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "Source: %s\nGUID: %s\nMeta: %s\nState: %s",
+                                asset->sourcePath.empty() ? "-" : asset->sourcePath.c_str(),
+                                asset->guid.empty() ? "-" : asset->guid.c_str(),
+                                asset->metadataPath.empty() ? "-" : asset->metadataPath.c_str(),
+                                asset->missing ? "missing" : "available");
                         }
                         if (selected) {
                             ImGui::SetItemDefaultFocus();

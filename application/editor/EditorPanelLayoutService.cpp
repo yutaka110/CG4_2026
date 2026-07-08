@@ -19,7 +19,10 @@ void EditorPanelLayoutService::Configure(const EditorPanelLayoutConfig& config) 
         contentHeight};
 
     if (!config.developerToolsVisible || !contentRect_.Valid()) {
+        leftSidebarRect_ = EditorPanelRect{};
         inspectorRect_ = EditorPanelRect{};
+        bottomDockRect_ = EditorPanelRect{};
+        contentBrowserRect_ = EditorPanelRect{};
         diagnosticsRect_ = EditorPanelRect{};
         viewportRect_ = contentRect_;
         ++revision_;
@@ -37,6 +40,17 @@ void EditorPanelLayoutService::Configure(const EditorPanelLayoutConfig& config) 
             280.0f,
             contentRect_.width * config.inspectorMaxContentRatio);
 
+    float leftSidebarWidth =
+        Clamp(
+            contentRect_.width * config.leftSidebarWidthRatio,
+            config.leftSidebarMinWidth,
+            config.leftSidebarMaxWidth);
+    leftSidebarWidth =
+        Clamp(
+            leftSidebarWidth,
+            0.0f,
+            contentRect_.width * config.leftSidebarMaxContentRatio);
+
     float diagnosticsHeight =
         Clamp(
             contentRect_.height * config.diagnosticsHeightRatio,
@@ -48,20 +62,44 @@ void EditorPanelLayoutService::Configure(const EditorPanelLayoutConfig& config) 
             160.0f,
             contentRect_.height * config.diagnosticsMaxContentRatio);
 
+    const float centerWidth =
+        Clamp(contentRect_.width - inspectorWidth - leftSidebarWidth, 0.0f, contentRect_.width);
+    float contentBrowserWidth =
+        Clamp(
+            centerWidth * config.contentBrowserWidthRatio,
+            config.contentBrowserMinWidth,
+            config.contentBrowserMaxWidth);
+    contentBrowserWidth = Clamp(contentBrowserWidth, 0.0f, centerWidth * 0.5f);
+
+    leftSidebarRect_ = EditorPanelRect{
+        contentRect_.x,
+        contentRect_.y,
+        leftSidebarWidth,
+        contentRect_.height};
     inspectorRect_ = EditorPanelRect{
         contentRect_.x + contentRect_.width - inspectorWidth,
         contentRect_.y,
         inspectorWidth,
         contentRect_.height};
-    diagnosticsRect_ = EditorPanelRect{
-        contentRect_.x,
+    bottomDockRect_ = EditorPanelRect{
+        contentRect_.x + leftSidebarWidth,
         contentRect_.y + contentRect_.height - diagnosticsHeight,
-        contentRect_.width - inspectorWidth,
+        centerWidth,
         diagnosticsHeight};
+    contentBrowserRect_ = EditorPanelRect{
+        bottomDockRect_.x,
+        bottomDockRect_.y,
+        contentBrowserWidth,
+        bottomDockRect_.height};
+    diagnosticsRect_ = EditorPanelRect{
+        bottomDockRect_.x + contentBrowserWidth,
+        bottomDockRect_.y,
+        bottomDockRect_.width - contentBrowserWidth,
+        bottomDockRect_.height};
     viewportRect_ = EditorPanelRect{
-        contentRect_.x,
+        contentRect_.x + leftSidebarWidth,
         contentRect_.y,
-        contentRect_.width - inspectorWidth,
+        centerWidth,
         contentRect_.height - diagnosticsHeight};
 
     ++revision_;

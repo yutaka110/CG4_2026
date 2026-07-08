@@ -1,5 +1,6 @@
 #include "CourseMeshAssetAdapter.h"
 
+#include <filesystem>
 #include <utility>
 
 namespace editor {
@@ -11,6 +12,9 @@ void RegisterMesh(EditorAssetRegistry& registry, const char* id, const char* sou
     record.id = id;
     record.displayName = id;
     record.sourcePath = sourcePath;
+    record.logicalPath = sourcePath;
+    record.metadataPath = std::string(sourcePath) + ".meta";
+    record.missing = !std::filesystem::exists(record.sourcePath);
     record.referenceable = true;
     registry.Register(std::move(record));
 }

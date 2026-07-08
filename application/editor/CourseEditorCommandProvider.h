@@ -14,6 +14,8 @@ struct CourseEditorCommandProviderInput {
     std::function<void()> closeCourse;
     std::function<void()> reopenCourse;
     std::function<void(float)> teleportCourseToDistance;
+    std::function<bool()> isCoursePreviewFrozen;
+    std::function<void(bool)> setCoursePreviewFrozen;
     float courseDistance = 0.0f;
 };
 

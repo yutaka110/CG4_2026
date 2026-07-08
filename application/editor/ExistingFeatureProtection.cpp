@@ -11,10 +11,13 @@
 #include "EditorDirtyStateService.h"
 #include "EditorDocumentLifecycleService.h"
 #include "EditorLayoutService.h"
+#include "EditorLayoutPersistenceService.h"
 #include "EditorModalConfirmService.h"
 #include "EditorNotificationCenter.h"
 #include "EditorPanelLayoutService.h"
+#include "EditorPanelRegistry.h"
 #include "EditorPlaySessionState.h"
+#include "EditorRailRuntimePause.h"
 #include "EditorRuntimeInspector.h"
 #include "EditorSaveApplyPolicy.h"
 #include "EditorSelection.h"
@@ -202,6 +205,14 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
         detail << input.assetRegistry->Count()
                << " assets, mesh "
                << input.assetRegistry->Count(EditorAssetKind::Mesh)
+               << ", meta "
+               << input.assetRegistry->CountWithMetadata()
+               << ", autoGuid "
+               << input.assetRegistry->CountWithProvisionalGuid()
+               << ", deps "
+               << input.assetRegistry->CountWithDependencies()
+               << ", missing "
+               << input.assetRegistry->CountMissing()
                << ", revision "
                << input.assetRegistry->Revision();
         AddCheck(
@@ -214,6 +225,25 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             input.assetRegistry->Count(EditorAssetKind::Mesh) > 0
                 ? detail.str()
                 : detail.str() + " / mesh asset candidates are empty");
+        const bool identityReady =
+            input.assetRegistry->Count() > 0 &&
+            input.assetRegistry->CountWithProvisionalGuid() <= input.assetRegistry->Count();
+        AddCheck(
+            report,
+            identityReady
+                ? ExistingFeatureStatus::Ok
+                : ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Asset identity metadata",
+            detail.str() + " / GUID identity is available with path fallback.");
+        if (input.assetRegistry->CountMissing() > 0) {
+            AddCheck(
+                report,
+                ExistingFeatureStatus::Attention,
+                "Editor Core",
+                "Missing assets",
+                "One or more indexed assets are marked missing.");
+        }
     } else {
         AddCheck(
             report,
@@ -374,9 +404,43 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             "EditorLayoutService is missing; editor chrome reservation is not centralized.");
     }
 
+    if (input.layoutPersistence != nullptr) {
+        std::ostringstream detail;
+        detail << (input.layoutPersistence->Loaded() ? "loaded" : "not loaded")
+               << ", "
+               << (input.layoutPersistence->Dirty() ? "dirty" : "clean")
+               << ", revision "
+               << input.layoutPersistence->Revision()
+               << ", path "
+               << input.layoutPersistence->Path().generic_string();
+        if (!input.layoutPersistence->StatusMessage().empty()) {
+            detail << ", "
+                   << input.layoutPersistence->StatusMessage();
+        }
+        AddCheck(
+            report,
+            input.layoutPersistence->Loaded()
+                ? (input.layoutPersistence->LastLoadValid()
+                    ? ExistingFeatureStatus::Ok
+                    : ExistingFeatureStatus::Attention)
+                : ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Layout persistence service",
+            detail.str());
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Layout persistence service",
+            "EditorLayoutPersistenceService is missing; editor workspace layout cannot be restored.");
+    }
+
     if (input.panelLayout != nullptr) {
         const EditorPanelRect& content = input.panelLayout->ContentRect();
+        const EditorPanelRect& leftSidebar = input.panelLayout->LeftSidebarRect();
         const EditorPanelRect& inspector = input.panelLayout->InspectorRect();
+        const EditorPanelRect& contentBrowser = input.panelLayout->ContentBrowserRect();
         const EditorPanelRect& diagnostics = input.panelLayout->DiagnosticsRect();
         const EditorPanelRect& viewport = input.panelLayout->ViewportRect();
         std::ostringstream detail;
@@ -388,6 +452,14 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
                << inspector.width
                << "x"
                << inspector.height
+               << ", left "
+               << leftSidebar.width
+               << "x"
+               << leftSidebar.height
+               << ", content browser "
+               << contentBrowser.width
+               << "x"
+               << contentBrowser.height
                << ", diagnostics "
                << diagnostics.width
                << "x"
@@ -413,6 +485,47 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             "Editor Core",
             "Panel layout service",
             "EditorPanelLayoutService is missing; inspector and diagnostics layout is not centralized.");
+    }
+
+    if (input.panelRegistry != nullptr) {
+        const std::size_t leftCount =
+            input.panelRegistry->Count(EditorPanelHostArea::LeftSidebar);
+        const std::size_t inspectorCount =
+            input.panelRegistry->Count(EditorPanelHostArea::RightInspector);
+        const std::size_t contentCount =
+            input.panelRegistry->Count(EditorPanelHostArea::ContentBrowser);
+        const std::size_t bottomCount =
+            input.panelRegistry->Count(EditorPanelHostArea::BottomDock);
+        std::ostringstream detail;
+        detail << "left "
+               << leftCount
+               << ", right "
+               << inspectorCount
+               << ", content "
+               << contentCount
+               << ", bottom "
+               << bottomCount
+               << ", total "
+               << input.panelRegistry->Count()
+               << ", revision "
+               << input.panelRegistry->Revision();
+        AddCheck(
+            report,
+            leftCount > 0 && inspectorCount > 0 && contentCount > 0 && bottomCount > 0
+                ? ExistingFeatureStatus::Ok
+                : ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Panel host multi-area registry",
+            leftCount > 0 && inspectorCount > 0 && contentCount > 0 && bottomCount > 0
+                ? detail.str()
+                : detail.str() + " / one or more editor host areas have no panels");
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Panel host multi-area registry",
+            "EditorPanelRegistry is missing; multi-area editor panel hosting cannot be guarded.");
     }
 
     if (input.notifications != nullptr) {
@@ -656,18 +769,29 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
                << input.transformGizmo->ManipulationLabel()
                << ", snap "
                << (state.snapEnabled ? "on" : "off")
+               << ", tx "
+               << (state.transactionConnected ? "connected" : "missing")
+               << ", undo "
+               << state.undoDepth
+               << ", redo "
+               << state.redoDepth
                << ", revision "
                << state.revision;
+        const bool connected =
+            state.selectionConnected &&
+            state.viewportBoundaryConnected &&
+            state.selectionRequestConnected &&
+            state.transactionConnected;
         AddCheck(
             report,
-            state.selectionConnected && state.viewportBoundaryConnected && state.selectionRequestConnected
+            connected
                 ? ExistingFeatureStatus::Ok
                 : ExistingFeatureStatus::Attention,
             "Editor Core",
             "Transform gizmo service",
-            state.selectionConnected && state.viewportBoundaryConnected && state.selectionRequestConnected
+            connected
                 ? detail.str()
-                : detail.str() + " / selection, request, or viewport boundary is not connected");
+                : detail.str() + " / selection, request, transaction, or viewport boundary is not connected");
     } else {
         AddCheck(
             report,
@@ -858,10 +982,11 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
         input.hasSaveCourseCommand &&
             input.hasApplyCourseCommand &&
             input.hasReloadCourseCommand &&
-            input.hasTeleportCourseCommand,
+            input.hasTeleportCourseCommand &&
+            input.hasFreezeCourseCommand,
         "Course",
         "Authoring commands",
-        "Save, Apply, Reload, and Teleport callbacks are connected.",
+        "Save, Apply, Reload, Teleport, and Freeze callbacks are connected.",
         "One or more Course authoring callbacks are missing.");
 
     if (input.runtimeState != nullptr) {
@@ -875,6 +1000,29 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             "Course",
             "Object edit history",
             detail.str());
+    }
+
+    if (input.railRuntimePause != nullptr) {
+        const EditorRailRuntimePauseState& state = input.railRuntimePause->State();
+        std::ostringstream detail;
+        detail << input.railRuntimePause->StatusLabel()
+               << ", distance " << state.distance
+               << ", speed " << state.speed
+               << ", frozenFrames " << state.frozenFrames
+               << ", revision " << state.revision;
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Ok,
+            "Course",
+            "Preview freeze",
+            detail.str());
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Course",
+            "Preview freeze",
+            "EditorRailRuntimePause is missing; rail preview freeze state is not visible to Editor Core.");
     }
 
     AddCheck(
