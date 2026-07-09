@@ -8,9 +8,13 @@
 
 #include "../../externals/imgui/imgui.h"
 
+#include <Windows.h>
+#include <commdlg.h>
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <cstdint>
+#include <cwchar>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -83,6 +87,64 @@ const char* ThumbnailLabel(const EditorAssetThumbnailEntry& thumbnail) {
     return ToString(thumbnail.status);
 }
 
+std::string PreviewSummary(const EditorAssetThumbnailEntry& thumbnail) {
+    std::string summary = ToString(thumbnail.previewKind);
+    if (!thumbnail.previewFormat.empty()) {
+        summary += " ";
+        summary += thumbnail.previewFormat;
+    }
+    if (thumbnail.width > 0 && thumbnail.height > 0) {
+        summary += " ";
+        summary += std::to_string(thumbnail.width);
+        summary += "x";
+        summary += std::to_string(thumbnail.height);
+    } else if (thumbnail.vertexCount > 0 || thumbnail.faceCount > 0) {
+        summary += " ";
+        summary += std::to_string(thumbnail.vertexCount);
+        summary += "v/";
+        summary += std::to_string(thumbnail.faceCount);
+        summary += "f";
+    } else if (thumbnail.lineCount > 0) {
+        summary += " ";
+        summary += std::to_string(thumbnail.lineCount);
+        summary += " lines";
+    }
+    if (thumbnail.byteSize > 0) {
+        summary += " ";
+        summary += std::to_string(static_cast<unsigned long long>(thumbnail.byteSize));
+        summary += " B";
+    }
+    if (thumbnail.materialTextureCount > 0) {
+        summary += " tex:";
+        summary += std::to_string(thumbnail.materialTextureCount);
+    }
+    return summary;
+}
+
+std::string GpuThumbnailSummary(const EditorAssetThumbnailEntry& thumbnail) {
+    if (thumbnail.gpuStatus == EditorAssetGpuThumbnailStatus::NotRequested ||
+        thumbnail.gpuStatus == EditorAssetGpuThumbnailStatus::Cancelled) {
+        return ToString(thumbnail.gpuStatus);
+    }
+    std::string summary = ToString(thumbnail.gpuStatus);
+    if (thumbnail.gpuWidth > 0 && thumbnail.gpuHeight > 0) {
+        summary += " ";
+        summary += std::to_string(thumbnail.gpuWidth);
+        summary += "x";
+        summary += std::to_string(thumbnail.gpuHeight);
+    }
+    if (thumbnail.gpuHandleToken != 0) {
+        summary += " GPU#";
+        summary += std::to_string(static_cast<unsigned long long>(thumbnail.gpuHandleToken));
+    }
+    if (thumbnail.gpuDescriptorIndex != UINT32_MAX) {
+        summary += " SRV[";
+        summary += std::to_string(thumbnail.gpuDescriptorIndex);
+        summary += "]";
+    }
+    return summary;
+}
+
 ImVec4 ThumbnailStatusColor(EditorAssetThumbnailStatus status) {
     switch (status) {
     case EditorAssetThumbnailStatus::Ready:
@@ -94,6 +156,23 @@ ImVec4 ThumbnailStatusColor(EditorAssetThumbnailStatus status) {
     case EditorAssetThumbnailStatus::Missing:
     case EditorAssetThumbnailStatus::Failed:
         return ImVec4(1.0f, 0.25f, 0.22f, 1.0f);
+    }
+    return ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
+}
+
+ImVec4 GpuThumbnailStatusColor(EditorAssetGpuThumbnailStatus status) {
+    switch (status) {
+    case EditorAssetGpuThumbnailStatus::Ready:
+        return ImVec4(0.42f, 0.86f, 0.58f, 1.0f);
+    case EditorAssetGpuThumbnailStatus::Queued:
+    case EditorAssetGpuThumbnailStatus::Rendering:
+        return ImVec4(1.0f, 0.72f, 0.22f, 1.0f);
+    case EditorAssetGpuThumbnailStatus::Failed:
+    case EditorAssetGpuThumbnailStatus::Stale:
+        return ImVec4(1.0f, 0.25f, 0.22f, 1.0f);
+    case EditorAssetGpuThumbnailStatus::Cancelled:
+    case EditorAssetGpuThumbnailStatus::NotRequested:
+        return ImVec4(0.58f, 0.68f, 0.84f, 1.0f);
     }
     return ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
 }
@@ -110,6 +189,7 @@ EditorAssetThumbnailEntry ResolveThumbnail(
     entry.assetId = record.id;
     entry.label = ToString(record.kind);
     entry.detail = "Thumbnail service is unavailable.";
+    entry.previewKind = EditorAssetPreviewKind::Icon;
     entry.status = EditorAssetThumbnailStatus::Pending;
     entry.fallbackIcon = true;
     return entry;
@@ -326,11 +406,98 @@ const char* CollisionPolicyLabel(int index) {
     return ToString(CollisionPolicyFromIndex(index));
 }
 
+std::vector<std::filesystem::path> ParseOpenFileNameBuffer(const std::vector<wchar_t>& buffer) {
+    std::vector<std::filesystem::path> paths;
+    if (buffer.empty() || buffer.front() == L'\0') {
+        return paths;
+    }
+
+    const wchar_t* cursor = buffer.data();
+    std::filesystem::path first(cursor);
+    cursor += std::wcslen(cursor) + 1;
+    if (*cursor == L'\0') {
+        paths.push_back(std::move(first));
+        return paths;
+    }
+
+    while (*cursor != L'\0') {
+        paths.push_back(first / cursor);
+        cursor += std::wcslen(cursor) + 1;
+    }
+    return paths;
+}
+
+std::vector<std::filesystem::path> OpenProductionAssetImportDialog(HWND owner) {
+    std::vector<wchar_t> buffer(32768, L'\0');
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = buffer.data();
+    ofn.nMaxFile = static_cast<DWORD>(buffer.size());
+    ofn.lpstrFilter =
+        L"Engine Assets\0*.mesh;*.obj;*.gltf;*.glb;*.fbx;*.effect;*.course;*.json;*.png;*.bmp;*.dds;*.jpg;*.jpeg;*.tga;*.wav;*.mp3;*.ogg;*.flac\0"
+        L"All Files\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags =
+        OFN_EXPLORER |
+        OFN_FILEMUSTEXIST |
+        OFN_PATHMUSTEXIST |
+        OFN_ALLOWMULTISELECT |
+        OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameW(&ofn)) {
+        return {};
+    }
+    return ParseOpenFileNameBuffer(buffer);
+}
+
+EditorAssetExternalImportPolicy MakeExternalImportPolicy(
+    const std::array<char, 128>& destinationFolderBuffer,
+    int collisionIndex) {
+    EditorAssetExternalImportPolicy policy{};
+    policy.destinationFolder =
+        destinationFolderBuffer[0] != '\0'
+            ? std::filesystem::path(destinationFolderBuffer.data())
+            : std::filesystem::path("Imported");
+    policy.collisionPolicy = CollisionPolicyFromIndex(collisionIndex);
+    return policy;
+}
+
+void ApplyExternalImportResult(
+    EditorAssetRegistry& registry,
+    EditorAssetSelection* assetSelection,
+    EditorNotificationCenter* notifications,
+    const EditorAssetImportResult& result) {
+    PushAssetImportNotification(notifications, result);
+    if (result.succeeded && result.importedCount > 0 && assetSelection != nullptr) {
+        assetSelection->SetPrimary(MakeEditorAssetHandle(result.record, registry.Revision()));
+    }
+}
+
+void ImportExternalPaths(
+    EditorAssetRegistry& registry,
+    EditorAssetSelection* assetSelection,
+    EditorAssetThumbnailService* thumbnails,
+    EditorNotificationCenter* notifications,
+    const std::vector<std::filesystem::path>& paths,
+    const EditorAssetExternalImportPolicy& policy) {
+    if (paths.empty()) {
+        return;
+    }
+    EditorAssetImportService importService(registry, thumbnails);
+    const EditorAssetImportResult result =
+        paths.size() == 1
+            ? importService.ImportExternal(paths.front(), policy)
+            : importService.ImportExternalBatch(paths, policy);
+    ApplyExternalImportResult(registry, assetSelection, notifications, result);
+}
+
 void DrawProductionImportControls(
     EditorAssetRegistry& registry,
     EditorAssetSelection* assetSelection,
     EditorAssetThumbnailService* thumbnails,
     EditorNotificationCenter* notifications,
+    HWND nativeDialogOwner,
+    std::vector<std::filesystem::path>* pendingExternalImportPaths,
     const EditorAssetRecord* selectedRecord) {
     static std::array<char, 260> externalSourceBuffer{};
     static std::array<char, 128> destinationFolderBuffer{};
@@ -343,6 +510,18 @@ void DrawProductionImportControls(
 
     ImGui::Separator();
     ImGui::TextUnformatted("Production Import");
+    if (pendingExternalImportPaths != nullptr && !pendingExternalImportPaths->empty()) {
+        const std::vector<std::filesystem::path> droppedPaths = std::move(*pendingExternalImportPaths);
+        pendingExternalImportPaths->clear();
+        ImportExternalPaths(
+            registry,
+            assetSelection,
+            thumbnails,
+            notifications,
+            droppedPaths,
+            MakeExternalImportPolicy(destinationFolderBuffer, collisionIndex));
+    }
+
     ImGui::SetNextItemWidth(340.0f);
     ImGui::InputText("External Source", externalSourceBuffer.data(), externalSourceBuffer.size());
     ImGui::SameLine();
@@ -362,20 +541,29 @@ void DrawProductionImportControls(
     ImGui::SetNextItemWidth(220.0f);
     ImGui::InputText("Destination", destinationFolderBuffer.data(), destinationFolderBuffer.size());
     ImGui::SameLine();
+    if (ImGui::SmallButton("Import...")) {
+        const std::vector<std::filesystem::path> selectedPaths =
+            OpenProductionAssetImportDialog(nativeDialogOwner);
+        ImportExternalPaths(
+            registry,
+            assetSelection,
+            thumbnails,
+            notifications,
+            selectedPaths,
+            MakeExternalImportPolicy(destinationFolderBuffer, collisionIndex));
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Opens a native file picker and imports selected files through the formal asset pipeline.");
+    }
+    ImGui::SameLine();
     if (ImGui::SmallButton("Import")) {
-        EditorAssetExternalImportPolicy policy{};
-        policy.destinationFolder =
-            destinationFolderBuffer[0] != '\0'
-                ? std::filesystem::path(destinationFolderBuffer.data())
-                : std::filesystem::path("Imported");
-        policy.collisionPolicy = CollisionPolicyFromIndex(collisionIndex);
-        EditorAssetImportService importService(registry, thumbnails);
-        const EditorAssetImportResult result =
-            importService.ImportExternal(externalSourceBuffer.data(), policy);
-        PushAssetImportNotification(notifications, result);
-        if (result.succeeded && assetSelection != nullptr) {
-            assetSelection->SetPrimary(MakeEditorAssetHandle(result.record, registry.Revision()));
-        }
+        ImportExternalPaths(
+            registry,
+            assetSelection,
+            thumbnails,
+            notifications,
+            std::vector<std::filesystem::path>{std::filesystem::path(externalSourceBuffer.data())},
+            MakeExternalImportPolicy(destinationFolderBuffer, collisionIndex));
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Copies an external file into Resources/<Destination>/ and imports it through the formal asset pipeline.");
@@ -519,15 +707,32 @@ void DrawThumbnailPreviewLine(
         "%s",
         ThumbnailLabel(thumbnail));
     ImGui::SameLine();
+    const std::string summary = PreviewSummary(thumbnail);
+    ImGui::TextDisabled("%s", summary.c_str());
+    ImGui::SameLine();
+    ImGui::TextColored(
+        GpuThumbnailStatusColor(thumbnail.gpuStatus),
+        "GPU %s",
+        ToString(thumbnail.gpuStatus));
+    ImGui::SameLine();
     ImGui::Text(
-        "Key %s  Gen %u  Stamp %llu",
+        "Job %s  Key %s  Gen %u  Stamp %llu",
+        ToString(thumbnail.jobStatus),
         thumbnail.key.empty() ? "-" : thumbnail.key.c_str(),
         thumbnail.generation,
         static_cast<unsigned long long>(thumbnail.sourceTimestamp));
     if (ImGui::IsItemHovered()) {
+        const std::string gpuSummary = GpuThumbnailSummary(thumbnail);
         ImGui::SetTooltip(
-            "%s\nSource: %s\nRecord key: %s",
+            "%s\n%s\nJob: %s attempts=%u\nGPU: %s revision=%u swatch=0x%08x texture=%llu\nSource: %s\nRecord key: %s",
             thumbnail.detail.c_str(),
+            summary.c_str(),
+            ToString(thumbnail.jobStatus),
+            thumbnail.jobAttempts,
+            gpuSummary.c_str(),
+            thumbnail.gpuRenderRevision,
+            thumbnail.gpuSwatchRgba,
+            static_cast<unsigned long long>(thumbnail.gpuDisplayTextureId),
             record.sourcePath.empty() ? "-" : record.sourcePath.c_str(),
             record.thumbnailKey.empty() ? "-" : record.thumbnailKey.c_str());
     }
@@ -541,18 +746,52 @@ void DrawThumbnailTile(
     EditorAssetSelection* assetSelection) {
     ImGui::PushID((std::string(ToString(record.kind)) + ":" + record.id).c_str());
     const ImVec4 color = ThumbnailStatusColor(thumbnail.status);
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(color.x * 0.32f, color.y * 0.32f, color.z * 0.32f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(color.x * 0.46f, color.y * 0.46f, color.z * 0.46f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(color.x * 0.58f, color.y * 0.58f, color.z * 0.58f, 1.0f));
-    if (ImGui::Button(thumbnail.label.empty() ? ToString(record.kind) : thumbnail.label.c_str(), ImVec2(92.0f, 58.0f))) {
+    const bool hasGpuTexture =
+        thumbnail.gpuStatus == EditorAssetGpuThumbnailStatus::Ready &&
+        thumbnail.gpuShaderResourceView &&
+        thumbnail.gpuDisplayTextureId != 0;
+    bool clicked = false;
+    if (hasGpuTexture) {
+        const ImTextureID textureId =
+            reinterpret_cast<ImTextureID>(static_cast<uintptr_t>(thumbnail.gpuDisplayTextureId));
+        clicked = ImGui::ImageButton(
+            "thumbnailGpuSrv",
+            textureId,
+            ImVec2(92.0f, 58.0f),
+            ImVec2(0.0f, 0.0f),
+            ImVec2(1.0f, 1.0f),
+            ImVec4(color.x * 0.18f, color.y * 0.18f, color.z * 0.18f, 1.0f),
+            ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+        const ImVec2 min = ImGui::GetItemRectMin();
+        const ImVec2 max = ImGui::GetItemRectMax();
+        ImGui::GetWindowDrawList()->AddRect(
+            min,
+            max,
+            ImGui::ColorConvertFloat4ToU32(selected ? ImVec4(0.42f, 0.86f, 0.58f, 1.0f) : color),
+            3.0f,
+            0,
+            selected ? 2.0f : 1.0f);
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(color.x * 0.32f, color.y * 0.32f, color.z * 0.32f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(color.x * 0.46f, color.y * 0.46f, color.z * 0.46f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(color.x * 0.58f, color.y * 0.58f, color.z * 0.58f, 1.0f));
+        clicked = ImGui::Button(
+            thumbnail.label.empty() ? ToString(record.kind) : thumbnail.label.c_str(),
+            ImVec2(92.0f, 58.0f));
+        ImGui::PopStyleColor(3);
+    }
+    if (clicked) {
         SelectAssetRecord(record, registry, assetSelection);
     }
-    ImGui::PopStyleColor(3);
     if (ImGui::IsItemHovered()) {
+        const std::string summary = PreviewSummary(thumbnail);
+        const std::string gpuSummary = GpuThumbnailSummary(thumbnail);
         ImGui::SetTooltip(
-            "%s\n%s\n%s",
+            "%s\n%s\n%s\nGPU: %s\n%s",
             AssetLabel(record).c_str(),
             ThumbnailLabel(thumbnail),
+            summary.c_str(),
+            gpuSummary.c_str(),
             thumbnail.detail.c_str());
     }
     if (selected) {
@@ -561,9 +800,10 @@ void DrawThumbnailTile(
         ImGui::TextUnformatted(record.id.c_str());
     }
     ImGui::TextDisabled(
-        "%s  %s",
+        "%s  %s  GPU %s",
         ToString(record.kind),
-        ThumbnailLabel(thumbnail));
+        ThumbnailLabel(thumbnail),
+        ToString(thumbnail.gpuStatus));
     ImGui::PopID();
 }
 
@@ -634,13 +874,60 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
         registry.Revision());
     if (thumbnails != nullptr) {
         ImGui::Text(
-            "Preview Cache  Items %u  Ready %u  Icon %u  Failed %u  Missing %u  Revision %u",
+            "Preview Cache  Items %u  Ready %u  Pending %u  Failed %u  Missing %u  Revision %u",
             static_cast<unsigned int>(thumbnails->Count()),
             static_cast<unsigned int>(thumbnails->Count(EditorAssetThumbnailStatus::Ready)),
-            static_cast<unsigned int>(thumbnails->Count(EditorAssetThumbnailStatus::Unsupported)),
+            static_cast<unsigned int>(thumbnails->Count(EditorAssetThumbnailStatus::Pending)),
             static_cast<unsigned int>(thumbnails->Count(EditorAssetThumbnailStatus::Failed)),
             static_cast<unsigned int>(thumbnails->Count(EditorAssetThumbnailStatus::Missing)),
             thumbnails->Revision());
+        ImGui::TextDisabled(
+            "Preview Jobs  Queued %u  Running %u  Ready %u  Failed %u  Revision %u",
+            static_cast<unsigned int>(thumbnails->PreviewJobs().Count(EditorAssetPreviewJobStatus::Queued)),
+            static_cast<unsigned int>(thumbnails->PreviewJobs().Count(EditorAssetPreviewJobStatus::Running)),
+            static_cast<unsigned int>(thumbnails->PreviewJobs().Count(EditorAssetPreviewJobStatus::Ready)),
+            static_cast<unsigned int>(thumbnails->PreviewJobs().Count(EditorAssetPreviewJobStatus::Failed)),
+            thumbnails->PreviewJobs().Revision());
+        ImGui::TextDisabled(
+            "GPU Thumbnails  Queued %u  Rendering %u  Ready %u  Failed %u  Revision %u",
+            static_cast<unsigned int>(thumbnails->GpuThumbnails().Count(EditorAssetGpuThumbnailStatus::Queued)),
+            static_cast<unsigned int>(thumbnails->GpuThumbnails().Count(EditorAssetGpuThumbnailStatus::Rendering)),
+            static_cast<unsigned int>(thumbnails->GpuThumbnails().Count(EditorAssetGpuThumbnailStatus::Ready)),
+            static_cast<unsigned int>(thumbnails->GpuThumbnails().Count(EditorAssetGpuThumbnailStatus::Failed)),
+            thumbnails->GpuThumbnails().Revision());
+        const EditorAssetGpuThumbnailBackendTelemetry gpuTelemetry =
+            thumbnails->GpuThumbnails().BackendTelemetry();
+        ImGui::TextDisabled(
+            "Thumbnail Lifetime  Resident %u/%u  Pending Uploads %u (%.2f MB)  Uploaded %.2f MB  Retired %.2f MB  Cache H/M %llu/%llu  Store %llu  Evict %llu  Fallback %llu",
+            static_cast<unsigned int>(gpuTelemetry.residentCount),
+            static_cast<unsigned int>(gpuTelemetry.descriptorCapacity),
+            static_cast<unsigned int>(gpuTelemetry.pendingUploadCount),
+            static_cast<double>(gpuTelemetry.pendingUploadBytes) / (1024.0 * 1024.0),
+            static_cast<double>(gpuTelemetry.uploadBytes) / (1024.0 * 1024.0),
+            static_cast<double>(gpuTelemetry.retiredUploadBytes) / (1024.0 * 1024.0),
+            static_cast<unsigned long long>(gpuTelemetry.cacheHits),
+            static_cast<unsigned long long>(gpuTelemetry.cacheMisses),
+            static_cast<unsigned long long>(gpuTelemetry.cacheStores),
+            static_cast<unsigned long long>(gpuTelemetry.cacheEvictions),
+            static_cast<unsigned long long>(gpuTelemetry.fallbackUploads));
+        ImGui::TextDisabled(
+            "Preview Scene  Direct %llu  Fallback %llu  Draw %llu  Loader %llu  Procedural %llu  Proxy %llu  Material %llu  Tex %llu/%llu  SRV %llu/%llu D%u  Table %llu  PBR %llu  RT Reuse %llu  RT Resize %llu",
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneRendered),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneFallback),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneRendererDraws),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneProductionMeshDraws),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneProceduralFallback),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneProxyGeometry),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneMaterialBound),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneMaterialTextureBound),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneMaterialTextureFallback),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneMaterialTextureSrvBound),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneMaterialTextureSrvFallback),
+            static_cast<unsigned int>(gpuTelemetry.previewSceneMaterialTextureSrvDescriptors),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneMaterialTextureTables),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneMaterialPbrPreviews),
+            static_cast<unsigned long long>(gpuTelemetry.previewRenderTargetReused),
+            static_cast<unsigned long long>(gpuTelemetry.previewRenderTargetResized));
     } else {
         ImGui::TextUnformatted("Preview Cache  unavailable");
     }
@@ -711,6 +998,26 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
             DrawThumbnailPreviewLine(
                 *selectedRecord,
                 ResolveThumbnail(*selectedRecord, thumbnails));
+            if (context.thumbnails != nullptr) {
+                const EditorAssetThumbnailEntry selectedThumbnail =
+                    context.thumbnails->Resolve(*selectedRecord);
+                if (selectedThumbnail.jobStatus == EditorAssetPreviewJobStatus::Failed) {
+                    if (ImGui::SmallButton("Retry Preview")) {
+                        context.thumbnails->RetryPreview(selectedThumbnail.key);
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Queues the selected asset preview job again.");
+                    }
+                }
+                if (selectedThumbnail.gpuStatus == EditorAssetGpuThumbnailStatus::Failed) {
+                    if (ImGui::SmallButton("Retry GPU Thumbnail")) {
+                        context.thumbnails->RetryGpuThumbnail(selectedThumbnail.key);
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Queues the selected GPU thumbnail render again.");
+                    }
+                }
+            }
             DrawReferenceInspector(
                 *selectedRecord,
                 registry,
@@ -734,6 +1041,8 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
         context.assetSelection,
         context.thumbnails,
         context.notifications,
+        context.nativeDialogOwner,
+        context.pendingExternalImportPaths,
         activeSelectedRecord);
 
     ImGui::SetNextItemWidth(180.0f);
@@ -823,9 +1132,11 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
             "%s",
             ThumbnailLabel(thumbnail));
         if (ImGui::IsItemHovered()) {
+            const std::string summary = PreviewSummary(thumbnail);
             ImGui::SetTooltip(
-                "%s\nKey: %s\nGeneration: %u",
+                "%s\n%s\nKey: %s\nGeneration: %u",
                 thumbnail.detail.c_str(),
+                summary.c_str(),
                 thumbnail.key.empty() ? "-" : thumbnail.key.c_str(),
                 thumbnail.generation);
         }

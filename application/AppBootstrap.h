@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.h>
+#include <utility>
 #include "platform/Window.h"
 
 class AppBootstrap {
@@ -12,6 +13,9 @@ public:
     HWND Handle() const { return window_.Handle(); }
     uint32_t Width() const { return width_; }
     uint32_t Height() const { return height_; }
+    void SetDropCallback(eng::platform::Window::DropFilesCallback callback) {
+        window_.SetDropCallback(std::move(callback));
+    }
 
 private:
     HINSTANCE hInstance_ = nullptr;

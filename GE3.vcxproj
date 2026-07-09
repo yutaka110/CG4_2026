@@ -176,12 +176,23 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\editor\EffectAssetDiagnosticsAdapter.cpp" />
     <ClCompile Include="application\editor\EditorAssetBrowserPanel.cpp" />
     <ClCompile Include="application\editor\EditorAssetCommandProvider.cpp" />
+    <ClCompile Include="application\editor\EditorAssetD3D12ThumbnailGpuBackend.cpp" />
+    <ClCompile Include="application\editor\EditorAssetFallbackIconAtlas.cpp" />
+    <ClCompile Include="application\editor\EditorAssetGpuThumbnailRenderer.cpp" />
     <ClCompile Include="application\editor\EditorAssetImportService.cpp" />
+    <ClCompile Include="application\editor\EditorAssetMeshThumbnailPreviewRenderer.cpp" />
     <ClCompile Include="application\editor\EditorAssetMutationExecutor.cpp" />
     <ClCompile Include="application\editor\EditorAssetMutationSafety.cpp" />
+    <ClCompile Include="application\editor\EditorAssetPreviewJobQueue.cpp" />
+    <ClCompile Include="application\editor\EditorAssetPreviewProvider.cpp" />
+    <ClCompile Include="application\editor\EditorAssetPreviewRenderTarget.cpp" />
+    <ClCompile Include="application\editor\EditorAssetPreviewSceneRenderer.cpp" />
     <ClCompile Include="application\editor\EditorAssetReferenceDiagnosticsAdapter.cpp" />
+    <ClCompile Include="application\editor\EditorAssetThumbnailCache.cpp" />
     <ClCompile Include="application\editor\EditorAssetThumbnailDiagnosticsAdapter.cpp" />
+    <ClCompile Include="application\editor\EditorAssetThumbnailTextureLoader.cpp" />
     <ClCompile Include="application\editor\EditorAssetThumbnailService.cpp" />
+    <ClCompile Include="application\editor\EditorThumbnailUploadRetirementQueue.cpp" />
     <ClCompile Include="application\editor\EditorBuiltinCommandProvider.cpp" />
     <ClCompile Include="application\editor\EditorCommandContext.cpp" />
     <ClCompile Include="application\editor\EditorCommandPanel.cpp" />
@@ -757,12 +768,23 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\editor\EffectAssetDiagnosticsAdapter.h" />
     <ClInclude Include="application\editor\EditorAssetBrowserPanel.h" />
     <ClInclude Include="application\editor\EditorAssetCommandProvider.h" />
+    <ClInclude Include="application\editor\EditorAssetD3D12ThumbnailGpuBackend.h" />
+    <ClInclude Include="application\editor\EditorAssetFallbackIconAtlas.h" />
+    <ClInclude Include="application\editor\EditorAssetGpuThumbnailRenderer.h" />
     <ClInclude Include="application\editor\EditorAssetImportService.h" />
+    <ClInclude Include="application\editor\EditorAssetMeshThumbnailPreviewRenderer.h" />
     <ClInclude Include="application\editor\EditorAssetMutationExecutor.h" />
     <ClInclude Include="application\editor\EditorAssetMutationSafety.h" />
+    <ClInclude Include="application\editor\EditorAssetPreviewJobQueue.h" />
+    <ClInclude Include="application\editor\EditorAssetPreviewProvider.h" />
+    <ClInclude Include="application\editor\EditorAssetPreviewRenderTarget.h" />
+    <ClInclude Include="application\editor\EditorAssetPreviewSceneRenderer.h" />
     <ClInclude Include="application\editor\EditorAssetReferenceDiagnosticsAdapter.h" />
+    <ClInclude Include="application\editor\EditorAssetThumbnailCache.h" />
     <ClInclude Include="application\editor\EditorAssetThumbnailDiagnosticsAdapter.h" />
+    <ClInclude Include="application\editor\EditorAssetThumbnailTextureLoader.h" />
     <ClInclude Include="application\editor\EditorAssetThumbnailService.h" />
+    <ClInclude Include="application\editor\EditorThumbnailUploadRetirementQueue.h" />
     <ClInclude Include="application\editor\EditorAuthoringMutationGuard.h" />
     <ClInclude Include="application\editor\EditorBuiltinCommandProvider.h" />
     <ClInclude Include="application\editor\EditorCommandContext.h" />
@@ -984,6 +1006,8 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\Particle.hlsli" />
+    <None Include="Resources\EditorAssetThumbnailPreview.PS.hlsl" />
+    <None Include="Resources\EditorAssetThumbnailPreview.VS.hlsl" />
     <None Include="Resources\Spear.PS.hlsl" />
     <None Include="Resources\Spear.VS.hlsl" />
     <None Include="Resources\Skybox.hlsli" />

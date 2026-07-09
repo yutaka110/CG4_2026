@@ -161,6 +161,8 @@ private:
     void BeginRailGpuTiming(ID3D12GraphicsCommandList* commandList, uint32_t backBufferIndex);
     void EndRailGpuTiming(ID3D12GraphicsCommandList* commandList, uint32_t backBufferIndex);
     void CaptureRailGpuTimingCpuMetadata(uint32_t backBufferIndex);
+    void ConfigureEditorPresentPolicy();
+    void LogEditorPresentPolicy() const;
     bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
@@ -239,6 +241,10 @@ private:
     uint32_t vfxTelemetryFrameIndex_ = 0;
     std::vector<uint64_t> frameFenceValues_;
     uint64_t nextFrameFenceValue_ = 1;
+    uint32_t presentSyncInterval_ = 1;
+    uint32_t presentMaxFrameLatency_ = 0;
+    bool editorLowLatencyPresent_ = false;
+    bool presentTearingAllowed_ = false;
     struct RailGpuTimingSlot {
         bool pending = false;
         uint32_t frame = 0;

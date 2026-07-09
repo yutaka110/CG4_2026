@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -29,6 +30,7 @@ public:
 
     std::string ActivePanel(EditorPanelHostArea area) const;
     void SetActivePanel(EditorPanelHostArea area, std::string_view panelId);
+    void SetActivePanelFromUser(EditorPanelHostArea area, std::string_view panelId);
 
     void SaveIfDirty();
     bool Load();
@@ -47,6 +49,8 @@ private:
     static const char* AreaKey(EditorPanelHostArea area);
     static bool AreaFromKey(std::string_view key, EditorPanelHostArea& outArea);
 
+    void MarkDirty();
+    void SetActivePanelInternal(EditorPanelHostArea area, std::string_view panelId, bool markDirty);
     void Touch();
     void ResetToDefaults();
 
@@ -55,6 +59,7 @@ private:
     bool dirty_ = false;
     bool lastLoadValid_ = true;
     uint32_t revision_ = 0;
+    std::chrono::steady_clock::time_point dirtyTouchedAt_{};
     std::string statusMessage_;
 
     float inspectorWidthRatio_ = 0.28f;

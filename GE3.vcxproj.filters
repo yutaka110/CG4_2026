@@ -279,13 +279,46 @@
     <ClCompile Include="application\editor\EditorAssetMutationSafety.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
+    <ClCompile Include="application\editor\EditorAssetPreviewJobQueue.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorAssetPreviewProvider.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorAssetD3D12ThumbnailGpuBackend.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorAssetFallbackIconAtlas.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorAssetGpuThumbnailRenderer.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorAssetMeshThumbnailPreviewRenderer.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorAssetPreviewSceneRenderer.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorAssetPreviewRenderTarget.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
     <ClCompile Include="application\editor\EditorAssetReferenceDiagnosticsAdapter.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorAssetThumbnailCache.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
     <ClCompile Include="application\editor\EditorAssetThumbnailDiagnosticsAdapter.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
+    <ClCompile Include="application\editor\EditorAssetThumbnailTextureLoader.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
     <ClCompile Include="application\editor\EditorAssetThumbnailService.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\EditorThumbnailUploadRetirementQueue.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
     <ClCompile Include="application\editor\EditorBuiltinCommandProvider.cpp">
@@ -1221,13 +1254,46 @@
     <ClInclude Include="application\editor\EditorAssetMutationSafety.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
+    <ClInclude Include="application\editor\EditorAssetPreviewJobQueue.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorAssetPreviewProvider.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorAssetD3D12ThumbnailGpuBackend.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorAssetFallbackIconAtlas.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorAssetGpuThumbnailRenderer.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorAssetMeshThumbnailPreviewRenderer.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorAssetPreviewSceneRenderer.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorAssetPreviewRenderTarget.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
     <ClInclude Include="application\editor\EditorAssetReferenceDiagnosticsAdapter.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorAssetThumbnailCache.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\EditorAssetThumbnailDiagnosticsAdapter.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
+    <ClInclude Include="application\editor\EditorAssetThumbnailTextureLoader.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
     <ClInclude Include="application\editor\EditorAssetThumbnailService.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorThumbnailUploadRetirementQueue.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\EditorAuthoringMutationGuard.h">
@@ -1430,6 +1496,8 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\Particle.hlsli" />
+    <None Include="Resources\EditorAssetThumbnailPreview.PS.hlsl" />
+    <None Include="Resources\EditorAssetThumbnailPreview.VS.hlsl" />
     <None Include="Resources\Spear.PS.hlsl" />
     <None Include="Resources\Spear.VS.hlsl" />
     <None Include="Resources\Skybox.hlsli" />

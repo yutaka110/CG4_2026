@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <filesystem>
 #include <string>
 #include <vector>
 #include <Windows.h>
@@ -9,6 +10,7 @@ struct ImDrawList;
 
 #include "graphics/RenderGraph.h"
 #include "editor/EditorAssetSelection.h"
+#include "editor/EditorAssetD3D12ThumbnailGpuBackend.h"
 #include "editor/EditorAssetThumbnailService.h"
 #include "editor/EditorCommandContext.h"
 #include "editor/EditorCommandInputRouter.h"
@@ -79,6 +81,9 @@ struct AppImGuiFrameContext {
     AppGpuParticleSystem* gpuParticleSystem = nullptr;
     FrameLoopState* frameState = nullptr;
     ID3D12DescriptorHeap* srvDescriptorHeap = nullptr;
+    ID3D12GraphicsCommandList* editorUploadCommandList = nullptr;
+    uint64_t editorCompletedFenceValue = 0;
+    uint64_t editorScheduledFenceValue = 0;
     D3D12_GPU_DESCRIPTOR_HANDLE vfxTextureHandle{};
     D3D12_GPU_DESCRIPTOR_HANDLE depthTextureHandle{};
     CourseAsset* course = nullptr;
@@ -108,6 +113,7 @@ public:
 
     void BeginFrame();
     void BuildUi(const AppImGuiFrameContext& context);
+    void QueueExternalAssetDrop(std::filesystem::path path);
     void RefreshEditorViewportRenderTargetLayout();
     void EndFrame();
 
@@ -120,6 +126,7 @@ public:
 
 private:
     bool initialized_ = false;
+    HWND hwnd_ = nullptr;
     bool viewportFocusMode_ = false;
     bool showcasePresentationInitialized_ = false;
     bool showDeveloperTools_ = false;
@@ -145,6 +152,7 @@ private:
     editor::EditorPropertyRegistry editorPropertyRegistry_{};
     editor::EditorAssetRegistry editorAssetRegistry_{};
     editor::EditorAssetSelection editorAssetSelection_{};
+    editor::EditorAssetD3D12ThumbnailGpuBackend editorAssetThumbnailGpuBackend_{};
     editor::EditorAssetThumbnailService editorAssetThumbnails_{};
     editor::EditorCommandInputRouter editorCommandInputRouter_{};
     editor::EditorCommandPalette editorCommandPalette_{};
@@ -170,6 +178,7 @@ private:
     editor::EditorRuntimeInspector editorRuntimeInspector_{};
     editor::EditorSelection editorSelection_{};
     editor::EditorTransactionStack editorTransactions_{};
+    std::vector<std::filesystem::path> pendingExternalAssetImportPaths_{};
     bool editorCourseDocumentOpen_ = true;
     std::string editorCourseDocumentPath_;
     bool editorCourseObjectDirtyRevisionInitialized_ = false;

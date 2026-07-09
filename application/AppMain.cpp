@@ -20,6 +20,7 @@
 #include <dxcapi.h>
 #include <dxgi1_6.h>
 #include <dxgidebug.h>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <locale>
@@ -782,6 +783,10 @@ imguiLayer.Initialize(
 	static_cast<int>(swapChain.BufferCount()),
 	kRtvFormat,
 	srvDescriptorHeap.Get());
+bootstrap.SetDropCallback(
+	[&imguiLayer](const std::wstring& path) {
+		imguiLayer.QueueExternalAssetDrop(std::filesystem::path(path));
+	});
 
 
 AppRenderResources renderResources;

@@ -52,8 +52,13 @@ void EditorPanelHost::DrawTabs(
         }
 
         if (ImGui::BeginTabItem(panel->label.c_str(), nullptr, tabFlags)) {
+            const bool selectedByUser = ImGui::IsItemClicked(ImGuiMouseButton_Left);
             if (persistence != nullptr) {
-                persistence->SetActivePanel(area, panel->id);
+                if (selectedByUser) {
+                    persistence->SetActivePanelFromUser(area, panel->id);
+                } else if (activePanel.empty()) {
+                    persistence->SetActivePanel(area, panel->id);
+                }
             }
             const std::string childId = panel->id + ".scroll";
             ImGui::PushStyleColor(ImGuiCol_ChildBg, OpaqueStyleColor(ImGuiCol_ChildBg));

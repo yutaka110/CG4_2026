@@ -78,7 +78,9 @@
 
 #include <array>
 #include <algorithm>
+#include <chrono>
 #include <cfloat>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -86,6 +88,107 @@
 #include <vector>
 
 namespace {
+using EditorUiTimingClock = std::chrono::steady_clock;
+
+double EditorUiElapsedMs(
+    EditorUiTimingClock::time_point begin,
+    EditorUiTimingClock::time_point end) {
+    return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+
+struct EditorImguiFrameTiming {
+    double assetPipelineMs = 0.0;
+    double assetRegistryInitMs = 0.0;
+    double assetThumbnailSyncMs = 0.0;
+    double assetPreviewJobMs = 0.0;
+    double assetGpuSetupMs = 0.0;
+    double assetGpuProcessMs = 0.0;
+    double validationMs = 0.0;
+    double panelRegistryMs = 0.0;
+    double panelDrawMs = 0.0;
+    double layoutPersistenceMs = 0.0;
+    double buildUiMs = 0.0;
+    uint32_t previewJobs = 0;
+    uint32_t gpuThumbnails = 0;
+    uint32_t assetRecords = 0;
+    uint32_t thumbnailEntries = 0;
+    uint32_t previewQueued = 0;
+    uint32_t previewRunning = 0;
+    uint32_t previewReady = 0;
+    uint32_t previewFailed = 0;
+    uint32_t previewActiveAsync = 0;
+    uint32_t gpuQueued = 0;
+    uint32_t gpuRendering = 0;
+    uint32_t gpuReady = 0;
+    uint32_t gpuFailed = 0;
+    bool developerTools = false;
+    bool viewportFocus = false;
+};
+
+void LogEditorImguiBreakdown(const EditorImguiFrameTiming& timing) {
+    if (timing.buildUiMs < 8.0 &&
+        timing.assetPipelineMs < 2.0 &&
+        timing.validationMs < 2.0 &&
+        timing.panelDrawMs < 4.0) {
+        return;
+    }
+
+    static uint32_t frameCounter = 0;
+    ++frameCounter;
+    if ((frameCounter % 30u) != 1u) {
+        return;
+    }
+
+    std::ofstream log("logs/editor_imgui_breakdown.log", std::ios::app);
+    if (!log.is_open()) {
+        return;
+    }
+    log << "[EditorImguiBreakdown]"
+        << " buildUiMs=" << timing.buildUiMs
+        << " assetPipelineMs=" << timing.assetPipelineMs
+        << " assetRegistryInitMs=" << timing.assetRegistryInitMs
+        << " assetThumbnailSyncMs=" << timing.assetThumbnailSyncMs
+        << " assetPreviewJobMs=" << timing.assetPreviewJobMs
+        << " assetGpuSetupMs=" << timing.assetGpuSetupMs
+        << " assetGpuProcessMs=" << timing.assetGpuProcessMs
+        << " previewJobs=" << timing.previewJobs
+        << " gpuThumbnails=" << timing.gpuThumbnails
+        << " assetRecords=" << timing.assetRecords
+        << " thumbnailEntries=" << timing.thumbnailEntries
+        << " previewQueued=" << timing.previewQueued
+        << " previewRunning=" << timing.previewRunning
+        << " previewReady=" << timing.previewReady
+        << " previewFailed=" << timing.previewFailed
+        << " previewActiveAsync=" << timing.previewActiveAsync
+        << " gpuQueued=" << timing.gpuQueued
+        << " gpuRendering=" << timing.gpuRendering
+        << " gpuReady=" << timing.gpuReady
+        << " gpuFailed=" << timing.gpuFailed
+        << " validationMs=" << timing.validationMs
+        << " panelRegistryMs=" << timing.panelRegistryMs
+        << " panelDrawMs=" << timing.panelDrawMs
+        << " layoutPersistenceMs=" << timing.layoutPersistenceMs
+        << " developerTools=" << (timing.developerTools ? 1 : 0)
+        << " viewportFocus=" << (timing.viewportFocus ? 1 : 0)
+        << '\n';
+}
+
+void LogEditorImguiRenderTiming(double renderMs) {
+    if (renderMs < 8.0) {
+        return;
+    }
+    static uint32_t frameCounter = 0;
+    ++frameCounter;
+    if ((frameCounter % 30u) != 1u) {
+        return;
+    }
+    std::ofstream log("logs/editor_imgui_breakdown.log", std::ios::app);
+    if (!log.is_open()) {
+        return;
+    }
+    log << "[EditorImguiRender] renderMs=" << renderMs << '\n';
+}
+
 void SyncEditorTransactionsFromFrame(
     editor::EditorTransactionStack& transactions,
     const AppRuntimeState& runtimeState) {
@@ -393,6 +496,16 @@ void DrawEditorWorkspacePanel(editor::EditorLayoutPersistenceService& persistenc
             }
         }
         ImGui::EndCombo();
+    }
+    const bool saveLayoutDisabled = !persistence.Dirty();
+    if (saveLayoutDisabled) {
+        ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Save Layout")) {
+        persistence.Save();
+    }
+    if (saveLayoutDisabled) {
+        ImGui::EndDisabled();
     }
     ImGui::TextWrapped("Layout: %s", persistence.StatusMessage().c_str());
 }
@@ -1057,6 +1170,7 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
     if (!hwnd || !device || !srvHeap || bufferCount <= 0) {
         return false;
     }
+    hwnd_ = hwnd;
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -1078,8 +1192,34 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
         return false;
     }
 
+    const uint32_t descriptorSize = device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    constexpr uint32_t kEditorThumbnailSrvBaseIndex = 3200;
+    constexpr uint32_t kEditorThumbnailSrvCapacity = 512;
+    if (editorAssetThumbnailGpuBackend_.Initialize(
+            device,
+            srvHeap,
+            descriptorSize,
+            kEditorThumbnailSrvBaseIndex,
+            kEditorThumbnailSrvCapacity)) {
+        editor::EditorAssetThumbnailCachePolicy thumbnailCachePolicy{};
+        thumbnailCachePolicy.persistentCacheEnabled = true;
+        thumbnailCachePolicy.persistentRoot = "logs/editor_thumbnail_cache";
+        thumbnailCachePolicy.maxMemoryBytes = 32ull * 1024ull * 1024ull;
+        thumbnailCachePolicy.maxRetainedUploadResources = 256;
+        editorAssetThumbnailGpuBackend_.ConfigureCache(std::move(thumbnailCachePolicy));
+        editorAssetThumbnails_.SetGpuThumbnailBackend(&editorAssetThumbnailGpuBackend_);
+    }
+
     initialized_ = true;
     return true;
+}
+
+void AppImGuiLayer::QueueExternalAssetDrop(std::filesystem::path path) {
+    if (path.empty()) {
+        return;
+    }
+    pendingExternalAssetImportPaths_.push_back(std::move(path));
 }
 
 void AppImGuiLayer::BeginFrame() {
@@ -1132,6 +1272,11 @@ void AppImGuiLayer::RefreshEditorViewportRenderTargetLayout() {
 }
 
 void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
+    const auto buildUiStart = EditorUiTimingClock::now();
+    EditorImguiFrameTiming imguiTiming{};
+    imguiTiming.developerTools = showDeveloperTools_;
+    imguiTiming.viewportFocus = viewportFocusMode_;
+
     if (!initialized_ ||
         context.runtimeState == nullptr ||
         context.effectRuntime == nullptr ||
@@ -1151,15 +1296,60 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     if (editorPropertyRegistry_.Count() == 0) {
         editor::RegisterBuiltInCourseObjectProperties(editorPropertyRegistry_);
     }
+    const auto assetPipelineStart = EditorUiTimingClock::now();
     if (!editorAssetRegistryInitialized_) {
+        const auto registryInitStart = EditorUiTimingClock::now();
         editorAssetRegistry_.Clear();
         editor::IndexEditorAssetsFromFolder(editorAssetRegistry_, "Resources");
         editor::CourseMeshAssetAdapter courseMeshAssetAdapter;
         courseMeshAssetAdapter.RegisterAssets(editorAssetRegistry_);
         editorAssetRegistry_.ScanDependencies();
         editorAssetRegistryInitialized_ = true;
+        imguiTiming.assetRegistryInitMs =
+            EditorUiElapsedMs(registryInitStart, EditorUiTimingClock::now());
     }
+    const auto thumbnailSyncStart = EditorUiTimingClock::now();
     editorAssetThumbnails_.Sync(editorAssetRegistry_);
+    imguiTiming.assetThumbnailSyncMs =
+        EditorUiElapsedMs(thumbnailSyncStart, EditorUiTimingClock::now());
+    const auto previewJobStart = EditorUiTimingClock::now();
+    imguiTiming.previewJobs =
+        editorAssetThumbnails_.ProcessPreviewJobs(std::chrono::milliseconds(2), 2);
+    imguiTiming.assetPreviewJobMs =
+        EditorUiElapsedMs(previewJobStart, EditorUiTimingClock::now());
+    const auto gpuSetupStart = EditorUiTimingClock::now();
+    editorAssetThumbnailGpuBackend_.SetUploadCommandList(context.editorUploadCommandList);
+    editorAssetThumbnailGpuBackend_.SetFrameFenceValues(
+        context.editorCompletedFenceValue,
+        context.editorScheduledFenceValue);
+    imguiTiming.assetGpuSetupMs =
+        EditorUiElapsedMs(gpuSetupStart, EditorUiTimingClock::now());
+    const auto gpuProcessStart = EditorUiTimingClock::now();
+    imguiTiming.gpuThumbnails = editorAssetThumbnails_.ProcessGpuThumbnails(4);
+    imguiTiming.assetGpuProcessMs =
+        EditorUiElapsedMs(gpuProcessStart, EditorUiTimingClock::now());
+    imguiTiming.assetRecords = static_cast<uint32_t>(editorAssetRegistry_.Records().size());
+    imguiTiming.thumbnailEntries = static_cast<uint32_t>(editorAssetThumbnails_.Count());
+    imguiTiming.previewQueued = static_cast<uint32_t>(
+        editorAssetThumbnails_.PreviewJobs().Count(editor::EditorAssetPreviewJobStatus::Queued));
+    imguiTiming.previewRunning = static_cast<uint32_t>(
+        editorAssetThumbnails_.PreviewJobs().Count(editor::EditorAssetPreviewJobStatus::Running));
+    imguiTiming.previewReady = static_cast<uint32_t>(
+        editorAssetThumbnails_.PreviewJobs().Count(editor::EditorAssetPreviewJobStatus::Ready));
+    imguiTiming.previewFailed = static_cast<uint32_t>(
+        editorAssetThumbnails_.PreviewJobs().Count(editor::EditorAssetPreviewJobStatus::Failed));
+    imguiTiming.previewActiveAsync = static_cast<uint32_t>(
+        editorAssetThumbnails_.PreviewJobs().ActiveAsyncJobCount());
+    imguiTiming.gpuQueued = static_cast<uint32_t>(
+        editorAssetThumbnails_.GpuThumbnails().Count(editor::EditorAssetGpuThumbnailStatus::Queued));
+    imguiTiming.gpuRendering = static_cast<uint32_t>(
+        editorAssetThumbnails_.GpuThumbnails().Count(editor::EditorAssetGpuThumbnailStatus::Rendering));
+    imguiTiming.gpuReady = static_cast<uint32_t>(
+        editorAssetThumbnails_.GpuThumbnails().Count(editor::EditorAssetGpuThumbnailStatus::Ready));
+    imguiTiming.gpuFailed = static_cast<uint32_t>(
+        editorAssetThumbnails_.GpuThumbnails().Count(editor::EditorAssetGpuThumbnailStatus::Failed));
+    imguiTiming.assetPipelineMs =
+        EditorUiElapsedMs(assetPipelineStart, EditorUiTimingClock::now());
     if (context.course == nullptr) {
         editorCourseDocumentOpen_ = false;
         editorCourseDocumentPath_.clear();
@@ -1207,6 +1397,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     } else if (courseObjectRevision < editorCourseObjectDirtyRevision_) {
         editorCourseObjectDirtyRevision_ = courseObjectRevision;
     }
+    const auto validationStart = EditorUiTimingClock::now();
     editor::CourseDocumentAdapter courseDocumentAdapter(
         context.course,
         context.coursePath,
@@ -1227,6 +1418,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     editorValidationService.AddAdapter(&assetReferenceDiagnosticsAdapter);
     editorValidationService.AddAdapter(&assetThumbnailDiagnosticsAdapter);
     const editor::EditorValidationReport editorValidationReport = editorValidationService.Validate();
+    imguiTiming.validationMs =
+        EditorUiElapsedMs(validationStart, EditorUiTimingClock::now());
     const editor::EditorSaveApplyPolicyInput editorSaveApplyPolicy{
         showDeveloperTools_,
         static_cast<bool>(context.onSaveCourse),
@@ -1484,6 +1677,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             UpdateVfxRuntimeStatusTelemetry(runtimeStatusInput);
         }
         DrawViewportFocusStatusBar(viewportFocusMode_);
+        imguiTiming.buildUiMs = EditorUiElapsedMs(buildUiStart, EditorUiTimingClock::now());
+        LogEditorImguiBreakdown(imguiTiming);
         return;
     }
 
@@ -1497,9 +1692,12 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         if (NeedsVfxRuntimeStatusTelemetry(runtimeState.vfx, hiddenRuntimeTelemetryFrame_++)) {
             UpdateVfxRuntimeStatusTelemetry(runtimeStatusInput);
         }
+        imguiTiming.buildUiMs = EditorUiElapsedMs(buildUiStart, EditorUiTimingClock::now());
+        LogEditorImguiBreakdown(imguiTiming);
         return;
     }
 
+    const auto panelRegistryStart = EditorUiTimingClock::now();
     const D3D12_GPU_DESCRIPTOR_HANDLE editorViewportPreview =
         context.postColorPreview.ptr != 0 ? context.postColorPreview : context.sceneColorPreview;
     editorPanelRegistry_.Register(
@@ -1643,7 +1841,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         &editorAssetSelection_,
                         &editorAssetThumbnails_,
                         &editorTransactions,
-                        &editorNotifications_});
+                        &editorNotifications_,
+                        hwnd_,
+                        &pendingExternalAssetImportPaths_});
             }});
     editorPanelRegistry_.Register(
         editor::EditorPanelDescriptor{
@@ -1853,6 +2053,10 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         editorCommandContext.canMutateAuthoring});
             }});
 
+    imguiTiming.panelRegistryMs =
+        EditorUiElapsedMs(panelRegistryStart, EditorUiTimingClock::now());
+
+    const auto panelDrawStart = EditorUiTimingClock::now();
     editorLayoutPersistence_.CaptureRegistryDefaults(editorPanelRegistry_);
     editorLayoutPersistence_.ValidateActivePanels(editorPanelRegistry_);
     editorPanelHost_.DrawArea(
@@ -1885,6 +2089,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorPanelLayout_.DiagnosticsRect(),
         "Editor Bottom Dock",
         &editorLayoutPersistence_);
+    imguiTiming.panelDrawMs = EditorUiElapsedMs(panelDrawStart, EditorUiTimingClock::now());
+
+    const auto layoutPersistenceStart = EditorUiTimingClock::now();
     if (DrawEditorWorkspaceSplitters(editorPanelLayoutConfig, editorPanelLayout_)) {
         editorPanelLayout_.Configure(editorPanelLayoutConfig);
         editorLayoutPersistence_.CaptureLayout(editorPanelLayoutConfig);
@@ -1898,6 +2105,10 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorLayoutPersistence_.CaptureLayout(editorPanelLayoutConfig);
     }
     editorLayoutPersistence_.SaveIfDirty();
+    imguiTiming.layoutPersistenceMs =
+        EditorUiElapsedMs(layoutPersistenceStart, EditorUiTimingClock::now());
+    imguiTiming.buildUiMs = EditorUiElapsedMs(buildUiStart, EditorUiTimingClock::now());
+    LogEditorImguiBreakdown(imguiTiming);
 }
 
 void AppImGuiLayer::EndFrame() {
@@ -1905,7 +2116,9 @@ void AppImGuiLayer::EndFrame() {
         return;
     }
 
+    const auto renderStart = EditorUiTimingClock::now();
     ImGui::Render();
+    LogEditorImguiRenderTiming(EditorUiElapsedMs(renderStart, EditorUiTimingClock::now()));
 }
 
 void AppImGuiLayer::Render(ID3D12GraphicsCommandList* cmdList) {
@@ -1921,6 +2134,7 @@ void AppImGuiLayer::Shutdown() {
         return;
     }
 
+    editorAssetThumbnails_.Clear();
     ImGui_ImplDX12_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
@@ -1960,6 +2174,10 @@ void AppImGuiLayer::BeginFrame() {
 
 void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     (void)context;
+}
+
+void AppImGuiLayer::QueueExternalAssetDrop(std::filesystem::path path) {
+    (void)path;
 }
 
 void AppImGuiLayer::RefreshEditorViewportRenderTargetLayout() {

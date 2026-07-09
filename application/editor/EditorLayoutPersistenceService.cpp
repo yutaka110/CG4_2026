@@ -10,6 +10,7 @@ namespace editor {
 namespace {
 
 constexpr int kLayoutPersistenceVersion = 1;
+constexpr std::chrono::milliseconds kLayoutSaveDebounce(750);
 
 bool StartsWith(std::string_view value, std::string_view prefix) {
     return value.size() >= prefix.size() &&
@@ -74,6 +75,7 @@ void EditorLayoutPersistenceService::SetPath(std::filesystem::path path) {
     path_ = std::move(path);
     loaded_ = false;
     dirty_ = false;
+    dirtyTouchedAt_ = {};
     lastLoadValid_ = true;
     ResetToDefaults();
     Touch();
@@ -113,8 +115,7 @@ void EditorLayoutPersistenceService::CaptureLayout(
     leftSidebarWidthRatio_ = left;
     diagnosticsHeightRatio_ = diagnostics;
     contentBrowserWidthRatio_ = content;
-    dirty_ = true;
-    Touch();
+    MarkDirty();
 }
 
 void EditorLayoutPersistenceService::ApplyWorkspacePreset(std::string_view presetId) {
@@ -169,8 +170,7 @@ void EditorLayoutPersistenceService::ApplyWorkspacePreset(std::string_view prese
     leftSidebarWidthRatio_ = left;
     diagnosticsHeightRatio_ = diagnostics;
     contentBrowserWidthRatio_ = content;
-    dirty_ = true;
-    Touch();
+    MarkDirty();
 }
 
 void EditorLayoutPersistenceService::CaptureRegistryDefaults(
@@ -184,8 +184,7 @@ void EditorLayoutPersistenceService::CaptureRegistryDefaults(
     }
 
     if (changed) {
-        dirty_ = true;
-        Touch();
+        MarkDirty();
     }
 }
 
@@ -202,8 +201,7 @@ bool EditorLayoutPersistenceService::ValidateActivePanels(
     }
 
     if (changed) {
-        dirty_ = true;
-        Touch();
+        MarkDirty();
     }
     return !changed;
 }
@@ -225,8 +223,7 @@ void EditorLayoutPersistenceService::SetPanelVisible(
     }
 
     panelVisibility_[std::move(id)] = visible;
-    dirty_ = true;
-    Touch();
+    MarkDirty();
 }
 
 std::string EditorLayoutPersistenceService::ActivePanel(EditorPanelHostArea area) const {
@@ -237,33 +234,39 @@ std::string EditorLayoutPersistenceService::ActivePanel(EditorPanelHostArea area
 void EditorLayoutPersistenceService::SetActivePanel(
     EditorPanelHostArea area,
     std::string_view panelId) {
-    std::string id(panelId);
-    const auto found = activePanels_.find(area);
-    if (found != activePanels_.end() && found->second == id) {
-        return;
-    }
+    SetActivePanelInternal(area, panelId, false);
+}
 
-    activePanels_[area] = std::move(id);
-    dirty_ = true;
-    Touch();
+void EditorLayoutPersistenceService::SetActivePanelFromUser(
+    EditorPanelHostArea area,
+    std::string_view panelId) {
+    SetActivePanelInternal(area, panelId, true);
 }
 
 void EditorLayoutPersistenceService::SaveIfDirty() {
-    if (dirty_) {
-        Save();
+    if (!dirty_) {
+        return;
     }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (dirtyTouchedAt_ != std::chrono::steady_clock::time_point{} &&
+        now - dirtyTouchedAt_ < kLayoutSaveDebounce) {
+        return;
+    }
+
+    Save();
 }
 
 bool EditorLayoutPersistenceService::Load() {
     loaded_ = true;
     lastLoadValid_ = true;
+    dirtyTouchedAt_ = {};
     ResetToDefaults();
 
     std::ifstream input(path_);
     if (!input) {
         statusMessage_ = "Layout defaults active; no saved layout file.";
-        dirty_ = true;
-        Touch();
+        MarkDirty();
         return true;
     }
 
@@ -338,6 +341,7 @@ bool EditorLayoutPersistenceService::Load() {
     status << ").";
     statusMessage_ = status.str();
     dirty_ = false;
+    dirtyTouchedAt_ = {};
     Touch();
     return true;
 }
@@ -387,6 +391,7 @@ bool EditorLayoutPersistenceService::Save() {
     }
 
     dirty_ = false;
+    dirtyTouchedAt_ = {};
     statusMessage_ = "Saved editor layout to " + PathText(path_) + ".";
     Touch();
     return true;
@@ -445,6 +450,30 @@ bool EditorLayoutPersistenceService::AreaFromKey(
         return true;
     }
     return false;
+}
+
+void EditorLayoutPersistenceService::MarkDirty() {
+    dirty_ = true;
+    dirtyTouchedAt_ = std::chrono::steady_clock::now();
+    Touch();
+}
+
+void EditorLayoutPersistenceService::SetActivePanelInternal(
+    EditorPanelHostArea area,
+    std::string_view panelId,
+    bool markDirty) {
+    std::string id(panelId);
+    const auto found = activePanels_.find(area);
+    if (found != activePanels_.end() && found->second == id) {
+        return;
+    }
+
+    activePanels_[area] = std::move(id);
+    if (markDirty) {
+        MarkDirty();
+    } else {
+        Touch();
+    }
 }
 
 void EditorLayoutPersistenceService::Touch() {

@@ -747,8 +747,120 @@ Current staged implementation:
   before copy, rolls back partial files on failed registration, and routes the
   result through the same metadata, dependency, thumbnail, selection, and
   notification path as normal import/reimport.
-- Remaining Phase 8 work is focused on richer asset preview generation and
-  production import UI polish such as native file dialogs and drag-and-drop.
+- Phase 8-K adds `EditorAssetPreviewProvider` as the formal rich preview
+  metadata generator behind `EditorAssetThumbnailService`. Texture previews
+  can read lightweight image dimensions, mesh/course/effect/audio previews
+  expose source metadata, Asset Browser preview rows/tooltips show the richer
+  summary, and import/reimport/external import regression gates verify that
+  preview metadata refreshes through the formal asset pipeline.
+- Phase 8-L adds production import entry points. Asset Browser exposes a
+  native file picker, dropped OS files are queued into the same panel import
+  path, and `EditorAssetImportService::ImportExternalBatch` provides the
+  formal multi-file import path with collision policy, unsupported-file skips,
+  selection refresh, notification summaries, dependency rescans, and thumbnail
+  refresh through the existing asset pipeline.
+- Phase 8-M adds `EditorAssetPreviewJobQueue` as the formal budgeted preview
+  work queue. `EditorAssetThumbnailService::Sync` now queues preview work,
+  `ProcessPreviewJobs` advances jobs within a per-frame budget, Asset Browser
+  exposes queued/running/ready/failed counts and retry for failed previews, and
+  import/reimport/batch external import tests verify that preview refreshes
+  flow through the job path without stale source stamps overwriting newer
+  thumbnail state.
+- Phase 8-N adds `EditorAssetGpuThumbnailRenderer` as the formal GPU-backed
+  thumbnail rendering queue. Ready preview metadata now feeds budgeted GPU
+  thumbnail requests, thumbnail entries expose GPU status/render revision/
+  resident handle tokens, Asset Browser shows GPU queue health and retry, and
+  regression/smoke gates verify import-driven thumbnails become GPU resident.
+- Phase 8-O replaces placeholder GPU thumbnail tokens with a formal SRV
+  allocation path. `EditorAssetGpuThumbnailRenderer` now accepts a backend,
+  `EditorAssetD3D12ThumbnailGpuBackend` allocates shader-visible SRV
+  descriptors for the editor thumbnail range, thumbnail entries carry
+  `displayTextureId`/descriptor metadata, Asset Browser draws ready GPU
+  thumbnails through `ImGui::ImageButton`, and regression coverage verifies
+  SRV allocation plus stale descriptor release on source timestamp changes.
+- Phase 8-P adds texture thumbnail pixel decode and GPU upload. Texture
+  thumbnail requests now carry source paths, `EditorAssetThumbnailTextureLoader`
+  decodes DDS/WIC/TGA sources through DirectXTex, normalizes thumbnails to
+  RGBA8, `EditorAssetD3D12ThumbnailGpuBackend` records upload copies into the
+  frame command list, retains upload resources, creates SRVs against real
+  default-heap textures, and regression coverage verifies decode/resize plus
+  existing stale descriptor release behavior.
+- Phase 8-Q adds mesh/material preview render payloads and production fallback
+  icon atlas pixels to the same GPU thumbnail path. Mesh thumbnails now carry
+  vertex/face metadata into `EditorAssetMeshThumbnailPreviewRenderer`,
+  non-texture or decode-failed previews route through
+  `EditorAssetFallbackIconAtlas`, and the D3D12 thumbnail backend uploads those
+  generated RGBA8 payloads into real SRV-backed thumbnail textures instead of
+  relying on null descriptors.
+- Phase 8-R adds thumbnail lifetime telemetry and persistent preview cache
+  policy. `EditorAssetThumbnailCacheStore` defines stable preview cache keys,
+  memory limits, optional disk persistence, LRU eviction, and fallback storage
+  policy; `EditorAssetD3D12ThumbnailGpuBackend` uses it before regenerating
+  RGBA8 payloads, reports allocation/release/resident/upload/cache/fallback
+  counters, bounds retained upload resources by policy, and Asset Browser
+  surfaces lifetime/cache telemetry next to preview and GPU queue state.
+- Phase 8-S adds fence-aware thumbnail upload retirement and the first formal
+  engine-scene material preview pass boundary. Thumbnail upload buffers now
+  enter `EditorThumbnailUploadRetirementQueue` with the frame fence value that
+  will make the copy safe to release, the D3D12 backend retires uploads only
+  after the completed fence reaches that value, telemetry exposes pending and
+  retired upload bytes/counts, and mesh/material thumbnail payload generation
+  routes through `EditorAssetPreviewSceneRenderer` before GPU upload.
+- Phase 8-T replaces deterministic preview-scene publication with a real
+  offscreen D3D12 render target path for mesh/material thumbnails.
+  `EditorAssetPreviewRenderTargetPool` owns preview RTV resources, the D3D12
+  thumbnail backend clears/renders the offscreen target, transitions it to a
+  shader resource, publishes its SRV directly to Asset Browser, and records
+  preview-scene direct/fallback/reuse/resize telemetry while retaining the
+  cached RGBA upload path as the fallback.
+- Phase 8-U binds real mesh/material preview scene metadata into the thumbnail
+  path. OBJ previews now extract source bounds, face/vertex counts, material
+  slots, camera distance, and light preset data on the preview worker path;
+  thumbnail entries and GPU allocation requests preserve that metadata;
+  offscreen D3D12 preview targets draw a material-aware proxy scene before SRV
+  publication; cache keys include material/bounds inputs; and regression/smoke
+  gates verify OBJ geometry/material binding.
+- Phase 8-V replaces the proxy-only direct preview target with a renderer-backed
+  thumbnail mesh pass. `EditorAssetD3D12ThumbnailGpuBackend` now owns a
+  dedicated preview root signature/PSO, compiles thumbnail VS/PS resources,
+  extracts capped OBJ triangles into preview vertex/index buffers, binds a
+  material/light/camera constant buffer, draws into the offscreen preview render
+  target, publishes the target SRV directly, and retains VB/IB/CB upload
+  resources through the fence-aware retirement queue. Unsupported mesh formats
+  still fall back to a procedural renderer-backed proxy, and shader/data failure
+  falls back to the prior clear-rect proxy with telemetry.
+- Phase 8-W binds the thumbnail preview path to production mesh/material inputs.
+  `EditorAssetPreviewProvider` now uses Assimp-based mesh inspection for OBJ,
+  FBX, GLTF/GLB, and engine mesh candidates before falling back to legacy
+  lightweight scans, and propagates material texture count/timestamp into
+  thumbnail entries, GPU requests, cache keys, and generation diffing. The
+  D3D12 thumbnail backend now tries an Assimp-backed preview payload before the
+  legacy OBJ extractor, colors preview triangles from material diffuse data,
+  samples diffuse/base-color textures into preview material colors when they
+  decode successfully, falls back explicitly when texture sampling fails, and
+  exposes loader/texture binding telemetry in Asset Browser.
+- Phase 8-X replaces CPU-side material texture color sampling with a real GPU
+  preview material texture binding. The D3D12 thumbnail backend now extracts a
+  primary diffuse/base-color texture path from production Assimp materials,
+  uploads the decoded texture into a fence-aware preview texture resource,
+  allocates a dedicated material SRV descriptor, passes UVs and texture weights
+  through the renderer-backed mesh vertex stream, and samples the material
+  texture in the thumbnail preview pixel shader. Missing/unsupported textures
+  fall back to material vertex color with explicit SRV fallback telemetry, while
+  Asset Browser reports material texture SRV bound/fallback counts and live
+  descriptor usage.
+- Phase 8-Y upgrades the preview material path from a single primary texture to
+  slot-aware multi-material binding. The thumbnail backend now allocates
+  contiguous material SRV descriptor tables, binds up to four diffuse/base-color
+  textures per preview mesh, carries texture indices, UVs, roughness, and
+  metallic values in the preview vertex stream, disables sampling per slot when
+  decode/upload fails, and shades thumbnails with a lightweight PBR-style
+  diffuse/specular/rim evaluation. Asset Browser telemetry now reports material
+  texture table usage, PBR preview counts, live descriptor usage, and explicit
+  partial fallback cases.
+- Remaining Phase 8 work is focused on sharing the actual production
+  material/PBR evaluation path more deeply, including normal/roughness/metallic
+  texture maps, environment lighting parity, and renderer material cache reuse.
 
 ### Phase 9: Full Details/Reflection Coverage
 

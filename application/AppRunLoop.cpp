@@ -99,6 +99,8 @@ struct RailPerfFrameSample {
     double sceneTransformsMs = 0.0;
     double syncCourseMeshMs = 0.0;
     double imguiMs = 0.0;
+    double imguiBuildUiMs = 0.0;
+    double imguiEndFrameMs = 0.0;
     double sceneRuntimeSyncMs = 0.0;
     double registerPassesMs = 0.0;
     double prepareGraphResourcesMs = 0.0;
@@ -422,6 +424,18 @@ uint32_t ReadEnvironmentUInt(const char* name, uint32_t fallback) {
         return fallback;
     }
     return static_cast<uint32_t>(parsed);
+}
+
+bool ReadEnvironmentFlag(const char* name, bool fallback) {
+    char value[16]{};
+    const DWORD length = GetEnvironmentVariableA(name, value, static_cast<DWORD>(sizeof(value)));
+    if (length == 0 || length >= sizeof(value)) {
+        return fallback;
+    }
+    if (value[0] == '0' || value[0] == 'f' || value[0] == 'F' || value[0] == 'n' || value[0] == 'N') {
+        return false;
+    }
+    return true;
 }
 
 Vector3 RailLocalPoint(
@@ -1433,6 +1447,54 @@ AppRunLoop::AppRunLoop(
     ApplyRailShooterCourse();
     frameFenceValues_.assign((std::max)(1u, swapChain_.BufferCount()), engineContext_.GetFenceValue());
     nextFrameFenceValue_ = engineContext_.GetFenceValue() + 1;
+    ConfigureEditorPresentPolicy();
+    LogEditorPresentPolicy();
+}
+
+void AppRunLoop::ConfigureEditorPresentPolicy() {
+#if defined(_DEBUG) || defined(DEVELOP)
+    constexpr bool kDefaultLowLatencyPresent = true;
+#else
+    constexpr bool kDefaultLowLatencyPresent = false;
+#endif
+    editorLowLatencyPresent_ =
+        ReadEnvironmentFlag("GE3_EDITOR_LOW_LATENCY_PRESENT", kDefaultLowLatencyPresent);
+    presentSyncInterval_ =
+        ReadEnvironmentUInt("GE3_EDITOR_PRESENT_SYNC_INTERVAL", editorLowLatencyPresent_ ? 0u : 1u);
+    presentSyncInterval_ = (std::min)(presentSyncInterval_, 4u);
+    editorLowLatencyPresent_ = presentSyncInterval_ == 0;
+    presentTearingAllowed_ = editorLowLatencyPresent_ && swapChain_.AllowsTearing();
+
+    const uint32_t defaultMaxFrameLatency =
+        editorLowLatencyPresent_
+            ? (std::min)(2u, (std::max)(1u, swapChain_.BufferCount()))
+            : 0u;
+    presentMaxFrameLatency_ =
+        ReadEnvironmentUInt("GE3_EDITOR_MAX_FRAME_LATENCY", defaultMaxFrameLatency);
+    if (presentMaxFrameLatency_ > 0) {
+        presentMaxFrameLatency_ =
+            (std::clamp)(presentMaxFrameLatency_, 1u, (std::max)(1u, swapChain_.BufferCount()));
+        if (!swapChain_.SetMaximumFrameLatency(presentMaxFrameLatency_)) {
+            presentMaxFrameLatency_ = 0;
+        }
+    }
+}
+
+void AppRunLoop::LogEditorPresentPolicy() const {
+    std::ostringstream line;
+    line << "[EditorPresentPolicy]"
+         << " lowLatency=" << (editorLowLatencyPresent_ ? 1 : 0)
+         << " syncInterval=" << presentSyncInterval_
+         << " tearingSupported=" << (swapChain_.AllowsTearing() ? 1 : 0)
+         << " tearingAllowed=" << (presentTearingAllowed_ ? 1 : 0)
+         << " bufferCount=" << swapChain_.BufferCount()
+         << " maxFrameLatency=" << presentMaxFrameLatency_
+         << "\n";
+    OutputDebugStringA(line.str().c_str());
+    std::ofstream log("logs/rail_present_policy.log", std::ios::app);
+    if (log) {
+        log << line.str();
+    }
 }
 
 void AppRunLoop::InitializeBeam(
@@ -3941,7 +4003,8 @@ void AppRunLoop::LogRailShooterPerfSpike() {
         gRailPerfFrame.prepareGraphResourcesMs >= 3.0 ||
         gRailPerfFrame.renderGraphExecuteMs >= 6.0 ||
         gRailPerfFrame.endAndExecuteMs >= 4.0 ||
-        gRailPerfFrame.presentMs >= 30.0;
+        gRailPerfFrame.waitFrameSlotMs >= 8.0 ||
+        gRailPerfFrame.presentMs >= 8.0;
     if (!shouldLog) {
         return;
     }
@@ -3960,6 +4023,10 @@ void AppRunLoop::LogRailShooterPerfSpike() {
          << " updateMs=" << gRailPerfFrame.updateMs
          << " renderMs=" << gRailPerfFrame.renderMs
          << " presentMs=" << gRailPerfFrame.presentMs
+         << " presentSyncInterval=" << presentSyncInterval_
+         << " presentTearingAllowed=" << (presentTearingAllowed_ ? 1 : 0)
+         << " presentMaxFrameLatency=" << presentMaxFrameLatency_
+         << " swapBufferCount=" << swapChain_.BufferCount()
          << " collisionMs=" << gRailPerfFrame.collisionMs
          << " visualPresetMs=" << gRailPerfFrame.visualPresetMs
          << " vfxUpdateMs=" << gRailPerfFrame.vfxUpdateMs
@@ -3970,6 +4037,8 @@ void AppRunLoop::LogRailShooterPerfSpike() {
          << " sceneTransformsMs=" << gRailPerfFrame.sceneTransformsMs
          << " syncCourseMeshMs=" << gRailPerfFrame.syncCourseMeshMs
          << " imguiMs=" << gRailPerfFrame.imguiMs
+         << " imguiBuildUiMs=" << gRailPerfFrame.imguiBuildUiMs
+         << " imguiEndFrameMs=" << gRailPerfFrame.imguiEndFrameMs
          << " sceneRuntimeSyncMs=" << gRailPerfFrame.sceneRuntimeSyncMs
          << " registerPassesMs=" << gRailPerfFrame.registerPassesMs
          << " prepareGraphResourcesMs=" << gRailPerfFrame.prepareGraphResourcesMs
@@ -4759,6 +4828,10 @@ void AppRunLoop::ResolveCompletedRailGpuTiming(uint32_t backBufferIndex) {
              << " pacingWaitMs=" << pacingWaitMs
              << " waitFrameSlotMs=" << timingSlot.waitFrameSlotMs
              << " presentMs=" << timingSlot.presentMs
+             << " presentSyncInterval=" << presentSyncInterval_
+             << " presentTearingAllowed=" << (presentTearingAllowed_ ? 1 : 0)
+             << " presentMaxFrameLatency=" << presentMaxFrameLatency_
+             << " swapBufferCount=" << swapChain_.BufferCount()
              << " renderGraphExecuteMs=" << timingSlot.renderGraphExecuteMs
              << " endAndExecuteMs=" << timingSlot.endAndExecuteMs
              << " timestampTicks=" << ticks
@@ -5673,16 +5746,18 @@ void AppRunLoop::CommitCourseObjectHistoryIfNeeded() {
                 std::move(propertyChange.beforeValue),
                 std::move(propertyChange.afterValue));
         } else if (!propertyChanges.empty()) {
+            const editor::EditorPropertyChange& firstChange = propertyChanges.front();
             editor::EditorObjectHandle transactionTarget{};
-            transactionTarget.domain = propertyChanges.front().target.domain;
-            transactionTarget.stableId = propertyChanges.front().target.stableId;
-            transactionTarget.localIndex = propertyChanges.front().target.localIndex;
+            transactionTarget.domain = firstChange.target.domain;
+            transactionTarget.stableId = firstChange.target.stableId;
+            transactionTarget.localIndex = firstChange.target.localIndex;
             transactionTarget.generation = editor.courseObjectEditRevision;
-            transactionTarget.displayName = propertyChanges.front().target.displayName;
+            transactionTarget.displayName = firstChange.target.displayName;
+            const std::string transactionLabel = firstChange.displayName.empty()
+                ? std::string("Course Property Batch Edit")
+                : firstChange.displayName;
             courseObjectTransactions_.PushMultiPropertyDelta(
-                propertyChanges.front().displayName.empty()
-                    ? "Course Property Batch Edit"
-                    : propertyChanges.front().displayName,
+                transactionLabel,
                 std::move(transactionTarget),
                 std::move(propertyChanges));
         }
@@ -6651,6 +6726,14 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     const auto renderStart = RailPerfClock::now();
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.begin");
     BeginFrameSystems();
+    bool imguiFrameOpen = true;
+    const auto closeImguiFrameOnAbort = [&]() {
+        if (!imguiFrameOpen) {
+            return;
+        }
+        imguiLayer_.EndFrame();
+        imguiFrameOpen = false;
+    };
     imguiLayer_.RefreshEditorViewportRenderTargetLayout();
     ApplyEditorViewportRenderTargetForRender();
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterBeginFrameSystems");
@@ -6661,6 +6744,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     if (!WaitForFrameSlot(backBufferIndex)) {
         gRailPerfFrame.waitFrameSlotMs = ElapsedMs(waitStart, RailPerfClock::now());
         LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.waitForFrameSlotFailed");
+        closeImguiFrameOnAbort();
         return;
     }
     gRailPerfFrame.waitFrameSlotMs = ElapsedMs(waitStart, RailPerfClock::now());
@@ -6672,6 +6756,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     gRailPerfFrame.commandListBeginMs = ElapsedMs(commandBeginStart, RailPerfClock::now());
     if (commandList == nullptr) {
         LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.commandListBeginFailed");
+        closeImguiFrameOnAbort();
         return;
     }
     BeginRailGpuTiming(commandList.Get(), backBufferIndex);
@@ -6715,6 +6800,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         runtimeState_.useMonsterBall ? scene_.textureSrvHandleGPU2 : scene_.textureSrvHandleGPU;
 
     const auto imguiStart = RailPerfClock::now();
+    const auto imguiBuildUiStart = RailPerfClock::now();
     imguiLayer_.BuildUi(
         AppImGuiFrameContext{
             &runtimeState_,
@@ -6743,6 +6829,9 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             &vfxEngine_.GpuParticles(),
             &frameState_,
             srvDescriptorHeap_.Get(),
+            commandList.Get(),
+            fence_ != nullptr ? fence_->GetCompletedValue() : 0,
+            nextFrameFenceValue_,
             spriteTextureHandle,
             engineContext_.GetDepthSrvGpuHandle(),
             &railShooterCourse_,
@@ -6784,7 +6873,11 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 DrawRailVisibilityDebugOverlay(drawList);
             },
             &courseObjectTransactions_});
+    gRailPerfFrame.imguiBuildUiMs = ElapsedMs(imguiBuildUiStart, RailPerfClock::now());
+    const auto imguiEndFrameStart = RailPerfClock::now();
     imguiLayer_.EndFrame();
+    imguiFrameOpen = false;
+    gRailPerfFrame.imguiEndFrameMs = ElapsedMs(imguiEndFrameStart, RailPerfClock::now());
     gRailPerfFrame.imguiMs = ElapsedMs(imguiStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterImgui");
 
@@ -6973,7 +7066,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterSignalFrame");
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.beforePresent");
     const auto presentStart = RailPerfClock::now();
-    const HRESULT presentHr = swapChain_.Present(dev_, 1);
+    const HRESULT presentHr = swapChain_.Present(dev_, presentSyncInterval_);
     gRailPerfFrame.presentMs = ElapsedMs(presentStart, RailPerfClock::now());
     gRailPerfFrame.renderMs = ElapsedMs(renderStart, RailPerfClock::now());
     RecordRailCameraTuningSample(

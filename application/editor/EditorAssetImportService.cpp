@@ -411,6 +411,13 @@ EditorAssetImportService::EditorAssetImportService(
 EditorAssetImportResult EditorAssetImportService::Import(
     const std::filesystem::path& sourcePath,
     const EditorAssetImportOptions& options) {
+    return ImportInternal(sourcePath, options, true);
+}
+
+EditorAssetImportResult EditorAssetImportService::ImportInternal(
+    const std::filesystem::path& sourcePath,
+    const EditorAssetImportOptions& options,
+    bool finalizeChange) {
     std::filesystem::path physicalSource;
     std::filesystem::path relativeSource;
     std::string error;
@@ -449,7 +456,9 @@ EditorAssetImportResult EditorAssetImportService::Import(
         return Fail("Failed to register imported asset.");
     }
 
-    FinalizeAssetRegistryChange(options);
+    if (finalizeChange) {
+        FinalizeAssetRegistryChange(options);
+    }
 
     EditorAssetImportResult result{};
     result.succeeded = true;
@@ -462,6 +471,13 @@ EditorAssetImportResult EditorAssetImportService::Import(
 EditorAssetImportResult EditorAssetImportService::ImportExternal(
     const std::filesystem::path& externalSourcePath,
     const EditorAssetExternalImportPolicy& policy) {
+    return ImportExternalInternal(externalSourcePath, policy, true);
+}
+
+EditorAssetImportResult EditorAssetImportService::ImportExternalInternal(
+    const std::filesystem::path& externalSourcePath,
+    const EditorAssetExternalImportPolicy& policy,
+    bool finalizeChange) {
     std::filesystem::path externalSource;
     std::filesystem::path destination;
     std::string error;
@@ -511,7 +527,7 @@ EditorAssetImportResult EditorAssetImportService::ImportExternal(
     importOptions.createMetadata = policy.createMetadata;
     importOptions.scanDependencies = policy.scanDependencies;
     importOptions.replaceExisting = policy.replaceExisting;
-    EditorAssetImportResult result = Import(destination, importOptions);
+    EditorAssetImportResult result = ImportInternal(destination, importOptions, finalizeChange);
     if (!result.succeeded) {
         if (!destinationExisted) {
             std::filesystem::remove(destination, fsError);
@@ -533,6 +549,54 @@ EditorAssetImportResult EditorAssetImportService::ImportExternal(
         ":" +
         result.record.id;
     return result;
+}
+
+EditorAssetImportResult EditorAssetImportService::ImportExternalBatch(
+    const std::vector<std::filesystem::path>& externalSourcePaths,
+    const EditorAssetExternalImportPolicy& policy) {
+    if (externalSourcePaths.empty()) {
+        return Fail("No external asset files were provided for batch import.");
+    }
+
+    EditorAssetImportResult batch{};
+    std::vector<std::string> failures;
+    for (const std::filesystem::path& externalSourcePath : externalSourcePaths) {
+        EditorAssetImportResult result =
+            ImportExternalInternal(externalSourcePath, policy, false);
+        if (result.succeeded) {
+            batch.succeeded = true;
+            batch.record = std::move(result.record);
+            batch.importedCount += result.importedCount;
+            batch.migratedCount += result.migratedCount;
+            batch.skippedCount += result.skippedCount;
+            continue;
+        }
+
+        batch.warning = true;
+        batch.skippedCount += result.skippedCount > 0 ? result.skippedCount : 1;
+        if (!result.message.empty()) {
+            failures.push_back(result.message);
+        }
+    }
+
+    EditorAssetImportOptions finalizeOptions{};
+    finalizeOptions.resourcesRoot = policy.resourcesRoot;
+    finalizeOptions.scanDependencies = policy.scanDependencies;
+    if (batch.importedCount > 0) {
+        FinalizeAssetRegistryChange(finalizeOptions);
+    }
+
+    batch.warning = batch.warning || !failures.empty();
+    batch.message =
+        "Batch external import imported " +
+        std::to_string(batch.importedCount) +
+        " assets, skipped " +
+        std::to_string(batch.skippedCount) +
+        ".";
+    if (!failures.empty()) {
+        batch.message += " First issue: " + failures.front();
+    }
+    return batch;
 }
 
 EditorAssetImportResult EditorAssetImportService::Reimport(

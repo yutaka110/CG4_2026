@@ -123,6 +123,34 @@ void WriteTextFile(const std::filesystem::path& path, const std::string& text) {
     file << text;
 }
 
+void WriteBinaryFile(const std::filesystem::path& path, const std::vector<unsigned char>& bytes) {
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file.is_open()) {
+        throw std::runtime_error("failed to write " + path.generic_string());
+    }
+    file.write(
+        reinterpret_cast<const char*>(bytes.data()),
+        static_cast<std::streamsize>(bytes.size()));
+}
+
+std::vector<unsigned char> MakeBmpPreviewHeader(uint32_t width, uint32_t height) {
+    std::vector<unsigned char> bytes(26, 0);
+    bytes[0] = 'B';
+    bytes[1] = 'M';
+    const auto writeLe32 = [&](std::size_t offset, uint32_t value) {
+        bytes[offset + 0] = static_cast<unsigned char>(value & 0xff);
+        bytes[offset + 1] = static_cast<unsigned char>((value >> 8) & 0xff);
+        bytes[offset + 2] = static_cast<unsigned char>((value >> 16) & 0xff);
+        bytes[offset + 3] = static_cast<unsigned char>((value >> 24) & 0xff);
+    };
+    writeLe32(18, width);
+    writeLe32(22, height);
+    return bytes;
+}
+
 void RemoveTreeIfPresent(const std::filesystem::path& path) {
     std::error_code error;
     if (std::filesystem::exists(path, error)) {
@@ -628,8 +656,29 @@ void RunWorkflowProbe(SmokeRun& smoke, std::ostream& log) {
 }
 
 void RunAssetThumbnailServiceGate(SmokeRun& smoke, std::ostream& log) {
+    const std::filesystem::path thumbnailSmokeRoot = "logs/__editor_smoke_thumbnail";
+    RemoveTreeIfPresent(thumbnailSmokeRoot);
+    const std::filesystem::path smokeMeshPath = thumbnailSmokeRoot / "thumb_mesh.obj";
+    const std::filesystem::path smokeMeshMaterialPath = thumbnailSmokeRoot / "thumb_mesh.mtl";
+    const std::filesystem::path smokeMeshTexturePath = thumbnailSmokeRoot / "thumb_texture.bmp";
+    WriteTextFile(
+        smokeMeshMaterialPath,
+        "newmtl smoke_material\n"
+        "Kd 0.3 0.7 0.9\n"
+        "map_Kd thumb_texture.bmp\n");
+    WriteBinaryFile(smokeMeshTexturePath, MakeBmpPreviewHeader(8, 4));
+    WriteTextFile(
+        smokeMeshPath,
+        "mtllib thumb_mesh.mtl\n"
+        "v -0.5 0.0 -0.5\n"
+        "v 0.5 0.0 -0.5\n"
+        "v 0.0 0.8 0.5\n"
+        "usemtl smoke_material\n"
+        "f 1 2 3\n");
     EditorAssetRegistry registry;
     EditorAssetRecord mesh = MakeSmokeAsset(EditorAssetKind::Mesh, "thumb_mesh", "guid-thumb-mesh");
+    mesh.sourcePath = smokeMeshPath.generic_string();
+    mesh.logicalPath = mesh.sourcePath;
     EditorAssetRecord texture = MakeSmokeAsset(EditorAssetKind::Texture, "thumb_texture", "guid-thumb-texture");
     texture.sourcePath = "Resources/smoke/thumb_texture.png";
     texture.logicalPath = texture.sourcePath;
@@ -653,11 +702,37 @@ void RunAssetThumbnailServiceGate(SmokeRun& smoke, std::ostream& log) {
     smoke.Expect(textureRecord != nullptr, "thumbnail texture should be findable");
     smoke.Expect(invalidRecord != nullptr, "thumbnail invalid texture should be findable");
     smoke.Expect(
-        thumbnails.Resolve(*meshRecord).status == EditorAssetThumbnailStatus::Unsupported,
-        "mesh thumbnail should use fallback icon");
+        thumbnails.Resolve(*meshRecord).status == EditorAssetThumbnailStatus::Pending,
+        "mesh thumbnail should start pending before preview jobs run");
+    smoke.Expect(
+        thumbnails.PreviewJobs().Count(EditorAssetPreviewJobStatus::Queued) >= 2,
+        "thumbnail jobs should be queued after sync");
+    smoke.Expect(thumbnails.ProcessPreviewJobs(2) == 2, "thumbnail jobs should process with frame budget");
+    thumbnails.ProcessPreviewJobs(8);
+    smoke.Expect(
+        thumbnails.GpuThumbnails().Count(EditorAssetGpuThumbnailStatus::Queued) >= 2,
+        "ready thumbnails should queue GPU thumbnail rendering");
+    smoke.Expect(thumbnails.ProcessGpuThumbnails(2) == 2, "GPU thumbnails should process with frame budget");
+    thumbnails.ProcessGpuThumbnails(8);
+    smoke.Expect(
+        thumbnails.Resolve(*meshRecord).status == EditorAssetThumbnailStatus::Ready,
+        "mesh thumbnail should use rich preview metadata");
+    smoke.Expect(
+        thumbnails.Resolve(*meshRecord).previewKind == EditorAssetPreviewKind::Mesh,
+        "mesh thumbnail should expose mesh preview kind");
+    smoke.Expect(
+        thumbnails.Resolve(*meshRecord).hasPreviewGeometry &&
+            thumbnails.Resolve(*meshRecord).hasMaterialBinding &&
+            thumbnails.Resolve(*meshRecord).materialSlotCount == 1 &&
+            thumbnails.Resolve(*meshRecord).materialTextureCount == 1,
+        "mesh thumbnail should bind source geometry, material, and texture metadata");
     smoke.Expect(
         thumbnails.Resolve(*textureRecord).status == EditorAssetThumbnailStatus::Ready,
         "texture thumbnail should be ready");
+    smoke.Expect(
+        thumbnails.Resolve(*meshRecord).gpuStatus == EditorAssetGpuThumbnailStatus::Ready &&
+            thumbnails.Resolve(*meshRecord).gpuHandleToken != 0,
+        "mesh thumbnail should become GPU resident");
     smoke.Expect(
         thumbnails.Resolve(*invalidRecord).status == EditorAssetThumbnailStatus::Failed,
         "invalid texture thumbnail should fail cleanly");
@@ -667,6 +742,7 @@ void RunAssetThumbnailServiceGate(SmokeRun& smoke, std::ostream& log) {
     updatedInvalid.sourceTimestamp = 201;
     smoke.Expect(registry.Register(updatedInvalid), "thumbnail timestamp update should register");
     thumbnails.Sync(registry);
+    thumbnails.ProcessPreviewJobs(8);
     smoke.Expect(
         thumbnails.Resolve(*registry.Find(EditorAssetKind::Texture, "thumb_invalid")).generation >
             generationBefore,
@@ -684,9 +760,12 @@ void RunAssetThumbnailServiceGate(SmokeRun& smoke, std::ostream& log) {
         << thumbnails.Count(EditorAssetThumbnailStatus::Unsupported)
         << " failed="
         << thumbnails.Count(EditorAssetThumbnailStatus::Failed)
+        << " gpuReady="
+        << thumbnails.GpuThumbnails().Count(EditorAssetGpuThumbnailStatus::Ready)
         << " revision="
         << thumbnails.Revision()
         << '\n';
+    RemoveTreeIfPresent(thumbnailSmokeRoot);
 }
 
 void RunAssetHandleStabilityGate(SmokeRun& smoke, std::ostream& log) {
@@ -730,10 +809,14 @@ void RunAssetImportReimportGate(SmokeRun& smoke, std::ostream& log) {
 
     const std::filesystem::path meshPath = root / "mesh" / "smoke_import.mesh";
     const std::filesystem::path legacyPath = root / "legacy" / "smoke_legacy.png";
-    const std::filesystem::path externalTexturePath = externalRoot / "smoke_external.png";
+    const std::filesystem::path externalTexturePath = externalRoot / "smoke_external.bmp";
+    const std::filesystem::path externalBatchTexturePath = externalRoot / "smoke_batch.bmp";
+    const std::filesystem::path unsupportedExternalPath = externalRoot / "smoke_unsupported.txt";
     WriteTextFile(meshPath, "smoke import mesh");
     WriteTextFile(legacyPath, "smoke legacy texture");
-    WriteTextFile(externalTexturePath, "smoke external texture");
+    WriteBinaryFile(externalTexturePath, MakeBmpPreviewHeader(8, 4));
+    WriteBinaryFile(externalBatchTexturePath, MakeBmpPreviewHeader(10, 5));
+    WriteTextFile(unsupportedExternalPath, "smoke unsupported");
 
     EditorAssetRegistry registry;
     EditorAssetThumbnailService thumbnails;
@@ -761,6 +844,45 @@ void RunAssetImportReimportGate(SmokeRun& smoke, std::ostream& log) {
     smoke.Expect(
         std::filesystem::exists(externalImport.record.sourcePath),
         "smoke external import should copy into Resources");
+    thumbnails.ProcessPreviewJobs(8);
+    thumbnails.ProcessGpuThumbnails(8);
+    const EditorAssetThumbnailEntry externalThumbnail = thumbnails.Resolve(externalImport.record);
+    smoke.Expect(
+        externalThumbnail.status == EditorAssetThumbnailStatus::Ready &&
+            externalThumbnail.width == 8 &&
+            externalThumbnail.height == 4,
+        "smoke external import should refresh rich texture preview");
+    smoke.Expect(
+        externalThumbnail.gpuStatus == EditorAssetGpuThumbnailStatus::Ready &&
+            externalThumbnail.gpuHandleToken != 0,
+        "smoke external import should allocate a GPU thumbnail");
+
+    EditorAssetExternalImportPolicy batchExternalPolicy{};
+    batchExternalPolicy.destinationFolder = "__editor_smoke_asset_import/batch";
+    batchExternalPolicy.collisionPolicy = EditorAssetExternalImportCollisionPolicy::Rename;
+    const EditorAssetImportResult batchExternalImport =
+        importService.ImportExternalBatch(
+            std::vector<std::filesystem::path>{
+                externalBatchTexturePath,
+                externalBatchTexturePath,
+                unsupportedExternalPath},
+            batchExternalPolicy);
+    smoke.Expect(batchExternalImport.succeeded, "smoke batch external import should succeed");
+    smoke.Expect(batchExternalImport.warning, "smoke batch external import should warn on unsupported files");
+    smoke.Expect(batchExternalImport.importedCount == 2, "smoke batch external import should import valid files");
+    smoke.Expect(batchExternalImport.skippedCount == 1, "smoke batch external import should count unsupported files");
+    thumbnails.ProcessPreviewJobs(8);
+    thumbnails.ProcessGpuThumbnails(8);
+    const EditorAssetThumbnailEntry batchThumbnail = thumbnails.Resolve(batchExternalImport.record);
+    smoke.Expect(
+        batchThumbnail.status == EditorAssetThumbnailStatus::Ready &&
+            batchThumbnail.width == 10 &&
+            batchThumbnail.height == 5,
+        "smoke batch external import should refresh rich preview");
+    smoke.Expect(
+        batchThumbnail.gpuStatus == EditorAssetGpuThumbnailStatus::Ready &&
+            batchThumbnail.gpuHandleToken != 0,
+        "smoke batch external import should allocate a GPU thumbnail");
 
     EditorAssetRecord legacy = MakeSmokeAsset(EditorAssetKind::Texture, "smoke_legacy", {});
     legacy.sourcePath = legacyPath.generic_string();
@@ -780,6 +902,8 @@ void RunAssetImportReimportGate(SmokeRun& smoke, std::ostream& log) {
         << importResult.importedCount
         << " external="
         << externalImport.importedCount
+        << " batchExternal="
+        << batchExternalImport.importedCount
         << " migrated="
         << migrateResult.migratedCount
         << " thumbnails="

@@ -2,12 +2,19 @@
 
 #include "EditorAssetMutationExecutor.h"
 #include "EditorAssetMutationSafety.h"
+#include "EditorAssetFallbackIconAtlas.h"
 #include "EditorAssetImportService.h"
+#include "EditorAssetMeshThumbnailPreviewRenderer.h"
+#include "EditorAssetPreviewSceneRenderer.h"
+#include "EditorAssetPreviewRenderTarget.h"
 #include "EditorAssetReferenceDiagnosticsAdapter.h"
 #include "EditorAssetRegistry.h"
 #include "EditorAssetSelection.h"
+#include "EditorAssetThumbnailCache.h"
 #include "EditorAssetThumbnailDiagnosticsAdapter.h"
 #include "EditorAssetThumbnailService.h"
+#include "EditorAssetThumbnailTextureLoader.h"
+#include "EditorThumbnailUploadRetirementQueue.h"
 #include "EditorDirtyStateService.h"
 #include "EditorDetailsEditController.h"
 #include "EditorLayoutPersistenceService.h"
@@ -21,6 +28,7 @@
 #include "EditorValidationService.h"
 #include "ExistingFeatureProtection.h"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -28,6 +36,8 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -82,6 +92,42 @@ private:
     uint32_t failedCount_ = 0;
 };
 
+class FakeThumbnailGpuBackend final : public EditorAssetGpuThumbnailBackend {
+public:
+    bool AllocateThumbnail(
+        const EditorAssetGpuThumbnailAllocationRequest& request,
+        EditorAssetGpuThumbnailAllocation& outAllocation,
+        std::string& outError) override {
+        (void)outError;
+        const uint32_t descriptorIndex = nextDescriptorIndex_++;
+        const uint64_t textureId = 0x70000000ull + descriptorIndex;
+        allocated_[request.key] = textureId;
+        ++allocationCount_;
+        outAllocation.resourceId = textureId;
+        outAllocation.displayTextureId = textureId;
+        outAllocation.descriptorIndex = descriptorIndex;
+        outAllocation.shaderResourceView = true;
+        outAllocation.detail = "Fake GPU thumbnail SRV descriptor is allocated.";
+        return true;
+    }
+
+    void ReleaseThumbnail(std::string_view key, uint64_t resourceId) override {
+        (void)resourceId;
+        if (allocated_.erase(std::string(key)) > 0) {
+            ++releaseCount_;
+        }
+    }
+
+    uint32_t AllocationCount() const { return allocationCount_; }
+    uint32_t ReleaseCount() const { return releaseCount_; }
+
+private:
+    uint32_t nextDescriptorIndex_ = 4000;
+    uint32_t allocationCount_ = 0;
+    uint32_t releaseCount_ = 0;
+    std::unordered_map<std::string, uint64_t> allocated_;
+};
+
 EditorObjectHandle MakeCourseObject(uint64_t index) {
     EditorObjectHandle handle{};
     handle.domain = EditorDomainId::CourseTerrainPlacement;
@@ -120,6 +166,55 @@ void WriteTextFile(const std::filesystem::path& path, const std::string& text) {
         throw std::runtime_error("failed to write " + path.generic_string());
     }
     file << text;
+}
+
+void WriteBinaryFile(const std::filesystem::path& path, const std::vector<unsigned char>& bytes) {
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file.is_open()) {
+        throw std::runtime_error("failed to write " + path.generic_string());
+    }
+    file.write(
+        reinterpret_cast<const char*>(bytes.data()),
+        static_cast<std::streamsize>(bytes.size()));
+}
+
+std::vector<unsigned char> MakeBmpPreviewHeader(uint32_t width, uint32_t height) {
+    std::vector<unsigned char> bytes(26, 0);
+    bytes[0] = 'B';
+    bytes[1] = 'M';
+    const auto writeLe32 = [&](std::size_t offset, uint32_t value) {
+        bytes[offset + 0] = static_cast<unsigned char>(value & 0xff);
+        bytes[offset + 1] = static_cast<unsigned char>((value >> 8) & 0xff);
+        bytes[offset + 2] = static_cast<unsigned char>((value >> 16) & 0xff);
+        bytes[offset + 3] = static_cast<unsigned char>((value >> 24) & 0xff);
+    };
+    writeLe32(18, width);
+    writeLe32(22, height);
+    return bytes;
+}
+
+std::vector<unsigned char> MakeTgaPreviewImage(uint16_t width, uint16_t height) {
+    std::vector<unsigned char> bytes(18 + static_cast<size_t>(width) * height * 4, 0);
+    bytes[2] = 2;
+    bytes[12] = static_cast<unsigned char>(width & 0xff);
+    bytes[13] = static_cast<unsigned char>((width >> 8) & 0xff);
+    bytes[14] = static_cast<unsigned char>(height & 0xff);
+    bytes[15] = static_cast<unsigned char>((height >> 8) & 0xff);
+    bytes[16] = 32;
+    bytes[17] = 0x28;
+    for (uint16_t y = 0; y < height; ++y) {
+        for (uint16_t x = 0; x < width; ++x) {
+            const size_t offset = 18 + (static_cast<size_t>(y) * width + x) * 4;
+            bytes[offset + 0] = static_cast<unsigned char>(40 + x);
+            bytes[offset + 1] = static_cast<unsigned char>(80 + y);
+            bytes[offset + 2] = 180;
+            bytes[offset + 3] = 255;
+        }
+    }
+    return bytes;
 }
 
 void RemoveTreeIfPresent(const std::filesystem::path& path) {
@@ -1014,7 +1109,198 @@ void TestAssetRegistryAndMutationSafety(RegressionRunner& runner) {
 
     std::string thumbnailStage = "thumbnail setup";
     try {
+        thumbnailStage = "thumbnail texture pixel decode";
+        const std::filesystem::path thumbnailDecodeRoot = "logs/__editor_thumbnail_decode_regression";
+        RemoveTreeIfPresent(thumbnailDecodeRoot);
+        const std::filesystem::path thumbnailDecodeTexture = thumbnailDecodeRoot / "decode_texture.tga";
+        WriteBinaryFile(thumbnailDecodeTexture, MakeTgaPreviewImage(16, 8));
+        const std::filesystem::path thumbnailMeshObj = thumbnailDecodeRoot / "preview_mesh.obj";
+        const std::filesystem::path thumbnailMeshMtl = thumbnailDecodeRoot / "preview_mesh.mtl";
+        WriteTextFile(
+            thumbnailMeshMtl,
+            "newmtl warm_preview\n"
+            "Kd 0.8 0.4 0.2\n"
+            "map_Kd decode_texture.tga\n");
+        WriteTextFile(
+            thumbnailMeshObj,
+            "mtllib preview_mesh.mtl\n"
+            "v -1.0 0.0 -0.5\n"
+            "v 1.0 0.0 -0.5\n"
+            "v 0.0 1.5 0.5\n"
+            "usemtl warm_preview\n"
+            "f 1 2 3\n");
+        EditorAssetRecord previewMeshRecord = MakeAsset(
+            EditorAssetKind::Mesh,
+            "preview_mesh_obj",
+            thumbnailMeshObj.generic_string(),
+            true,
+            "guid-preview-mesh-obj");
+        const EditorAssetPreviewInfo previewMeshInfo =
+            EditorAssetPreviewProvider{}.BuildPreview(previewMeshRecord);
+        runner.Expect(
+            previewMeshInfo.readiness == EditorAssetPreviewReadiness::Ready &&
+                previewMeshInfo.hasPreviewGeometry &&
+                previewMeshInfo.hasMaterialBinding,
+            "OBJ mesh preview should bind real geometry bounds and material metadata");
+        runner.Expect(
+            previewMeshInfo.vertexCount == 3 &&
+                previewMeshInfo.faceCount == 1 &&
+                previewMeshInfo.materialSlotCount == 1 &&
+                previewMeshInfo.materialTextureCount == 1 &&
+                previewMeshInfo.materialTextureTimestamp != 0 &&
+                previewMeshInfo.boundsRadius > 0.0f &&
+                previewMeshInfo.previewCameraDistance > previewMeshInfo.boundsRadius,
+            "OBJ mesh preview should expose bounds, material texture stamp, and camera preset");
+        EditorAssetThumbnailPixelData decodedPixels;
+        std::string decodeError;
+        runner.Expect(
+            LoadEditorAssetTextureThumbnailPixels(
+                thumbnailDecodeTexture.generic_string(),
+                8,
+                decodedPixels,
+                decodeError),
+            "texture thumbnail loader should decode valid TGA pixels");
+        runner.Expect(
+            decodedPixels.width == 8 &&
+                decodedPixels.height == 4 &&
+                decodedPixels.rowPitch == 32 &&
+                decodedPixels.rgba8.size() == 128,
+            "texture thumbnail loader should resize and normalize pixels to RGBA8");
+
+        EditorAssetThumbnailCachePolicy cachePolicy{};
+        cachePolicy.persistentCacheEnabled = true;
+        cachePolicy.persistentRoot = thumbnailDecodeRoot / "cache";
+        cachePolicy.maxMemoryBytes = 1024 * 1024;
+        EditorAssetThumbnailCacheStore cacheStore;
+        cacheStore.Configure(cachePolicy);
+        EditorAssetGpuThumbnailAllocationRequest cacheRequest{};
+        cacheRequest.key = "thumb:Texture:cache_regression";
+        cacheRequest.kind = EditorAssetKind::Texture;
+        cacheRequest.previewKind = EditorAssetPreviewKind::Texture;
+        cacheRequest.assetId = "cache_regression";
+        cacheRequest.sourcePath = thumbnailDecodeTexture.generic_string();
+        cacheRequest.sourceTimestamp = 77;
+        cacheRequest.previewGeneration = 2;
+        cacheRequest.width = decodedPixels.width;
+        cacheRequest.height = decodedPixels.height;
+        std::string cacheDetail;
+        const EditorAssetThumbnailCacheKey cacheKey =
+            BuildEditorAssetThumbnailCacheKey(cacheRequest, cachePolicy.previewVersion);
+        runner.Expect(
+            cacheStore.Store(cacheKey, decodedPixels, false, cacheDetail),
+            "thumbnail cache store should persist a valid pixel payload");
+        EditorAssetThumbnailPixelData cacheHitPixels;
+        runner.Expect(
+            cacheStore.TryLoad(cacheKey, cacheHitPixels, cacheDetail) &&
+                cacheHitPixels.rgba8 == decodedPixels.rgba8,
+            "thumbnail cache should return a memory hit for stored payloads");
+        runner.Expect(
+            cacheStore.Telemetry().hits == 1 &&
+                cacheStore.Telemetry().stores == 1,
+            "thumbnail cache telemetry should count memory hits and stores");
+
+        EditorAssetThumbnailCacheStore warmCacheStore;
+        warmCacheStore.Configure(cachePolicy);
+        EditorAssetThumbnailPixelData diskHitPixels;
+        runner.Expect(
+            warmCacheStore.TryLoad(cacheKey, diskHitPixels, cacheDetail) &&
+                diskHitPixels.rgba8 == decodedPixels.rgba8,
+            "thumbnail cache should return a disk hit for persistent payloads");
+
+        EditorAssetThumbnailCachePolicy evictionPolicy{};
+        evictionPolicy.maxMemoryBytes = 64;
+        EditorAssetThumbnailCacheStore evictionCache;
+        evictionCache.Configure(evictionPolicy);
+        runner.Expect(
+            evictionCache.Store(cacheKey, decodedPixels, false, cacheDetail),
+            "thumbnail cache should accept payloads before applying eviction policy");
+        runner.Expect(
+            evictionCache.Telemetry().evictions > 0 &&
+                evictionCache.Telemetry().residentEntries == 0,
+            "thumbnail cache should evict least-recent entries when memory policy is exceeded");
+
+        EditorThumbnailUploadRetirementQueue uploadRetirement;
+        uploadRetirement.EnqueueForTesting(4096, 12);
+        runner.Expect(
+            uploadRetirement.Telemetry().pendingCount == 1 &&
+                uploadRetirement.Telemetry().pendingBytes == 4096,
+            "thumbnail upload retirement queue should retain pending uploads before fence completion");
+        runner.Expect(
+            uploadRetirement.RetireCompleted(11) == 0 &&
+                uploadRetirement.Telemetry().pendingCount == 1,
+            "thumbnail upload retirement queue should not retire before completed fence reaches target");
+        runner.Expect(
+            uploadRetirement.RetireCompleted(12) == 1 &&
+                uploadRetirement.Telemetry().pendingCount == 0 &&
+                uploadRetirement.Telemetry().retiredBytes == 4096,
+            "thumbnail upload retirement queue should retire uploads after completed fence reaches target");
+
+        EditorAssetPreviewRenderTargetPool nullPreviewTargetPool;
+        EditorAssetPreviewRenderTargetAllocation nullPreviewTargetAllocation{};
+        std::string nullPreviewTargetError;
+        runner.Expect(
+            !nullPreviewTargetPool.Allocate(
+                128,
+                128,
+                nullPreviewTargetAllocation,
+                nullPreviewTargetError),
+            "preview render target pool should reject allocation before D3D12 initialization");
+
+        EditorAssetGpuThumbnailAllocationRequest meshPreviewRequest{};
+        meshPreviewRequest.key = "mesh-preview-regression";
+        meshPreviewRequest.kind = EditorAssetKind::Mesh;
+        meshPreviewRequest.previewKind = EditorAssetPreviewKind::Mesh;
+        meshPreviewRequest.vertexCount = 128;
+        meshPreviewRequest.faceCount = 64;
+        meshPreviewRequest.materialSlotCount = 2;
+        meshPreviewRequest.boundsRadius = 1.75f;
+        meshPreviewRequest.previewCameraDistance = 4.9f;
+        meshPreviewRequest.previewLightDirection[0] = 0.38f;
+        meshPreviewRequest.previewLightDirection[1] = -0.82f;
+        meshPreviewRequest.previewLightDirection[2] = 0.42f;
+        meshPreviewRequest.hasPreviewGeometry = true;
+        meshPreviewRequest.hasMaterialBinding = true;
+        meshPreviewRequest.swatchRgba = 0xff4477aau;
+        EditorAssetThumbnailPixelData meshPreviewPixels;
+        std::string meshPreviewError;
+        std::string previewSceneDetail;
+        runner.Expect(
+            RenderEditorAssetPreviewScenePass(
+                meshPreviewRequest,
+                meshPreviewPixels,
+                previewSceneDetail,
+                meshPreviewError),
+            "engine-scene mesh/material preview pass should generate pixels");
+        runner.Expect(
+            meshPreviewPixels.width == 128 &&
+                meshPreviewPixels.height == 128 &&
+                meshPreviewPixels.rowPitch == 512 &&
+                meshPreviewPixels.rgba8.size() == 65536,
+            "engine-scene mesh/material preview pass should produce a stable RGBA8 payload");
+        runner.Expect(
+            previewSceneDetail.find("material slots 2") != std::string::npos &&
+                previewSceneDetail.find("camera") != std::string::npos,
+            "engine-scene mesh/material preview pass should report material and camera binding");
+
+        EditorAssetThumbnailPixelData fallbackIconPixels;
+        runner.Expect(
+            BuildEditorAssetFallbackIconPixels(
+                EditorAssetKind::Audio,
+                EditorAssetPreviewKind::Audio,
+                0xff335577u,
+                fallbackIconPixels),
+            "fallback icon atlas should generate production fallback icon pixels");
+        runner.Expect(
+            fallbackIconPixels.width == 96 &&
+                fallbackIconPixels.height == 96 &&
+                fallbackIconPixels.rowPitch == 384 &&
+                fallbackIconPixels.rgba8.size() == 36864,
+            "fallback icon atlas should produce a stable RGBA8 tile payload");
+        RemoveTreeIfPresent(thumbnailDecodeRoot);
+
         EditorAssetThumbnailService thumbnails;
+        FakeThumbnailGpuBackend fakeGpuBackend;
+        thumbnails.SetGpuThumbnailBackend(&fakeGpuBackend);
         thumbnailStage = "thumbnail initial sync";
         thumbnails.Sync(registry);
         meshRecord = registry.Find(EditorAssetKind::Mesh, "mesh_rock_a");
@@ -1028,11 +1314,90 @@ void TestAssetRegistryAndMutationSafety(RegressionRunner& runner) {
             !BuildEditorAssetThumbnailKey(*meshRecord).empty(),
             "thumbnail key should be stable");
         runner.Expect(
-            thumbnails.Resolve(*meshRecord).status == EditorAssetThumbnailStatus::Unsupported,
-            "mesh thumbnail should use icon fallback until a mesh preview provider exists");
+            thumbnails.Resolve(*meshRecord).status == EditorAssetThumbnailStatus::Pending,
+            "mesh thumbnail should be pending before preview job processing");
+        runner.Expect(
+            thumbnails.PreviewJobs().Count(EditorAssetPreviewJobStatus::Queued) >= 2,
+            "thumbnail sync should queue preview jobs");
+        {
+            EditorAssetThumbnailService asyncThumbnails;
+            asyncThumbnails.Sync(registry);
+            const uint32_t asyncStarted =
+                asyncThumbnails.ProcessPreviewJobs(std::chrono::milliseconds(1), 2);
+            runner.Expect(
+                asyncStarted > 0,
+                "async thumbnail preview should launch work inside the UI time budget");
+
+            bool asyncCompleted = false;
+            for (int attempt = 0; attempt < 100; ++attempt) {
+                asyncThumbnails.ProcessPreviewJobs(std::chrono::milliseconds(1), 2);
+                if (asyncThumbnails.Count(EditorAssetThumbnailStatus::Ready) > 0 ||
+                    asyncThumbnails.Count(EditorAssetThumbnailStatus::Failed) > 0) {
+                    asyncCompleted = true;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            runner.Expect(
+                asyncCompleted,
+                "async thumbnail preview should complete without blocking the caller");
+        }
+        runner.Expect(
+            thumbnails.ProcessPreviewJobs(2) == 2,
+            "thumbnail preview jobs should respect the requested processing budget");
+        thumbnails.ProcessPreviewJobs(16);
+        runner.Expect(
+            thumbnails.Resolve(*meshRecord).status == EditorAssetThumbnailStatus::Ready,
+            "mesh thumbnail should use the rich preview provider");
+        runner.Expect(
+            thumbnails.Resolve(*meshRecord).previewKind == EditorAssetPreviewKind::Mesh,
+            "mesh thumbnail should expose mesh preview metadata");
         runner.Expect(
             thumbnails.Resolve(*textureRecord).status == EditorAssetThumbnailStatus::Ready,
             "texture thumbnail should be preview ready for supported texture extensions");
+        runner.Expect(
+            thumbnails.GpuThumbnails().Count(EditorAssetGpuThumbnailStatus::Queued) >= 2,
+            "ready preview thumbnails should queue GPU thumbnail rendering");
+        runner.Expect(
+            thumbnails.ProcessGpuThumbnails(1) == 1,
+            "GPU thumbnail rendering should respect the requested processing budget");
+        thumbnails.ProcessGpuThumbnails(16);
+        runner.Expect(
+            thumbnails.Resolve(*meshRecord).gpuStatus == EditorAssetGpuThumbnailStatus::Ready &&
+                thumbnails.Resolve(*meshRecord).gpuHandleToken != 0 &&
+                thumbnails.Resolve(*meshRecord).gpuDisplayTextureId != 0 &&
+                thumbnails.Resolve(*meshRecord).gpuDescriptorIndex != UINT32_MAX &&
+                thumbnails.Resolve(*meshRecord).gpuShaderResourceView,
+            "mesh thumbnail should become GPU SRV resident");
+        runner.Expect(
+            thumbnails.Resolve(*textureRecord).gpuStatus == EditorAssetGpuThumbnailStatus::Ready &&
+                thumbnails.Resolve(*textureRecord).gpuHandleToken != 0 &&
+                thumbnails.Resolve(*textureRecord).gpuDisplayTextureId != 0,
+            "texture thumbnail should become GPU SRV resident");
+        runner.Expect(
+            fakeGpuBackend.AllocationCount() >= 2,
+            "GPU thumbnail backend should allocate SRV descriptors for ready thumbnails");
+
+        thumbnailStage = "thumbnail gpu srv invalidation";
+        const uint64_t meshTextureBefore = thumbnails.Resolve(*meshRecord).gpuDisplayTextureId;
+        const uint32_t releasesBefore = fakeGpuBackend.ReleaseCount();
+        EditorAssetRecord updatedMeshForGpu = *meshRecord;
+        updatedMeshForGpu.sourceTimestamp += 101;
+        runner.Expect(
+            registry.Register(updatedMeshForGpu),
+            "updated mesh registration should succeed for GPU thumbnail invalidation");
+        thumbnails.Sync(registry);
+        thumbnails.ProcessPreviewJobs(8);
+        thumbnails.ProcessGpuThumbnails(8);
+        meshRecord = registry.Find(EditorAssetKind::Mesh, "mesh_rock_a");
+        runner.Expect(meshRecord != nullptr, "updated mesh record should be findable");
+        runner.Expect(
+            fakeGpuBackend.ReleaseCount() > releasesBefore,
+            "stale GPU thumbnail SRV should be released when source timestamp changes");
+        runner.Expect(
+            thumbnails.Resolve(*meshRecord).gpuDisplayTextureId != 0 &&
+                thumbnails.Resolve(*meshRecord).gpuDisplayTextureId != meshTextureBefore,
+            "updated mesh thumbnail should receive a fresh GPU display texture id");
 
         thumbnailStage = "thumbnail invalid texture registration";
         EditorAssetRecord invalidTexture = MakeAsset(
@@ -1044,12 +1409,24 @@ void TestAssetRegistryAndMutationSafety(RegressionRunner& runner) {
         invalidTexture.sourceTimestamp = 10;
         runner.Expect(registry.Register(invalidTexture), "invalid texture registration should succeed");
         thumbnails.Sync(registry);
+        runner.Expect(
+            thumbnails.Resolve(*registry.Find(EditorAssetKind::Texture, "texture_invalid_preview")).status ==
+                EditorAssetThumbnailStatus::Pending,
+            "invalid texture thumbnail should be pending until preview job processing");
+        thumbnails.ProcessPreviewJobs(8);
         const EditorAssetRecord* invalidTextureRecord =
             registry.Find(EditorAssetKind::Texture, "texture_invalid_preview");
         runner.Expect(invalidTextureRecord != nullptr, "invalid texture record should be findable");
         runner.Expect(
             thumbnails.Resolve(*invalidTextureRecord).status == EditorAssetThumbnailStatus::Failed,
             "unsupported texture extension should report thumbnail failure");
+        runner.Expect(
+            thumbnails.Resolve(*invalidTextureRecord).gpuStatus == EditorAssetGpuThumbnailStatus::Cancelled,
+            "failed preview thumbnails should not request GPU rendering");
+        runner.Expect(
+            thumbnails.RetryPreview(thumbnails.Resolve(*invalidTextureRecord).key),
+            "failed thumbnail preview should be retryable");
+        thumbnails.ProcessPreviewJobs(1);
         const uint32_t generationBefore =
             thumbnails.Resolve(*invalidTextureRecord).generation;
 
@@ -1060,6 +1437,7 @@ void TestAssetRegistryAndMutationSafety(RegressionRunner& runner) {
             registry.Register(updatedInvalidTexture),
             "updated invalid texture registration should succeed");
         thumbnails.Sync(registry);
+        thumbnails.ProcessPreviewJobs(8);
         const uint32_t generationAfter =
             thumbnails.Resolve(*registry.Find(EditorAssetKind::Texture, "texture_invalid_preview")).generation;
         runner.Expect(
@@ -1170,17 +1548,27 @@ void TestAssetMigrationPipeline(RegressionRunner& runner) {
 
         EditorAssetThumbnailService thumbnails;
         thumbnails.Sync(registry);
+        thumbnails.ProcessPreviewJobs(8);
         const EditorAssetThumbnailEntry beforeThumbnail =
             thumbnails.Resolve(*registry.Find(EditorAssetKind::Mesh, "migration_mesh"));
         runner.Expect(
-            beforeThumbnail.status == EditorAssetThumbnailStatus::Unsupported,
-            "migration mesh should use thumbnail fallback before preview provider support");
+            beforeThumbnail.status == EditorAssetThumbnailStatus::Ready,
+            "migration mesh should produce rich preview metadata");
+        runner.Expect(
+            beforeThumbnail.lineCount > 0,
+            "migration mesh preview should summarize source lines");
 
         EditorAssetMutationExecutor executor(registry);
         EditorTransactionStack transactions;
+        std::string lastAssetTransactionError;
         const auto applyAssetTransaction =
             [&](const EditorTransactionRecord& record, EditorTransactionApplyMode mode) {
                 const EditorAssetMutationResult result = executor.ApplyTransaction(record, mode);
+                if (!result.succeeded) {
+                    lastAssetTransactionError = result.message.empty()
+                        ? record.label + " " + std::string(ToString(mode)) + " returned an empty error."
+                        : result.message;
+                }
                 return result.succeeded;
             };
 
@@ -1228,6 +1616,7 @@ void TestAssetMigrationPipeline(RegressionRunner& runner) {
             movedMesh != nullptr && movedMesh->sourcePath.find("/moved/") != std::string::npos,
             "migrated asset move should update source path");
         thumbnails.Sync(registry);
+        thumbnails.ProcessPreviewJobs(8);
         const EditorAssetThumbnailEntry movedThumbnail = thumbnails.Resolve(*movedMesh);
         runner.Expect(
             movedThumbnail.key == movedMesh->thumbnailKey,
@@ -1274,7 +1663,16 @@ void TestAssetMigrationPipeline(RegressionRunner& runner) {
 
         runner.Expect(transactions.Undo(applyAssetTransaction), "migration mesh delete undo should restore mesh");
         runner.Expect(transactions.Undo(applyAssetTransaction), "migration dependent delete undo should restore course");
-        runner.Expect(transactions.Undo(applyAssetTransaction), "migration move undo should restore source folder");
+        const EditorTransactionRecord* nextMoveUndo = transactions.NextUndoTransaction();
+        runner.Expect(
+            nextMoveUndo != nullptr,
+            "migration move undo should have a transaction available");
+        runner.Expect(
+            nextMoveUndo->label == "Move Asset",
+            "migration move undo expected Move Asset, got " + nextMoveUndo->label);
+        runner.Expect(
+            transactions.Undo(applyAssetTransaction),
+            "migration move undo should restore source folder: " + lastAssetTransactionError);
         runner.Expect(transactions.Undo(applyAssetTransaction), "migration rename undo should restore original id");
         runner.Expect(
             registry.Find(EditorAssetKind::Mesh, "migration_mesh") != nullptr,
@@ -1314,12 +1712,14 @@ void TestAssetImportReimportPipeline(RegressionRunner& runner) {
         const std::filesystem::path meshPath = root / "mesh" / "import_mesh.mesh";
         const std::filesystem::path coursePath = root / "course" / "import_course.course";
         const std::filesystem::path legacyPath = root / "legacy" / "legacy_texture.png";
-        const std::filesystem::path externalTexturePath = externalRoot / "external_texture.png";
+        const std::filesystem::path externalTexturePath = externalRoot / "external_texture.bmp";
+        const std::filesystem::path externalBatchTexturePath = externalRoot / "batch_texture.bmp";
         const std::filesystem::path unsupportedExternalPath = externalRoot / "unsupported.txt";
         WriteTextFile(meshPath, "import mesh v1");
         WriteTextFile(coursePath, "mesh=import_mesh\n");
         WriteTextFile(legacyPath, "legacy texture");
-        WriteTextFile(externalTexturePath, "external texture");
+        WriteBinaryFile(externalTexturePath, MakeBmpPreviewHeader(4, 2));
+        WriteBinaryFile(externalBatchTexturePath, MakeBmpPreviewHeader(6, 3));
         WriteTextFile(unsupportedExternalPath, "unsupported");
 
         EditorAssetRegistry registry;
@@ -1351,6 +1751,10 @@ void TestAssetImportReimportPipeline(RegressionRunner& runner) {
         runner.Expect(
             thumbnails.Count() == registry.Count(),
             "import service should sync thumbnail cache after import");
+        runner.Expect(
+            thumbnails.PreviewJobs().Count(EditorAssetPreviewJobStatus::Queued) > 0,
+            "import service should enqueue preview jobs after import");
+        thumbnails.ProcessPreviewJobs(8);
 
         importStage = "external import";
         EditorAssetExternalImportPolicy externalPolicy{};
@@ -1361,7 +1765,7 @@ void TestAssetImportReimportPipeline(RegressionRunner& runner) {
         runner.Expect(externalImport.succeeded, "external texture import should succeed");
         runner.Expect(
             externalImport.record.sourcePath ==
-                "Resources/__editor_asset_import_regression/external/external_texture.png",
+                "Resources/__editor_asset_import_regression/external/external_texture.bmp",
             "external import should copy into the requested Resources folder");
         runner.Expect(
             std::filesystem::exists(externalImport.record.sourcePath),
@@ -1369,12 +1773,26 @@ void TestAssetImportReimportPipeline(RegressionRunner& runner) {
         runner.Expect(
             externalImport.record.hasMetadata && !externalImport.record.provisionalGuid,
             "external import should create durable metadata");
+        thumbnails.ProcessPreviewJobs(8);
+        thumbnails.ProcessGpuThumbnails(8);
+        const EditorAssetThumbnailEntry externalThumbnail = thumbnails.Resolve(externalImport.record);
+        runner.Expect(
+            externalThumbnail.status == EditorAssetThumbnailStatus::Ready &&
+                externalThumbnail.previewKind == EditorAssetPreviewKind::Texture,
+            "external import should refresh rich texture preview metadata");
+        runner.Expect(
+            externalThumbnail.width == 4 && externalThumbnail.height == 2,
+            "external texture preview should expose source dimensions");
+        runner.Expect(
+            externalThumbnail.gpuStatus == EditorAssetGpuThumbnailStatus::Ready &&
+                externalThumbnail.gpuHandleToken != 0,
+            "external import should allocate a GPU thumbnail after preview generation");
         importStage = "external import collision";
         const EditorAssetImportResult externalCollisionImport =
             importService.ImportExternal(externalTexturePath, externalPolicy);
         runner.Expect(externalCollisionImport.succeeded, "external import collision rename should succeed");
         runner.Expect(
-            externalCollisionImport.record.sourcePath.find("external_texture_1.png") != std::string::npos,
+            externalCollisionImport.record.sourcePath.find("external_texture_1.bmp") != std::string::npos,
             "external import collision should allocate a unique filename");
         importStage = "unsupported external import";
         const EditorAssetImportResult unsupportedImport =
@@ -1383,6 +1801,41 @@ void TestAssetImportReimportPipeline(RegressionRunner& runner) {
         runner.Expect(
             !std::filesystem::exists(root / "external" / "unsupported.txt"),
             "unsupported external import should not copy a partial destination");
+
+        importStage = "batch external import";
+        EditorAssetExternalImportPolicy batchExternalPolicy{};
+        batchExternalPolicy.destinationFolder = "__editor_asset_import_regression/batch";
+        batchExternalPolicy.collisionPolicy = EditorAssetExternalImportCollisionPolicy::Rename;
+        const EditorAssetImportResult batchExternalImport =
+            importService.ImportExternalBatch(
+                std::vector<std::filesystem::path>{
+                    externalBatchTexturePath,
+                    externalBatchTexturePath,
+                    unsupportedExternalPath},
+                batchExternalPolicy);
+        runner.Expect(batchExternalImport.succeeded, "batch external import should succeed with valid files");
+        runner.Expect(batchExternalImport.warning, "batch external import should warn for skipped unsupported files");
+        runner.Expect(batchExternalImport.importedCount == 2, "batch external import should import both valid files");
+        runner.Expect(batchExternalImport.skippedCount == 1, "batch external import should count unsupported files");
+        runner.Expect(
+            batchExternalImport.record.sourcePath.find("batch_texture_1.bmp") != std::string::npos,
+            "batch external import should preserve collision rename result");
+        runner.Expect(
+            !std::filesystem::exists(root / "batch" / "unsupported.txt"),
+            "batch external import should not copy unsupported files");
+        thumbnails.ProcessPreviewJobs(8);
+        thumbnails.ProcessGpuThumbnails(8);
+        const EditorAssetThumbnailEntry batchExternalThumbnail =
+            thumbnails.Resolve(batchExternalImport.record);
+        runner.Expect(
+            batchExternalThumbnail.status == EditorAssetThumbnailStatus::Ready &&
+                batchExternalThumbnail.width == 6 &&
+                batchExternalThumbnail.height == 3,
+            "batch external import should refresh rich preview metadata once finalized");
+        runner.Expect(
+            batchExternalThumbnail.gpuStatus == EditorAssetGpuThumbnailStatus::Ready &&
+                batchExternalThumbnail.gpuHandleToken != 0,
+            "batch external import should allocate a GPU thumbnail once finalized");
 
         importStage = "course reimport";
         courseRecord =
@@ -1545,6 +1998,28 @@ void TestLayoutPersistence(RegressionRunner& runner) {
     runner.Expect(
         recovered.ActivePanel(EditorPanelHostArea::BottomDock) == "course.timeline",
         "valid entries in corrupt layout should still recover");
+
+    const std::filesystem::path activeTabPath =
+        std::filesystem::path{"generated"} / "editor" / "tests" / "layout_active_tabs.ini";
+    std::error_code activeRemoveError;
+    std::filesystem::remove(activeTabPath, activeRemoveError);
+    EditorLayoutPersistenceService activeTabs;
+    activeTabs.SetPath(activeTabPath);
+    activeTabs.SetActivePanel(EditorPanelHostArea::LeftSidebar, "editor.workspace");
+    runner.Expect(
+        !activeTabs.Dirty(),
+        "programmatic active panel synchronization should not dirty layout persistence");
+    activeTabs.SetActivePanelFromUser(EditorPanelHostArea::LeftSidebar, "editor.selection");
+    runner.Expect(
+        activeTabs.Dirty(),
+        "user active tab selection should dirty layout persistence");
+    activeTabs.SaveIfDirty();
+    runner.Expect(
+        activeTabs.Dirty() && !std::filesystem::exists(activeTabPath),
+        "debounced layout persistence should not save immediately after tab selection");
+    runner.Expect(activeTabs.Save(), "explicit layout save should flush debounced active tab selection");
+    runner.Expect(!activeTabs.Dirty(), "explicit layout save should clear dirty state");
+    std::filesystem::remove(activeTabPath, activeRemoveError);
 
     std::error_code removeError;
     std::filesystem::remove(testPath, removeError);

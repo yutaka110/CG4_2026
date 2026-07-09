@@ -64,6 +64,9 @@ public:
     EditorAssetImportResult ImportExternal(
         const std::filesystem::path& externalSourcePath,
         const EditorAssetExternalImportPolicy& policy = {});
+    EditorAssetImportResult ImportExternalBatch(
+        const std::vector<std::filesystem::path>& externalSourcePaths,
+        const EditorAssetExternalImportPolicy& policy = {});
     EditorAssetImportResult Reimport(
         EditorAssetKind kind,
         std::string_view id,
@@ -72,6 +75,14 @@ public:
         const EditorAssetImportOptions& options = {});
 
 private:
+    EditorAssetImportResult ImportInternal(
+        const std::filesystem::path& sourcePath,
+        const EditorAssetImportOptions& options,
+        bool finalizeChange);
+    EditorAssetImportResult ImportExternalInternal(
+        const std::filesystem::path& externalSourcePath,
+        const EditorAssetExternalImportPolicy& policy,
+        bool finalizeChange);
     void FinalizeAssetRegistryChange(const EditorAssetImportOptions& options);
 
     EditorAssetRegistry& registry_;
