@@ -1,5 +1,7 @@
 #include "EditorCommandPanel.h"
 
+#include "EditorToolRegistration.h"
+
 #include "../../externals/imgui/imgui.h"
 
 #include <string>
@@ -10,6 +12,28 @@ void DrawEditorCommandPanel(EditorContext& context) {
     if (context.commands == nullptr) {
         ImGui::TextUnformatted("Command registry unavailable.");
         return;
+    }
+    if (context.tools != nullptr && !context.tools->Diagnostics().empty()) {
+        ImGui::Text(
+            "Tool Registration  Errors %u  Warnings %u",
+            static_cast<unsigned int>(context.tools->ErrorCount()),
+            static_cast<unsigned int>(context.tools->WarningCount()));
+        for (const EditorToolRegistrationDiagnostic& diagnostic : context.tools->Diagnostics()) {
+            const ImVec4 color =
+                diagnostic.severity == EditorToolDiagnosticSeverity::Error
+                    ? ImVec4(1.0f, 0.35f, 0.30f, 1.0f)
+                    : (diagnostic.severity == EditorToolDiagnosticSeverity::Warning
+                           ? ImVec4(1.0f, 0.75f, 0.25f, 1.0f)
+                           : ImVec4(0.65f, 0.80f, 1.0f, 1.0f));
+            ImGui::TextColored(
+                color,
+                "%s %s %s: %s",
+                ToString(diagnostic.severity),
+                ToString(diagnostic.kind),
+                diagnostic.id.c_str(),
+                diagnostic.message.c_str());
+        }
+        ImGui::Separator();
     }
     DrawEditorCommandPanel(
         *context.commands,

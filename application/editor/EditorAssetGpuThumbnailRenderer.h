@@ -111,6 +111,11 @@ struct EditorAssetGpuThumbnailBackendTelemetry {
     uint32_t previewSceneMaterialTextureSrvDescriptors = 0;
     uint64_t previewSceneMaterialTextureTables = 0;
     uint64_t previewSceneMaterialPbrPreviews = 0;
+    uint64_t previewSceneMaterialNormalMapBound = 0;
+    uint64_t previewSceneMaterialRoughnessMapBound = 0;
+    uint64_t previewSceneMaterialMetallicMapBound = 0;
+    uint64_t previewSceneProductionMaterialCacheHits = 0;
+    uint64_t previewSceneProductionMaterialCacheMisses = 0;
     uint64_t previewRenderTargetReused = 0;
     uint64_t previewRenderTargetResized = 0;
 };

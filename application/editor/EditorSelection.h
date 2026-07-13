@@ -15,6 +15,14 @@ enum class EditorDomainId : uint32_t {
     VfxEffectInstance,
     CourseTerrainPlacement,
     CourseRockCluster,
+    CourseCameraKey,
+    CourseEventMarker,
+    CourseTerrainMaterialPreset,
+    TerrainGeneration,
+    PostProcessPass,
+    RenderPreset,
+    CameraRig,
+    GameplayTuning,
     RenderGraphPass,
 };
 

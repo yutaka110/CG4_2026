@@ -14,6 +14,7 @@
 #include "EditorPropertyRegistry.h"
 #include "EditorSelection.h"
 #include "EditorTransactionStack.h"
+#include "EditorToolRegistration.h"
 
 #include <filesystem>
 #include <fstream>
@@ -347,10 +348,10 @@ void EditorAssetCommandProvider::RegisterCommands(EditorContext& context) const 
         return;
     }
 
-    EditorCommandRegistry& registry = *context.commands;
     const EditorCommandContext& commandContext = *context.commandContext;
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "asset.createMeta",
             "Create Asset .meta",
@@ -397,7 +398,8 @@ void EditorAssetCommandProvider::RegisterCommands(EditorContext& context) const 
                 return EditorCommandResult{true, "Created .meta for selected asset."};
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "asset.renameSafety",
             "Check Asset Rename Safety",
@@ -419,7 +421,8 @@ void EditorAssetCommandProvider::RegisterCommands(EditorContext& context) const 
                 return RunSafetyPreflight(context, EditorAssetMutationKind::Rename);
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "asset.moveSafety",
             "Check Asset Move Safety",
@@ -441,7 +444,8 @@ void EditorAssetCommandProvider::RegisterCommands(EditorContext& context) const 
                 return RunSafetyPreflight(context, EditorAssetMutationKind::Move);
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "asset.deleteSafety",
             "Check Asset Delete Safety",
@@ -467,7 +471,8 @@ void EditorAssetCommandProvider::RegisterCommands(EditorContext& context) const 
                 return RequestDeleteSafetyConfirmation(context);
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "asset.reimport",
             "Reimport Selected Asset",
@@ -493,7 +498,8 @@ void EditorAssetCommandProvider::RegisterCommands(EditorContext& context) const 
                 return ReimportSelectedAsset(context);
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "asset.batchMigrateMetadata",
             "Batch Migrate Asset Metadata",
@@ -520,7 +526,8 @@ void EditorAssetCommandProvider::RegisterCommands(EditorContext& context) const 
                 return BatchMigrateAssetMetadata(context);
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "asset.repairMissingReference",
             "Repair Missing Asset Reference",

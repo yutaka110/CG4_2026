@@ -77,6 +77,11 @@ struct EditorPropertyApplyDeltaResult {
     std::string appliedValue;
 };
 
+struct EditorPropertyValidationResult {
+    bool valid = true;
+    std::string message;
+};
+
 class EditorPropertyEditService {
 public:
     EditorPropertyEditResult Apply(const EditorPropertyEditRequest& request) const;
@@ -88,5 +93,8 @@ public:
 bool IsEditorPropertyEditCourseAuthoringDomain(EditorDomainId domain);
 std::string BuildEditorPropertyEditDirtyId(const EditorObjectHandle& target);
 std::string BuildEditorPropertyEditDirtyLabel(const EditorObjectHandle& target);
+EditorPropertyValidationResult ValidateEditorPropertyValue(
+    const EditorPropertyDescriptor& descriptor,
+    const EditorPropertyValue& value);
 
 } // namespace editor

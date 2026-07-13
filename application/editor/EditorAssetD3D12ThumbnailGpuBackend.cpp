@@ -25,7 +25,17 @@
 namespace editor {
 namespace {
 
-constexpr uint32_t kMaxPreviewMaterialTextures = 4;
+constexpr uint32_t kMaxPreviewMaterialSlots = 4;
+constexpr uint32_t kPreviewMaterialTextureRoleCount = 4;
+constexpr uint32_t kMaxPreviewMaterialTextures = kMaxPreviewMaterialSlots * kPreviewMaterialTextureRoleCount;
+constexpr size_t kMaxPreviewMaterialTexturePixelCacheEntries = 128;
+
+enum class PreviewMaterialTextureRole : uint32_t {
+    Albedo = 0,
+    Normal = 1,
+    Roughness = 2,
+    Metallic = 3,
+};
 
 bool SupportsDirectPreviewSceneSvr(const EditorAssetGpuThumbnailAllocationRequest& request) {
     return request.previewKind == EditorAssetPreviewKind::Mesh || request.kind == EditorAssetKind::Mesh;
@@ -57,6 +67,9 @@ struct PreviewMeshVertex {
     float textureIndex = 0.0f;
     float roughness = 0.58f;
     float metallic = 0.0f;
+    float normalTextureWeight = 0.0f;
+    float roughnessTextureWeight = 0.0f;
+    float metallicTextureWeight = 0.0f;
 };
 
 struct PreviewMeshConstants {
@@ -82,6 +95,9 @@ struct PreviewMeshPayload {
     bool materialTextureBound = false;
     bool materialTextureFallback = false;
     std::vector<std::string> materialTexturePaths;
+    uint32_t normalTextureCount = 0;
+    uint32_t roughnessTextureCount = 0;
+    uint32_t metallicTextureCount = 0;
 };
 
 struct Vec3 {
@@ -98,8 +114,17 @@ struct Vec2 {
 struct PreviewMaterialInfo {
     std::array<float, 3> color{};
     std::string texturePath;
+    std::string normalTexturePath;
+    std::string roughnessTexturePath;
+    std::string metallicTexturePath;
     bool hasTexture = false;
     uint32_t textureIndex = UINT32_MAX;
+    bool hasNormalTexture = false;
+    bool hasRoughnessTexture = false;
+    bool hasMetallicTexture = false;
+    uint32_t normalTextureIndex = UINT32_MAX;
+    uint32_t roughnessTextureIndex = UINT32_MAX;
+    uint32_t metallicTextureIndex = UINT32_MAX;
     float roughness = 0.58f;
     float metallic = 0.0f;
 };
@@ -177,23 +202,78 @@ std::filesystem::path ResolveMaterialTexturePath(
     return path.lexically_normal();
 }
 
-uint32_t RegisterPreviewMaterialTexturePath(
-    PreviewMeshPayload& payload,
-    const std::string& texturePath) {
-    if (texturePath.empty()) {
+uint32_t PreviewMaterialTextureDescriptorIndex(
+    PreviewMaterialTextureRole role,
+    uint32_t slot) {
+    if (slot >= kMaxPreviewMaterialSlots) {
         return UINT32_MAX;
     }
-    for (uint32_t i = 0; i < payload.materialTexturePaths.size(); ++i) {
-        if (payload.materialTexturePaths[i] == texturePath) {
-            return i;
-        }
-    }
-    if (payload.materialTexturePaths.size() >= kMaxPreviewMaterialTextures) {
+    return static_cast<uint32_t>(role) * kMaxPreviewMaterialSlots + slot;
+}
+
+uint32_t RegisterPreviewMaterialTexturePath(
+    PreviewMeshPayload& payload,
+    PreviewMaterialTextureRole role,
+    uint32_t slot,
+    const std::string& texturePath) {
+    const uint32_t descriptorIndex = PreviewMaterialTextureDescriptorIndex(role, slot);
+    if (texturePath.empty() || descriptorIndex == UINT32_MAX) {
         payload.materialTextureFallback = true;
         return UINT32_MAX;
     }
-    payload.materialTexturePaths.push_back(texturePath);
-    return static_cast<uint32_t>(payload.materialTexturePaths.size() - 1u);
+    if (payload.materialTexturePaths.size() < kMaxPreviewMaterialTextures) {
+        payload.materialTexturePaths.resize(kMaxPreviewMaterialTextures);
+    }
+    payload.materialTexturePaths[descriptorIndex] = texturePath;
+    return descriptorIndex;
+}
+
+uint32_t CountPreviewMaterialTexturePaths(const std::vector<std::string>& texturePaths) {
+    return static_cast<uint32_t>(std::count_if(
+        texturePaths.begin(),
+        texturePaths.end(),
+        [](const std::string& path) { return !path.empty(); }));
+}
+
+bool TryRegisterAssimpMaterialTexture(
+    const aiMaterial* material,
+    const std::filesystem::path& meshPath,
+    aiTextureType primaryType,
+    aiTextureType fallbackType,
+    PreviewMeshPayload& payload,
+    PreviewMaterialTextureRole role,
+    uint32_t slot,
+    std::string& outTexturePath,
+    uint32_t& outTextureIndex) {
+    if (material == nullptr) {
+        return false;
+    }
+
+    aiString texturePath;
+    bool hasTexture = material->GetTexture(primaryType, 0, &texturePath) == AI_SUCCESS;
+    if (!hasTexture && fallbackType != primaryType) {
+        hasTexture = material->GetTexture(fallbackType, 0, &texturePath) == AI_SUCCESS;
+    }
+    if (!hasTexture) {
+        return false;
+    }
+
+    ++payload.materialTextureCount;
+    const std::filesystem::path resolvedTexture = ResolveMaterialTexturePath(meshPath, texturePath);
+    std::error_code existsError;
+    if (resolvedTexture.empty() || !std::filesystem::exists(resolvedTexture, existsError)) {
+        payload.materialTextureFallback = true;
+        return false;
+    }
+
+    outTexturePath = resolvedTexture.generic_string();
+    outTextureIndex = RegisterPreviewMaterialTexturePath(payload, role, slot, outTexturePath);
+    if (outTextureIndex == UINT32_MAX) {
+        payload.materialTextureFallback = true;
+        outTexturePath.clear();
+        return false;
+    }
+    return true;
 }
 
 PreviewMaterialInfo MaterialInfoFromAssimp(
@@ -231,28 +311,54 @@ PreviewMaterialInfo MaterialInfoFromAssimp(
         info.metallic = (std::clamp)(metallic, 0.0f, 1.0f);
     }
 
-    aiString texturePath;
-    bool hasTexture = material->GetTexture(aiTextureType_DIFFUSE, 0, &texturePath) == AI_SUCCESS;
-    if (!hasTexture) {
-        hasTexture = material->GetTexture(aiTextureType_BASE_COLOR, 0, &texturePath) == AI_SUCCESS;
+    info.hasTexture = TryRegisterAssimpMaterialTexture(
+        material,
+        meshPath,
+        aiTextureType_DIFFUSE,
+        aiTextureType_BASE_COLOR,
+        payload,
+        PreviewMaterialTextureRole::Albedo,
+        slot,
+        info.texturePath,
+        info.textureIndex);
+    info.hasNormalTexture = TryRegisterAssimpMaterialTexture(
+        material,
+        meshPath,
+        aiTextureType_NORMALS,
+        aiTextureType_NORMAL_CAMERA,
+        payload,
+        PreviewMaterialTextureRole::Normal,
+        slot,
+        info.normalTexturePath,
+        info.normalTextureIndex);
+    if (info.hasNormalTexture) {
+        ++payload.normalTextureCount;
     }
-    if (!hasTexture) {
-        return info;
+    info.hasRoughnessTexture = TryRegisterAssimpMaterialTexture(
+        material,
+        meshPath,
+        aiTextureType_DIFFUSE_ROUGHNESS,
+        aiTextureType_DIFFUSE_ROUGHNESS,
+        payload,
+        PreviewMaterialTextureRole::Roughness,
+        slot,
+        info.roughnessTexturePath,
+        info.roughnessTextureIndex);
+    if (info.hasRoughnessTexture) {
+        ++payload.roughnessTextureCount;
     }
-
-    ++payload.materialTextureCount;
-    const std::filesystem::path resolvedTexture = ResolveMaterialTexturePath(meshPath, texturePath);
-    std::error_code existsError;
-    if (!resolvedTexture.empty() && std::filesystem::exists(resolvedTexture, existsError)) {
-        info.texturePath = resolvedTexture.generic_string();
-        info.hasTexture = true;
-        info.textureIndex = RegisterPreviewMaterialTexturePath(payload, info.texturePath);
-        if (info.textureIndex == UINT32_MAX) {
-            payload.materialTextureFallback = true;
-            info.hasTexture = false;
-        }
-    } else {
-        payload.materialTextureFallback = true;
+    info.hasMetallicTexture = TryRegisterAssimpMaterialTexture(
+        material,
+        meshPath,
+        aiTextureType_METALNESS,
+        aiTextureType_METALNESS,
+        payload,
+        PreviewMaterialTextureRole::Metallic,
+        slot,
+        info.metallicTexturePath,
+        info.metallicTextureIndex);
+    if (info.hasMetallicTexture) {
+        ++payload.metallicTextureCount;
     }
     return info;
 }
@@ -298,6 +404,9 @@ void AppendPreviewTriangle(
     uint32_t textureIndex,
     float roughness,
     float metallic,
+    float normalTextureWeight,
+    float roughnessTextureWeight,
+    float metallicTextureWeight,
     Vec3& minPoint,
     Vec3& maxPoint,
     bool& hasBounds) {
@@ -323,6 +432,9 @@ void AppendPreviewTriangle(
         vertex.textureIndex = static_cast<float>(textureIndex);
         vertex.roughness = (std::clamp)(roughness, 0.04f, 1.0f);
         vertex.metallic = (std::clamp)(metallic, 0.0f, 1.0f);
+        vertex.normalTextureWeight = normalTextureWeight;
+        vertex.roughnessTextureWeight = roughnessTextureWeight;
+        vertex.metallicTextureWeight = metallicTextureWeight;
         payload.vertices.push_back(vertex);
         AccumulateBounds(point, minPoint, maxPoint, hasBounds);
     }
@@ -410,7 +522,9 @@ bool BuildProductionPreviewMeshPayload(
         const bool materialUsesTexture =
             materialInfo.hasTexture &&
             materialInfo.textureIndex != UINT32_MAX &&
-            materialInfo.textureIndex < kMaxPreviewMaterialTextures;
+            materialInfo.textureIndex < kMaxPreviewMaterialSlots;
+        const uint32_t materialTextureSlot =
+            slot < kMaxPreviewMaterialSlots ? slot : 0u;
 
         for (unsigned faceIndex = 0; faceIndex < mesh->mNumFaces; ++faceIndex) {
             if (outPayload.indices.size() / 3u >= kMaxPreviewTriangles) {
@@ -441,9 +555,12 @@ bool BuildProductionPreviewMeshPayload(
                 uvAt(face.mIndices[1]),
                 uvAt(face.mIndices[2]),
                 materialUsesTexture ? 1.0f : 0.0f,
-                materialUsesTexture ? materialInfo.textureIndex : 0u,
+                materialTextureSlot,
                 materialInfo.roughness,
                 materialInfo.metallic,
+                materialInfo.hasNormalTexture ? 1.0f : 0.0f,
+                materialInfo.hasRoughnessTexture ? 1.0f : 0.0f,
+                materialInfo.hasMetallicTexture ? 1.0f : 0.0f,
                 minPoint,
                 maxPoint,
                 hasBounds);
@@ -542,6 +659,9 @@ bool BuildObjPreviewMeshPayload(
                     0u,
                     0.58f,
                     0.0f,
+                    0.0f,
+                    0.0f,
+                    0.0f,
                     minPoint,
                     maxPoint,
                     hasBounds);
@@ -581,14 +701,14 @@ void BuildProceduralPreviewMeshPayload(
     Vec3 minPoint{};
     Vec3 maxPoint{};
     const uint32_t swatch = request.swatchRgba == 0 ? 0xff88a766u : request.swatchRgba;
-    AppendPreviewTriangle(outPayload, top, right, front, MaterialColor(swatch, 0, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, minPoint, maxPoint, hasBounds);
-    AppendPreviewTriangle(outPayload, top, front, left, MaterialColor(swatch, 1 % slotCount, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, minPoint, maxPoint, hasBounds);
-    AppendPreviewTriangle(outPayload, top, left, back, MaterialColor(swatch, 2 % slotCount, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, minPoint, maxPoint, hasBounds);
-    AppendPreviewTriangle(outPayload, top, back, right, MaterialColor(swatch, 3 % slotCount, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, minPoint, maxPoint, hasBounds);
-    AppendPreviewTriangle(outPayload, bottom, front, right, MaterialColor(swatch, 0, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, minPoint, maxPoint, hasBounds);
-    AppendPreviewTriangle(outPayload, bottom, left, front, MaterialColor(swatch, 1 % slotCount, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, minPoint, maxPoint, hasBounds);
-    AppendPreviewTriangle(outPayload, bottom, back, left, MaterialColor(swatch, 2 % slotCount, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, minPoint, maxPoint, hasBounds);
-    AppendPreviewTriangle(outPayload, bottom, right, back, MaterialColor(swatch, 3 % slotCount, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, minPoint, maxPoint, hasBounds);
+    AppendPreviewTriangle(outPayload, top, right, front, MaterialColor(swatch, 0, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, 0.0f, 0.0f, 0.0f, minPoint, maxPoint, hasBounds);
+    AppendPreviewTriangle(outPayload, top, front, left, MaterialColor(swatch, 1 % slotCount, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, 0.0f, 0.0f, 0.0f, minPoint, maxPoint, hasBounds);
+    AppendPreviewTriangle(outPayload, top, left, back, MaterialColor(swatch, 2 % slotCount, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, 0.0f, 0.0f, 0.0f, minPoint, maxPoint, hasBounds);
+    AppendPreviewTriangle(outPayload, top, back, right, MaterialColor(swatch, 3 % slotCount, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, 0.0f, 0.0f, 0.0f, minPoint, maxPoint, hasBounds);
+    AppendPreviewTriangle(outPayload, bottom, front, right, MaterialColor(swatch, 0, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, 0.0f, 0.0f, 0.0f, minPoint, maxPoint, hasBounds);
+    AppendPreviewTriangle(outPayload, bottom, left, front, MaterialColor(swatch, 1 % slotCount, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, 0.0f, 0.0f, 0.0f, minPoint, maxPoint, hasBounds);
+    AppendPreviewTriangle(outPayload, bottom, back, left, MaterialColor(swatch, 2 % slotCount, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, 0.0f, 0.0f, 0.0f, minPoint, maxPoint, hasBounds);
+    AppendPreviewTriangle(outPayload, bottom, right, back, MaterialColor(swatch, 3 % slotCount, slotCount), Vec2{}, Vec2{}, Vec2{}, 0.0f, 0u, 0.58f, 0.0f, 0.0f, 0.0f, 0.0f, minPoint, maxPoint, hasBounds);
     outPayload.materialSlotCount = slotCount;
     outMinPoint = minPoint;
     outMaxPoint = maxPoint;
@@ -887,6 +1007,7 @@ bool EditorAssetD3D12ThumbnailGpuBackend::Initialize(
     keyToPreviewMaterialDescriptorIndex_.clear();
     keyToPreviewMaterialDescriptorCount_.clear();
     keyToPreviewMaterialTextureResources_.clear();
+    previewMaterialTexturePixelCache_.clear();
     previewRenderTargets_.Initialize(device_, descriptorCapacity_);
     uploadRetirementQueue_.Clear();
     telemetry_ = {};
@@ -1244,19 +1365,36 @@ bool EditorAssetD3D12ThumbnailGpuBackend::TryCreatePreviewMaterialTextureTable(
     for (uint32_t i = 0; i < inputCount; ++i) {
         const std::string& texturePath = texturePaths[i];
         if (texturePath.empty()) {
-            ++outTable.fallbackCount;
             continue;
         }
 
         EditorAssetThumbnailPixelData pixels;
         std::string decodeError;
-        if (!LoadEditorAssetTextureThumbnailPixels(texturePath, 256, pixels, decodeError) ||
-            pixels.rgba8.empty()) {
+        const auto cacheIt = previewMaterialTexturePixelCache_.find(texturePath);
+        if (cacheIt != previewMaterialTexturePixelCache_.end()) {
+            pixels = cacheIt->second;
+            ++telemetry_.previewSceneProductionMaterialCacheHits;
+        } else {
+            ++telemetry_.previewSceneProductionMaterialCacheMisses;
+            if (!LoadEditorAssetTextureThumbnailPixels(texturePath, 256, pixels, decodeError) ||
+                pixels.rgba8.empty()) {
+                ++outTable.fallbackCount;
+                if (firstFailure.empty()) {
+                    firstFailure = decodeError.empty()
+                        ? "Preview material texture decode failed."
+                        : decodeError;
+                }
+                continue;
+            }
+            if (previewMaterialTexturePixelCache_.size() >= kMaxPreviewMaterialTexturePixelCacheEntries) {
+                previewMaterialTexturePixelCache_.erase(previewMaterialTexturePixelCache_.begin());
+            }
+            previewMaterialTexturePixelCache_.emplace(texturePath, pixels);
+        }
+        if (pixels.rgba8.empty()) {
             ++outTable.fallbackCount;
             if (firstFailure.empty()) {
-                firstFailure = decodeError.empty()
-                    ? "Preview material texture decode failed."
-                    : decodeError;
+                firstFailure = "Preview material texture cache entry was empty.";
             }
             continue;
         }
@@ -1418,6 +1556,9 @@ bool EditorAssetD3D12ThumbnailGpuBackend::EnsurePreviewMeshPipeline(std::string&
         {"TEXINDEX", 0, DXGI_FORMAT_R32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
         {"ROUGHNESS", 0, DXGI_FORMAT_R32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
         {"METALLIC", 0, DXGI_FORMAT_R32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"NORMALTEXWEIGHT", 0, DXGI_FORMAT_R32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"ROUGHTEXWEIGHT", 0, DXGI_FORMAT_R32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"METALTEXWEIGHT", 0, DXGI_FORMAT_R32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
     };
 
     D3D12_RASTERIZER_DESC rasterDesc{};
@@ -1493,8 +1634,9 @@ bool EditorAssetD3D12ThumbnailGpuBackend::TryDrawRendererBackedMeshPreview(
 
     PreviewMaterialTextureTable materialTextureTable;
     std::string materialTextureSrvError;
+    const uint32_t expectedMaterialTextureCount = CountPreviewMaterialTexturePaths(payload.materialTexturePaths);
     const bool materialTextureSrvBound =
-        !payload.materialTexturePaths.empty() &&
+        expectedMaterialTextureCount > 0 &&
         TryCreatePreviewMaterialTextureTable(
             request.key,
             payload.materialTexturePaths,
@@ -1505,13 +1647,39 @@ bool EditorAssetD3D12ThumbnailGpuBackend::TryDrawRendererBackedMeshPreview(
         payload.materialTextureFallback = payload.materialTextureFallback || materialTextureTable.fallbackCount > 0;
         for (PreviewMeshVertex& vertex : payload.vertices) {
             const uint32_t textureIndex = static_cast<uint32_t>((std::max)(0.0f, vertex.textureIndex));
-            if (textureIndex >= materialTextureTable.boundSlots.size() ||
-                !materialTextureTable.boundSlots[textureIndex]) {
+            const uint32_t albedoIndex = PreviewMaterialTextureDescriptorIndex(PreviewMaterialTextureRole::Albedo, textureIndex);
+            const uint32_t normalIndex = PreviewMaterialTextureDescriptorIndex(PreviewMaterialTextureRole::Normal, textureIndex);
+            const uint32_t roughnessIndex = PreviewMaterialTextureDescriptorIndex(PreviewMaterialTextureRole::Roughness, textureIndex);
+            const uint32_t metallicIndex = PreviewMaterialTextureDescriptorIndex(PreviewMaterialTextureRole::Metallic, textureIndex);
+            if (albedoIndex == UINT32_MAX ||
+                albedoIndex >= materialTextureTable.boundSlots.size() ||
+                !materialTextureTable.boundSlots[albedoIndex]) {
                 vertex.textureWeight = 0.0f;
             }
+            if (normalIndex == UINT32_MAX ||
+                normalIndex >= materialTextureTable.boundSlots.size() ||
+                !materialTextureTable.boundSlots[normalIndex]) {
+                vertex.normalTextureWeight = 0.0f;
+            }
+            if (roughnessIndex == UINT32_MAX ||
+                roughnessIndex >= materialTextureTable.boundSlots.size() ||
+                !materialTextureTable.boundSlots[roughnessIndex]) {
+                vertex.roughnessTextureWeight = 0.0f;
+            }
+            if (metallicIndex == UINT32_MAX ||
+                metallicIndex >= materialTextureTable.boundSlots.size() ||
+                !materialTextureTable.boundSlots[metallicIndex]) {
+                vertex.metallicTextureWeight = 0.0f;
+            }
         }
-    } else if (!payload.materialTexturePaths.empty()) {
+    } else if (expectedMaterialTextureCount > 0) {
         payload.materialTextureFallback = true;
+        for (PreviewMeshVertex& vertex : payload.vertices) {
+            vertex.textureWeight = 0.0f;
+            vertex.normalTextureWeight = 0.0f;
+            vertex.roughnessTextureWeight = 0.0f;
+            vertex.metallicTextureWeight = 0.0f;
+        }
     }
     const auto cleanupMaterialTextureSrv = [&]() {
         if (materialTextureTable.baseDescriptorIndex != UINT32_MAX) {
@@ -1668,7 +1836,29 @@ bool EditorAssetD3D12ThumbnailGpuBackend::TryDrawRendererBackedMeshPreview(
     if (payload.materialTextureBound) {
         outDetail += ", material texture SRV table bound " +
             std::to_string(materialTextureTable.boundCount) + "/" +
-            std::to_string(payload.materialTexturePaths.size());
+            std::to_string(expectedMaterialTextureCount);
+        const auto countBoundRole = [&](PreviewMaterialTextureRole role) {
+            const uint32_t baseIndex = static_cast<uint32_t>(role) * kMaxPreviewMaterialSlots;
+            uint32_t count = 0;
+            for (uint32_t i = 0; i < kMaxPreviewMaterialSlots && baseIndex + i < materialTextureTable.boundSlots.size(); ++i) {
+                if (materialTextureTable.boundSlots[baseIndex + i]) {
+                    ++count;
+                }
+            }
+            return count;
+        };
+        const uint32_t boundNormalMaps = countBoundRole(PreviewMaterialTextureRole::Normal);
+        const uint32_t boundRoughnessMaps = countBoundRole(PreviewMaterialTextureRole::Roughness);
+        const uint32_t boundMetallicMaps = countBoundRole(PreviewMaterialTextureRole::Metallic);
+        if (boundNormalMaps > 0) {
+            outDetail += ", normal map bound " + std::to_string(boundNormalMaps);
+        }
+        if (boundRoughnessMaps > 0) {
+            outDetail += ", roughness map bound " + std::to_string(boundRoughnessMaps);
+        }
+        if (boundMetallicMaps > 0) {
+            outDetail += ", metallic map bound " + std::to_string(boundMetallicMaps);
+        }
         if (materialTextureTable.fallbackCount > 0) {
             outDetail += ", material texture SRV partial fallback " +
                 std::to_string(materialTextureTable.fallbackCount);
@@ -1746,6 +1936,15 @@ bool EditorAssetD3D12ThumbnailGpuBackend::TryPublishPreviewSceneRenderTarget(
         }
         if (rendererDrawDetail.find("PBR preview") != std::string::npos) {
             ++telemetry_.previewSceneMaterialPbrPreviews;
+        }
+        if (rendererDrawDetail.find("normal map bound") != std::string::npos) {
+            ++telemetry_.previewSceneMaterialNormalMapBound;
+        }
+        if (rendererDrawDetail.find("roughness map bound") != std::string::npos) {
+            ++telemetry_.previewSceneMaterialRoughnessMapBound;
+        }
+        if (rendererDrawDetail.find("metallic map bound") != std::string::npos) {
+            ++telemetry_.previewSceneMaterialMetallicMapBound;
         }
         if (rendererDrawDetail.find("material texture SRV fallback") != std::string::npos ||
             rendererDrawDetail.find("material texture SRV partial fallback") != std::string::npos) {

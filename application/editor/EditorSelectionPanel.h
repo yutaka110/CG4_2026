@@ -2,8 +2,16 @@
 
 #include "EditorSelection.h"
 
+#include <vector>
+
 namespace editor {
 
-void DrawEditorSelectionPanel(const EditorSelection& selection);
+struct EditorSelectionPanelTarget {
+    EditorObjectHandle handle;
+};
+
+void DrawEditorSelectionPanel(
+    EditorSelection& selection,
+    const std::vector<EditorSelectionPanelTarget>& targets = {});
 
 } // namespace editor

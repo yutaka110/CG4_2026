@@ -911,7 +911,7 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
             static_cast<unsigned long long>(gpuTelemetry.cacheEvictions),
             static_cast<unsigned long long>(gpuTelemetry.fallbackUploads));
         ImGui::TextDisabled(
-            "Preview Scene  Direct %llu  Fallback %llu  Draw %llu  Loader %llu  Procedural %llu  Proxy %llu  Material %llu  Tex %llu/%llu  SRV %llu/%llu D%u  Table %llu  PBR %llu  RT Reuse %llu  RT Resize %llu",
+            "Preview Scene  Direct %llu  Fallback %llu  Draw %llu  Loader %llu  Procedural %llu  Proxy %llu  Material %llu  Tex %llu/%llu  SRV %llu/%llu D%u  Table %llu  PBR %llu N/R/M %llu/%llu/%llu  MatCache H/M %llu/%llu  RT Reuse %llu  RT Resize %llu",
             static_cast<unsigned long long>(gpuTelemetry.previewSceneRendered),
             static_cast<unsigned long long>(gpuTelemetry.previewSceneFallback),
             static_cast<unsigned long long>(gpuTelemetry.previewSceneRendererDraws),
@@ -926,6 +926,11 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
             static_cast<unsigned int>(gpuTelemetry.previewSceneMaterialTextureSrvDescriptors),
             static_cast<unsigned long long>(gpuTelemetry.previewSceneMaterialTextureTables),
             static_cast<unsigned long long>(gpuTelemetry.previewSceneMaterialPbrPreviews),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneMaterialNormalMapBound),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneMaterialRoughnessMapBound),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneMaterialMetallicMapBound),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneProductionMaterialCacheHits),
+            static_cast<unsigned long long>(gpuTelemetry.previewSceneProductionMaterialCacheMisses),
             static_cast<unsigned long long>(gpuTelemetry.previewRenderTargetReused),
             static_cast<unsigned long long>(gpuTelemetry.previewRenderTargetResized));
     } else {

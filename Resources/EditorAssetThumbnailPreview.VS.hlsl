@@ -22,6 +22,9 @@ struct VSInput
     float textureIndex : TEXINDEX;
     float roughness : ROUGHNESS;
     float metallic : METALLIC;
+    float normalTextureWeight : NORMALTEXWEIGHT;
+    float roughnessTextureWeight : ROUGHTEXWEIGHT;
+    float metallicTextureWeight : METALTEXWEIGHT;
 };
 
 struct VSOutput
@@ -34,6 +37,9 @@ struct VSOutput
     float textureIndex : TEXINDEX;
     float roughness : ROUGHNESS;
     float metallic : METALLIC;
+    float normalTextureWeight : NORMALTEXWEIGHT;
+    float roughnessTextureWeight : ROUGHTEXWEIGHT;
+    float metallicTextureWeight : METALTEXWEIGHT;
 };
 
 VSOutput VSMain(VSInput input)
@@ -64,5 +70,8 @@ VSOutput VSMain(VSInput input)
     output.textureIndex = input.textureIndex;
     output.roughness = saturate(input.roughness);
     output.metallic = saturate(input.metallic);
+    output.normalTextureWeight = saturate(input.normalTextureWeight);
+    output.roughnessTextureWeight = saturate(input.roughnessTextureWeight);
+    output.metallicTextureWeight = saturate(input.metallicTextureWeight);
     return output;
 }

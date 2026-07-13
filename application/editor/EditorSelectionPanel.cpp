@@ -4,7 +4,9 @@
 
 namespace editor {
 
-void DrawEditorSelectionPanel(const EditorSelection& selection) {
+void DrawEditorSelectionPanel(
+    EditorSelection& selection,
+    const std::vector<EditorSelectionPanelTarget>& targets) {
     ImGui::Text(
         "Selected %u  Revision %u",
         static_cast<unsigned int>(selection.Count()),
@@ -17,6 +19,24 @@ void DrawEditorSelectionPanel(const EditorSelection& selection) {
     }
 
     ImGui::Separator();
+    if (!targets.empty()) {
+        if (ImGui::TreeNode("Production Targets")) {
+            for (const EditorSelectionPanelTarget& target : targets) {
+                const EditorObjectHandle& handle = target.handle;
+                ImGui::PushID(handle.stableId.c_str());
+                const char* label =
+                    handle.displayName.empty() ? handle.stableId.c_str() : handle.displayName.c_str();
+                if (ImGui::SmallButton(label)) {
+                    selection.SetPrimary(handle);
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", ToString(handle.domain));
+                ImGui::PopID();
+            }
+            ImGui::TreePop();
+        }
+        ImGui::Separator();
+    }
 
     if (!ImGui::BeginTable(
             "EditorSelectionHandles",

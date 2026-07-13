@@ -7,6 +7,7 @@
 #include "EditorDirtyStateService.h"
 #include "EditorDocumentLifecycleService.h"
 #include "EditorSaveApplyPolicy.h"
+#include "EditorToolRegistration.h"
 
 namespace editor {
 
@@ -19,7 +20,6 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
         return;
     }
 
-    EditorCommandRegistry& registry = *context.commands;
     const EditorCommandContext& commandContext = *context.commandContext;
     const EditorAuthoringMutationGuard mutationGuard =
         MakeEditorAuthoringMutationGuard(context.playSession);
@@ -35,7 +35,8 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
         context.validationReport,
         context.playSession};
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "course.save",
             "Save Course",
@@ -62,7 +63,8 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
                     saved ? std::string("Saved course.") : (error.empty() ? std::string("Save failed.") : error)};
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "course.apply",
             "Apply Course",
@@ -86,7 +88,8 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
                 return EditorCommandResult{true, "Applied course to runtime."};
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "course.reload",
             "Reload Course",
@@ -128,7 +131,8 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
                 return EditorCommandResult{true, "Reloaded course from disk."};
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "course.close",
             "Close Course",
@@ -171,7 +175,8 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
                 return EditorCommandResult{true, "Closed course document."};
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "course.reopen",
             "Reopen Course",
@@ -204,7 +209,8 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
                 return EditorCommandResult{true, "Reopened course document."};
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "course.teleport",
             "Teleport Course",
@@ -232,7 +238,8 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
                 return EditorCommandResult{true, "Teleported course to current editor distance."};
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "course.previewFreeze",
             "Freeze Course Preview",

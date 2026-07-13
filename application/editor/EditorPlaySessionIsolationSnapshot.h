@@ -20,6 +20,7 @@ struct EditorPlaySessionIsolationSnapshotTarget {
 class EditorPlaySessionIsolationSnapshot {
 public:
     bool Capture(const EditorPlaySessionIsolationSnapshotTarget& target, std::string* errorMessage = nullptr);
+    bool Adopt(const EditorPlaySessionIsolationSnapshotTarget& target, std::string* errorMessage = nullptr);
     bool Restore(const EditorPlaySessionIsolationSnapshotTarget& target, std::string* errorMessage = nullptr);
     void Clear();
     void BindSession(uint64_t sessionSerial);
@@ -31,6 +32,8 @@ public:
     uint32_t CourseObjectRevision() const { return courseObjectRevision_; }
     std::size_t TerrainPlacementCount() const { return terrainPlacementCount_; }
     std::size_t RockClusterCount() const { return rockClusterCount_; }
+    const CourseAsset* CapturedCourse() const { return captured_ ? &course_ : nullptr; }
+    const TerrainAuthoringState* CapturedTerrain() const { return captured_ ? &terrain_ : nullptr; }
 
     const char* StateLabel() const;
 

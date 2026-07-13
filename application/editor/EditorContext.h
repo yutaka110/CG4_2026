@@ -22,6 +22,7 @@ class EditorPlaySessionState;
 class EditorRailRuntimePause;
 class EditorRuntimeInspector;
 class EditorSelection;
+class EditorToolRegistry;
 class EditorTransformGizmoService;
 class EditorTransactionStack;
 class EditorViewportInteractionService;
@@ -54,6 +55,7 @@ struct EditorContext {
     EditorRuntimeInspector* runtimeInspector = nullptr;
     EditorPlaySessionState* playSession = nullptr;
     EditorRailRuntimePause* railRuntimePause = nullptr;
+    EditorToolRegistry* tools = nullptr;
 
     EditorCommandRegistry* commands = nullptr;
     const EditorCommandContext* commandContext = nullptr;

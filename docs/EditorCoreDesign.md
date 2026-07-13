@@ -858,9 +858,18 @@ Current staged implementation:
   diffuse/specular/rim evaluation. Asset Browser telemetry now reports material
   texture table usage, PBR preview counts, live descriptor usage, and explicit
   partial fallback cases.
-- Remaining Phase 8 work is focused on sharing the actual production
-  material/PBR evaluation path more deeply, including normal/roughness/metallic
-  texture maps, environment lighting parity, and renderer material cache reuse.
+- Phase 8-Z reuses more of the production material/PBR preview path. The
+  thumbnail backend now builds a role-major material texture table for albedo,
+  normal, roughness, and metallic maps across the first four material slots,
+  extracts those maps from Assimp material metadata, gates shader sampling by
+  successfully bound descriptors, and feeds normal/roughness/metallic weights
+  through the preview vertex stream. Material texture decoding now goes through
+  a preview material pixel cache so repeated thumbnails reuse decoded source
+  pixels before GPU upload. Asset Browser telemetry reports PBR normal,
+  roughness, metallic map usage and material decode cache hit/miss counts.
+- Remaining Phase 8 risk is focused on deeper renderer parity, especially
+  shared environment lighting, production BRDF/material graph evaluation, and
+  GPU material resource reuse beyond decode-level cache reuse.
 
 ### Phase 9: Full Details/Reflection Coverage
 
@@ -884,6 +893,58 @@ Success criteria:
 - Runtime-only fields are visibly read-only and cannot mutate authoring data by
   accident.
 
+Current staged implementation:
+
+- Phase 9-A expands property descriptor coverage beyond course objects. The
+  editor now has a formal `RegisterBuiltInEditorProperties()` entry point that
+  registers descriptor groups for course objects, VFX asset/runtime state,
+  terrain generation/material presets, post-process passes, render presets,
+  camera keys/rigs, RenderGraph runtime passes, and gameplay tuning data.
+  `EditorPropertyDescriptor` now carries reset/default metadata, validation
+  hints, multi-edit readiness, and explicit read-only/runtime-only reasons so
+  Details and registry tooling can distinguish descriptor coverage from
+  mutation support. The app-level registry initialization uses the full editor
+  registration path, while the existing Course accessor remains the only
+  mutable adapter until the next Phase 9 steps formalize domain adapters.
+- Phase 9-B formalizes the first multi-selection Details foundation. The
+  Details panel now derives an intersection of common same-domain properties,
+  shows mixed values explicitly, and routes multi-object edits through
+  `EditorPropertyEditSession` into `EditorPropertyEditService::ApplyBatch()`
+  so undo/redo and dirty state stay on the official mutation path. Descriptors
+  with `readOnlyReason` now surface that reason through service/session
+  rejection messages, and reset-to-default is available for descriptors with
+  parseable `defaultValue` metadata, including mutable Course transform fields.
+- Phase 9-C formalizes the first production property accessor adapters beyond
+  Course object editing. `EditorCompositePropertyAccessor` now lets Details,
+  commands, undo/redo, and sessions share one mutation gateway, while
+  `EditorProductionPropertyAdapter` binds descriptors for VFX assets,
+  post-process passes, course camera keys, terrain generation, camera rig, and
+  gameplay tuning to live production data. The Selection panel exposes these
+  production targets for Details inspection/editing, read-only fields such as
+  derived VFX technique and post-process stage are rejected with explicit
+  ownership reasons, and regression coverage verifies that non-Course edits use
+  generic property dirty state while Course camera authoring remains on the
+  Course dirty path.
+- Phase 9-D formalizes typed property clipboard and validation enforcement for
+  Details editing. `EditorPropertyClipboardService` stores a formatted,
+  descriptor-aware property value so Details can copy from the active accessor
+  and paste only into compatible descriptors, including multi-selection paste
+  through the existing `EditorPropertyEditSession` and
+  `EditorPropertyEditService` mutation path. `ValidateEditorPropertyValue()`
+  now rejects descriptor/domain mismatches, read-only values, invalid enum
+  options, and enforced numeric/vector ranges before any accessor mutation,
+  while Details surfaces paste/validation failures through the existing tooltip
+  and notification UX.
+- Phase 9-E formalizes custom Details sections as registered providers instead
+  of ad-hoc panel code. `EditorDetailsSectionProviderRegistry` lets domain
+  adapters publish section UI for production-only workflows while still using
+  the active `EditorPropertyAccessor`, `EditorPropertyEditService`, transaction
+  stack, dirty state, validation, and notifications. Built-in providers now
+  cover production VFX defaults, post-process tuning, Course event dispatch
+  inspection, and Render preset read-only authoring status. Course event marker
+  descriptors and the production adapter are also bound so Details can inspect
+  and edit event distance/type/id/payload through the official mutation path.
+
 ### Phase 10: Play-In-Editor And Runtime Isolation
 
 Deliverables:
@@ -904,6 +965,43 @@ Success criteria:
 - Dirty state, document lifecycle, and save/apply policy reflect play/simulate
   state consistently.
 
+Current staged implementation:
+
+- Phase 10-A formalizes Play/Simulate lifecycle ownership with
+  `EditorPlaySessionLifecycleService`. Begin Play/Simulate now captures the
+  authoring snapshot, enters the requested mode, binds the snapshot to the
+  session serial, and marks runtime isolation active in one service call. Stop
+  now requires a captured snapshot from the active session and restores
+  authoring state before returning to Stopped. `EditorBuiltinCommandProvider`
+  no longer falls back to direct `EditorPlaySessionState::Play()`,
+  `Simulate()`, or `Stop()` calls, so command entry points must use the
+  official lifecycle service path.
+- Phase 10-B adds an explicit runtime-to-authoring apply path. The
+  `editor.applyRuntimeChanges` command requests confirmation before calling
+  `EditorRuntimeAuthoringApplyService`, which compares the active Play/Sim
+  snapshot with the current runtime authoring state, rejects validation-blocked
+  applies, pushes a `RuntimeAuthoringApply` transaction, marks Course authoring
+  dirty, and adopts the applied state as the new restore snapshot. Stop keeps
+  only explicitly applied runtime changes; later runtime changes are still
+  discarded by snapshot restore. The transaction payload can be undone/redone
+  after returning to authoring mode.
+- Phase 10-C formalizes runtime pause, resume, single-step, and reset through
+  `EditorPlaySessionRuntimeControlService`. Toolbar/command entry points now
+  route `editor.pauseRuntime`, `editor.resumeRuntime`, `editor.stepRuntime`,
+  and `editor.resetRuntime` through the service. `EditorPlaySessionState`
+  tracks runtime pause/step/reset state and runtime frame count separately from
+  session lifetime, `AppRunLoop` gates Rail/VFX runtime delta advancement
+  through that state, Runtime Watch exposes the control state read-only, and
+  reset restores the active Play/Sim snapshot without stopping the session.
+- Phase 10-D closes the Runtime Watch coverage path with
+  `EditorRuntimeWatchBuilder`. Watch row generation moved out of
+  `AppImGuiLayer` into a read-only builder that emits stable records for
+  Play/Sim state, runtime pause/step/reset state, editor selection, Course
+  director/checkpoint state, VFX runtime and selected instance state, gameplay
+  spawn/collision/combat stats, and RenderGraph pass/resource summaries. The
+  builder owns observation only; runtime edits still route through explicit
+  services, commands, and transactions.
+
 ### Phase 11: Extensibility And Tool Registration
 
 Deliverables:
@@ -922,6 +1020,57 @@ Success criteria:
   details support from its own module.
 - Shortcut conflicts are reported before registration succeeds.
 - Disabling an experimental tool leaves the rest of the editor stable.
+
+Current staged implementation:
+
+- Phase 11-A introduces `EditorToolRegistry` and versioned descriptors for
+  command, panel, and toolbar registration. Built-in, Course, and Asset command
+  providers now route command registration through the tool descriptor path when
+  an editor context provides it. `AppImGuiLayer` owns a per-frame tool registry,
+  panel registration is wrapped by `EditorPanelRegistrationDescriptor`, and the
+  editor toolbar is no longer a hard-coded draw-time command list; it is
+  populated by `EditorToolbarItemDescriptor` entries and validated against the
+  active command registry. Registration diagnostics now cover unsupported
+  descriptor versions, duplicate command/panel/toolbar IDs, shortcut conflicts,
+  and toolbar entries that reference missing commands.
+- Phase 11-B extends the same registration path to menu sections/items and
+  feature gates. `EditorMenuBar` now consumes `EditorMenuSectionDescriptor` and
+  `EditorMenuItemDescriptor` entries from `EditorToolRegistry`; the former
+  command-category menu is rebuilt as default menu descriptors each frame.
+  Command, panel, toolbar, and menu descriptors share `EditorToolFeatureGate`
+  state so production, experimental, hidden, and disabled tools have one
+  consistent registration policy. Disabled tools become safe no-ops; hidden
+  tools can keep internal registrations while staying out of panel hosts,
+  toolbar, and menu presentation. Diagnostics now also cover duplicate menu
+  sections/items, missing menu commands, and menu items targeting hidden or
+  unknown sections.
+- Phase 11-C extends provider registration beyond UI contributions. Asset
+  providers, property accessors, validation adapters, and Runtime Watch
+  providers now have versioned descriptors and the same feature-gate behavior
+  as commands, panels, menus, and toolbar entries. `AppImGuiLayer` no longer
+  directly composes Details property accessors, validation adapters, or Runtime
+  Watch rows; it registers those providers through `EditorToolRegistry`, then
+  consumes the composed accessor, validation service, and runtime watch build
+  path. The default Runtime Watch builder is now an appendable provider so
+  future modules can contribute rows without editing the central builder.
+- Phase 11-D adds a tool module boundary and startup/frame registration
+  pipeline. `EditorToolModuleRegistry` owns versioned module descriptors,
+  load-order sorting, duplicate detection, feature-gated no-op modules, and
+  module diagnostics that flow into `EditorToolRegistry`. `AppImGuiLayer`
+  registers built-in asset, property, validation, and Runtime Watch
+  contributions as editor modules, then executes the module pipeline with a
+  shared registration context instead of directly wiring each provider at the
+  call site. This establishes the boundary future Course, VFX, Asset, and
+  gameplay tools can use to publish their editor capabilities from their own
+  module startup code.
+- Phase 11-E extracts the built-in App editor contributions into
+  `AppEditorToolModules`. Startup modules now initialize built-in property
+  descriptors and custom Details section providers through the same module
+  pipeline, frame provider modules publish asset, property, validation, and
+  Runtime Watch providers, and command modules register Course, Built-in,
+  Asset, menu, and toolbar contributions in load-order. `AppImGuiLayer` now
+  runs startup, provider, and command module pipelines instead of directly
+  wiring those registration details at the call site.
 
 ### Phase 12: Commercial Hardening And Automation
 
@@ -948,6 +1097,37 @@ Success criteria:
 - Daily production workflows are stable enough for team use without relying on
   hidden debug panels or manual state repair.
 
+Current staged implementation:
+
+- Phase 12-A introduces `EditorAutomationGate`, a commercial readiness gate
+  runner that aggregates the existing Editor Core regression suite and Editor
+  Smoke Run behind the `--editor-commercial-gates` command-line entry point.
+  The runner records each gate's id, category, pass/fail result, exit code,
+  duration, warning budget, artifact path, and status message, then writes both
+  `logs/editor_automation_report.json` and
+  `logs/editor_automation_report.md`. This creates the first structured
+  preflight artifact for PR/build review while preserving the existing
+  `--editor-core-regression` and `--editor-smoke-run` entry points.
+- Phase 12-B expands the commercial gate into recovery scenario coverage.
+  The structured report now uses `editor.commercialAutomation.v2` and records
+  check counts, owner area, critical status, and recovery action per gate.
+  `--editor-commercial-gates` now includes independent recovery gates for
+  corrupt layout fallback, asset GUID/dependency mutation recovery, Details
+  transaction/validation recovery, and Play/Sim snapshot/apply recovery. Each
+  scenario writes a focused artifact under `logs/editor_recovery_*.log` so a
+  failed PR/build can point directly at the broken commercial workflow.
+- Phase 12-C integrates Feature Guard and performance budgets into the same
+  commercial gate. The structured report now uses
+  `editor.commercialAutomation.v3` and records budget kind, measured time,
+  sample count, blocked checks, and attention checks. The new
+  `editor.featureGuard` gate builds a representative editor startup context and
+  fails on blocked Feature Guard checks, while `editor.performanceBudget`
+  measures asset indexing, validation aggregation, Details descriptor traversal,
+  diagnostics data preparation, and viewport resize mapping against defined
+  service budgets. The new artifacts are
+  `logs/editor_feature_guard_report.log` and
+  `logs/editor_performance_budget_report.log`.
+
 ## Commercial Completion Scorecard
 
 Use this scorecard to track the path to 100%. Percentages are intentionally
@@ -963,8 +1143,8 @@ workflow-based, not file-count based.
 | Asset/content browser | 50% | GUID/meta, dependency graph, thumbnails where useful, safe rename/move/delete, and repair commands. |
 | Diagnostics/profiling | 70% | Unified diagnostics with source navigation, profiling views, severity filters, and domain adapters. |
 | Play/simulate isolation | 60% | Runtime clone/snapshot boundary, explicit apply changes, pause/step, and safe stop restoration. |
-| Extensibility | 50% | Versioned registration APIs for commands, panels, assets, properties, validation, menus, and toolbar entries. |
-| Automation/hardening | 25% | Unit, smoke, regression, performance, and recovery tests covering critical editor workflows. |
+| Extensibility | 80% | Versioned registration APIs and App-level module startup/frame pipelines for commands, panels, assets, properties, validation, Details sections, menus, toolbar entries, and Runtime Watch providers. |
+| Automation/hardening | 55% | Structured commercial gate runner, unit/smoke/regression aggregation, recovery scenario gates, Feature Guard gates, performance budgets, and recovery tests covering critical editor workflows. |
 
 The editor should not be called commercial-ready until every area is at least
 90%, no critical area is below 85%, and Feature Guard reports no blocked

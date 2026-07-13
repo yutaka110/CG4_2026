@@ -8,6 +8,8 @@
 
 #include "EditorAssetMutationSafety.h"
 #include "EditorSelection.h"
+#include "../AppRuntimeState.h"
+#include "../course/CourseAsset.h"
 
 namespace editor {
 
@@ -16,6 +18,7 @@ enum class EditorTransactionPayloadKind {
     PropertyDelta,
     MultiPropertyDelta,
     AssetMutation,
+    RuntimeAuthoringApply,
 };
 
 enum class EditorTransactionApplyMode {
@@ -49,6 +52,14 @@ struct EditorAssetMutationChange {
     std::vector<uint8_t> metadataBytes;
 };
 
+struct EditorRuntimeAuthoringApplyChange {
+    uint64_t sessionSerial = 0;
+    CourseAsset beforeCourse;
+    CourseAsset afterCourse;
+    TerrainAuthoringState beforeTerrain;
+    TerrainAuthoringState afterTerrain;
+};
+
 struct EditorTransactionPayload {
     EditorTransactionPayloadKind kind = EditorTransactionPayloadKind::Snapshot;
     std::string propertyPath;
@@ -57,6 +68,7 @@ struct EditorTransactionPayload {
     std::string afterSummary;
     std::vector<EditorPropertyChange> propertyChanges;
     EditorAssetMutationChange assetMutation;
+    EditorRuntimeAuthoringApplyChange runtimeAuthoringApply;
 };
 
 struct EditorTransactionRecord {
@@ -102,6 +114,10 @@ public:
         std::string label,
         EditorObjectHandle target,
         EditorAssetMutationChange change);
+    void PushRuntimeAuthoringApply(
+        std::string label,
+        EditorObjectHandle target,
+        EditorRuntimeAuthoringApplyChange change);
 
     void StagePropertyDelta(EditorPropertyChange change);
     void StagePropertyDeltas(std::vector<EditorPropertyChange> changes);

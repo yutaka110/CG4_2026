@@ -2,6 +2,8 @@
 
 #include "EditorPropertyEditSession.h"
 
+#include <vector>
+
 namespace editor {
 
 struct EditorDetailsEditControllerContext {
@@ -36,6 +38,23 @@ EditorPropertyEditSessionResult CancelEditorDetailsPropertyEdit(
 EditorPropertyEditSessionResult ApplyEditorDetailsImmediatePropertyEdit(
     const EditorDetailsEditControllerContext& context,
     const EditorObjectHandle& target,
+    const EditorPropertyDescriptor& descriptor,
+    const EditorPropertyValue& requestedValue);
+
+EditorPropertyEditSessionResult BeginEditorDetailsPropertyBatchEdit(
+    const EditorDetailsEditControllerContext& context,
+    const std::vector<EditorObjectHandle>& targets,
+    const EditorPropertyDescriptor& descriptor);
+
+EditorPropertyEditSessionResult PreviewEditorDetailsPropertyBatchEdit(
+    const EditorDetailsEditControllerContext& context,
+    const std::vector<EditorObjectHandle>& targets,
+    const EditorPropertyDescriptor& descriptor,
+    const EditorPropertyValue& requestedValue);
+
+EditorPropertyEditSessionResult ApplyEditorDetailsImmediatePropertyBatchEdit(
+    const EditorDetailsEditControllerContext& context,
+    const std::vector<EditorObjectHandle>& targets,
     const EditorPropertyDescriptor& descriptor,
     const EditorPropertyValue& requestedValue);
 

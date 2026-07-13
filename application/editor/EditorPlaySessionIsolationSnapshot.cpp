@@ -29,6 +29,32 @@ bool EditorPlaySessionIsolationSnapshot::Capture(
     return true;
 }
 
+bool EditorPlaySessionIsolationSnapshot::Adopt(
+    const EditorPlaySessionIsolationSnapshotTarget& target,
+    std::string* errorMessage) {
+    if (target.course == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Course asset is unavailable for Play/Sim snapshot adoption.";
+        }
+        return false;
+    }
+    if (target.runtimeState == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Runtime state is unavailable for Play/Sim snapshot adoption.";
+        }
+        return false;
+    }
+
+    course_ = *target.course;
+    terrain_ = target.runtimeState->terrain;
+    captured_ = true;
+    restored_ = false;
+    courseObjectRevision_ = terrain_.courseObjectEditRevision;
+    terrainPlacementCount_ = course_.terrainPlacements.size();
+    rockClusterCount_ = course_.rockClusters.size();
+    return true;
+}
+
 bool EditorPlaySessionIsolationSnapshot::Restore(
     const EditorPlaySessionIsolationSnapshotTarget& target,
     std::string* errorMessage) {

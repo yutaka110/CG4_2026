@@ -4156,7 +4156,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.begin");
 
     constexpr float kFixedGameplayDeltaTime = 0.016f;
-    const bool coursePreviewFrozen = runtimeState_.terrain.freezeCourseRuntime;
+    const bool editorRuntimeAdvance = imguiLayer_.ShouldAdvanceEditorRuntimeFrame();
+    const bool coursePreviewFrozen =
+        runtimeState_.terrain.freezeCourseRuntime || !editorRuntimeAdvance;
     const float gameplayDeltaTime = coursePreviewFrozen ? 0.0f : kFixedGameplayDeltaTime;
     for (RailNormalShotLine& line : railNormalShotLines_) {
         line.age += gameplayDeltaTime;
@@ -4485,6 +4487,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         frameState_.deltaTime);
     gRailPerfFrame.particleUpdateMs = ElapsedMs(particleUpdateStart, RailPerfClock::now());
     gRailPerfFrame.updateMs = ElapsedMs(updateStart, RailPerfClock::now());
+    imguiLayer_.CompleteEditorRuntimeFrameAdvance(!coursePreviewFrozen);
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.end");
 }
 
@@ -4523,18 +4526,21 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
     frameState_.projMatrix = debugCamera_.GetProjectionMatrix();
 
     constexpr float kFixedPreviewDeltaTime = 0.016f;
-    ProcessReleaseShowcaseControls(kFixedPreviewDeltaTime);
-    vfxEngine_.Update(runtimeState_.vfx, kFixedPreviewDeltaTime);
-    UpdateTerrainAuthoring(kFixedPreviewDeltaTime);
+    const bool editorRuntimeAdvance = imguiLayer_.ShouldAdvanceEditorRuntimeFrame();
+    const float previewDeltaTime = editorRuntimeAdvance ? kFixedPreviewDeltaTime : 0.0f;
+    ProcessReleaseShowcaseControls(previewDeltaTime);
+    vfxEngine_.Update(runtimeState_.vfx, previewDeltaTime);
+    UpdateTerrainAuthoring(previewDeltaTime);
 
     BYTE key[256] = {};
     (void)key;
 
     frameState_.viewProjectionMatrix = debugCamera_.GetViewProjectionMatrix();
-    frameState_.deltaTime = kFixedPreviewDeltaTime;
+    frameState_.deltaTime = previewDeltaTime;
     frameState_.drawCount = particleSystem_.UpdateInstances(
         frameState_.viewProjectionMatrix,
         frameState_.deltaTime);
+    imguiLayer_.CompleteEditorRuntimeFrameAdvance(editorRuntimeAdvance);
 }
 
 void AppRunLoop::BeginFrameSystems() {
@@ -6842,7 +6848,9 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             &railShooterCourseLoadStatus_,
             &railShooterCoursePath_,
             railShooterDistance_,
-            runtimeState_.terrain.freezeCourseRuntime ? 0.0f : railShooterSpeedDirector_.LastFrame().smoothedSpeed,
+            (runtimeState_.terrain.freezeCourseRuntime || !imguiLayer_.ShouldAdvanceEditorRuntimeFrame())
+                ? 0.0f
+                : railShooterSpeedDirector_.LastFrame().smoothedSpeed,
             railPath_.Length(),
             [&](std::string* errorMessage) {
                 return SaveRailShooterCourse(errorMessage);

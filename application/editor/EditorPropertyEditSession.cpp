@@ -31,6 +31,12 @@ const EditorPropertyValue& CurrentValue(const EditorPropertyEditSession::Entry& 
     return entry.hasPreviewValue ? entry.previewValue : entry.beforeValue;
 }
 
+std::string ReadOnlyPropertyMessage(const EditorPropertyDescriptor& descriptor) {
+    return descriptor.readOnlyReason.empty()
+        ? std::string("Property is read-only.")
+        : descriptor.readOnlyReason;
+}
+
 } // namespace
 
 EditorPropertyEditSession::Entry* EditorPropertyEditSession::FindEntry(
@@ -96,7 +102,13 @@ EditorPropertyEditSessionResult EditorPropertyEditSession::Begin(
             return MakeSessionResult(false, false, "Property descriptor is unavailable.");
         }
         if (property.descriptor.readOnly) {
-            return MakeSessionResult(false, false, "Property is read-only.");
+            return MakeSessionResult(false, false, ReadOnlyPropertyMessage(property.descriptor));
+        }
+        if (property.descriptor.domain != property.target.domain) {
+            return MakeSessionResult(
+                false,
+                false,
+                "Property descriptor domain does not match the edit session target.");
         }
         const bool duplicate = std::any_of(
             entries.begin(),
@@ -177,6 +189,12 @@ EditorPropertyEditSessionResult EditorPropertyEditSession::Preview(
         if (entry == nullptr) {
             rollbackApplied();
             return MakeSessionResult(false, false, "Preview targets a property outside the edit session.");
+        }
+        const EditorPropertyValidationResult validation =
+            ValidateEditorPropertyValue(entry->descriptor, value.value);
+        if (!validation.valid) {
+            rollbackApplied();
+            return MakeSessionResult(false, false, validation.message);
         }
 
         AppliedPreview appliedPreview{};

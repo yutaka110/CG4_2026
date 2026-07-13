@@ -1,6 +1,7 @@
 #include "EditorPropertyEditService.h"
 
 #include <algorithm>
+#include <cmath>
 #include <sstream>
 #include <utility>
 
@@ -83,6 +84,50 @@ EditorPropertyApplyDeltaResult FailDelta(
             message);
     }
     return MakeDeltaResult(false, false, std::move(message));
+}
+
+std::string ReadOnlyPropertyMessage(const EditorPropertyDescriptor& descriptor) {
+    return descriptor.readOnlyReason.empty()
+        ? std::string("Property is read-only.")
+        : descriptor.readOnlyReason;
+}
+
+EditorPropertyValidationResult MakeValidationResult(
+    bool valid,
+    std::string message = {}) {
+    EditorPropertyValidationResult result{};
+    result.valid = valid;
+    result.message = std::move(message);
+    return result;
+}
+
+std::string WithValidationHint(
+    const EditorPropertyDescriptor& descriptor,
+    std::string message) {
+    if (!descriptor.validationHint.empty()) {
+        message += " ";
+        message += descriptor.validationHint;
+    }
+    return message;
+}
+
+bool FloatInRange(float value, float minValue, float maxValue) {
+    return value >= minValue && value <= maxValue;
+}
+
+bool HasEnforcedRange(const EditorPropertyDescriptor& descriptor) {
+    return descriptor.hasRange && descriptor.maxValue > descriptor.minValue;
+}
+
+bool ContainsEnumOption(
+    const EditorPropertyDescriptor& descriptor,
+    const std::string& value) {
+    return std::any_of(
+        descriptor.enumOptions.begin(),
+        descriptor.enumOptions.end(),
+        [&](const std::string& option) {
+            return option == value;
+        });
 }
 
 void StagePropertyDelta(
@@ -210,9 +255,78 @@ void MarkDeltaDirty(
 
 } // namespace
 
+EditorPropertyValidationResult ValidateEditorPropertyValue(
+    const EditorPropertyDescriptor& descriptor,
+    const EditorPropertyValue& value) {
+    if (descriptor.readOnly) {
+        return MakeValidationResult(false, ReadOnlyPropertyMessage(descriptor));
+    }
+
+    switch (descriptor.kind) {
+    case EditorPropertyKind::Bool:
+    case EditorPropertyKind::String:
+    case EditorPropertyKind::ObjectRef:
+    case EditorPropertyKind::AssetRef:
+        break;
+    case EditorPropertyKind::Enum:
+        if (!descriptor.enumOptions.empty() &&
+            !ContainsEnumOption(descriptor, value.stringValue)) {
+            return MakeValidationResult(
+                false,
+                WithValidationHint(
+                    descriptor,
+                    "Enum value is not one of the registered options."));
+        }
+        break;
+    case EditorPropertyKind::Int:
+        if (HasEnforcedRange(descriptor) &&
+            (value.intValue < static_cast<int>(std::floor(descriptor.minValue)) ||
+                value.intValue > static_cast<int>(std::ceil(descriptor.maxValue)))) {
+            return MakeValidationResult(
+                false,
+                WithValidationHint(descriptor, "Int value is outside the allowed range."));
+        }
+        break;
+    case EditorPropertyKind::UInt:
+        if (HasEnforcedRange(descriptor) &&
+            (static_cast<float>(value.uintValue) < descriptor.minValue ||
+                static_cast<float>(value.uintValue) > descriptor.maxValue)) {
+            return MakeValidationResult(
+                false,
+                WithValidationHint(descriptor, "UInt value is outside the allowed range."));
+        }
+        break;
+    case EditorPropertyKind::Float:
+        if (HasEnforcedRange(descriptor) &&
+            !FloatInRange(value.floatValue, descriptor.minValue, descriptor.maxValue)) {
+            return MakeValidationResult(
+                false,
+                WithValidationHint(descriptor, "Float value is outside the allowed range."));
+        }
+        break;
+    case EditorPropertyKind::Vec2:
+    case EditorPropertyKind::Vec3:
+    case EditorPropertyKind::Vec4:
+    case EditorPropertyKind::Color:
+        if (HasEnforcedRange(descriptor) &&
+            (!FloatInRange(value.vec3Value.x, descriptor.minValue, descriptor.maxValue) ||
+                !FloatInRange(value.vec3Value.y, descriptor.minValue, descriptor.maxValue) ||
+                !FloatInRange(value.vec3Value.z, descriptor.minValue, descriptor.maxValue))) {
+            return MakeValidationResult(
+                false,
+                WithValidationHint(descriptor, "Vector value is outside the allowed range."));
+        }
+        break;
+    }
+
+    return MakeValidationResult(true);
+}
+
 bool IsEditorPropertyEditCourseAuthoringDomain(EditorDomainId domain) {
     return domain == EditorDomainId::CourseTerrainPlacement ||
-        domain == EditorDomainId::CourseRockCluster;
+        domain == EditorDomainId::CourseRockCluster ||
+        domain == EditorDomainId::CourseCameraKey ||
+        domain == EditorDomainId::CourseEventMarker;
 }
 
 std::string BuildEditorPropertyEditDirtyId(const EditorObjectHandle& target) {
@@ -244,7 +358,15 @@ EditorPropertyEditResult EditorPropertyEditService::Apply(
         return Fail(request, "Property descriptor is unavailable.");
     }
     if (request.descriptor->readOnly) {
-        return Fail(request, "Property is read-only.");
+        return Fail(request, ReadOnlyPropertyMessage(*request.descriptor));
+    }
+    if (request.descriptor->domain != request.target.domain) {
+        return Fail(request, "Property descriptor domain does not match the selected object.");
+    }
+    const EditorPropertyValidationResult validation =
+        ValidateEditorPropertyValue(*request.descriptor, request.requestedValue);
+    if (!validation.valid) {
+        return Fail(request, validation.message);
     }
 
     EditorPropertyValue beforeValue{};
@@ -322,7 +444,15 @@ EditorPropertyBatchEditResult EditorPropertyEditService::ApplyBatch(
             return FailBatch(request, "Property descriptor is unavailable.");
         }
         if (edit.descriptor->readOnly) {
-            return FailBatch(request, "Property is read-only.");
+            return FailBatch(request, ReadOnlyPropertyMessage(*edit.descriptor));
+        }
+        if (edit.descriptor->domain != edit.target.domain) {
+            return FailBatch(request, "Property descriptor domain does not match a batch edit target.");
+        }
+        const EditorPropertyValidationResult validation =
+            ValidateEditorPropertyValue(*edit.descriptor, edit.requestedValue);
+        if (!validation.valid) {
+            return FailBatch(request, validation.message);
         }
         for (const PreparedEdit& existing : prepared) {
             if (existing.edit.target.SameObject(edit.target) &&
@@ -470,7 +600,7 @@ EditorPropertyApplyDeltaResult EditorPropertyEditService::ApplyDelta(
             return FailDelta(request, "Property descriptor for transaction delta was not found.");
         }
         if (descriptor->readOnly) {
-            return FailDelta(request, "Property delta targets a read-only property.");
+            return FailDelta(request, ReadOnlyPropertyMessage(*descriptor));
         }
 
         const std::string& summary =
@@ -483,6 +613,11 @@ EditorPropertyApplyDeltaResult EditorPropertyEditService::ApplyDelta(
             return FailDelta(
                 request,
                 parseError.empty() ? std::string("Failed to parse property delta value.") : parseError);
+        }
+        const EditorPropertyValidationResult validation =
+            ValidateEditorPropertyValue(*descriptor, value);
+        if (!validation.valid) {
+            return FailDelta(request, validation.message);
         }
 
         PreparedDelta delta{};

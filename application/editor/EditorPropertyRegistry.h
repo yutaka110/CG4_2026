@@ -40,6 +40,11 @@ struct EditorPropertyDescriptor {
     bool hasRange = false;
     bool readOnly = false;
     bool runtimeOnly = false;
+    bool resettable = false;
+    bool supportsMultiEdit = true;
+    std::string readOnlyReason;
+    std::string validationHint;
+    std::string defaultValue;
 };
 
 class EditorPropertyRegistry {
@@ -64,6 +69,14 @@ private:
 };
 
 void RegisterBuiltInCourseObjectProperties(EditorPropertyRegistry& registry);
+void RegisterBuiltInVfxProperties(EditorPropertyRegistry& registry);
+void RegisterBuiltInTerrainProperties(EditorPropertyRegistry& registry);
+void RegisterBuiltInPostProcessProperties(EditorPropertyRegistry& registry);
+void RegisterBuiltInRenderProperties(EditorPropertyRegistry& registry);
+void RegisterBuiltInCameraProperties(EditorPropertyRegistry& registry);
+void RegisterBuiltInCourseEventProperties(EditorPropertyRegistry& registry);
+void RegisterBuiltInGameplayProperties(EditorPropertyRegistry& registry);
+void RegisterBuiltInEditorProperties(EditorPropertyRegistry& registry);
 const char* ToString(EditorPropertyKind kind);
 
 } // namespace editor

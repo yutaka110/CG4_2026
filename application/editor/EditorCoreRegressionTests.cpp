@@ -17,18 +17,44 @@
 #include "EditorThumbnailUploadRetirementQueue.h"
 #include "EditorDirtyStateService.h"
 #include "EditorDetailsEditController.h"
+#include "EditorCompositePropertyAccessor.h"
+#include "EditorBuiltinDetailsSectionProviders.h"
+#include "EditorDetailsSectionProvider.h"
 #include "EditorLayoutPersistenceService.h"
 #include "EditorPanelLayoutService.h"
 #include "EditorPanelRegistry.h"
+#include "EditorPlaySessionLifecycleService.h"
+#include "EditorPlaySessionRuntimeControlService.h"
+#include "EditorRailRuntimePause.h"
+#include "EditorRuntimeAuthoringApplyService.h"
+#include "EditorRuntimeWatchBuilder.h"
+#include "EditorMenuBar.h"
+#include "EditorToolbar.h"
+#include "EditorToolRegistration.h"
+#include "EditorPropertyClipboardService.h"
 #include "EditorPropertyEditSession.h"
 #include "EditorPropertyEditService.h"
+#include "EditorProductionPropertyAdapter.h"
 #include "EditorPropertyRegistry.h"
 #include "EditorSelection.h"
 #include "EditorTransactionStack.h"
 #include "EditorValidationService.h"
 #include "ExistingFeatureProtection.h"
 
+#include "../AppEditorToolModules.h"
+#include "../AppRuntimeState.h"
+#include "../EffectAssetLoader.h"
+#include "../EffectRuntime.h"
+#include "../EffectSystem.h"
+#include "../PostProcessStack.h"
+#include "../course/CourseAsset.h"
+#include "../course/CourseCollisionSystem.h"
+#include "../course/CourseSpawnRuntime.h"
+#include "../course/PlayerCombatFeelSystem.h"
+#include "../course/SectionCheckpointSystem.h"
+
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -364,6 +390,93 @@ private:
     std::vector<PropertySlot> values_;
 };
 
+class RegressionMultiTargetPropertyAccessor final : public EditorPropertyAccessor {
+public:
+    void SetInitial(
+        EditorObjectHandle target,
+        std::string propertyPath,
+        EditorPropertyValue value) {
+        values_.push_back(PropertySlot{std::move(target), std::move(propertyPath), std::move(value)});
+    }
+
+    bool CanAccess(
+        const EditorObjectHandle& object,
+        const EditorPropertyDescriptor& descriptor) const override {
+        return FindSlot(object, descriptor.name) != nullptr;
+    }
+
+    bool Get(
+        const EditorObjectHandle& object,
+        const EditorPropertyDescriptor& descriptor,
+        EditorPropertyValue& outValue) const override {
+        const PropertySlot* slot = FindSlot(object, descriptor.name);
+        if (slot == nullptr) {
+            return false;
+        }
+        outValue = slot->value;
+        return true;
+    }
+
+    bool Set(
+        const EditorObjectHandle& object,
+        const EditorPropertyDescriptor& descriptor,
+        const EditorPropertyValue& value,
+        std::string* errorMessage) override {
+        PropertySlot* slot = FindSlot(object, descriptor.name);
+        if (slot == nullptr) {
+            if (errorMessage != nullptr) {
+                *errorMessage = "regression multi-target property is inaccessible";
+            }
+            return false;
+        }
+        slot->value = value;
+        return true;
+    }
+
+    const EditorPropertyValue& Value(
+        const EditorObjectHandle& object,
+        const std::string& propertyPath) const {
+        const PropertySlot* slot = FindSlot(object, propertyPath);
+        if (slot == nullptr) {
+            throw std::runtime_error("missing regression multi-target property");
+        }
+        return slot->value;
+    }
+
+private:
+    struct PropertySlot {
+        EditorObjectHandle target;
+        std::string path;
+        EditorPropertyValue value;
+    };
+
+    PropertySlot* FindSlot(
+        const EditorObjectHandle& object,
+        const std::string& propertyPath) {
+        auto it = std::find_if(
+            values_.begin(),
+            values_.end(),
+            [&](const PropertySlot& slot) {
+                return slot.target.SameObject(object) && slot.path == propertyPath;
+            });
+        return it != values_.end() ? &*it : nullptr;
+    }
+
+    const PropertySlot* FindSlot(
+        const EditorObjectHandle& object,
+        const std::string& propertyPath) const {
+        auto it = std::find_if(
+            values_.begin(),
+            values_.end(),
+            [&](const PropertySlot& slot) {
+                return slot.target.SameObject(object) && slot.path == propertyPath;
+            });
+        return it != values_.end() ? &*it : nullptr;
+    }
+
+    std::vector<PropertySlot> values_;
+};
+
 void TestTransactionStack(RegressionRunner& runner) {
     EditorTransactionStack stack;
     stack.SetMaxHistory(2);
@@ -494,6 +607,60 @@ void TestSelectionAndPropertyRegistry(RegressionRunner& runner) {
     }
     runner.Expect(enumCount > 0, "built-in registry should include enum descriptors");
     runner.Expect(enumCount == enumWithOptions, "enum descriptors should have combo options");
+
+    EditorPropertyRegistry fullRegistry;
+    RegisterBuiltInEditorProperties(fullRegistry);
+    runner.Expect(
+        fullRegistry.Count() > registry.Count(),
+        "full built-in editor registry should expand beyond course descriptors");
+    runner.Expect(
+        fullRegistry.Find(EditorDomainId::VfxEffectAsset, "VfxEffectAsset.technique") != nullptr,
+        "vfx effect asset descriptors should register");
+    runner.Expect(
+        fullRegistry.Find(EditorDomainId::TerrainGeneration, "TerrainGeneration.chunkLength") != nullptr,
+        "terrain generation descriptors should register");
+    runner.Expect(
+        fullRegistry.Find(EditorDomainId::PostProcessPass, "PostProcessPass.intensity") != nullptr,
+        "post-process pass descriptors should register");
+    runner.Expect(
+        fullRegistry.Find(EditorDomainId::RenderPreset, "RenderPreset.renderScale") != nullptr,
+        "render preset descriptors should register");
+    runner.Expect(
+        fullRegistry.Find(EditorDomainId::CourseCameraKey, "CourseCameraKey.fov") != nullptr,
+        "course camera key descriptors should register");
+    runner.Expect(
+        fullRegistry.Find(EditorDomainId::CourseEventMarker, "CourseEventMarker.payload") != nullptr,
+        "course event marker descriptors should register");
+    runner.Expect(
+        fullRegistry.Find(EditorDomainId::GameplayTuning, "GameplayTuning.lockOnRange") != nullptr,
+        "gameplay tuning descriptors should register");
+    const EditorPropertyDescriptor* runtimeParticles =
+        fullRegistry.Find(EditorDomainId::VfxEffectInstance, "VfxEffectInstance.particleCount");
+    runner.Expect(
+        runtimeParticles != nullptr &&
+            runtimeParticles->readOnly &&
+            runtimeParticles->runtimeOnly &&
+            !runtimeParticles->readOnlyReason.empty(),
+        "runtime-only descriptors should carry explicit read-only reasons");
+    const EditorPropertyDescriptor* resettableRenderScale =
+        fullRegistry.Find(EditorDomainId::RenderPreset, "RenderPreset.renderScale");
+    runner.Expect(
+        resettableRenderScale != nullptr &&
+            resettableRenderScale->resettable &&
+            !resettableRenderScale->defaultValue.empty(),
+        "resettable descriptors should carry default values");
+    const EditorPropertyDescriptor* resettableCourseDistance =
+        fullRegistry.Find(EditorDomainId::CourseTerrainPlacement, "CourseTerrainPlacement.distance");
+    EditorPropertyValue defaultCourseDistance{};
+    runner.Expect(
+        resettableCourseDistance != nullptr &&
+            resettableCourseDistance->resettable &&
+            ParseEditorPropertyValue(
+                *resettableCourseDistance,
+                resettableCourseDistance->defaultValue,
+                defaultCourseDistance) &&
+            defaultCourseDistance.floatValue == 0.0f,
+        "mutable course descriptors should expose parseable reset defaults");
 }
 
 void TestPropertyEditService(RegressionRunner& runner) {
@@ -605,6 +772,104 @@ void TestPropertyEditService(RegressionRunner& runner) {
     runner.Expect(!locked.applied, "locked property edit should be rejected");
     runner.Expect(accessor.Value() == 125.0f, "locked property edit should not mutate accessor");
     runner.Expect(notifications.Count() == 2, "locked property edit should notify failure");
+
+    EditorPropertyClipboardService clipboard;
+    const EditorPropertyClipboardResult copyResult =
+        clipboard.Copy(
+            EditorPropertyClipboardCopyRequest{
+                &accessor,
+                &notifications,
+                target,
+                descriptor,
+                false,
+                "regression.propertyClipboard"});
+    runner.Expect(copyResult.applied, "property clipboard should copy through accessor");
+    runner.Expect(
+        clipboard.HasValue() && clipboard.Summary() == "125.000",
+        "property clipboard should preserve formatted value");
+    runner.Expect(
+        clipboard.CanPasteTo(*descriptor),
+        "property clipboard should allow compatible paste");
+    runner.Expect(
+        !clipboard.CanPasteTo(*layerDescriptor),
+        "property clipboard should reject incompatible descriptor kind");
+    EditorPropertyValue pasteValue{};
+    const EditorPropertyClipboardResult pasteValueResult =
+        clipboard.BuildPasteValue(EditorPropertyClipboardPasteRequest{descriptor}, pasteValue);
+    runner.Expect(
+        pasteValueResult.applied && pasteValue.floatValue == 125.0f,
+        "property clipboard should parse paste value for compatible descriptor");
+    RegressionPropertyAccessor pasteAccessor(target, descriptor->name, 5.0f);
+    EditorTransactionStack pasteTransactions;
+    EditorDirtyStateService pasteDirtyState;
+    const EditorPropertyEditResult pasteApplyResult =
+        editService.Apply(
+            EditorPropertyEditRequest{
+                &pasteAccessor,
+                &pasteTransactions,
+                &pasteDirtyState,
+                &notifications,
+                target,
+                descriptor,
+                pasteValue,
+                true,
+                true,
+                "regression.propertyClipboard"});
+    runner.Expect(
+        pasteApplyResult.applied && pasteApplyResult.changed && pasteAccessor.Value() == 125.0f,
+        "property clipboard paste should apply through the official edit service");
+    runner.Expect(
+        pasteTransactions.HasStagedPropertyDelta(),
+        "property clipboard paste should stage undoable property delta");
+
+    EditorPropertyValue invalidScale{};
+    invalidScale.vec3Value = {-1.0f, 1.0f, 1.0f};
+    EditorPropertyValue validationScaleInitial{};
+    validationScaleInitial.vec3Value = {1.0f, 1.0f, 1.0f};
+    RegressionPropertyAccessor scaleValidationAccessor(
+        target,
+        scaleDescriptor->name,
+        validationScaleInitial);
+    const EditorPropertyEditResult invalidRange =
+        editService.Apply(
+            EditorPropertyEditRequest{
+                &scaleValidationAccessor,
+                &transactions,
+                &dirtyState,
+                &notifications,
+                target,
+                scaleDescriptor,
+                invalidScale,
+                true,
+                true,
+                "regression.propertyValidation"});
+    runner.Expect(!invalidRange.applied, "range validation should reject invalid vector values");
+    runner.Expect(
+        invalidRange.message.find("outside the allowed range") != std::string::npos,
+        "range validation should report an actionable reason");
+
+    EditorPropertyValue invalidEnum{};
+    invalidEnum.stringValue = "not_a_layer";
+    EditorPropertyValue validationEnumInitial{};
+    validationEnumInitial.stringValue = "gameplay_collision";
+    RegressionPropertyAccessor enumValidationAccessor(
+        target,
+        layerDescriptor->name,
+        validationEnumInitial);
+    const EditorPropertyEditResult invalidEnumResult =
+        editService.Apply(
+            EditorPropertyEditRequest{
+                &enumValidationAccessor,
+                &transactions,
+                &dirtyState,
+                &notifications,
+                target,
+                layerDescriptor,
+                invalidEnum,
+                true,
+                true,
+                "regression.propertyValidation"});
+    runner.Expect(!invalidEnumResult.applied, "enum validation should reject unregistered options");
 
     EditorPropertyValue initialDistance{};
     initialDistance.floatValue = 10.0f;
@@ -861,6 +1126,105 @@ void TestPropertyEditService(RegressionRunner& runner) {
     runner.Expect(
         detailsTransactions.StagedPropertyDeltaCount() == 1,
         "details controller immediate edit should stage one delta");
+    detailsTransactions.ConsumeStagedPropertyDelta();
+
+    const EditorObjectHandle multiTargetA = MakeCourseObject(41);
+    const EditorObjectHandle multiTargetB = MakeCourseObject(42);
+    EditorPropertyValue multiBeforeA{};
+    multiBeforeA.floatValue = 5.0f;
+    EditorPropertyValue multiBeforeB{};
+    multiBeforeB.floatValue = 10.0f;
+    RegressionMultiTargetPropertyAccessor multiDetailsAccessor;
+    multiDetailsAccessor.SetInitial(multiTargetA, descriptor->name, multiBeforeA);
+    multiDetailsAccessor.SetInitial(multiTargetB, descriptor->name, multiBeforeB);
+    EditorPropertyEditSession multiDetailsSession;
+    EditorTransactionStack multiDetailsTransactions;
+    EditorDirtyStateService multiDetailsDirtyState;
+    EditorNotificationCenter multiDetailsNotifications;
+    const EditorDetailsEditControllerContext multiDetailsContext{
+        &multiDetailsSession,
+        &multiDetailsAccessor,
+        &multiDetailsAccessor,
+        &multiDetailsTransactions,
+        &multiDetailsDirtyState,
+        &multiDetailsNotifications,
+        true,
+        true,
+        "regression.details.multi"};
+    const std::vector<EditorObjectHandle> multiTargets{multiTargetA, multiTargetB};
+
+    EditorPropertyValue multiRequested{};
+    multiRequested.floatValue = 25.0f;
+    const EditorPropertyEditSessionResult multiPreviewResult =
+        PreviewEditorDetailsPropertyBatchEdit(
+            multiDetailsContext,
+            multiTargets,
+            *descriptor,
+            multiRequested);
+    runner.Expect(multiPreviewResult.applied, "details controller multi preview should apply");
+    runner.Expect(multiDetailsSession.IsActive(), "details controller multi preview should open session");
+    runner.Expect(
+        multiDetailsAccessor.Value(multiTargetA, descriptor->name).floatValue == 25.0f &&
+            multiDetailsAccessor.Value(multiTargetB, descriptor->name).floatValue == 25.0f,
+        "details controller multi preview should write all selected targets");
+    runner.Expect(
+        !multiDetailsTransactions.HasStagedPropertyDelta(),
+        "details controller multi preview should not stage transactions");
+
+    const EditorPropertyEditSessionResult multiCommitResult =
+        CommitEditorDetailsPropertyEdit(multiDetailsContext);
+    runner.Expect(multiCommitResult.applied, "details controller multi commit should apply");
+    runner.Expect(multiCommitResult.changed, "details controller multi commit should report changes");
+    runner.Expect(
+        multiDetailsTransactions.StagedPropertyDeltaCount() == 2,
+        "details controller multi commit should stage one delta per selected target");
+    runner.Expect(
+        multiDetailsDirtyState.HasDirtyDomain(EditorDirtyDomain::CourseAuthoring),
+        "details controller multi commit should mark course authoring dirty");
+
+    EditorPropertyValue resetValue{};
+    runner.Expect(
+        descriptor->resettable &&
+            ParseEditorPropertyValue(*descriptor, descriptor->defaultValue, resetValue),
+        "details reset foundation should parse descriptor defaults");
+    const EditorPropertyEditSessionResult resetMultiResult =
+        ApplyEditorDetailsImmediatePropertyBatchEdit(
+            multiDetailsContext,
+            multiTargets,
+            *descriptor,
+            resetValue);
+    runner.Expect(resetMultiResult.applied, "details reset should apply through batch session");
+    runner.Expect(
+        multiDetailsAccessor.Value(multiTargetA, descriptor->name).floatValue == 0.0f &&
+            multiDetailsAccessor.Value(multiTargetB, descriptor->name).floatValue == 0.0f,
+        "details reset should write descriptor default to all selected targets");
+
+    const EditorPropertyDescriptor* readOnlyDescriptor =
+        registry.Find(EditorDomainId::VfxEffectInstance, "VfxEffectInstance.particleCount");
+    if (readOnlyDescriptor == nullptr) {
+        EditorPropertyRegistry fullRegistryForReadOnly;
+        RegisterBuiltInEditorProperties(fullRegistryForReadOnly);
+        readOnlyDescriptor =
+            fullRegistryForReadOnly.Find(EditorDomainId::VfxEffectInstance, "VfxEffectInstance.particleCount");
+        runner.Expect(readOnlyDescriptor != nullptr, "runtime read-only descriptor should exist");
+        const EditorPropertyEditResult readOnlyResult =
+            editService.Apply(
+                EditorPropertyEditRequest{
+                    &detailsAccessor,
+                    &detailsTransactions,
+                    &dirtyState,
+                    &notifications,
+                    target,
+                    readOnlyDescriptor,
+                    requested,
+                    true,
+                    true,
+                    "regression.propertyReadOnly"});
+        runner.Expect(!readOnlyResult.applied, "read-only edit should be rejected");
+        runner.Expect(
+            readOnlyResult.message.find("Runtime inspection only") != std::string::npos,
+            "read-only edit should report descriptor read-only reason");
+    }
 
     EditorTransactionStack deltaTransactions;
     deltaTransactions.PushPropertyDelta(
@@ -1003,6 +1367,672 @@ void TestPropertyEditService(RegressionRunner& runner) {
                 true,
                 "regression.propertyDelta"});
     runner.Expect(!lockedDelta.applied, "locked property delta should be rejected");
+}
+
+void TestProductionPropertyAdapters(RegressionRunner& runner) {
+    EditorPropertyRegistry registry;
+    RegisterBuiltInEditorProperties(registry);
+
+    EffectSystem effectSystem;
+    EffectAsset effectAsset{};
+    effectAsset.name = "spark_core";
+    effectAsset.texture = "spark_a";
+    effectAsset.lifetime = 1.0f;
+    effectAsset.defaultParticle.spawnFrequency = 12.0f;
+    effectSystem.RegisterAsset(effectAsset);
+    EffectRuntime effectRuntime(&effectSystem);
+
+    PostProcessStack postProcessStack;
+    postProcessStack.ResetToVfxDefaults();
+    runner.Expect(!postProcessStack.Passes().empty(), "post-process defaults should provide editable passes");
+
+    AppRuntimeState runtimeState;
+    runtimeState.terrain.settings.chunkLength = 80.0f;
+    CourseAsset course;
+    course.cameraKeys.push_back(CourseCameraKey{});
+    CourseEventMarker event{};
+    event.distance = 120.0f;
+    event.type = "spawn";
+    event.id = "wave_alpha";
+    event.payload = "count=3";
+    course.events.push_back(event);
+
+    EditorProductionPropertyAdapter productionAccessor(
+        &effectRuntime,
+        &postProcessStack,
+        &runtimeState,
+        &course);
+    EditorCompositePropertyAccessor compositeAccessor;
+    compositeAccessor.Add(&productionAccessor);
+
+    EditorObjectHandle vfxHandle{};
+    vfxHandle.domain = EditorDomainId::VfxEffectAsset;
+    vfxHandle.stableId = "vfx-asset:spark_core";
+    vfxHandle.displayName = "VFX Asset: spark_core";
+
+    EditorObjectHandle postHandle{};
+    postHandle.domain = EditorDomainId::PostProcessPass;
+    postHandle.stableId = "post-process:" + postProcessStack.Passes().front().name;
+    postHandle.localIndex = 0;
+    postHandle.displayName = "PostProcess: " + postProcessStack.Passes().front().name;
+
+    EditorObjectHandle cameraHandle{};
+    cameraHandle.domain = EditorDomainId::CourseCameraKey;
+    cameraHandle.stableId = BuildStableIndexedId("course-camera-key", 0);
+    cameraHandle.localIndex = 0;
+    cameraHandle.displayName = "Course Camera Key #0";
+
+    EditorObjectHandle eventHandle{};
+    eventHandle.domain = EditorDomainId::CourseEventMarker;
+    eventHandle.stableId = BuildStableIndexedId("course-event", 0);
+    eventHandle.localIndex = 0;
+    eventHandle.displayName = "Course Event: wave_alpha";
+
+    EditorObjectHandle terrainHandle{};
+    terrainHandle.domain = EditorDomainId::TerrainGeneration;
+    terrainHandle.stableId = BuildStableIndexedId("terrain-generation", 0);
+    terrainHandle.displayName = "Terrain Generation";
+
+    const EditorPropertyDescriptor* vfxLifetime =
+        registry.Find(EditorDomainId::VfxEffectAsset, "VfxEffectAsset.lifetime");
+    const EditorPropertyDescriptor* vfxTechnique =
+        registry.Find(EditorDomainId::VfxEffectAsset, "VfxEffectAsset.technique");
+    const EditorPropertyDescriptor* postIntensity =
+        registry.Find(EditorDomainId::PostProcessPass, "PostProcessPass.intensity");
+    const EditorPropertyDescriptor* postStage =
+        registry.Find(EditorDomainId::PostProcessPass, "PostProcessPass.stage");
+    const EditorPropertyDescriptor* cameraFov =
+        registry.Find(EditorDomainId::CourseCameraKey, "CourseCameraKey.fov");
+    const EditorPropertyDescriptor* eventPayload =
+        registry.Find(EditorDomainId::CourseEventMarker, "CourseEventMarker.payload");
+    const EditorPropertyDescriptor* terrainChunkLength =
+        registry.Find(EditorDomainId::TerrainGeneration, "TerrainGeneration.chunkLength");
+    runner.Expect(vfxLifetime != nullptr, "vfx lifetime descriptor should exist");
+    runner.Expect(vfxTechnique != nullptr, "vfx technique descriptor should exist");
+    runner.Expect(postIntensity != nullptr, "post-process intensity descriptor should exist");
+    runner.Expect(postStage != nullptr, "post-process stage descriptor should exist");
+    runner.Expect(cameraFov != nullptr, "camera fov descriptor should exist");
+    runner.Expect(eventPayload != nullptr, "course event payload descriptor should exist");
+    runner.Expect(terrainChunkLength != nullptr, "terrain chunk length descriptor should exist");
+
+    EditorTransactionStack transactions;
+    EditorDirtyStateService dirtyState;
+    EditorNotificationCenter notifications;
+    EditorPropertyEditService editService;
+
+    EditorPropertyValue requested{};
+    requested.floatValue = 2.5f;
+    EditorPropertyEditResult result =
+        editService.Apply(
+            EditorPropertyEditRequest{
+                &compositeAccessor,
+                &transactions,
+                &dirtyState,
+                &notifications,
+                vfxHandle,
+                vfxLifetime,
+                requested,
+                true,
+                true,
+                "regression.productionProperty"});
+    runner.Expect(result.applied && result.changed, "vfx lifetime should edit through production accessor");
+    runner.Expect(
+        std::fabs(effectRuntime.Assets().at("spark_core").lifetime - 2.5f) < 0.001f,
+        "vfx lifetime should mutate the effect asset");
+    runner.Expect(
+        dirtyState.HasDirtyDomain(EditorDirtyDomain::Property),
+        "vfx edits should dirty generic property state instead of course authoring");
+
+    requested.floatValue = 0.35f;
+    result =
+        editService.Apply(
+            EditorPropertyEditRequest{
+                &compositeAccessor,
+                &transactions,
+                &dirtyState,
+                &notifications,
+                postHandle,
+                postIntensity,
+                requested,
+                true,
+                true,
+                "regression.productionProperty"});
+    runner.Expect(result.applied && result.changed, "post-process intensity should edit through production accessor");
+    runner.Expect(
+        std::fabs(postProcessStack.Passes().front().intensity - 0.35f) < 0.001f,
+        "post-process intensity should mutate the production pass");
+
+    requested.floatValue = 60.0f;
+    result =
+        editService.Apply(
+            EditorPropertyEditRequest{
+                &compositeAccessor,
+                &transactions,
+                &dirtyState,
+                &notifications,
+                cameraHandle,
+                cameraFov,
+                requested,
+                true,
+                true,
+                "regression.productionProperty"});
+    runner.Expect(result.applied && result.changed, "course camera fov should edit through production accessor");
+    runner.Expect(
+        std::fabs(course.cameraKeys.front().fovY - (60.0f * 3.14159265358979323846f / 180.0f)) < 0.001f,
+        "camera fov should be stored in radians");
+    runner.Expect(
+        dirtyState.HasDirtyDomain(EditorDirtyDomain::CourseAuthoring),
+        "course camera edits should dirty course authoring");
+
+    EditorPropertyValue eventValue{};
+    eventValue.stringValue = "count=5 route=left";
+    result =
+        editService.Apply(
+            EditorPropertyEditRequest{
+                &compositeAccessor,
+                &transactions,
+                &dirtyState,
+                &notifications,
+                eventHandle,
+                eventPayload,
+                eventValue,
+                true,
+                true,
+                "regression.productionProperty"});
+    runner.Expect(result.applied && result.changed, "course event payload should edit through production accessor");
+    runner.Expect(
+        course.events.front().payload == "count=5 route=left",
+        "course event payload should mutate the course asset");
+    runner.Expect(
+        dirtyState.HasDirtyDomain(EditorDirtyDomain::CourseAuthoring),
+        "course event edits should dirty course authoring");
+
+    requested.floatValue = 192.0f;
+    result =
+        editService.Apply(
+            EditorPropertyEditRequest{
+                &compositeAccessor,
+                &transactions,
+                &dirtyState,
+                &notifications,
+                terrainHandle,
+                terrainChunkLength,
+                requested,
+                true,
+                true,
+                "regression.productionProperty"});
+    runner.Expect(result.applied && result.changed, "terrain generation should edit through production accessor");
+    runner.Expect(
+        std::fabs(runtimeState.terrain.settings.chunkLength - 192.0f) < 0.001f,
+        "terrain generation settings should mutate runtime authoring state");
+
+    EditorPropertyValue enumValue{};
+    enumValue.stringValue = "trail";
+    const EditorPropertyEditResult readOnlyTechnique =
+        editService.Apply(
+            EditorPropertyEditRequest{
+                &compositeAccessor,
+                &transactions,
+                &dirtyState,
+                &notifications,
+                vfxHandle,
+                vfxTechnique,
+                enumValue,
+                true,
+                true,
+                "regression.productionProperty"});
+    runner.Expect(!readOnlyTechnique.applied, "read-only vfx technique edits should be rejected");
+    runner.Expect(
+        readOnlyTechnique.message.find("typed VFX components") != std::string::npos,
+        "read-only vfx technique should report the production replacement path");
+
+    const EditorPropertyEditResult readOnlyStage =
+        editService.Apply(
+            EditorPropertyEditRequest{
+                &compositeAccessor,
+                &transactions,
+                &dirtyState,
+                &notifications,
+                postHandle,
+                postStage,
+                enumValue,
+                true,
+                true,
+                "regression.productionProperty"});
+    runner.Expect(!readOnlyStage.applied, "read-only post-process stage edits should be rejected");
+    runner.Expect(
+        readOnlyStage.message.find("production post-process pipeline") != std::string::npos,
+        "read-only post-process stage should report derived pipeline ownership");
+}
+
+void TestDetailsSectionProviders(RegressionRunner& runner) {
+    EditorDetailsSectionProviderRegistry providers;
+    RegisterBuiltInEditorDetailsSectionProviders(providers);
+
+    runner.Expect(providers.Count() >= 4, "built-in details section providers should register");
+    runner.Expect(
+        !providers.FindByDomain(EditorDomainId::VfxEffectAsset).empty(),
+        "vfx effect assets should expose a custom details section");
+    runner.Expect(
+        !providers.FindByDomain(EditorDomainId::PostProcessPass).empty(),
+        "post-process passes should expose a custom details section");
+    runner.Expect(
+        !providers.FindByDomain(EditorDomainId::CourseEventMarker).empty(),
+        "course event markers should expose a custom details section");
+    runner.Expect(
+        !providers.FindByDomain(EditorDomainId::RenderPreset).empty(),
+        "render presets should expose a custom details section");
+    runner.Expect(
+        providers.FindByDomain(EditorDomainId::CourseTerrainPlacement).empty(),
+        "domains without custom sections should remain on generic details coverage");
+}
+
+bool HasRuntimeWatchRecord(
+    const EditorRuntimeInspector& inspector,
+    std::string_view domain,
+    std::string_view displayName) {
+    for (const EditorRuntimeWatchRecord& record : inspector.Records()) {
+        if (record.domain == domain && record.displayName == displayName) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void TestRuntimeWatchBuilder(RegressionRunner& runner) {
+    EditorRuntimeInspector inspector;
+    EditorPlaySessionState playSession;
+    EditorPlaySessionIsolationSnapshot snapshot;
+    EditorPlaySessionLifecycleService lifecycle;
+    EditorRailRuntimePause railPause;
+    EditorSelection selection;
+    EffectRuntime effectRuntime;
+    std::vector<LoadedEffectAsset> loadedEffects;
+    CourseAsset course;
+    CourseSection section{};
+    section.name = "intro";
+    section.category = "warmup";
+    section.startDistance = 0.0f;
+    section.endDistance = 80.0f;
+    course.sections.push_back(section);
+    CourseEventMarker event{};
+    event.id = "watch_event";
+    event.type = "spawn";
+    course.events.push_back(event);
+    AppRuntimeState runtimeState;
+    runtimeState.terrain.previewDistance = 12.0f;
+    runtimeState.terrain.courseObjectEditRevision = 7;
+    CourseSpawnRuntime spawnRuntime;
+    CourseCollisionSystem collisionSystem;
+    SectionCheckpointSystem checkpointSystem;
+    PlayerCombatFeelSystem combatFeelSystem;
+    checkpointSystem.Reset(&course, 12.0f);
+    checkpointSystem.Update(&course, 12.0f);
+    const EditorPlaySessionLifecycleRequest lifecycleRequest{
+        &playSession,
+        &snapshot,
+        &course,
+        &runtimeState,
+        nullptr,
+        "regression.runtimeWatch"};
+    runner.Expect(
+        lifecycle.Begin(lifecycleRequest, EditorPlaySessionMode::Simulating).succeeded,
+        "runtime watch test should begin simulate session");
+    playSession.PauseRuntime();
+    railPause.Sync(
+        EditorRailRuntimePauseInput{
+            true,
+            true,
+            12.0f,
+            0.0f});
+    selection.SetPrimary(
+        EditorObjectHandle{
+            EditorDomainId::CourseTerrainPlacement,
+            "course-terrain:0",
+            0,
+            7,
+            "Course Terrain #0"});
+    std::vector<ge3::graphics::RenderPassDebugInfo> passes;
+    ge3::graphics::RenderPassDebugInfo pass{};
+    pass.name = "Main Scene";
+    pass.executed = true;
+    pass.executionIndex = 3;
+    pass.reason = "required";
+    passes.push_back(pass);
+    const std::string renderGraphDescription = "Main Scene";
+    const std::string renderGraphError;
+
+    BuildEditorRuntimeWatch(
+        EditorRuntimeWatchBuildInput{
+            &inspector,
+            &effectRuntime,
+            &loadedEffects,
+            0,
+            &playSession,
+            &snapshot,
+            &railPause,
+            &selection,
+            &runtimeState,
+            &course,
+            &spawnRuntime,
+            &collisionSystem,
+            &checkpointSystem,
+            &combatFeelSystem,
+            &renderGraphDescription,
+            &renderGraphError,
+            &passes,
+            2,
+            4,
+            3,
+            8,
+            12.0f,
+            0.0f,
+            80.0f});
+
+    runner.Expect(inspector.ReadOnly(), "runtime watch builder should preserve read-only inspector semantics");
+    runner.Expect(
+        HasRuntimeWatchRecord(inspector, "Editor", "Play Session"),
+        "runtime watch should include play session state");
+    runner.Expect(
+        HasRuntimeWatchRecord(inspector, "Editor", "Selection"),
+        "runtime watch should include selected object state");
+    runner.Expect(
+        HasRuntimeWatchRecord(inspector, "Course Runtime", "Course Director"),
+        "runtime watch should include course director state");
+    runner.Expect(
+        HasRuntimeWatchRecord(inspector, "Course Runtime", "Section Checkpoint"),
+        "runtime watch should include checkpoint state");
+    runner.Expect(
+        HasRuntimeWatchRecord(inspector, "VFX", "Effect Runtime"),
+        "runtime watch should include VFX runtime state");
+    runner.Expect(
+        HasRuntimeWatchRecord(inspector, "Gameplay", "Spawn Runtime"),
+        "runtime watch should include spawn runtime state");
+    runner.Expect(
+        HasRuntimeWatchRecord(inspector, "Gameplay", "Collision System"),
+        "runtime watch should include collision system state");
+    runner.Expect(
+        HasRuntimeWatchRecord(inspector, "Gameplay", "Combat Feel"),
+        "runtime watch should include combat feel state");
+    runner.Expect(
+        HasRuntimeWatchRecord(inspector, "RenderGraph", "Pass Summary") &&
+            HasRuntimeWatchRecord(inspector, "RenderGraph", "Main Scene"),
+        "runtime watch should include RenderGraph summary and executed pass rows");
+}
+
+void TestPlaySessionLifecycleService(RegressionRunner& runner) {
+    EditorPlaySessionState playSession;
+    EditorPlaySessionIsolationSnapshot snapshot;
+    EditorPlaySessionLifecycleService lifecycle;
+    EditorNotificationCenter notifications;
+    CourseAsset course;
+    CourseEventMarker event{};
+    event.id = "runtime_event";
+    event.payload = "authoring";
+    course.events.push_back(event);
+    AppRuntimeState runtimeState;
+    runtimeState.terrain.previewSpeed = 40.0f;
+
+    const EditorPlaySessionLifecycleRequest request{
+        &playSession,
+        &snapshot,
+        &course,
+        &runtimeState,
+        &notifications,
+        "regression.playSessionLifecycle"};
+
+    const EditorPlaySessionLifecycleResult beginResult =
+        lifecycle.Begin(request, EditorPlaySessionMode::Simulating);
+    runner.Expect(beginResult.succeeded, "play lifecycle begin should capture authoring snapshot");
+    runner.Expect(playSession.IsSimulating(), "play lifecycle begin should enter simulate mode");
+    runner.Expect(
+        playSession.RuntimeIsolationSnapshotActive() && snapshot.Captured(),
+        "play lifecycle begin should mark snapshot isolation active");
+    runner.Expect(
+        snapshot.SessionSerial() == playSession.SessionSerial(),
+        "play lifecycle snapshot should bind to the active session");
+
+    const EditorPlaySessionLifecycleResult nestedBegin =
+        lifecycle.Begin(request, EditorPlaySessionMode::Playing);
+    runner.Expect(!nestedBegin.succeeded, "play lifecycle should reject nested begin");
+
+    course.events.front().payload = "runtime-mutated";
+    runtimeState.terrain.previewSpeed = 120.0f;
+    playSession.TickFrame();
+    runner.Expect(playSession.FrameCount() == 1, "active play lifecycle should tick frame");
+
+    const EditorPlaySessionLifecycleResult stopResult = lifecycle.Stop(request);
+    runner.Expect(stopResult.succeeded, "play lifecycle stop should restore authoring snapshot");
+    runner.Expect(playSession.IsStopped(), "play lifecycle stop should return to stopped");
+    runner.Expect(playSession.RuntimeIsolationRestored(), "play lifecycle stop should mark restored state");
+    runner.Expect(snapshot.Restored(), "play lifecycle stop should mark snapshot restored");
+    runner.Expect(
+        course.events.front().payload == "authoring",
+        "play lifecycle stop should restore course authoring data");
+    runner.Expect(
+        std::fabs(runtimeState.terrain.previewSpeed - 40.0f) < 0.001f,
+        "play lifecycle stop should restore runtime authoring state");
+
+    EditorPlaySessionState missingSnapshotSession;
+    EditorPlaySessionIsolationSnapshot missingSnapshot;
+    AppRuntimeState missingRuntime;
+    CourseAsset missingCourse;
+    const EditorPlaySessionLifecycleRequest missingSnapshotRequest{
+        &missingSnapshotSession,
+        &missingSnapshot,
+        &missingCourse,
+        &missingRuntime,
+        &notifications,
+        "regression.playSessionLifecycle"};
+    const EditorPlaySessionLifecycleResult missingSnapshotBegin =
+        lifecycle.Begin(missingSnapshotRequest, EditorPlaySessionMode::Playing);
+    runner.Expect(missingSnapshotBegin.succeeded, "play lifecycle missing snapshot setup should begin");
+    missingSnapshot.Clear();
+    const EditorPlaySessionLifecycleResult missingSnapshotStop =
+        lifecycle.Stop(missingSnapshotRequest);
+    runner.Expect(!missingSnapshotStop.succeeded, "play lifecycle stop should require a captured snapshot");
+}
+
+void TestPlaySessionRuntimeControlService(RegressionRunner& runner) {
+    EditorPlaySessionState playSession;
+    EditorPlaySessionIsolationSnapshot snapshot;
+    EditorPlaySessionLifecycleService lifecycle;
+    EditorPlaySessionRuntimeControlService runtimeControl;
+    EditorNotificationCenter notifications;
+    CourseAsset course;
+    CourseEventMarker event{};
+    event.id = "runtime_control_event";
+    event.payload = "authoring";
+    course.events.push_back(event);
+    AppRuntimeState runtimeState;
+    runtimeState.terrain.previewSpeed = 32.0f;
+
+    const EditorPlaySessionLifecycleRequest lifecycleRequest{
+        &playSession,
+        &snapshot,
+        &course,
+        &runtimeState,
+        &notifications,
+        "regression.runtimeControl.lifecycle"};
+    runner.Expect(
+        lifecycle.Begin(lifecycleRequest, EditorPlaySessionMode::Simulating).succeeded,
+        "runtime control test should begin simulate session");
+
+    const EditorPlaySessionRuntimeControlRequest controlRequest{
+        &playSession,
+        &snapshot,
+        &course,
+        &runtimeState,
+        &notifications,
+        "regression.runtimeControl"};
+    const EditorPlaySessionRuntimeControlResult pauseResult =
+        runtimeControl.Pause(controlRequest);
+    runner.Expect(pauseResult.succeeded, "runtime control should pause an active session");
+    runner.Expect(playSession.RuntimePaused(), "runtime control pause should mark runtime paused");
+    runner.Expect(!playSession.ShouldAdvanceRuntimeFrame(), "paused runtime should block frame advance");
+
+    const EditorPlaySessionRuntimeControlResult stepResult =
+        runtimeControl.Step(controlRequest);
+    runner.Expect(stepResult.succeeded, "runtime control should queue a single step");
+    runner.Expect(playSession.ShouldAdvanceRuntimeFrame(), "queued step should allow one runtime frame");
+    playSession.CompleteRuntimeFrameAdvance();
+    runner.Expect(playSession.RuntimeFrameCount() == 1, "single step should advance one runtime frame");
+    runner.Expect(playSession.RuntimePaused(), "single step should return to paused state");
+    runner.Expect(!playSession.RuntimeStepRequested(), "single step should consume the step request");
+
+    const EditorPlaySessionRuntimeControlResult resumeResult =
+        runtimeControl.Resume(controlRequest);
+    runner.Expect(resumeResult.succeeded, "runtime control should resume an active session");
+    runner.Expect(!playSession.RuntimePaused(), "runtime control resume should clear paused state");
+    runner.Expect(playSession.ShouldAdvanceRuntimeFrame(), "resumed runtime should advance frames");
+
+    course.events.front().payload = "runtime-mutated";
+    runtimeState.terrain.previewSpeed = 128.0f;
+    const EditorPlaySessionRuntimeControlResult resetResult =
+        runtimeControl.ResetRuntime(controlRequest);
+    runner.Expect(resetResult.succeeded, "runtime control reset should restore the snapshot");
+    runner.Expect(playSession.RuntimePaused(), "runtime control reset should leave runtime paused");
+    runner.Expect(playSession.RuntimeFrameCount() == 0, "runtime control reset should reset runtime frame count");
+    runner.Expect(playSession.RuntimeResetCount() == 1, "runtime control reset should record reset count");
+    runner.Expect(
+        course.events.front().payload == "authoring",
+        "runtime control reset should restore course snapshot data");
+    runner.Expect(
+        std::fabs(runtimeState.terrain.previewSpeed - 32.0f) < 0.001f,
+        "runtime control reset should restore terrain snapshot data");
+
+    const EditorPlaySessionLifecycleResult stopResult = lifecycle.Stop(lifecycleRequest);
+    runner.Expect(stopResult.succeeded, "runtime control test should still stop through lifecycle service");
+}
+
+void TestRuntimeAuthoringApplyService(RegressionRunner& runner) {
+    EditorPlaySessionState playSession;
+    EditorPlaySessionIsolationSnapshot snapshot;
+    EditorPlaySessionLifecycleService lifecycle;
+    EditorRuntimeAuthoringApplyService runtimeApply;
+    EditorTransactionStack transactions;
+    EditorDirtyStateService dirtyState;
+    EditorNotificationCenter notifications;
+    CourseAsset course;
+    CourseEventMarker event{};
+    event.id = "runtime_apply_event";
+    event.payload = "authoring";
+    course.events.push_back(event);
+    AppRuntimeState runtimeState;
+    runtimeState.terrain.previewSpeed = 40.0f;
+
+    const EditorPlaySessionLifecycleRequest lifecycleRequest{
+        &playSession,
+        &snapshot,
+        &course,
+        &runtimeState,
+        &notifications,
+        "regression.runtimeApply.lifecycle"};
+    runner.Expect(
+        lifecycle.Begin(lifecycleRequest, EditorPlaySessionMode::Simulating).succeeded,
+        "runtime apply test should begin simulate session");
+
+    course.events.front().payload = "applied-runtime";
+    runtimeState.terrain.previewSpeed = 88.0f;
+    const EditorRuntimeAuthoringApplyRequest applyRequest{
+        &playSession,
+        &snapshot,
+        &course,
+        &runtimeState,
+        &transactions,
+        &dirtyState,
+        &notifications,
+        0,
+        "regression.runtimeApply"};
+    const EditorRuntimeAuthoringApplyResult applyResult = runtimeApply.Apply(applyRequest);
+    runner.Expect(applyResult.succeeded && applyResult.changed, "runtime apply should accept changed runtime state");
+    runner.Expect(
+        dirtyState.HasDirtyDomain(EditorDirtyDomain::CourseAuthoring),
+        "runtime apply should dirty course authoring");
+    const EditorTransactionRecord* lastTransaction = transactions.LastTransaction();
+    runner.Expect(
+        lastTransaction != nullptr &&
+            lastTransaction->payload.kind == EditorTransactionPayloadKind::RuntimeAuthoringApply,
+        "runtime apply should push a runtime authoring transaction");
+    runner.Expect(
+        snapshot.CapturedTerrain() != nullptr &&
+            std::fabs(snapshot.CapturedTerrain()->previewSpeed - 88.0f) < 0.001f,
+        "runtime apply should adopt applied state as the new restore snapshot");
+
+    course.events.front().payload = "not-applied-runtime";
+    runtimeState.terrain.previewSpeed = 144.0f;
+    const EditorPlaySessionLifecycleResult stopResult = lifecycle.Stop(lifecycleRequest);
+    runner.Expect(stopResult.succeeded, "runtime apply stop should restore to latest applied snapshot");
+    runner.Expect(course.events.front().payload == "applied-runtime", "stop should keep applied runtime course changes");
+    runner.Expect(
+        std::fabs(runtimeState.terrain.previewSpeed - 88.0f) < 0.001f,
+        "stop should keep applied runtime terrain changes");
+
+    bool undoApplied = false;
+    runner.Expect(
+        transactions.Undo(
+            [&](const EditorTransactionRecord& record, EditorTransactionApplyMode mode) {
+                const EditorRuntimeAuthoringApplyResult result =
+                    runtimeApply.ApplyTransaction(
+                        EditorRuntimeAuthoringApplyRequest{
+                            nullptr,
+                            nullptr,
+                            &course,
+                            &runtimeState,
+                            &transactions,
+                            &dirtyState,
+                            &notifications,
+                            0,
+                            "regression.runtimeApply.undo"},
+                        record,
+                        mode);
+                undoApplied = result.succeeded && course.events.front().payload == "authoring";
+                return result.succeeded;
+            }),
+        "runtime apply transaction undo should run");
+    runner.Expect(undoApplied, "runtime apply undo should restore original authoring data");
+
+    bool redoApplied = false;
+    runner.Expect(
+        transactions.Redo(
+            [&](const EditorTransactionRecord& record, EditorTransactionApplyMode mode) {
+                const EditorRuntimeAuthoringApplyResult result =
+                    runtimeApply.ApplyTransaction(
+                        EditorRuntimeAuthoringApplyRequest{
+                            nullptr,
+                            nullptr,
+                            &course,
+                            &runtimeState,
+                            &transactions,
+                            &dirtyState,
+                            &notifications,
+                            0,
+                            "regression.runtimeApply.redo"},
+                        record,
+                        mode);
+                redoApplied = result.succeeded && course.events.front().payload == "applied-runtime";
+                return result.succeeded;
+            }),
+        "runtime apply transaction redo should run");
+    runner.Expect(redoApplied, "runtime apply redo should restore applied runtime data");
+
+    runner.Expect(
+        lifecycle.Begin(lifecycleRequest, EditorPlaySessionMode::Simulating).succeeded,
+        "runtime apply validation test should begin a new simulate session");
+    course.events.front().payload = "blocked-by-validation";
+    runner.Expect(
+        !runtimeApply.Apply(
+            EditorRuntimeAuthoringApplyRequest{
+                &playSession,
+                &snapshot,
+                &course,
+                &runtimeState,
+                &transactions,
+                &dirtyState,
+                &notifications,
+                1,
+                "regression.runtimeApply.validation"}).succeeded,
+        "runtime apply should reject validation errors");
 }
 
 void TestAssetRegistryAndMutationSafety(RegressionRunner& runner) {
@@ -1557,6 +2587,7 @@ void TestAssetMigrationPipeline(RegressionRunner& runner) {
         runner.Expect(
             beforeThumbnail.lineCount > 0,
             "migration mesh preview should summarize source lines");
+        thumbnails.Clear();
 
         EditorAssetMutationExecutor executor(registry);
         EditorTransactionStack transactions;
@@ -1621,6 +2652,7 @@ void TestAssetMigrationPipeline(RegressionRunner& runner) {
         runner.Expect(
             movedThumbnail.key == movedMesh->thumbnailKey,
             "thumbnail cache should follow moved asset stable key");
+        thumbnails.Clear();
 
         const EditorAssetMutationResult blockedDelete =
             executor.Execute(
@@ -2025,6 +3057,521 @@ void TestLayoutPersistence(RegressionRunner& runner) {
     std::filesystem::remove(testPath, removeError);
 }
 
+void TestEditorToolRegistrationDescriptors(RegressionRunner& runner) {
+    EditorToolRegistry tools;
+    EditorCommandRegistry commands;
+    EditorPanelRegistry panels;
+
+    tools.BeginFrame();
+    runner.Expect(
+        tools.RegisterCommand(
+            EditorCommandRegistrationDescriptor{
+                {},
+                "test.tool.primary",
+                EditorCommand{
+                    "test.command",
+                    "Test Command",
+                    "Test",
+                    "Ctrl+T",
+                    []() { return true; },
+                    []() { return std::string(); },
+                    []() { return EditorCommandResult{true, "ok"}; }},
+                false},
+            commands),
+        "command descriptor should register");
+    runner.Expect(commands.Find("test.command") != nullptr, "registered command should be findable");
+
+    runner.Expect(
+        !tools.RegisterCommand(
+            EditorCommandRegistrationDescriptor{
+                {},
+                "test.tool.duplicate",
+                EditorCommand{
+                    "test.command",
+                    "Duplicate Test Command",
+                    "Test",
+                    "",
+                    nullptr,
+                    nullptr,
+                    nullptr},
+                false},
+            commands),
+        "duplicate command descriptor should be rejected when replacement is disabled");
+    runner.Expect(tools.ErrorCount() >= 1, "duplicate command should emit a registration error");
+
+    const uint32_t warningCountBeforeShortcut = tools.WarningCount();
+    runner.Expect(
+        tools.RegisterCommand(
+            EditorCommandRegistrationDescriptor{
+                {},
+                "test.tool.shortcutConflict",
+                EditorCommand{
+                    "test.command.conflict",
+                    "Shortcut Conflict",
+                    "Test",
+                    "Ctrl+T",
+                    nullptr,
+                    nullptr,
+                    nullptr},
+                false},
+            commands),
+        "shortcut-conflicting command should still register");
+    runner.Expect(
+        tools.WarningCount() > warningCountBeforeShortcut,
+        "shortcut conflict should emit a warning");
+
+    runner.Expect(
+        tools.RegisterPanel(
+            EditorPanelRegistrationDescriptor{
+                {},
+                "test.panel.tool",
+                EditorPanelDescriptor{
+                    "test.panel",
+                    "Test Panel",
+                    "Test",
+                    EditorPanelHostArea::Diagnostics,
+                    true,
+                    []() {}},
+                false},
+            panels),
+        "panel descriptor should register");
+    runner.Expect(panels.Count() == 1, "panel registry should contain descriptor panel");
+
+    runner.Expect(
+        tools.RegisterToolbarItem(
+            EditorToolbarItemDescriptor{
+                {},
+                "toolbar.test.command",
+                "test.command",
+                "Test",
+                10,
+                false,
+                true,
+                false}),
+        "toolbar descriptor should register");
+    runner.Expect(
+        tools.ValidateToolbarCommands(commands),
+        "toolbar descriptor should resolve registered command");
+
+    runner.Expect(
+        tools.RegisterToolbarItem(
+            EditorToolbarItemDescriptor{
+                {},
+                "toolbar.test.missing",
+                "test.missing",
+                "Missing",
+                20,
+                false,
+                true,
+                false}),
+        "missing-command toolbar descriptor should register before validation");
+    runner.Expect(
+        !tools.ValidateToolbarCommands(commands),
+        "toolbar validation should fail for unresolved command ids");
+
+    runner.Expect(
+        tools.RegisterMenuSection(
+            EditorMenuSectionDescriptor{
+                {},
+                "menu.test",
+                "Test",
+                10,
+                true,
+                false,
+                {}}),
+        "menu section descriptor should register");
+    runner.Expect(
+        !tools.RegisterMenuSection(
+            EditorMenuSectionDescriptor{
+                {},
+                "menu.test",
+                "Duplicate Test",
+                20,
+                true,
+                false,
+                {}}),
+        "duplicate menu section should be rejected when replacement is disabled");
+    runner.Expect(
+        tools.RegisterMenuItem(
+            EditorMenuItemDescriptor{
+                {},
+                "menu.item.test.command",
+                "menu.test",
+                "test.command",
+                "Test Command",
+                10,
+                false,
+                true,
+                false,
+                {}}),
+        "menu item descriptor should register");
+    runner.Expect(
+        tools.ValidateMenuCommands(commands),
+        "menu descriptor should resolve registered command and section");
+
+    const uint32_t menuErrorCountBeforeMissing = tools.ErrorCount();
+    runner.Expect(
+        tools.RegisterMenuItem(
+            EditorMenuItemDescriptor{
+                {},
+                "menu.item.test.missing",
+                "menu.test",
+                "test.menu.missing",
+                "Missing",
+                20,
+                false,
+                true,
+                false,
+                {}}),
+        "missing-command menu descriptor should register before validation");
+    runner.Expect(
+        !tools.ValidateMenuCommands(commands),
+        "menu validation should fail for unresolved command ids");
+    runner.Expect(
+        tools.ErrorCount() > menuErrorCountBeforeMissing,
+        "missing menu command should emit a registration error");
+
+    EditorToolRegistry featureTools;
+    EditorCommandRegistry featureCommands;
+    EditorPanelRegistry featurePanels;
+    featureTools.BeginFrame();
+    runner.Expect(
+        featureTools.RegisterCommand(
+            EditorCommandRegistrationDescriptor{
+                {},
+                "feature.disabled.command",
+                EditorCommand{
+                    "feature.disabled",
+                    "Disabled Feature Command",
+                    "Feature",
+                    "",
+                    nullptr,
+                    nullptr,
+                    nullptr},
+                false,
+                EditorToolFeatureGate{EditorToolFeatureState::Disabled, "test.disabled", true}},
+            featureCommands),
+        "disabled feature command registration should be a safe no-op");
+    runner.Expect(
+        featureCommands.Find("feature.disabled") == nullptr,
+        "disabled feature command should not enter command registry");
+    runner.Expect(
+        featureTools.RegisterPanel(
+            EditorPanelRegistrationDescriptor{
+                {},
+                "feature.hidden.panel",
+                EditorPanelDescriptor{
+                    "feature.hidden.panel",
+                    "Hidden Panel",
+                    "Feature",
+                    EditorPanelHostArea::Diagnostics,
+                    true,
+                    []() {}},
+                false,
+                EditorToolFeatureGate{EditorToolFeatureState::Hidden, "test.hidden", true}},
+            featurePanels),
+        "hidden feature panel should register as hidden");
+    runner.Expect(
+        featurePanels.Count(EditorPanelHostArea::Diagnostics) == 0,
+        "hidden feature panel should not be visible in panel hosts");
+    runner.Expect(
+        featureTools.RegisterToolbarItem(
+            EditorToolbarItemDescriptor{
+                {},
+                "toolbar.feature.hidden",
+                "test.command",
+                "Hidden",
+                10,
+                false,
+                true,
+                false,
+                EditorToolFeatureGate{EditorToolFeatureState::Hidden, "test.hidden", true}}),
+        "hidden feature toolbar item should register as hidden");
+    runner.Expect(
+        featureTools.Toolbar().VisibleItems().empty(),
+        "hidden feature toolbar item should not be visible");
+    runner.Expect(
+        featureTools.RegisterMenuSection(
+            EditorMenuSectionDescriptor{
+                {},
+                "menu.feature.disabled",
+                "Disabled",
+                10,
+                true,
+                false,
+                EditorToolFeatureGate{EditorToolFeatureState::Disabled, "test.disabled", true}}),
+        "disabled feature menu section should be a safe no-op");
+    runner.Expect(
+        featureTools.Menu().VisibleSections().empty(),
+        "disabled feature menu section should not be visible");
+
+    EditorToolRegistry defaultToolbarTools;
+    defaultToolbarTools.BeginFrame();
+    RegisterDefaultEditorToolbar(defaultToolbarTools);
+    runner.Expect(
+        defaultToolbarTools.Toolbar().Count() >= 10,
+        "default editor toolbar should be descriptor-driven");
+    RegisterDefaultEditorMenu(defaultToolbarTools, commands);
+    runner.Expect(
+        defaultToolbarTools.Menu().SectionCount() > 0 &&
+            defaultToolbarTools.Menu().ItemCount() >= commands.Count(),
+        "default editor menu should be descriptor-driven");
+
+    EditorToolRegistry providerTools;
+    providerTools.BeginFrame();
+    runner.Expect(
+        providerTools.RegisterAssetProvider(
+            EditorAssetProviderDescriptor{
+                {},
+                "asset.provider.test",
+                "Test Asset Provider",
+                "Asset",
+                false,
+                {}}),
+        "asset provider descriptor should register");
+    runner.Expect(
+        providerTools.AssetProviders().size() == 1,
+        "asset provider registry should retain descriptor");
+
+    EditorCompositePropertyAccessor compositeAccessor;
+    EditorObjectHandle propertyTarget{};
+    propertyTarget.domain = EditorDomainId::CourseTerrainPlacement;
+    propertyTarget.stableId = "provider-property-target";
+    propertyTarget.generation = 1;
+    EditorPropertyDescriptor propertyDescriptor{};
+    propertyDescriptor.domain = propertyTarget.domain;
+    propertyDescriptor.name = "provider.value";
+    propertyDescriptor.kind = EditorPropertyKind::Float;
+    RegressionPropertyAccessor providerAccessor(propertyTarget, propertyDescriptor.name, 42.0f);
+    runner.Expect(
+        providerTools.RegisterPropertyAccessor(
+            EditorPropertyAccessorRegistrationDescriptor{
+                {},
+                "property.provider.test",
+                &providerAccessor,
+                0,
+                false,
+                {}},
+            compositeAccessor),
+        "property accessor provider should register");
+    runner.Expect(
+        compositeAccessor.CanAccess(propertyTarget, propertyDescriptor),
+        "registered property accessor should be composed");
+
+    class ProviderValidationAdapter final : public EditorValidationAdapter {
+    public:
+        void Validate(EditorValidationReport& report) const override {
+            EditorValidationIssue issue{};
+            issue.severity = EditorValidationSeverity::Warning;
+            issue.title = "Provider";
+            issue.message = "provider validation reached";
+            report.AddIssue(std::move(issue));
+        }
+    };
+    ProviderValidationAdapter providerValidation;
+    EditorValidationService providerValidationService;
+    runner.Expect(
+        providerTools.RegisterValidationAdapter(
+            EditorValidationAdapterRegistrationDescriptor{
+                {},
+                "validation.provider.test",
+                &providerValidation,
+                0,
+                false,
+                {}},
+            providerValidationService),
+        "validation adapter provider should register");
+    const EditorValidationReport providerReport = providerValidationService.Validate();
+    runner.Expect(
+        providerReport.warningCount == 1,
+        "registered validation provider should contribute report issues");
+
+    EditorRuntimeInspector providerRuntimeInspector;
+    runner.Expect(
+        providerTools.RegisterRuntimeWatchProvider(
+            EditorRuntimeWatchProviderDescriptor{
+                {},
+                "runtime.provider.test",
+                "Runtime Provider Test",
+                0,
+                [](const EditorRuntimeWatchBuildInput& input) {
+                    if (input.inspector != nullptr) {
+                        input.inspector->AddRecord(
+                            EditorRuntimeWatchRecord{
+                                "Provider",
+                                "Runtime Provider Test",
+                                "Ready",
+                                "provider runtime watch reached",
+                                EditorRuntimeWatchSeverity::Info,
+                                0});
+                    }
+                },
+                false,
+                {}}),
+        "runtime watch provider should register");
+    providerTools.BuildRuntimeWatch(
+        EditorRuntimeWatchBuildInput{
+            &providerRuntimeInspector});
+    runner.Expect(
+        providerRuntimeInspector.Count() == 1,
+        "registered runtime watch provider should contribute rows");
+
+    EditorToolRegistry disabledProviderTools;
+    disabledProviderTools.BeginFrame();
+    EditorCompositePropertyAccessor disabledComposite;
+    runner.Expect(
+        disabledProviderTools.RegisterPropertyAccessor(
+            EditorPropertyAccessorRegistrationDescriptor{
+                {},
+                "property.provider.disabled",
+                &providerAccessor,
+                0,
+                false,
+                EditorToolFeatureGate{EditorToolFeatureState::Disabled, "provider.disabled", true}},
+            disabledComposite),
+        "disabled property provider should be a safe no-op");
+    runner.Expect(
+        !disabledComposite.CanAccess(propertyTarget, propertyDescriptor),
+        "disabled property provider should not be composed");
+
+    EditorToolRegistry moduleTools;
+    moduleTools.BeginFrame();
+    EditorToolModuleRegistry modules;
+    std::vector<int> moduleOrder;
+    bool disabledModuleRan = false;
+    runner.Expect(
+        modules.Register(
+            EditorToolModuleRegistration{
+                EditorToolModuleDescriptor{
+                    {},
+                    "module.late",
+                    "Late Module",
+                    20,
+                    false,
+                    {}},
+                [&moduleOrder](EditorToolModuleRegistrationContext&) {
+                    moduleOrder.push_back(20);
+                }},
+            &moduleTools),
+        "tool module descriptor should register");
+    runner.Expect(
+        modules.Register(
+            EditorToolModuleRegistration{
+                EditorToolModuleDescriptor{
+                    {},
+                    "module.assets",
+                    "Asset Module",
+                    10,
+                    false,
+                    {}},
+                [&moduleOrder](EditorToolModuleRegistrationContext& moduleContext) {
+                    moduleOrder.push_back(10);
+                    if (moduleContext.tools != nullptr) {
+                        moduleContext.tools->RegisterAssetProvider(
+                            EditorAssetProviderDescriptor{
+                                {},
+                                "asset.provider.module",
+                                "Module Asset Provider",
+                                "Asset",
+                                false,
+                                {}});
+                    }
+                }},
+            &moduleTools),
+        "tool module should register startup callbacks");
+    runner.Expect(
+        !modules.Register(
+            EditorToolModuleRegistration{
+                EditorToolModuleDescriptor{
+                    {},
+                    "module.assets",
+                    "Duplicate Asset Module",
+                    15,
+                    false,
+                    {}},
+                [](EditorToolModuleRegistrationContext&) {}},
+            &moduleTools),
+        "duplicate tool module should be rejected when replacement is disabled");
+    runner.Expect(moduleTools.ErrorCount() > 0, "duplicate module should emit a tool diagnostic");
+    runner.Expect(
+        modules.Register(
+            EditorToolModuleRegistration{
+                EditorToolModuleDescriptor{
+                    {},
+                    "module.disabled",
+                    "Disabled Module",
+                    0,
+                    false,
+                    EditorToolFeatureGate{EditorToolFeatureState::Disabled, "module.disabled", true}},
+                [&disabledModuleRan](EditorToolModuleRegistrationContext&) {
+                    disabledModuleRan = true;
+                }},
+            &moduleTools),
+        "disabled tool module registration should be a safe no-op");
+    modules.RunFrameRegistrations(
+        EditorToolModuleRegistrationContext{
+            &moduleTools});
+    runner.Expect(
+        moduleOrder.size() == 2 && moduleOrder[0] == 10 && moduleOrder[1] == 20,
+        "tool modules should execute in load order");
+    runner.Expect(!disabledModuleRan, "disabled tool module callback should not run");
+    runner.Expect(
+        moduleTools.AssetProviders().size() == 1 &&
+            moduleTools.AssetProviders().front().id == "asset.provider.module",
+        "tool module should publish provider descriptors through the registration context");
+
+    EditorToolRegistry startupModuleTools;
+    startupModuleTools.BeginFrame();
+    EditorPropertyRegistry startupProperties;
+    EditorDetailsSectionProviderRegistry startupDetailsSections;
+    RunAppEditorStartupToolPipeline(
+        AppEditorStartupToolModuleInput{
+            &startupModuleTools,
+            &startupProperties,
+            &startupDetailsSections});
+    runner.Expect(
+        startupProperties.Count() > 0,
+        "app startup tool modules should register built-in property descriptors");
+    runner.Expect(
+        startupDetailsSections.Count() > 0,
+        "app startup tool modules should register built-in details section providers");
+
+    EditorToolRegistry appProviderModuleTools;
+    appProviderModuleTools.BeginFrame();
+    EditorCompositePropertyAccessor appPropertyAccessors;
+    EditorCompositePropertyAccessor appPreviewPropertyAccessors;
+    EditorValidationService appValidationService;
+    RunAppEditorFrameProviderToolPipeline(
+        AppEditorFrameProviderToolModuleInput{
+            &appProviderModuleTools,
+            &appPropertyAccessors,
+            &appPreviewPropertyAccessors,
+            &appValidationService,
+            &providerAccessor,
+            &providerAccessor,
+            &providerAccessor,
+            &providerAccessor,
+            &providerValidation,
+            &providerValidation,
+            &providerValidation,
+            &providerValidation});
+    runner.Expect(
+        appProviderModuleTools.AssetProviders().size() == 1,
+        "app provider tool modules should publish asset provider descriptors");
+    runner.Expect(
+        appProviderModuleTools.PropertyAccessors().size() == 4,
+        "app provider tool modules should publish authoring and preview property accessors");
+    runner.Expect(
+        appProviderModuleTools.ValidationAdapters().size() == 4,
+        "app provider tool modules should publish validation adapters");
+    runner.Expect(
+        appProviderModuleTools.RuntimeWatchProviders().size() == 1,
+        "app provider tool modules should publish runtime watch providers");
+    runner.Expect(
+        appProviderModuleTools.ErrorCount() == 0,
+        "app provider tool modules should register without diagnostics errors");
+}
+
 void TestPanelLayoutGeometry(RegressionRunner& runner) {
     EditorPanelLayoutService layout;
     EditorPanelLayoutConfig config{};
@@ -2072,10 +3619,17 @@ int RunEditorCoreRegressionTests() {
         {"transaction stack undo/redo", [&]() { TestTransactionStack(runner); }},
         {"selection and property registry", [&]() { TestSelectionAndPropertyRegistry(runner); }},
         {"property edit service", [&]() { TestPropertyEditService(runner); }},
+        {"production property adapters", [&]() { TestProductionPropertyAdapters(runner); }},
+        {"details section providers", [&]() { TestDetailsSectionProviders(runner); }},
+        {"runtime watch builder", [&]() { TestRuntimeWatchBuilder(runner); }},
+        {"play session lifecycle service", [&]() { TestPlaySessionLifecycleService(runner); }},
+        {"play session runtime control service", [&]() { TestPlaySessionRuntimeControlService(runner); }},
+        {"runtime authoring apply service", [&]() { TestRuntimeAuthoringApplyService(runner); }},
         {"asset registry and mutation safety", [&]() { TestAssetRegistryAndMutationSafety(runner); }},
         {"asset migration pipeline", [&]() { TestAssetMigrationPipeline(runner); }},
         {"asset import reimport pipeline", [&]() { TestAssetImportReimportPipeline(runner); }},
         {"layout persistence", [&]() { TestLayoutPersistence(runner); }},
+        {"editor tool registration descriptors", [&]() { TestEditorToolRegistrationDescriptors(runner); }},
         {"panel layout geometry", [&]() { TestPanelLayoutGeometry(runner); }},
         {"feature guard tripwire", [&]() { TestFeatureGuardTripwire(runner); }},
     };

@@ -69,7 +69,7 @@ void DrawEditorPropertyRegistryPanel(
 
     if (!ImGui::BeginTable(
             "EditorPropertyRegistryTable",
-            7,
+            9,
             ImGuiTableFlags_Borders |
                 ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_Resizable |
@@ -84,6 +84,8 @@ void DrawEditorPropertyRegistryPanel(
     ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 72.0f);
     ImGui::TableSetupColumn("Category", ImGuiTableColumnFlags_WidthFixed, 130.0f);
     ImGui::TableSetupColumn("Options", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+    ImGui::TableSetupColumn("Flags", ImGuiTableColumnFlags_WidthFixed, 96.0f);
+    ImGui::TableSetupColumn("Default", ImGuiTableColumnFlags_WidthFixed, 96.0f);
     ImGui::TableSetupColumn("Range");
     ImGui::TableHeadersRow();
 
@@ -105,6 +107,21 @@ void DrawEditorPropertyRegistryPanel(
         } else {
             ImGui::TextUnformatted("-");
         }
+        ImGui::TableNextColumn();
+        ImGui::Text(
+            "%s%s%s",
+            descriptor.readOnly ? "R" : "-",
+            descriptor.runtimeOnly ? "T" : "-",
+            descriptor.resettable ? "D" : "-");
+        if ((!descriptor.readOnlyReason.empty() || !descriptor.validationHint.empty()) && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "%s%s%s",
+                descriptor.readOnlyReason.empty() ? "" : descriptor.readOnlyReason.c_str(),
+                (!descriptor.readOnlyReason.empty() && !descriptor.validationHint.empty()) ? "\n" : "",
+                descriptor.validationHint.empty() ? "" : descriptor.validationHint.c_str());
+        }
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(descriptor.defaultValue.empty() ? "-" : descriptor.defaultValue.c_str());
         ImGui::TableNextColumn();
         if (descriptor.hasRange) {
             ImGui::Text("%.2f..%.2f", descriptor.minValue, descriptor.maxValue);

@@ -21,19 +21,25 @@ struct ImDrawList;
 #include "editor/EditorDocumentLifecycleService.h"
 #include "editor/EditorLayoutService.h"
 #include "editor/EditorLayoutPersistenceService.h"
+#include "editor/EditorDetailsSectionProvider.h"
 #include "editor/EditorModalConfirmService.h"
 #include "editor/EditorNotificationCenter.h"
 #include "editor/EditorPanelHost.h"
 #include "editor/EditorPanelLayoutService.h"
 #include "editor/EditorPanelRegistry.h"
 #include "editor/EditorPlaySessionIsolationSnapshot.h"
+#include "editor/EditorPlaySessionLifecycleService.h"
+#include "editor/EditorPlaySessionRuntimeControlService.h"
 #include "editor/EditorPlaySessionState.h"
 #include "editor/EditorPropertyEditSession.h"
 #include "editor/EditorPropertyEditService.h"
+#include "editor/EditorPropertyClipboardService.h"
 #include "editor/EditorPropertyRegistry.h"
 #include "editor/EditorRailRuntimePause.h"
 #include "editor/EditorRuntimeInspector.h"
+#include "editor/EditorRuntimeAuthoringApplyService.h"
 #include "editor/EditorSelection.h"
+#include "editor/EditorToolRegistration.h"
 #include "editor/EditorTransformGizmoService.h"
 #include "editor/EditorTransactionStack.h"
 #include "editor/EditorViewportInteractionService.h"
@@ -120,6 +126,8 @@ public:
     void Render(ID3D12GraphicsCommandList* cmdList);
     bool IsEnabled() const;
     bool WantsDeveloperDiagnostics() const;
+    bool ShouldAdvanceEditorRuntimeFrame() const;
+    void CompleteEditorRuntimeFrameAdvance(bool advanced);
     const editor::EditorViewportRenderTargetState& EditorViewportRenderTargetState() const;
 
     void Shutdown();
@@ -164,6 +172,7 @@ private:
     editor::EditorPanelHost editorPanelHost_{};
     editor::EditorPanelLayoutService editorPanelLayout_{};
     editor::EditorPanelRegistry editorPanelRegistry_{};
+    editor::EditorDetailsSectionProviderRegistry editorDetailsSectionProviders_{};
     editor::EditorViewportInteractionService editorViewportInteraction_{};
     editor::EditorViewportSelectionBridge editorViewportSelectionBridge_{};
     editor::EditorViewportRenderTarget editorViewportRenderTarget_{};
@@ -171,12 +180,17 @@ private:
     editor::EditorModalConfirmService editorConfirmService_{};
     editor::EditorNotificationCenter editorNotifications_{};
     editor::EditorPlaySessionIsolationSnapshot editorPlaySessionSnapshot_{};
+    editor::EditorPlaySessionLifecycleService editorPlaySessionLifecycle_{};
+    editor::EditorPlaySessionRuntimeControlService editorPlaySessionRuntimeControl_{};
     editor::EditorPlaySessionState editorPlaySession_{};
     editor::EditorPropertyEditSession editorDetailsEditSession_{};
     editor::EditorPropertyEditService editorPropertyEditService_{};
+    editor::EditorPropertyClipboardService editorPropertyClipboard_{};
     editor::EditorRailRuntimePause editorRailRuntimePause_{};
     editor::EditorRuntimeInspector editorRuntimeInspector_{};
+    editor::EditorRuntimeAuthoringApplyService editorRuntimeAuthoringApply_{};
     editor::EditorSelection editorSelection_{};
+    editor::EditorToolRegistry editorToolRegistry_{};
     editor::EditorTransactionStack editorTransactions_{};
     std::vector<std::filesystem::path> pendingExternalAssetImportPaths_{};
     bool editorCourseDocumentOpen_ = true;

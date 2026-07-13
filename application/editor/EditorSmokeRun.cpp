@@ -13,6 +13,9 @@
 #include "EditorPanelLayoutService.h"
 #include "EditorPanelRegistry.h"
 #include "EditorPlaySessionState.h"
+#include "EditorPlaySessionLifecycleService.h"
+#include "EditorPlaySessionRuntimeControlService.h"
+#include "EditorRuntimeAuthoringApplyService.h"
 #include "EditorPropertyAccessor.h"
 #include "EditorPropertyRegistry.h"
 #include "EditorPropertyValue.h"
@@ -24,6 +27,9 @@
 #include "EditorViewportInteractionService.h"
 #include "EditorViewportRenderTarget.h"
 #include "EditorViewportSelectionBridge.h"
+
+#include "../AppRuntimeState.h"
+#include "../course/CourseAsset.h"
 
 #include <cmath>
 #include <filesystem>
@@ -461,29 +467,93 @@ void RunDetailsTransactionGate(SmokeRun& smoke, std::ostream& log) {
 
 void RunPlaySessionBoundaryGate(SmokeRun& smoke, std::ostream& log) {
     EditorPlaySessionState playSession;
+    EditorPlaySessionIsolationSnapshot snapshot;
+    EditorPlaySessionLifecycleService lifecycle;
+    EditorPlaySessionRuntimeControlService runtimeControl;
+    EditorRuntimeAuthoringApplyService runtimeApply;
+    EditorTransactionStack transactions;
+    EditorDirtyStateService dirtyState;
+    CourseAsset course;
+    CourseEventMarker event{};
+    event.id = "smoke_event";
+    event.payload = "authoring";
+    course.events.push_back(event);
+    AppRuntimeState runtimeState;
+    runtimeState.terrain.previewSpeed = 45.0f;
     smoke.Expect(playSession.IsStopped(), "play session should start stopped");
     smoke.Expect(MakeEditorAuthoringMutationGuard(&playSession).CanMutate(), "authoring should be open while stopped");
 
-    playSession.Simulate();
+    const EditorPlaySessionLifecycleRequest request{
+        &playSession,
+        &snapshot,
+        &course,
+        &runtimeState,
+        nullptr,
+        "smoke.playSessionLifecycle"};
+    const EditorPlaySessionLifecycleResult beginResult =
+        lifecycle.Begin(request, EditorPlaySessionMode::Simulating);
+    smoke.Expect(beginResult.succeeded, "simulate should begin through lifecycle service");
     smoke.Expect(playSession.IsSimulating(), "simulate should enter simulating mode");
-    smoke.Expect(playSession.RuntimeIsolationPending(), "simulate should request runtime isolation");
+    smoke.Expect(playSession.RuntimeIsolationSnapshotActive(), "simulate should activate runtime isolation snapshot");
     smoke.Expect(MakeEditorAuthoringMutationGuard(&playSession).LockedByPlaySession(), "authoring should lock during sim");
     smoke.Expect(
         !MakeEditorViewportAuthoringInputGuard(!playSession.IsActive()).CanUseViewportInput(true),
         "viewport authoring input should lock during sim");
-    playSession.MarkRuntimeIsolationSnapshotActive();
-    smoke.Expect(playSession.RuntimeIsolationSnapshotActive(), "runtime isolation snapshot should become active");
+    smoke.Expect(snapshot.Captured(), "runtime isolation snapshot should be captured");
+    const EditorPlaySessionRuntimeControlRequest controlRequest{
+        &playSession,
+        &snapshot,
+        &course,
+        &runtimeState,
+        nullptr,
+        "smoke.runtimeControl"};
+    smoke.Expect(runtimeControl.Pause(controlRequest).succeeded, "runtime control should pause active sim");
+    smoke.Expect(!playSession.ShouldAdvanceRuntimeFrame(), "runtime pause should block frame advance");
+    smoke.Expect(runtimeControl.Step(controlRequest).succeeded, "runtime control should queue a single step");
+    smoke.Expect(playSession.ShouldAdvanceRuntimeFrame(), "runtime step should permit one frame");
+    playSession.CompleteRuntimeFrameAdvance();
+    smoke.Expect(playSession.RuntimeFrameCount() == 1, "runtime step should advance one runtime frame");
+    smoke.Expect(playSession.RuntimePaused(), "runtime step should settle back to paused");
+    smoke.Expect(runtimeControl.Resume(controlRequest).succeeded, "runtime control should resume active sim");
+    smoke.Expect(playSession.ShouldAdvanceRuntimeFrame(), "runtime resume should reopen frame advance");
+    course.events.front().payload = "runtime-applied";
+    runtimeState.terrain.previewSpeed = 90.0f;
+    const EditorRuntimeAuthoringApplyResult applyResult =
+        runtimeApply.Apply(
+            EditorRuntimeAuthoringApplyRequest{
+                &playSession,
+                &snapshot,
+                &course,
+                &runtimeState,
+                &transactions,
+                &dirtyState,
+                nullptr,
+                0,
+                "smoke.runtimeApply"});
+    smoke.Expect(applyResult.succeeded, "runtime apply should accept explicit authoring apply");
+    smoke.Expect(
+        transactions.LastTransaction() != nullptr &&
+            transactions.LastTransaction()->payload.kind == EditorTransactionPayloadKind::RuntimeAuthoringApply,
+        "runtime apply should push a transaction");
+    course.events.front().payload = "runtime-not-applied";
+    runtimeState.terrain.previewSpeed = 120.0f;
+    smoke.Expect(runtimeControl.ResetRuntime(controlRequest).succeeded, "runtime reset should restore applied snapshot");
+    smoke.Expect(course.events.front().payload == "runtime-applied", "runtime reset should restore latest applied course state");
+    smoke.Expect(std::fabs(runtimeState.terrain.previewSpeed - 90.0f) < 0.001f, "runtime reset should restore latest applied terrain state");
     playSession.TickFrame();
     smoke.Expect(playSession.FrameCount() == 1, "active play session should tick frame");
-    playSession.MarkRuntimeIsolationRestored();
+    const EditorPlaySessionLifecycleResult stopResult = lifecycle.Stop(request);
+    smoke.Expect(stopResult.succeeded, "stop should restore through lifecycle service");
     smoke.Expect(playSession.RuntimeIsolationRestored(), "runtime isolation should report restored");
-    playSession.Stop();
     smoke.Expect(playSession.IsStopped(), "stop should return to stopped");
+    smoke.Expect(course.events.front().payload == "runtime-applied", "stop should keep applied course authoring data");
+    smoke.Expect(std::fabs(runtimeState.terrain.previewSpeed - 90.0f) < 0.001f, "stop should keep applied runtime authoring data");
     smoke.Expect(MakeEditorAuthoringMutationGuard(&playSession).CanMutate(), "authoring should reopen after stop");
 
     log << "playSession serial=" << playSession.SessionSerial()
         << " mode=" << ToString(playSession.Mode())
         << " restored=" << (playSession.RuntimeIsolationRestored() ? "yes" : "no")
+        << " snapshot=" << snapshot.StateLabel()
         << '\n';
 }
 

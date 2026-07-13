@@ -4,6 +4,7 @@
 
 #include "AppDebugViewsPanel.h"
 #include "AppCourseTimelineDebugPanel.h"
+#include "AppEditorToolModules.h"
 #include "AppEffectAssetEditorPanel.h"
 #include "AppEffectInstancePanel.h"
 #include "AppPostProcessPanel.h"
@@ -22,12 +23,15 @@
 #include "EffectRuntime.h"
 #include "EffectAssetLoader.h"
 #include "PostProcessStack.h"
+#include "course/CourseAsset.h"
 #include "editor/CourseMeshAssetAdapter.h"
 #include "editor/CourseDocumentAdapter.h"
 #include "editor/CourseEditorCommandProvider.h"
 #include "editor/CourseObjectPropertyAdapter.h"
+#include "editor/EditorCompositePropertyAccessor.h"
 #include "editor/CourseObjectValidationAdapter.h"
 #include "editor/EffectAssetDiagnosticsAdapter.h"
+#include "editor/EditorProductionPropertyAdapter.h"
 #include "editor/EditorAssetBrowserPanel.h"
 #include "editor/EditorAssetCommandProvider.h"
 #include "editor/EditorAssetMutationExecutor.h"
@@ -41,6 +45,7 @@
 #include "editor/EditorCommandPanel.h"
 #include "editor/EditorCommandPalette.h"
 #include "editor/EditorCommandRegistry.h"
+#include "editor/EditorBuiltinDetailsSectionProviders.h"
 #include "editor/EditorDetailsPanel.h"
 #include "editor/EditorDiagnosticsPanel.h"
 #include "editor/EditorDocumentLifecycleService.h"
@@ -55,6 +60,7 @@
 #include "editor/EditorPanelRegistry.h"
 #include "editor/EditorPropertyRegistryPanel.h"
 #include "editor/EditorRuntimeInspectorPanel.h"
+#include "editor/EditorRuntimeWatchBuilder.h"
 #include "editor/EditorSaveApplyPolicy.h"
 #include "editor/EditorSelectionPanel.h"
 #include "editor/EditorStatusBar.h"
@@ -124,6 +130,123 @@ struct EditorImguiFrameTiming {
     bool developerTools = false;
     bool viewportFocus = false;
 };
+
+editor::EditorObjectHandle MakeEditorObjectHandle(
+    editor::EditorDomainId domain,
+    const std::string& prefix,
+    uint64_t index,
+    uint32_t generation,
+    std::string displayName) {
+    editor::EditorObjectHandle handle{};
+    handle.domain = domain;
+    handle.stableId = editor::BuildStableIndexedId(prefix, index);
+    handle.localIndex = index;
+    handle.generation = generation;
+    handle.displayName = std::move(displayName);
+    return handle;
+}
+
+editor::EditorObjectHandle MakeNamedEditorObjectHandle(
+    editor::EditorDomainId domain,
+    const std::string& prefix,
+    const std::string& name,
+    uint64_t index,
+    uint32_t generation,
+    std::string displayName) {
+    editor::EditorObjectHandle handle{};
+    handle.domain = domain;
+    handle.stableId = prefix + ":" + name;
+    handle.localIndex = index;
+    handle.generation = generation;
+    handle.displayName = std::move(displayName);
+    return handle;
+}
+
+std::vector<editor::EditorSelectionPanelTarget> BuildProductionSelectionTargets(
+    const EffectRuntime& effectRuntime,
+    const PostProcessStack& postProcessStack,
+    const AppRuntimeState& runtimeState,
+    const CourseAsset* course) {
+    std::vector<editor::EditorSelectionPanelTarget> targets;
+
+    uint64_t effectIndex = 0;
+    for (const auto& [name, asset] : effectRuntime.Assets()) {
+        (void)asset;
+        targets.push_back(
+            editor::EditorSelectionPanelTarget{
+                MakeNamedEditorObjectHandle(
+                    editor::EditorDomainId::VfxEffectAsset,
+                    "vfx-asset",
+                    name,
+                    effectIndex++,
+                    runtimeState.terrain.courseObjectEditRevision,
+                    "VFX Asset: " + name)});
+    }
+
+    const std::vector<PostProcessPass>& passes = postProcessStack.Passes();
+    for (std::size_t index = 0; index < passes.size(); ++index) {
+        targets.push_back(
+            editor::EditorSelectionPanelTarget{
+                MakeNamedEditorObjectHandle(
+                    editor::EditorDomainId::PostProcessPass,
+                    "post-process",
+                    passes[index].name,
+                    static_cast<uint64_t>(index),
+                    runtimeState.terrain.courseObjectEditRevision,
+                    "PostProcess: " + passes[index].name)});
+    }
+
+    if (course != nullptr) {
+        for (std::size_t index = 0; index < course->cameraKeys.size(); ++index) {
+            targets.push_back(
+                editor::EditorSelectionPanelTarget{
+                    MakeEditorObjectHandle(
+                        editor::EditorDomainId::CourseCameraKey,
+                        "course-camera-key",
+                        static_cast<uint64_t>(index),
+                        runtimeState.terrain.courseObjectEditRevision,
+                        "Course Camera Key #" + std::to_string(index))});
+        }
+        for (std::size_t index = 0; index < course->events.size(); ++index) {
+            const CourseEventMarker& event = course->events[index];
+            targets.push_back(
+                editor::EditorSelectionPanelTarget{
+                    MakeEditorObjectHandle(
+                        editor::EditorDomainId::CourseEventMarker,
+                        "course-event",
+                        static_cast<uint64_t>(index),
+                        runtimeState.terrain.courseObjectEditRevision,
+                        "Course Event: " + (event.id.empty() ? std::to_string(index) : event.id))});
+        }
+    }
+
+    targets.push_back(
+        editor::EditorSelectionPanelTarget{
+            MakeEditorObjectHandle(
+                editor::EditorDomainId::TerrainGeneration,
+                "terrain-generation",
+                0,
+                runtimeState.terrain.courseObjectEditRevision,
+                "Terrain Generation")});
+    targets.push_back(
+        editor::EditorSelectionPanelTarget{
+            MakeEditorObjectHandle(
+                editor::EditorDomainId::CameraRig,
+                "camera-rig",
+                0,
+                runtimeState.terrain.courseObjectEditRevision,
+                "Camera Rig")});
+    targets.push_back(
+        editor::EditorSelectionPanelTarget{
+            MakeEditorObjectHandle(
+                editor::EditorDomainId::GameplayTuning,
+                "gameplay-tuning",
+                0,
+                runtimeState.terrain.courseObjectEditRevision,
+                "Gameplay Tuning")});
+
+    return targets;
+}
 
 void LogEditorImguiBreakdown(const EditorImguiFrameTiming& timing) {
     if (timing.buildUiMs < 8.0 &&
@@ -198,134 +321,6 @@ void SyncEditorTransactionsFromFrame(
         terrain.courseObjectUndoDepth,
         terrain.courseObjectRedoDepth,
         terrain.courseObjectEditRevision);
-}
-
-void PopulateVfxRuntimeInspector(
-    editor::EditorRuntimeInspector& inspector,
-    const EffectRuntime& effectRuntime,
-    const std::vector<LoadedEffectAsset>* loadedEffectAssets,
-    uint32_t selectedEffectInstanceId) {
-    inspector.Clear();
-
-    const std::vector<EffectInstance>& instances = effectRuntime.Instances();
-    inspector.AddRecord(
-        editor::EditorRuntimeWatchRecord{
-            "VFX",
-            "Effect Runtime",
-            effectRuntime.IsAttached() ? "Attached" : "Detached",
-            "Active instances " + std::to_string(instances.size()),
-            effectRuntime.IsAttached()
-                ? editor::EditorRuntimeWatchSeverity::Info
-                : editor::EditorRuntimeWatchSeverity::Warning,
-            0});
-
-    inspector.AddRecord(
-        editor::EditorRuntimeWatchRecord{
-            "VFX",
-            "Loaded Effect Assets",
-            loadedEffectAssets != nullptr ? "Available" : "Missing",
-            loadedEffectAssets != nullptr
-                ? "Loaded assets " + std::to_string(loadedEffectAssets->size())
-                : std::string("LoadedEffectAsset list is unavailable"),
-            loadedEffectAssets != nullptr
-                ? editor::EditorRuntimeWatchSeverity::Info
-                : editor::EditorRuntimeWatchSeverity::Warning,
-            0});
-
-    if (selectedEffectInstanceId == 0) {
-        inspector.AddRecord(
-            editor::EditorRuntimeWatchRecord{
-                "VFX",
-                "Selected Effect Instance",
-                "None",
-                "No effect instance selected",
-                editor::EditorRuntimeWatchSeverity::Info,
-                0});
-        return;
-    }
-
-    const EffectInstance* selectedInstance = effectRuntime.FindInstance(selectedEffectInstanceId);
-    if (selectedInstance == nullptr) {
-        inspector.AddRecord(
-            editor::EditorRuntimeWatchRecord{
-                "VFX",
-                "Selected Effect Instance",
-                "Missing",
-                "Selected id " + std::to_string(selectedEffectInstanceId) + " is not active",
-                editor::EditorRuntimeWatchSeverity::Warning,
-                0});
-        return;
-    }
-
-    std::ostringstream detail;
-    detail << "Asset "
-           << (selectedInstance->asset != nullptr ? selectedInstance->asset->name : selectedInstance->assetName)
-           << ", age "
-           << selectedInstance->age
-           << ", components "
-           << selectedInstance->components.size()
-           << ", previewLoop "
-           << (selectedInstance->previewLoop ? "yes" : "no");
-    inspector.AddRecord(
-        editor::EditorRuntimeWatchRecord{
-            "VFX",
-            "Selected Effect Instance #" + std::to_string(selectedEffectInstanceId),
-            selectedInstance->attached ? "Attached" : "Runtime",
-            detail.str(),
-            editor::EditorRuntimeWatchSeverity::Info,
-            0});
-}
-
-void AppendPlaySessionRuntimeInspector(
-    editor::EditorRuntimeInspector& inspector,
-    const editor::EditorPlaySessionState& playSession,
-    const editor::EditorPlaySessionIsolationSnapshot& snapshot) {
-    std::string detail;
-    editor::EditorRuntimeWatchSeverity severity = editor::EditorRuntimeWatchSeverity::Info;
-    if (playSession.RuntimeIsolationSnapshotActive()) {
-        detail = "Snapshot active; authoring will be restored on Stop";
-    } else if (playSession.RuntimeIsolationPending()) {
-        detail = "Boundary active; runtime clone/isolation pending";
-        severity = editor::EditorRuntimeWatchSeverity::Warning;
-    } else if (playSession.RuntimeIsolationRestored()) {
-        detail = "Authoring/runtime boundary restored from snapshot";
-    } else {
-        detail = "Authoring/runtime boundary inactive";
-    }
-    if (snapshot.Captured()) {
-        detail +=
-            " / snapshot " + std::string(snapshot.StateLabel()) +
-            " rev " + std::to_string(snapshot.CourseObjectRevision()) +
-            " placements " + std::to_string(snapshot.TerrainPlacementCount()) +
-            " rocks " + std::to_string(snapshot.RockClusterCount());
-    }
-
-    inspector.AddRecord(
-        editor::EditorRuntimeWatchRecord{
-            "Editor",
-            "Play Session",
-            editor::ToString(playSession.Mode()),
-            detail,
-            severity,
-            playSession.FrameCount()});
-}
-
-void AppendRailRuntimePauseInspector(
-    editor::EditorRuntimeInspector& inspector,
-    const editor::EditorRailRuntimePause& railPause) {
-    const editor::EditorRailRuntimePauseState& state = railPause.State();
-    std::string detail;
-    detail += "distance=" + std::to_string(state.distance);
-    detail += " speed=" + std::to_string(state.speed);
-    detail += " frozenFrames=" + std::to_string(state.frozenFrames);
-    inspector.AddRecord(
-        editor::EditorRuntimeWatchRecord{
-            "Course Runtime",
-            "Preview Freeze",
-            railPause.StatusLabel(),
-            detail,
-            state.frozen ? editor::EditorRuntimeWatchSeverity::Warning : editor::EditorRuntimeWatchSeverity::Info,
-            state.frozenFrames});
 }
 
 float ClampWorkspaceRatio(float value) {
@@ -510,180 +505,6 @@ void DrawEditorWorkspacePanel(editor::EditorLayoutPersistenceService& persistenc
     ImGui::TextWrapped("Layout: %s", persistence.StatusMessage().c_str());
 }
 
-void RegisterFrameEditorCommands(
-    editor::EditorContext& editorContext,
-    const AppImGuiFrameContext& context,
-    AppRuntimeState& runtimeState,
-    editor::EditorPlaySessionIsolationSnapshot& playSessionSnapshot,
-    std::function<void()> closeCourseDocument,
-    std::function<void()> reopenCourseDocument) {
-    if (editorContext.commands == nullptr) {
-        return;
-    }
-
-    editor::EditorCommandRegistry& registry = *editorContext.commands;
-    registry.Clear();
-
-    const editor::CourseEditorCommandProvider courseProvider(
-        editor::CourseEditorCommandProviderInput{
-            context.onSaveCourse,
-            context.onApplyCourse,
-            context.onReloadCourse,
-            std::move(closeCourseDocument),
-            std::move(reopenCourseDocument),
-            context.onTeleportCourseToDistance,
-            [&runtimeState]() {
-                return runtimeState.terrain.freezeCourseRuntime;
-            },
-            [&runtimeState](bool frozen) {
-                runtimeState.terrain.freezeCourseRuntime = frozen;
-            },
-            context.courseDistance});
-    courseProvider.RegisterCommands(editorContext);
-
-    const editor::EditorBuiltinCommandProvider builtinProvider(
-        editor::EditorBuiltinCommandProviderInput{
-            [&runtimeState,
-             transactions = editorContext.transactions,
-             assets = editorContext.assets,
-             notifications = editorContext.notifications]() {
-                const editor::EditorTransactionRecord* next =
-                    transactions != nullptr ? transactions->NextUndoTransaction() : nullptr;
-                if (next != nullptr &&
-                    next->payload.kind == editor::EditorTransactionPayloadKind::AssetMutation) {
-                    if (assets == nullptr) {
-                        return editor::EditorCommandResult{false, "Asset registry is unavailable."};
-                    }
-                    editor::EditorAssetMutationExecutor executor(*assets);
-                    editor::EditorAssetMutationResult applyResult{};
-                    const bool applied =
-                        transactions->Undo(
-                            [&](const editor::EditorTransactionRecord& record,
-                                editor::EditorTransactionApplyMode mode) {
-                                applyResult = executor.ApplyTransaction(record, mode);
-                                return applyResult.succeeded;
-                            });
-                    if (notifications != nullptr && !applyResult.message.empty()) {
-                        notifications->Push(
-                            applied
-                                ? editor::EditorNotificationSeverity::Info
-                                : editor::EditorNotificationSeverity::Error,
-                            "Asset",
-                            applyResult.message);
-                    }
-                    return editor::EditorCommandResult{
-                        applied,
-                        applyResult.message.empty()
-                            ? std::string("Asset undo failed.")
-                            : applyResult.message};
-                }
-                if (runtimeState.terrain.courseObjectUndoDepth == 0) {
-                    return editor::EditorCommandResult{false, "Undo stack is empty."};
-                }
-                runtimeState.terrain.courseObjectUndoRequested = true;
-                return editor::EditorCommandResult{true, "Queued course object undo."};
-            },
-            [&runtimeState,
-             transactions = editorContext.transactions,
-             assets = editorContext.assets,
-             notifications = editorContext.notifications]() {
-                const editor::EditorTransactionRecord* next =
-                    transactions != nullptr ? transactions->NextRedoTransaction() : nullptr;
-                if (next != nullptr &&
-                    next->payload.kind == editor::EditorTransactionPayloadKind::AssetMutation) {
-                    if (assets == nullptr) {
-                        return editor::EditorCommandResult{false, "Asset registry is unavailable."};
-                    }
-                    editor::EditorAssetMutationExecutor executor(*assets);
-                    editor::EditorAssetMutationResult applyResult{};
-                    const bool applied =
-                        transactions->Redo(
-                            [&](const editor::EditorTransactionRecord& record,
-                                editor::EditorTransactionApplyMode mode) {
-                                applyResult = executor.ApplyTransaction(record, mode);
-                                return applyResult.succeeded;
-                            });
-                    if (notifications != nullptr && !applyResult.message.empty()) {
-                        notifications->Push(
-                            applied
-                                ? editor::EditorNotificationSeverity::Info
-                                : editor::EditorNotificationSeverity::Error,
-                            "Asset",
-                            applyResult.message);
-                    }
-                    return editor::EditorCommandResult{
-                        applied,
-                        applyResult.message.empty()
-                            ? std::string("Asset redo failed.")
-                            : applyResult.message};
-                }
-                if (runtimeState.terrain.courseObjectRedoDepth == 0) {
-                    return editor::EditorCommandResult{false, "Redo stack is empty."};
-                }
-                runtimeState.terrain.courseObjectRedoRequested = true;
-                return editor::EditorCommandResult{true, "Queued course object redo."};
-            },
-            [&context, &runtimeState, &playSessionSnapshot, playSession = editorContext.playSession](
-                editor::EditorPlaySessionMode mode) {
-                if (playSession == nullptr) {
-                    return editor::EditorCommandResult{false, "Play session state is unavailable."};
-                }
-                if (!playSession->IsStopped()) {
-                    return editor::EditorCommandResult{false, "Stop the current Play/Sim session before changing mode."};
-                }
-
-                std::string error;
-                if (!playSessionSnapshot.Capture(
-                        editor::EditorPlaySessionIsolationSnapshotTarget{context.course, &runtimeState},
-                        &error)) {
-                    return editor::EditorCommandResult{
-                        false,
-                        error.empty() ? std::string("Failed to capture Play/Sim snapshot.") : error};
-                }
-
-                if (mode == editor::EditorPlaySessionMode::Playing) {
-                    playSession->Play();
-                } else if (mode == editor::EditorPlaySessionMode::Simulating) {
-                    playSession->Simulate();
-                } else {
-                    playSessionSnapshot.Clear();
-                    return editor::EditorCommandResult{false, "Unsupported Play session mode."};
-                }
-
-                playSessionSnapshot.BindSession(playSession->SessionSerial());
-                playSession->MarkRuntimeIsolationSnapshotActive();
-                return editor::EditorCommandResult{
-                    true,
-                    mode == editor::EditorPlaySessionMode::Playing
-                        ? std::string("Entered Play mode with authoring snapshot.")
-                        : std::string("Entered Simulate mode with authoring snapshot.")};
-            },
-            [&context, &runtimeState, &playSessionSnapshot, playSession = editorContext.playSession]() {
-                if (playSession == nullptr) {
-                    return editor::EditorCommandResult{false, "Play session state is unavailable."};
-                }
-                if (!playSession->IsActive()) {
-                    return editor::EditorCommandResult{false, "No Play or Simulate session is active."};
-                }
-
-                std::string error;
-                if (!playSessionSnapshot.Restore(
-                        editor::EditorPlaySessionIsolationSnapshotTarget{context.course, &runtimeState},
-                        &error)) {
-                    return editor::EditorCommandResult{
-                        false,
-                        error.empty() ? std::string("Failed to restore Play/Sim snapshot.") : error};
-                }
-
-                playSession->MarkRuntimeIsolationRestored();
-                playSession->Stop();
-                return editor::EditorCommandResult{true, "Stopped Play/Sim and restored authoring snapshot."};
-            }});
-    builtinProvider.RegisterCommands(editorContext);
-
-    const editor::EditorAssetCommandProvider assetProvider;
-    assetProvider.RegisterCommands(editorContext);
-}
 
 float ClampUiDimension(float value, float minimum, float maximum) {
     if (value < minimum) {
@@ -1293,9 +1114,11 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     editorPlaySession_.TickFrame();
     editor::EditorTransactionStack& editorTransactions =
         context.editorTransactions != nullptr ? *context.editorTransactions : editorTransactions_;
-    if (editorPropertyRegistry_.Count() == 0) {
-        editor::RegisterBuiltInCourseObjectProperties(editorPropertyRegistry_);
-    }
+    editor::RunAppEditorStartupToolPipeline(
+        editor::AppEditorStartupToolModuleInput{
+            &editorToolRegistry_,
+            &editorPropertyRegistry_,
+            &editorDetailsSectionProviders_});
     const auto assetPipelineStart = EditorUiTimingClock::now();
     if (!editorAssetRegistryInitialized_) {
         const auto registryInitStart = EditorUiTimingClock::now();
@@ -1366,22 +1189,15 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     CourseAsset* editableCourse =
         editorCourseDocumentOpen_ && context.course != nullptr ? context.course : nullptr;
     SyncEditorTransactionsFromFrame(editorTransactions, runtimeState);
-    PopulateVfxRuntimeInspector(
-        editorRuntimeInspector_,
-        effectRuntime,
-        context.loadedEffectAssets,
-        selectedEffectInstanceId_);
-    AppendPlaySessionRuntimeInspector(
-        editorRuntimeInspector_,
-        editorPlaySession_,
-        editorPlaySessionSnapshot_);
     editorRailRuntimePause_.Sync(
         editor::EditorRailRuntimePauseInput{
             context.course != nullptr,
-            runtimeState.terrain.freezeCourseRuntime,
+            runtimeState.terrain.freezeCourseRuntime ||
+                (editorPlaySession_.IsActive() &&
+                    editorPlaySession_.RuntimePaused() &&
+                    !editorPlaySession_.RuntimeStepRequested()),
             context.courseDistance,
             context.courseSpeed});
-    AppendRailRuntimePauseInspector(editorRuntimeInspector_, editorRailRuntimePause_);
     const uint32_t courseObjectRevision = runtimeState.terrain.courseObjectEditRevision;
     if (!editorCourseObjectDirtyRevisionInitialized_) {
         editorCourseObjectDirtyRevisionInitialized_ = true;
@@ -1398,6 +1214,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorCourseObjectDirtyRevision_ = courseObjectRevision;
     }
     const auto validationStart = EditorUiTimingClock::now();
+    editorToolRegistry_.BeginFrame();
     editor::CourseDocumentAdapter courseDocumentAdapter(
         context.course,
         context.coursePath,
@@ -1406,6 +1223,25 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editableCourse != nullptr);
     editor::CourseObjectPropertyAdapter coursePropertyAdapter(editableCourse, &runtimeState);
     editor::CourseObjectPropertyAdapter coursePreviewPropertyAdapter(editableCourse, &runtimeState, false);
+    editor::EditorProductionPropertyAdapter productionPropertyAdapter(
+        &effectRuntime,
+        &postProcessStack,
+        &runtimeState,
+        editableCourse);
+    editor::EditorProductionPropertyAdapter productionPreviewPropertyAdapter(
+        &effectRuntime,
+        &postProcessStack,
+        &runtimeState,
+        editableCourse,
+        false);
+    editor::EditorCompositePropertyAccessor editorPropertyAccessor;
+    editor::EditorCompositePropertyAccessor editorPreviewPropertyAccessor;
+    const std::vector<editor::EditorSelectionPanelTarget> productionSelectionTargets =
+        BuildProductionSelectionTargets(
+            effectRuntime,
+            postProcessStack,
+            runtimeState,
+            editableCourse);
     editor::CourseObjectValidationAdapter courseValidationAdapter(editableCourse, &editorAssetRegistry_);
     editor::EffectAssetDiagnosticsAdapter effectDiagnosticsAdapter(context.loadedEffectAssets);
     editor::EditorAssetReferenceDiagnosticsAdapter assetReferenceDiagnosticsAdapter(&editorAssetRegistry_);
@@ -1413,10 +1249,20 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &editorAssetRegistry_,
         &editorAssetThumbnails_);
     editor::EditorValidationService editorValidationService;
-    editorValidationService.AddAdapter(&courseValidationAdapter);
-    editorValidationService.AddAdapter(&effectDiagnosticsAdapter);
-    editorValidationService.AddAdapter(&assetReferenceDiagnosticsAdapter);
-    editorValidationService.AddAdapter(&assetThumbnailDiagnosticsAdapter);
+    editor::RunAppEditorFrameProviderToolPipeline(
+        editor::AppEditorFrameProviderToolModuleInput{
+            &editorToolRegistry_,
+            &editorPropertyAccessor,
+            &editorPreviewPropertyAccessor,
+            &editorValidationService,
+            &coursePropertyAdapter,
+            &productionPropertyAdapter,
+            &coursePreviewPropertyAdapter,
+            &productionPreviewPropertyAdapter,
+            &courseValidationAdapter,
+            &effectDiagnosticsAdapter,
+            &assetReferenceDiagnosticsAdapter,
+            &assetThumbnailDiagnosticsAdapter});
     const editor::EditorValidationReport editorValidationReport = editorValidationService.Validate();
     imguiTiming.validationMs =
         EditorUiElapsedMs(validationStart, EditorUiTimingClock::now());
@@ -1533,13 +1379,39 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             runtimeState.terrain.courseObjectSnapEnabled});
     runtimeState.terrain.courseObjectGizmoMode =
         editor::ToCourseGizmoMode(editorTransformGizmo_.State().mode);
+    editorToolRegistry_.BuildRuntimeWatch(
+        editor::EditorRuntimeWatchBuildInput{
+            &editorRuntimeInspector_,
+            &effectRuntime,
+            context.loadedEffectAssets,
+            selectedEffectInstanceId_,
+            &editorPlaySession_,
+            &editorPlaySessionSnapshot_,
+            &editorRailRuntimePause_,
+            &editorSelection_,
+            &runtimeState,
+            context.course,
+            context.courseSpawnRuntime,
+            context.courseCollisionSystem,
+            context.courseCheckpointSystem,
+            context.playerCombatFeelSystem,
+            context.renderGraphDescription,
+            context.renderGraphError,
+            context.renderPassDebugInfo,
+            context.transientTargetCount,
+            context.transientTargetStorageCount,
+            context.transientBufferCount,
+            context.transientBufferStorageCount,
+            context.courseDistance,
+            context.courseSpeed,
+            context.courseRailLength});
     const editor::EditorCommandContext editorCommandContext =
         editor::BuildEditorCommandContext(
             editor::EditorCommandContextInput{
                 &editorSelection_,
                 &editorAssetSelection_,
                 &editorPropertyRegistry_,
-                &coursePropertyAdapter,
+                &editorPropertyAccessor,
                 &editorTransactions,
                 &editorPlaySession_,
                 showDeveloperTools_});
@@ -1558,7 +1430,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &editorAssetThumbnails_,
         &courseDocumentAdapter,
         &editorPropertyRegistry_,
-        &coursePropertyAdapter,
+        &editorPropertyAccessor,
         &editorPropertyEditService_,
         &editorValidationReport,
         &editorDirtyState_,
@@ -1574,6 +1446,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &editorRuntimeInspector_,
         &editorPlaySession_,
         &editorRailRuntimePause_,
+        &editorToolRegistry_,
         &editorCommandRegistry,
         &editorCommandContext,
         &editorCommandInputRouter_,
@@ -1598,13 +1471,17 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorCourseDocumentOpen_ = true;
         editorSelection_.Clear();
     };
-    RegisterFrameEditorCommands(
-        editorContext,
-        context,
-        runtimeState,
-        editorPlaySessionSnapshot_,
-        std::move(closeCourseDocument),
-        std::move(reopenCourseDocument));
+    editor::RunAppEditorCommandToolPipeline(
+        editor::AppEditorCommandToolModuleInput{
+            &editorContext,
+            &context,
+            &runtimeState,
+            &editorPlaySessionLifecycle_,
+            &editorPlaySessionRuntimeControl_,
+            &editorRuntimeAuthoringApply_,
+            &editorPlaySessionSnapshot_,
+            std::move(closeCourseDocument),
+            std::move(reopenCourseDocument)});
     editorCommandInputRouter_.Dispatch(
         editorContext,
         editor::EditorCommandInputRouterOptions{
@@ -1632,8 +1509,17 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     const auto panelVisible = [this](const char* panelId, bool fallback = true) {
         return editorLayoutPersistence_.IsPanelVisible(panelId, fallback);
     };
+    const auto registerPanel = [this](editor::EditorPanelDescriptor descriptor) {
+        return editorToolRegistry_.RegisterPanel(
+                editor::EditorPanelRegistrationDescriptor{
+                    {},
+                    descriptor.id,
+                    std::move(descriptor),
+                    true},
+                editorPanelRegistry_);
+    };
     if (context.onDrawRailLockOnDebugPanel) {
-        editorPanelRegistry_.Register(
+        registerPanel(
             editor::EditorPanelDescriptor{
                 "gameplay.railLockOn",
                 "Rail Lock-On",
@@ -1700,7 +1586,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     const auto panelRegistryStart = EditorUiTimingClock::now();
     const D3D12_GPU_DESCRIPTOR_HANDLE editorViewportPreview =
         context.postColorPreview.ptr != 0 ? context.postColorPreview : context.sceneColorPreview;
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "editor.viewport",
             "Viewport",
@@ -1719,7 +1605,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         context.onDrawEditorViewportOverlay});
             }});
 
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "editor.workspace",
             "Workspace",
@@ -1729,7 +1615,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             [&]() {
                 DrawEditorWorkspacePanel(editorLayoutPersistence_);
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "vfx.inspector",
             "VFX Inspector",
@@ -1774,7 +1660,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                     DrawPostProcessPanel(postProcessStack);
                 }
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "editor.details",
             "Details",
@@ -1786,18 +1672,20 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                     editor::EditorDetailsPanelContext{
                         &editorSelection_,
                         &editorPropertyRegistry_,
-                        &coursePropertyAdapter,
-                        &coursePreviewPropertyAdapter,
+                        &editorPropertyAccessor,
+                        &editorPreviewPropertyAccessor,
                         &editorDetailsEditSession_,
                         &editorTransactions,
                         &editorDirtyState_,
                         &editorNotifications_,
+                        &editorPropertyClipboard_,
                         &editorAssetRegistry_,
                         &editorAssetSelection_,
                         &editorValidationReport,
+                        &editorDetailsSectionProviders_,
                         editorCommandContext.canMutateAuthoring});
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "editor.runtimeWatch",
             "Runtime Watch",
@@ -1807,7 +1695,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             [&]() {
                 editor::DrawEditorRuntimeInspectorPanel(editorRuntimeInspector_);
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "editor.selection",
             "Selection",
@@ -1815,9 +1703,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             editor::EditorPanelHostArea::LeftSidebar,
             panelVisible("editor.selection"),
             [&]() {
-                editor::DrawEditorSelectionPanel(editorSelection_);
+                editor::DrawEditorSelectionPanel(editorSelection_, productionSelectionTargets);
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "editor.commands",
             "Commands",
@@ -1827,7 +1715,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             [&]() {
                 editor::DrawEditorCommandPanel(editorContext);
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "editor.assets",
             "Assets",
@@ -1845,7 +1733,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         hwnd_,
                         &pendingExternalAssetImportPaths_});
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "vfx.effectAssets",
             "Effect Assets",
@@ -1858,7 +1746,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                     context.effectAuthoringRegistry,
                     context.loadedEffectAssets);
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "render.targets",
             "Render Targets",
@@ -1878,7 +1766,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         runtimeState.terrain.shadowDebugCascade,
                         runtimeState.terrain.showShadowDebugView});
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "editor.featureGuard",
             "Feature Guard",
@@ -1931,7 +1819,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                             &editorAssetThumbnails_});
                 editor::DrawExistingFeatureProtectionPanel(protectionReport);
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "editor.diagnostics",
             "Diagnostics",
@@ -1946,7 +1834,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         &editorAssetRegistry_,
                         &editorAssetSelection_});
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "editor.notifications",
             "Notifications",
@@ -1956,7 +1844,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             [&]() {
                 editor::DrawEditorNotificationsPanel(editorNotifications_);
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "editor.properties",
             "Properties",
@@ -1966,7 +1854,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             [&]() {
                 editor::DrawEditorPropertyRegistryPanel(editorPropertyRegistry_, &editorTransactions);
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "editor.transactions",
             "Transactions",
@@ -1976,7 +1864,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             [&]() {
                 editor::DrawEditorTransactionPanel(editorTransactions);
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "vfx.runtimeStatus",
             "Runtime Status",
@@ -1986,7 +1874,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             [&]() {
                 DrawVfxRuntimeStatusPanel(runtimeStatusInput);
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "vfx.runtimeQueues",
             "Runtime Queues",
@@ -2004,7 +1892,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         trailMeshStreamProbeHealthyFrames_,
                         trailMeshStreamActiveHealthyFrames_});
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "render.graph",
             "RenderGraph",
@@ -2022,7 +1910,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         context.transientBufferCount,
                         context.transientBufferStorageCount});
             }});
-    editorPanelRegistry_.Register(
+    registerPanel(
         editor::EditorPanelDescriptor{
             "course.timeline",
             "Course Timeline",
@@ -2149,6 +2037,16 @@ bool AppImGuiLayer::WantsDeveloperDiagnostics() const {
     return initialized_ && showDeveloperTools_ && !viewportFocusMode_;
 }
 
+bool AppImGuiLayer::ShouldAdvanceEditorRuntimeFrame() const {
+    return editorPlaySession_.ShouldAdvanceRuntimeFrame();
+}
+
+void AppImGuiLayer::CompleteEditorRuntimeFrameAdvance(bool advanced) {
+    if (advanced) {
+        editorPlaySession_.CompleteRuntimeFrameAdvance();
+    }
+}
+
 const editor::EditorViewportRenderTargetState& AppImGuiLayer::EditorViewportRenderTargetState() const {
     return editorViewportRenderTarget_.State();
 }
@@ -2196,6 +2094,14 @@ bool AppImGuiLayer::IsEnabled() const {
 
 bool AppImGuiLayer::WantsDeveloperDiagnostics() const {
     return false;
+}
+
+bool AppImGuiLayer::ShouldAdvanceEditorRuntimeFrame() const {
+    return true;
+}
+
+void AppImGuiLayer::CompleteEditorRuntimeFrameAdvance(bool advanced) {
+    (void)advanced;
 }
 
 const editor::EditorViewportRenderTargetState& AppImGuiLayer::EditorViewportRenderTargetState() const {

@@ -10,6 +10,7 @@
 
 #include "EffectAssetLoader.h"
 #include "EffectRuntime.h"
+#include "editor/EditorAutomationGate.h"
 #include "editor/EditorCoreRegressionTests.h"
 #include "editor/EditorSmokeRun.h"
 #include "include/vfx/VfxRenderInputs.h"
@@ -136,6 +137,9 @@ int RunEffectAuthoringSmoke() {
 } // namespace
 
 AppCommandLineResult RunAppCommandLineTools() {
+    if (HasArgument(L"--editor-commercial-gates")) {
+        return {true, editor::RunEditorCommercialAutomationGates(RunEffectAuthoringSmoke)};
+    }
     if (HasArgument(L"--editor-smoke-run")) {
         return {true, editor::RunEditorSmokeRun(RunEffectAuthoringSmoke)};
     }

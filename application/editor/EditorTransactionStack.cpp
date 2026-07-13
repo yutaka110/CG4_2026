@@ -116,6 +116,27 @@ void EditorTransactionStack::PushAssetMutation(
     Touch();
 }
 
+void EditorTransactionStack::PushRuntimeAuthoringApply(
+    std::string label,
+    EditorObjectHandle target,
+    EditorRuntimeAuthoringApplyChange change) {
+    EditorTransactionRecord record{};
+    record.id = nextId_++;
+    record.label = std::move(label);
+    record.target = std::move(target);
+    record.payload.kind = EditorTransactionPayloadKind::RuntimeAuthoringApply;
+    record.payload.beforeSummary =
+        "Course rev " + std::to_string(change.beforeTerrain.courseObjectEditRevision);
+    record.payload.afterSummary =
+        "Course rev " + std::to_string(change.afterTerrain.courseObjectEditRevision);
+    record.payload.runtimeAuthoringApply = std::move(change);
+
+    undoStack_.push_back(std::move(record));
+    TrimUndoHistory();
+    redoStack_.clear();
+    Touch();
+}
+
 void EditorTransactionStack::StagePropertyDelta(EditorPropertyChange change) {
     stagedPropertyChanges_.clear();
     stagedPropertyChanges_.push_back(std::move(change));
@@ -236,6 +257,8 @@ const char* ToString(EditorTransactionPayloadKind kind) {
         return "MultiPropertyDelta";
     case EditorTransactionPayloadKind::AssetMutation:
         return "AssetMutation";
+    case EditorTransactionPayloadKind::RuntimeAuthoringApply:
+        return "RuntimeAuthoringApply";
     }
     return "Unknown";
 }

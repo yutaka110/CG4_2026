@@ -6,7 +6,38 @@
 #include "EditorPropertyRegistry.h"
 #include "EditorTransactionStack.h"
 
+#include <algorithm>
+#include <vector>
+
 namespace editor {
+namespace {
+
+bool IsSingleDomainSelection(const std::vector<EditorObjectHandle>& selectedObjects) {
+    if (selectedObjects.empty()) {
+        return true;
+    }
+    const EditorDomainId domain = selectedObjects.front().domain;
+    return std::all_of(
+        selectedObjects.begin(),
+        selectedObjects.end(),
+        [domain](const EditorObjectHandle& selected) {
+            return selected.domain == domain;
+        });
+}
+
+bool CanAccessEverySelectedObject(
+    const EditorPropertyAccessor& accessor,
+    const std::vector<EditorObjectHandle>& selectedObjects,
+    const EditorPropertyDescriptor& descriptor) {
+    return std::all_of(
+        selectedObjects.begin(),
+        selectedObjects.end(),
+        [&](const EditorObjectHandle& selected) {
+            return accessor.CanAccess(selected, descriptor);
+        });
+}
+
+} // namespace
 
 EditorCommandContext BuildEditorCommandContext(const EditorCommandContextInput& input) {
     EditorCommandContext context;
@@ -17,8 +48,10 @@ EditorCommandContext BuildEditorCommandContext(const EditorCommandContextInput& 
     context.authoringLockedByPlaySession = mutationGuard.LockedByPlaySession();
 
     const EditorObjectHandle* selectedObject = nullptr;
+    std::vector<EditorObjectHandle> selectedObjects;
     if (input.selection != nullptr) {
         selectedObject = input.selection->Primary();
+        selectedObjects = input.selection->Handles();
         context.hasSelectedObject = selectedObject != nullptr;
         context.selectedObjectCount = input.selection->Count();
         context.selectionRevision = input.selection->Revision();
@@ -43,8 +76,20 @@ EditorCommandContext BuildEditorCommandContext(const EditorCommandContextInput& 
         input.propertyRegistry != nullptr &&
         input.propertyAccessor != nullptr;
     if (context.detailsAvailable) {
-        const std::vector<const EditorPropertyDescriptor*> properties =
-            input.propertyRegistry->FindByDomain(selectedObject->domain);
+        std::vector<const EditorPropertyDescriptor*> properties;
+        if (IsSingleDomainSelection(selectedObjects)) {
+            properties = input.propertyRegistry->FindByDomain(selectedObject->domain);
+            if (selectedObjects.size() > 1) {
+                properties.erase(
+                    std::remove_if(
+                        properties.begin(),
+                        properties.end(),
+                        [](const EditorPropertyDescriptor* descriptor) {
+                            return descriptor == nullptr || !descriptor->supportsMultiEdit;
+                        }),
+                    properties.end());
+            }
+        }
         context.detailsRegisteredPropertyCount = properties.size();
         context.detailsHasRegisteredProperties = !properties.empty();
 
@@ -52,14 +97,17 @@ EditorCommandContext BuildEditorCommandContext(const EditorCommandContextInput& 
             if (descriptor == nullptr) {
                 continue;
             }
-            const bool canAccess = input.propertyAccessor->CanAccess(*selectedObject, *descriptor);
+            const bool canAccess =
+                CanAccessEverySelectedObject(*input.propertyAccessor, selectedObjects, *descriptor);
             if (!canAccess) {
                 continue;
             }
 
             ++context.detailsAccessiblePropertyCount;
             context.detailsCanRead = true;
-            if (!descriptor->readOnly) {
+            const bool supportsSelectionEdit =
+                selectedObjects.size() <= 1 || descriptor->supportsMultiEdit;
+            if (!descriptor->readOnly && supportsSelectionEdit) {
                 ++context.detailsEditablePropertyCount;
                 if (context.canMutateAuthoring) {
                     context.detailsCanEdit = true;
@@ -70,6 +118,7 @@ EditorCommandContext BuildEditorCommandContext(const EditorCommandContextInput& 
                 selectedAsset->referenceable &&
                 context.canMutateAuthoring &&
                 !descriptor->readOnly &&
+                supportsSelectionEdit &&
                 descriptor->kind == EditorPropertyKind::AssetRef &&
                 descriptor->assetKind == selectedAsset->kind) {
                 context.detailsCanUseSelectedAsset = true;

@@ -3,6 +3,7 @@
 #include "EditorAssetGpuThumbnailRenderer.h"
 #include "EditorAssetPreviewRenderTarget.h"
 #include "EditorAssetThumbnailCache.h"
+#include "EditorAssetThumbnailTextureLoader.h"
 #include "EditorThumbnailUploadRetirementQueue.h"
 #include "core/ShaderCompiler.h"
 
@@ -99,6 +100,7 @@ private:
     std::unordered_map<std::string, uint32_t> keyToPreviewMaterialDescriptorIndex_;
     std::unordered_map<std::string, uint32_t> keyToPreviewMaterialDescriptorCount_;
     std::unordered_map<std::string, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>> keyToPreviewMaterialTextureResources_;
+    std::unordered_map<std::string, EditorAssetThumbnailPixelData> previewMaterialTexturePixelCache_;
     EditorAssetPreviewRenderTargetPool previewRenderTargets_;
     EditorThumbnailUploadRetirementQueue uploadRetirementQueue_;
     EditorAssetThumbnailCacheStore cacheStore_;

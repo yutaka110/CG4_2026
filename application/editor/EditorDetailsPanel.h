@@ -1,6 +1,8 @@
 #pragma once
 
 #include "EditorDetailsEditController.h"
+#include "EditorDetailsSectionProvider.h"
+#include "EditorPropertyClipboardService.h"
 #include "EditorPropertyRegistry.h"
 #include "EditorAssetSelection.h"
 #include "EditorSelection.h"
@@ -19,9 +21,11 @@ struct EditorDetailsPanelContext {
     EditorTransactionStack* transactions = nullptr;
     EditorDirtyStateService* dirtyState = nullptr;
     EditorNotificationCenter* notifications = nullptr;
+    EditorPropertyClipboardService* propertyClipboard = nullptr;
     const EditorAssetRegistry* assetRegistry = nullptr;
     const EditorAssetSelection* assetSelection = nullptr;
     const EditorValidationReport* validationReport = nullptr;
+    const EditorDetailsSectionProviderRegistry* sectionProviders = nullptr;
     bool canMutateAuthoring = true;
 };
 

@@ -3,38 +3,17 @@
 #include "EditorCommandRegistry.h"
 #include "EditorContext.h"
 #include "EditorLayoutService.h"
+#include "EditorToolRegistration.h"
 
 #include "../../externals/imgui/imgui.h"
 
-#include <array>
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace editor {
 namespace {
-
-struct ToolbarCommand {
-    const char* id = nullptr;
-    const char* label = nullptr;
-};
-
-constexpr std::array<ToolbarCommand, 10> kToolbarCommands{{
-    {"editor.play", "Play"},
-    {"editor.simulate", "Sim"},
-    {"editor.stop", "Stop"},
-    {"course.previewFreeze", "Freeze"},
-    {"course.save", "Save"},
-    {"course.apply", "Apply"},
-    {"course.reload", "Reload"},
-    {"editor.undo", "Undo"},
-    {"editor.redo", "Redo"},
-    {"editor.commandPalette", "Palette"},
-}};
-
-bool NeedsSeparatorAfter(std::string_view id) {
-    return id == "editor.stop" || id == "course.reload" || id == "editor.redo";
-}
 
 void DrawDisabledReasonTooltip(EditorCommandRegistry& registry, const EditorCommand& command, bool enabled) {
     if (enabled || !ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -65,8 +44,49 @@ float EditorToolbarHeight() {
     return 36.0f;
 }
 
+void RegisterDefaultEditorToolbar(EditorToolRegistry& registry) {
+    struct DefaultToolbarCommand {
+        const char* id = nullptr;
+        const char* commandId = nullptr;
+        const char* label = nullptr;
+        int order = 0;
+        bool separatorAfter = false;
+    };
+
+    constexpr DefaultToolbarCommand commands[] = {
+        {"toolbar.editor.play", "editor.play", "Play", 100, false},
+        {"toolbar.editor.simulate", "editor.simulate", "Sim", 110, false},
+        {"toolbar.editor.stop", "editor.stop", "Stop", 120, false},
+        {"toolbar.editor.pauseRuntime", "editor.pauseRuntime", "Pause", 130, false},
+        {"toolbar.editor.resumeRuntime", "editor.resumeRuntime", "Resume", 140, false},
+        {"toolbar.editor.stepRuntime", "editor.stepRuntime", "Step", 150, false},
+        {"toolbar.editor.resetRuntime", "editor.resetRuntime", "ResetRT", 160, false},
+        {"toolbar.editor.applyRuntimeChanges", "editor.applyRuntimeChanges", "ApplyRT", 170, true},
+        {"toolbar.course.previewFreeze", "course.previewFreeze", "Freeze", 200, false},
+        {"toolbar.course.save", "course.save", "Save", 210, false},
+        {"toolbar.course.apply", "course.apply", "Apply", 220, false},
+        {"toolbar.course.reload", "course.reload", "Reload", 230, true},
+        {"toolbar.editor.undo", "editor.undo", "Undo", 300, false},
+        {"toolbar.editor.redo", "editor.redo", "Redo", 310, true},
+        {"toolbar.editor.commandPalette", "editor.commandPalette", "Palette", 400, false},
+    };
+
+    for (const DefaultToolbarCommand& command : commands) {
+        registry.RegisterToolbarItem(
+            EditorToolbarItemDescriptor{
+                {},
+                command.id,
+                command.commandId,
+                command.label,
+                command.order,
+                command.separatorAfter,
+                true,
+                true});
+    }
+}
+
 void DrawEditorToolbar(EditorContext& context) {
-    if (!context.developerToolsVisible || context.commands == nullptr) {
+    if (!context.developerToolsVisible || context.commands == nullptr || context.tools == nullptr) {
         return;
     }
 
@@ -96,19 +116,21 @@ void DrawEditorToolbar(EditorContext& context) {
     }
 
     EditorCommandRegistry& registry = *context.commands;
-    for (std::size_t i = 0; i < kToolbarCommands.size(); ++i) {
-        const ToolbarCommand& toolbarCommand = kToolbarCommands[i];
-        const EditorCommand* command = registry.Find(toolbarCommand.id);
+    const std::vector<const EditorToolbarItemDescriptor*> toolbarItems =
+        context.tools->Toolbar().VisibleItems();
+    for (std::size_t i = 0; i < toolbarItems.size(); ++i) {
+        const EditorToolbarItemDescriptor& toolbarItem = *toolbarItems[i];
+        const EditorCommand* command = registry.Find(toolbarItem.commandId);
         if (command == nullptr) {
             continue;
         }
 
         const bool enabled = registry.IsEnabled(*command);
-        ImGui::PushID(toolbarCommand.id);
+        ImGui::PushID(toolbarItem.id.c_str());
         if (!enabled) {
             ImGui::BeginDisabled();
         }
-        if (ImGui::Button(toolbarCommand.label, ImVec2(76.0f, 0.0f))) {
+        if (ImGui::Button(toolbarItem.label.c_str(), ImVec2(76.0f, 0.0f))) {
             registry.Execute(command->id);
         }
         if (!enabled) {
@@ -120,10 +142,10 @@ void DrawEditorToolbar(EditorContext& context) {
         }
         ImGui::PopID();
 
-        if (i + 1 < kToolbarCommands.size()) {
+        if (i + 1 < toolbarItems.size()) {
             ImGui::SameLine();
         }
-        if (NeedsSeparatorAfter(toolbarCommand.id) && i + 1 < kToolbarCommands.size()) {
+        if (toolbarItem.separatorAfter && i + 1 < toolbarItems.size()) {
             ImGui::TextDisabled("|");
             ImGui::SameLine();
         }
