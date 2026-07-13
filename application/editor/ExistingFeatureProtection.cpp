@@ -1,6 +1,9 @@
 #include "ExistingFeatureProtection.h"
 
+#include "EditorAssetThumbnailService.h"
+
 #include <sstream>
+#include <string>
 
 #include "CourseDocumentAdapter.h"
 #include "EditorPropertyAccessor.h"
@@ -11,10 +14,13 @@
 #include "EditorDirtyStateService.h"
 #include "EditorDocumentLifecycleService.h"
 #include "EditorLayoutService.h"
+#include "EditorLayoutPersistenceService.h"
 #include "EditorModalConfirmService.h"
 #include "EditorNotificationCenter.h"
 #include "EditorPanelLayoutService.h"
+#include "EditorPanelRegistry.h"
 #include "EditorPlaySessionState.h"
+#include "EditorRailRuntimePause.h"
 #include "EditorRuntimeInspector.h"
 #include "EditorSaveApplyPolicy.h"
 #include "EditorSelection.h"
@@ -202,6 +208,14 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
         detail << input.assetRegistry->Count()
                << " assets, mesh "
                << input.assetRegistry->Count(EditorAssetKind::Mesh)
+               << ", meta "
+               << input.assetRegistry->CountWithMetadata()
+               << ", autoGuid "
+               << input.assetRegistry->CountWithProvisionalGuid()
+               << ", deps "
+               << input.assetRegistry->CountWithDependencies()
+               << ", missing "
+               << input.assetRegistry->CountMissing()
                << ", revision "
                << input.assetRegistry->Revision();
         AddCheck(
@@ -214,6 +228,31 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             input.assetRegistry->Count(EditorAssetKind::Mesh) > 0
                 ? detail.str()
                 : detail.str() + " / mesh asset candidates are empty");
+        std::size_t migrationDebt = 0;
+        for (const EditorAssetRecord& record : input.assetRegistry->Records()) {
+            if (!record.runtimeOnly && (!record.hasMetadata || record.provisionalGuid)) {
+                ++migrationDebt;
+            }
+        }
+        const bool identityReady = input.assetRegistry->Count() > 0 && migrationDebt == 0;
+        AddCheck(
+            report,
+            identityReady
+                ? ExistingFeatureStatus::Ok
+                : ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Asset identity metadata",
+            identityReady
+                ? detail.str() + " / durable metadata is available."
+                : detail.str() + " / migration debt " + std::to_string(migrationDebt));
+        if (input.assetRegistry->CountMissing() > 0) {
+            AddCheck(
+                report,
+                ExistingFeatureStatus::Attention,
+                "Editor Core",
+                "Missing assets",
+                "One or more indexed assets are marked missing.");
+        }
     } else {
         AddCheck(
             report,
@@ -223,17 +262,57 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             "EditorAssetRegistry is missing; AssetRef properties cannot be resolved safely.");
     }
 
+    if (input.assetThumbnails != nullptr) {
+        std::ostringstream detail;
+        detail << input.assetThumbnails->Count()
+               << " thumbnails, ready "
+               << input.assetThumbnails->Count(EditorAssetThumbnailStatus::Ready)
+               << ", icon "
+               << input.assetThumbnails->Count(EditorAssetThumbnailStatus::Unsupported)
+               << ", failed "
+               << input.assetThumbnails->Count(EditorAssetThumbnailStatus::Failed)
+               << ", missing "
+               << input.assetThumbnails->Count(EditorAssetThumbnailStatus::Missing)
+               << ", revision "
+               << input.assetThumbnails->Revision();
+        AddCheck(
+            report,
+            input.assetThumbnails->Count(EditorAssetThumbnailStatus::Failed) == 0
+                ? ExistingFeatureStatus::Ok
+                : ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Asset thumbnail cache",
+            detail.str());
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Asset thumbnail cache",
+            "EditorAssetThumbnailService is missing; Content Browser can only show text rows.");
+    }
+
     if (input.assetSelection != nullptr) {
         std::ostringstream detail;
         detail << "Revision " << input.assetSelection->Revision();
+        ExistingFeatureStatus assetSelectionStatus = ExistingFeatureStatus::Ok;
         if (const EditorAssetHandle* selected = input.assetSelection->Primary()) {
             detail << " / selected " << ToString(selected->kind) << ":" << selected->id;
+            if (input.assetRegistry != nullptr) {
+                const EditorAssetHandleResolveResult resolved =
+                    ResolveEditorAssetHandle(*input.assetRegistry, *selected);
+                detail << " / handle "
+                       << (resolved.Current() ? "current" : (resolved.found ? "stale" : "missing"));
+                if (!resolved.Current()) {
+                    assetSelectionStatus = ExistingFeatureStatus::Attention;
+                }
+            }
         } else {
             detail << " / no asset selected";
         }
         AddCheck(
             report,
-            ExistingFeatureStatus::Ok,
+            assetSelectionStatus,
             "Editor Core",
             "Asset selection",
             detail.str());
@@ -299,6 +378,17 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             "Validation service",
             "EditorValidationService report is missing; Details edits are not being validated.");
     }
+
+    AddCheck(
+        report,
+        input.propertyEditService != nullptr
+            ? ExistingFeatureStatus::Ok
+            : ExistingFeatureStatus::Attention,
+        "Editor Core",
+        "Property edit service",
+        input.propertyEditService != nullptr
+            ? "EditorPropertyEditService is connected as the shared authoring mutation path."
+            : "EditorPropertyEditService is missing; property edits may bypass transaction, dirty, or notification policy.");
 
     if (input.dirtyState != nullptr) {
         std::ostringstream detail;
@@ -374,9 +464,43 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             "EditorLayoutService is missing; editor chrome reservation is not centralized.");
     }
 
+    if (input.layoutPersistence != nullptr) {
+        std::ostringstream detail;
+        detail << (input.layoutPersistence->Loaded() ? "loaded" : "not loaded")
+               << ", "
+               << (input.layoutPersistence->Dirty() ? "dirty" : "clean")
+               << ", revision "
+               << input.layoutPersistence->Revision()
+               << ", path "
+               << input.layoutPersistence->Path().generic_string();
+        if (!input.layoutPersistence->StatusMessage().empty()) {
+            detail << ", "
+                   << input.layoutPersistence->StatusMessage();
+        }
+        AddCheck(
+            report,
+            input.layoutPersistence->Loaded()
+                ? (input.layoutPersistence->LastLoadValid()
+                    ? ExistingFeatureStatus::Ok
+                    : ExistingFeatureStatus::Attention)
+                : ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Layout persistence service",
+            detail.str());
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Layout persistence service",
+            "EditorLayoutPersistenceService is missing; editor workspace layout cannot be restored.");
+    }
+
     if (input.panelLayout != nullptr) {
         const EditorPanelRect& content = input.panelLayout->ContentRect();
+        const EditorPanelRect& leftSidebar = input.panelLayout->LeftSidebarRect();
         const EditorPanelRect& inspector = input.panelLayout->InspectorRect();
+        const EditorPanelRect& contentBrowser = input.panelLayout->ContentBrowserRect();
         const EditorPanelRect& diagnostics = input.panelLayout->DiagnosticsRect();
         const EditorPanelRect& viewport = input.panelLayout->ViewportRect();
         std::ostringstream detail;
@@ -388,6 +512,14 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
                << inspector.width
                << "x"
                << inspector.height
+               << ", left "
+               << leftSidebar.width
+               << "x"
+               << leftSidebar.height
+               << ", content browser "
+               << contentBrowser.width
+               << "x"
+               << contentBrowser.height
                << ", diagnostics "
                << diagnostics.width
                << "x"
@@ -413,6 +545,51 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             "Editor Core",
             "Panel layout service",
             "EditorPanelLayoutService is missing; inspector and diagnostics layout is not centralized.");
+    }
+
+    if (input.panelRegistry != nullptr) {
+        const std::size_t viewportCount =
+            input.panelRegistry->Count(EditorPanelHostArea::Viewport);
+        const std::size_t leftCount =
+            input.panelRegistry->Count(EditorPanelHostArea::LeftSidebar);
+        const std::size_t inspectorCount =
+            input.panelRegistry->Count(EditorPanelHostArea::RightInspector);
+        const std::size_t contentCount =
+            input.panelRegistry->Count(EditorPanelHostArea::ContentBrowser);
+        const std::size_t bottomCount =
+            input.panelRegistry->Count(EditorPanelHostArea::BottomDock);
+        std::ostringstream detail;
+        detail << "viewport "
+               << viewportCount
+               << ", left "
+               << leftCount
+               << ", right "
+               << inspectorCount
+               << ", content "
+               << contentCount
+               << ", bottom "
+               << bottomCount
+               << ", total "
+               << input.panelRegistry->Count()
+               << ", revision "
+               << input.panelRegistry->Revision();
+        AddCheck(
+            report,
+            viewportCount > 0 && leftCount > 0 && inspectorCount > 0 && contentCount > 0 && bottomCount > 0
+                ? ExistingFeatureStatus::Ok
+                : ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Panel host multi-area registry",
+            viewportCount > 0 && leftCount > 0 && inspectorCount > 0 && contentCount > 0 && bottomCount > 0
+                ? detail.str()
+                : detail.str() + " / one or more editor host areas have no panels");
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Editor Core",
+            "Panel host multi-area registry",
+            "EditorPanelRegistry is missing; multi-area editor panel hosting cannot be guarded.");
     }
 
     if (input.notifications != nullptr) {
@@ -656,18 +833,29 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
                << input.transformGizmo->ManipulationLabel()
                << ", snap "
                << (state.snapEnabled ? "on" : "off")
+               << ", tx "
+               << (state.transactionConnected ? "connected" : "missing")
+               << ", undo "
+               << state.undoDepth
+               << ", redo "
+               << state.redoDepth
                << ", revision "
                << state.revision;
+        const bool connected =
+            state.selectionConnected &&
+            state.viewportBoundaryConnected &&
+            state.selectionRequestConnected &&
+            state.transactionConnected;
         AddCheck(
             report,
-            state.selectionConnected && state.viewportBoundaryConnected && state.selectionRequestConnected
+            connected
                 ? ExistingFeatureStatus::Ok
                 : ExistingFeatureStatus::Attention,
             "Editor Core",
             "Transform gizmo service",
-            state.selectionConnected && state.viewportBoundaryConnected && state.selectionRequestConnected
+            connected
                 ? detail.str()
-                : detail.str() + " / selection, request, or viewport boundary is not connected");
+                : detail.str() + " / selection, request, transaction, or viewport boundary is not connected");
     } else {
         AddCheck(
             report,
@@ -689,8 +877,8 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
         const EditorTransactionLegacyMirror& mirror = input.transactions->LegacyMirror();
         const bool bridgeDepthMatches =
             !mirror.active ||
-            (mirror.undoDepth == input.transactions->UndoDepth() &&
-                mirror.redoDepth == input.transactions->RedoDepth());
+            (mirror.undoDepth <= input.transactions->UndoDepth() &&
+                mirror.redoDepth <= input.transactions->RedoDepth());
         bool propertyLookupOk = true;
         std::ostringstream detail;
         detail << "Editor undo " << input.transactions->UndoDepth()
@@ -711,13 +899,24 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
                     input.propertyRegistry->Find(last->target.domain, last->payload.propertyPath) != nullptr;
                 detail << (resolved ? " resolved" : " descriptor-missing");
                 propertyLookupOk = propertyLookupOk && resolved;
+            } else if (last->payload.kind == EditorTransactionPayloadKind::MultiPropertyDelta) {
+                detail << " changes " << last->payload.propertyChanges.size();
+                for (const EditorPropertyChange& change : last->payload.propertyChanges) {
+                    const bool resolved =
+                        input.propertyRegistry != nullptr &&
+                        input.propertyRegistry->Find(change.target.domain, change.propertyPath) != nullptr;
+                    propertyLookupOk = propertyLookupOk && resolved;
+                    if (!resolved) {
+                        detail << " missing " << change.propertyPath;
+                    }
+                }
             }
         }
-        if (const EditorPropertyChange* staged = input.transactions->StagedPropertyDelta()) {
-            detail << " / staged " << staged->propertyPath;
+        for (const EditorPropertyChange& staged : input.transactions->StagedPropertyDeltas()) {
+            detail << " / staged " << staged.propertyPath;
             const bool resolved =
                 input.propertyRegistry != nullptr &&
-                input.propertyRegistry->Find(staged->target.domain, staged->propertyPath) != nullptr;
+                input.propertyRegistry->Find(staged.target.domain, staged.propertyPath) != nullptr;
             detail << (resolved ? " resolved" : " descriptor-missing");
             propertyLookupOk = propertyLookupOk && resolved;
         }
@@ -858,10 +1057,11 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
         input.hasSaveCourseCommand &&
             input.hasApplyCourseCommand &&
             input.hasReloadCourseCommand &&
-            input.hasTeleportCourseCommand,
+            input.hasTeleportCourseCommand &&
+            input.hasFreezeCourseCommand,
         "Course",
         "Authoring commands",
-        "Save, Apply, Reload, and Teleport callbacks are connected.",
+        "Save, Apply, Reload, Teleport, and Freeze callbacks are connected.",
         "One or more Course authoring callbacks are missing.");
 
     if (input.runtimeState != nullptr) {
@@ -875,6 +1075,29 @@ ExistingFeatureProtectionReport BuildExistingFeatureProtectionReport(
             "Course",
             "Object edit history",
             detail.str());
+    }
+
+    if (input.railRuntimePause != nullptr) {
+        const EditorRailRuntimePauseState& state = input.railRuntimePause->State();
+        std::ostringstream detail;
+        detail << input.railRuntimePause->StatusLabel()
+               << ", distance " << state.distance
+               << ", speed " << state.speed
+               << ", frozenFrames " << state.frozenFrames
+               << ", revision " << state.revision;
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Ok,
+            "Course",
+            "Preview freeze",
+            detail.str());
+    } else {
+        AddCheck(
+            report,
+            ExistingFeatureStatus::Attention,
+            "Course",
+            "Preview freeze",
+            "EditorRailRuntimePause is missing; rail preview freeze state is not visible to Editor Core.");
     }
 
     AddCheck(

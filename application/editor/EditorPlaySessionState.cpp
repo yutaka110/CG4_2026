@@ -18,7 +18,10 @@ void EditorPlaySessionState::Stop() {
     mode_ = EditorPlaySessionMode::Stopped;
     runtimeIsolationPending_ = false;
     runtimeIsolationSnapshotActive_ = false;
+    runtimePaused_ = false;
+    runtimeStepRequested_ = false;
     frameCount_ = 0;
+    runtimeFrameCount_ = 0;
     Touch();
 }
 
@@ -28,15 +31,75 @@ void EditorPlaySessionState::TickFrame() {
     }
 }
 
+void EditorPlaySessionState::PauseRuntime() {
+    if (!IsActive() || runtimePaused_) {
+        return;
+    }
+    runtimePaused_ = true;
+    runtimeStepRequested_ = false;
+    Touch();
+}
+
+void EditorPlaySessionState::ResumeRuntime() {
+    if (!IsActive() || (!runtimePaused_ && !runtimeStepRequested_)) {
+        return;
+    }
+    runtimePaused_ = false;
+    runtimeStepRequested_ = false;
+    Touch();
+}
+
+void EditorPlaySessionState::RequestRuntimeStep() {
+    if (!IsActive()) {
+        return;
+    }
+    runtimePaused_ = true;
+    runtimeStepRequested_ = true;
+    Touch();
+}
+
+bool EditorPlaySessionState::ShouldAdvanceRuntimeFrame() const {
+    if (!IsActive()) {
+        return true;
+    }
+    return !runtimePaused_ || runtimeStepRequested_;
+}
+
+void EditorPlaySessionState::CompleteRuntimeFrameAdvance() {
+    if (!IsActive()) {
+        return;
+    }
+    ++runtimeFrameCount_;
+    if (runtimeStepRequested_) {
+        runtimeStepRequested_ = false;
+        runtimePaused_ = true;
+    }
+    Touch();
+}
+
+void EditorPlaySessionState::MarkRuntimeReset() {
+    if (!IsActive()) {
+        return;
+    }
+    runtimeStepRequested_ = false;
+    runtimePaused_ = true;
+    runtimeFrameCount_ = 0;
+    ++runtimeResetCount_;
+    Touch();
+}
+
 void EditorPlaySessionState::Begin(EditorPlaySessionMode mode) {
     if (mode_ != mode) {
         ++sessionSerial_;
         frameCount_ = 0;
+        runtimeFrameCount_ = 0;
     }
     mode_ = mode;
     runtimeIsolationPending_ = true;
     runtimeIsolationSnapshotActive_ = false;
     runtimeIsolationRestored_ = false;
+    runtimePaused_ = false;
+    runtimeStepRequested_ = false;
     Touch();
 }
 

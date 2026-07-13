@@ -5,6 +5,7 @@
 #include "EditorContext.h"
 #include "EditorPlaySessionState.h"
 #include "EditorSaveApplyPolicy.h"
+#include "EditorToolRegistration.h"
 
 namespace editor {
 
@@ -17,7 +18,6 @@ void EditorBuiltinCommandProvider::RegisterCommands(EditorContext& context) cons
         return;
     }
 
-    EditorCommandRegistry& registry = *context.commands;
     const EditorCommandContext& commandContext = *context.commandContext;
     EditorCommandPalette* commandPalette = context.commandPalette;
     EditorPlaySessionState* playSession = context.playSession;
@@ -31,7 +31,8 @@ void EditorBuiltinCommandProvider::RegisterCommands(EditorContext& context) cons
         context.validationReport,
         playSession};
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "editor.commandPalette",
             "Command Palette",
@@ -49,7 +50,8 @@ void EditorBuiltinCommandProvider::RegisterCommands(EditorContext& context) cons
                 return EditorCommandResult{true, "Opened command palette."};
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "editor.play",
             "Play",
@@ -84,16 +86,11 @@ void EditorBuiltinCommandProvider::RegisterCommands(EditorContext& context) cons
                     }
                     return result;
                 }
-                playSession->Play();
-                return EditorCommandResult{
-                    true,
-                    decision.warning.empty()
-                        ? std::string("Entered Play mode boundary.")
-                        : std::string("Entered Play mode boundary. ") + decision.warning,
-                    !decision.warning.empty()};
+                return EditorCommandResult{false, "Play session lifecycle service is unavailable."};
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "editor.simulate",
             "Simulate",
@@ -128,16 +125,11 @@ void EditorBuiltinCommandProvider::RegisterCommands(EditorContext& context) cons
                     }
                     return result;
                 }
-                playSession->Simulate();
-                return EditorCommandResult{
-                    true,
-                    decision.warning.empty()
-                        ? std::string("Entered Simulate mode boundary.")
-                        : std::string("Entered Simulate mode boundary. ") + decision.warning,
-                    !decision.warning.empty()};
+                return EditorCommandResult{false, "Play session lifecycle service is unavailable."};
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "editor.stop",
             "Stop",
@@ -166,11 +158,184 @@ void EditorBuiltinCommandProvider::RegisterCommands(EditorContext& context) cons
                 if (input.stopPlaySession) {
                     return input.stopPlaySession();
                 }
-                playSession->Stop();
-                return EditorCommandResult{true, "Stopped Play/Simulate boundary."};
+                return EditorCommandResult{false, "Play session lifecycle service is unavailable."};
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
+            "editor.applyRuntimeChanges",
+            "Apply Runtime Changes",
+            "Editor",
+            "",
+            [playSession, input, &commandContext]() {
+                return commandContext.developerToolsVisible &&
+                    playSession != nullptr &&
+                    playSession->IsActive() &&
+                    static_cast<bool>(input.applyRuntimeChanges);
+            },
+            [playSession, input, &commandContext]() {
+                if (!commandContext.developerToolsVisible) {
+                    return std::string("Developer tools are hidden.");
+                }
+                if (playSession == nullptr) {
+                    return std::string("Play session state is unavailable.");
+                }
+                if (!playSession->IsActive()) {
+                    return std::string("Runtime changes can only be applied during Play/Sim.");
+                }
+                return input.applyRuntimeChanges
+                    ? std::string()
+                    : std::string("Runtime authoring apply service is unavailable.");
+            },
+            [input]() {
+                return input.applyRuntimeChanges
+                    ? input.applyRuntimeChanges()
+                    : EditorCommandResult{false, "Runtime authoring apply service is unavailable."};
+            }});
+
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
+            "editor.pauseRuntime",
+            "Pause Runtime",
+            "Editor",
+            "",
+            [playSession, input, &commandContext]() {
+                return commandContext.developerToolsVisible &&
+                    playSession != nullptr &&
+                    playSession->IsActive() &&
+                    !playSession->RuntimePaused() &&
+                    static_cast<bool>(input.pauseRuntime);
+            },
+            [playSession, input, &commandContext]() {
+                if (!commandContext.developerToolsVisible) {
+                    return std::string("Developer tools are hidden.");
+                }
+                if (playSession == nullptr) {
+                    return std::string("Play session state is unavailable.");
+                }
+                if (!playSession->IsActive()) {
+                    return std::string("Runtime can only be paused during Play/Sim.");
+                }
+                if (playSession->RuntimePaused()) {
+                    return std::string("Runtime is already paused.");
+                }
+                return input.pauseRuntime
+                    ? std::string()
+                    : std::string("Runtime control service is unavailable.");
+            },
+            [input]() {
+                return input.pauseRuntime
+                    ? input.pauseRuntime()
+                    : EditorCommandResult{false, "Runtime control service is unavailable."};
+            }});
+
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
+            "editor.resumeRuntime",
+            "Resume Runtime",
+            "Editor",
+            "",
+            [playSession, input, &commandContext]() {
+                return commandContext.developerToolsVisible &&
+                    playSession != nullptr &&
+                    playSession->IsActive() &&
+                    playSession->RuntimePaused() &&
+                    static_cast<bool>(input.resumeRuntime);
+            },
+            [playSession, input, &commandContext]() {
+                if (!commandContext.developerToolsVisible) {
+                    return std::string("Developer tools are hidden.");
+                }
+                if (playSession == nullptr) {
+                    return std::string("Play session state is unavailable.");
+                }
+                if (!playSession->IsActive()) {
+                    return std::string("Runtime can only be resumed during Play/Sim.");
+                }
+                if (!playSession->RuntimePaused()) {
+                    return std::string("Runtime is already live.");
+                }
+                return input.resumeRuntime
+                    ? std::string()
+                    : std::string("Runtime control service is unavailable.");
+            },
+            [input]() {
+                return input.resumeRuntime
+                    ? input.resumeRuntime()
+                    : EditorCommandResult{false, "Runtime control service is unavailable."};
+            }});
+
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
+            "editor.stepRuntime",
+            "Step Runtime",
+            "Editor",
+            "",
+            [playSession, input, &commandContext]() {
+                return commandContext.developerToolsVisible &&
+                    playSession != nullptr &&
+                    playSession->IsActive() &&
+                    static_cast<bool>(input.stepRuntime);
+            },
+            [playSession, input, &commandContext]() {
+                if (!commandContext.developerToolsVisible) {
+                    return std::string("Developer tools are hidden.");
+                }
+                if (playSession == nullptr) {
+                    return std::string("Play session state is unavailable.");
+                }
+                if (!playSession->IsActive()) {
+                    return std::string("Runtime can only be stepped during Play/Sim.");
+                }
+                return input.stepRuntime
+                    ? std::string()
+                    : std::string("Runtime control service is unavailable.");
+            },
+            [input]() {
+                return input.stepRuntime
+                    ? input.stepRuntime()
+                    : EditorCommandResult{false, "Runtime control service is unavailable."};
+            }});
+
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
+            "editor.resetRuntime",
+            "Reset Runtime",
+            "Editor",
+            "",
+            [playSession, input, &commandContext]() {
+                return commandContext.developerToolsVisible &&
+                    playSession != nullptr &&
+                    playSession->IsActive() &&
+                    static_cast<bool>(input.resetRuntime);
+            },
+            [playSession, input, &commandContext]() {
+                if (!commandContext.developerToolsVisible) {
+                    return std::string("Developer tools are hidden.");
+                }
+                if (playSession == nullptr) {
+                    return std::string("Play session state is unavailable.");
+                }
+                if (!playSession->IsActive()) {
+                    return std::string("Runtime can only be reset during Play/Sim.");
+                }
+                return input.resetRuntime
+                    ? std::string()
+                    : std::string("Runtime control service is unavailable.");
+            },
+            [input]() {
+                return input.resetRuntime
+                    ? input.resetRuntime()
+                    : EditorCommandResult{false, "Runtime control service is unavailable."};
+            }});
+
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "editor.undo",
             "Undo",
@@ -189,7 +354,8 @@ void EditorBuiltinCommandProvider::RegisterCommands(EditorContext& context) cons
                 return input.undo ? input.undo() : EditorCommandResult{false, "Undo callback is unavailable."};
             }});
 
-    registry.Register(
+    RegisterEditorToolCommand(
+        context,
         EditorCommand{
             "editor.redo",
             "Redo",

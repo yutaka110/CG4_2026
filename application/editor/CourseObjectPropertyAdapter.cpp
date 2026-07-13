@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 #include "../AppRuntimeState.h"
 #include "../course/CourseAsset.h"
@@ -33,6 +34,82 @@ Vector3 DegreesToRadians(const Vector3& degrees) {
         DegreesToRadians(degrees.y),
         DegreesToRadians(degrees.z),
     };
+}
+
+std::string FormatCourseFloat(float value) {
+    char buffer[64]{};
+    std::snprintf(buffer, sizeof(buffer), "%.6f", value);
+    return buffer;
+}
+
+std::string FormatCourseVector3(const Vector3& value) {
+    char buffer[128]{};
+    std::snprintf(buffer, sizeof(buffer), "%.6f, %.6f, %.6f", value.x, value.y, value.z);
+    return buffer;
+}
+
+std::string FormatTerrainGizmoTransform(const CourseTerrainPlacement& placement) {
+    return "distance=" + FormatCourseFloat(placement.distance) +
+        " lateral=" + FormatCourseFloat(placement.lateralOffset) +
+        " vertical=" + FormatCourseFloat(placement.verticalOffset) +
+        " forward=" + FormatCourseFloat(placement.forwardOffset) +
+        " scale=(" + FormatCourseVector3(placement.scale) +
+        ") rotationRad=(" + FormatCourseVector3(placement.rotation) + ")";
+}
+
+std::string FormatRockGizmoTransform(const CourseRockCluster& cluster) {
+    return "distance=" + FormatCourseFloat(cluster.distance) +
+        " minScale=" + FormatCourseFloat(cluster.minScale) +
+        " maxScale=" + FormatCourseFloat(cluster.maxScale) +
+        " spread=(" + FormatCourseVector3(cluster.spread) +
+        ") clearLane=" + FormatCourseFloat(cluster.clearLaneRadius) +
+        " rotationRad=(" + FormatCourseVector3(cluster.rotation) + ")";
+}
+
+bool ParseTerrainGizmoTransform(
+    const std::string& value,
+    float& distance,
+    float& lateral,
+    float& vertical,
+    float& forward,
+    Vector3& scale,
+    Vector3& rotation) {
+    return sscanf_s(
+        value.c_str(),
+        "distance=%f lateral=%f vertical=%f forward=%f scale=(%f, %f, %f) rotationRad=(%f, %f, %f)",
+        &distance,
+        &lateral,
+        &vertical,
+        &forward,
+        &scale.x,
+        &scale.y,
+        &scale.z,
+        &rotation.x,
+        &rotation.y,
+        &rotation.z) == 10;
+}
+
+bool ParseRockGizmoTransform(
+    const std::string& value,
+    float& distance,
+    float& minScale,
+    float& maxScale,
+    Vector3& spread,
+    float& clearLaneRadius,
+    Vector3& rotation) {
+    return sscanf_s(
+        value.c_str(),
+        "distance=%f minScale=%f maxScale=%f spread=(%f, %f, %f) clearLane=%f rotationRad=(%f, %f, %f)",
+        &distance,
+        &minScale,
+        &maxScale,
+        &spread.x,
+        &spread.y,
+        &spread.z,
+        &clearLaneRadius,
+        &rotation.x,
+        &rotation.y,
+        &rotation.z) == 10;
 }
 
 bool SameFloat(float a, float b) {
@@ -212,9 +289,11 @@ void MarkCourseEdited(AppRuntimeState* runtimeState) {
 
 CourseObjectPropertyAdapter::CourseObjectPropertyAdapter(
     CourseAsset* course,
-    AppRuntimeState* runtimeState)
+    AppRuntimeState* runtimeState,
+    bool markEdits)
     : course_(course)
-    , runtimeState_(runtimeState) {
+    , runtimeState_(runtimeState)
+    , markEdits_(markEdits) {
 }
 
 bool CourseObjectPropertyAdapter::CanAccess(
@@ -243,6 +322,10 @@ bool CourseObjectPropertyAdapter::Get(
 
     if (const CourseTerrainPlacement* placement = FindTerrainPlacement(course_, object)) {
         const std::string& name = descriptor.name;
+        if (name.find("CourseTerrainPlacement.transform.") == 0) {
+            outValue.stringValue = FormatTerrainGizmoTransform(*placement);
+            return true;
+        }
         if (name == "CourseTerrainPlacement.id") {
             outValue.stringValue = placement->id;
             return true;
@@ -299,6 +382,10 @@ bool CourseObjectPropertyAdapter::Get(
 
     if (const CourseRockCluster* cluster = FindRockCluster(course_, object)) {
         const std::string& name = descriptor.name;
+        if (name.find("CourseRockCluster.transform.") == 0) {
+            outValue.stringValue = FormatRockGizmoTransform(*cluster);
+            return true;
+        }
         if (name == "CourseRockCluster.id") {
             outValue.stringValue = cluster->id;
             return true;
@@ -369,7 +456,31 @@ bool CourseObjectPropertyAdapter::Set(
     bool changed = false;
     if (CourseTerrainPlacement* placement = FindTerrainPlacement(course_, object)) {
         const std::string& name = descriptor.name;
-        if (name == "CourseTerrainPlacement.id") {
+        if (name.find("CourseTerrainPlacement.transform.") == 0) {
+            float distance = placement->distance;
+            float lateral = placement->lateralOffset;
+            float vertical = placement->verticalOffset;
+            float forward = placement->forwardOffset;
+            Vector3 scale = placement->scale;
+            Vector3 rotation = placement->rotation;
+            if (!ParseTerrainGizmoTransform(
+                    value.stringValue,
+                    distance,
+                    lateral,
+                    vertical,
+                    forward,
+                    scale,
+                    rotation)) {
+                SetError(errorMessage, "Failed to parse terrain transform delta.");
+                return false;
+            }
+            changed = AssignFloat(placement->distance, distance) || changed;
+            changed = AssignFloat(placement->lateralOffset, lateral) || changed;
+            changed = AssignFloat(placement->verticalOffset, vertical) || changed;
+            changed = AssignFloat(placement->forwardOffset, forward) || changed;
+            changed = AssignVector3(placement->scale, scale) || changed;
+            changed = AssignVector3(placement->rotation, rotation) || changed;
+        } else if (name == "CourseTerrainPlacement.id") {
             changed = AssignString(placement->id, value.stringValue);
         } else if (name == "CourseTerrainPlacement.meshId") {
             changed = AssignString(placement->meshId, value.stringValue);
@@ -413,7 +524,31 @@ bool CourseObjectPropertyAdapter::Set(
         }
     } else if (CourseRockCluster* cluster = FindRockCluster(course_, object)) {
         const std::string& name = descriptor.name;
-        if (name == "CourseRockCluster.id") {
+        if (name.find("CourseRockCluster.transform.") == 0) {
+            float distance = cluster->distance;
+            float minScale = cluster->minScale;
+            float maxScale = cluster->maxScale;
+            Vector3 spread = cluster->spread;
+            float clearLaneRadius = cluster->clearLaneRadius;
+            Vector3 rotation = cluster->rotation;
+            if (!ParseRockGizmoTransform(
+                    value.stringValue,
+                    distance,
+                    minScale,
+                    maxScale,
+                    spread,
+                    clearLaneRadius,
+                    rotation)) {
+                SetError(errorMessage, "Failed to parse rock cluster transform delta.");
+                return false;
+            }
+            changed = AssignFloat(cluster->distance, distance) || changed;
+            changed = AssignFloat(cluster->minScale, minScale) || changed;
+            changed = AssignFloat(cluster->maxScale, maxScale) || changed;
+            changed = AssignVector3(cluster->spread, spread) || changed;
+            changed = AssignFloat(cluster->clearLaneRadius, clearLaneRadius) || changed;
+            changed = AssignVector3(cluster->rotation, rotation) || changed;
+        } else if (name == "CourseRockCluster.id") {
             changed = AssignString(cluster->id, value.stringValue);
         } else if (name == "CourseRockCluster.meshId") {
             changed = AssignString(cluster->meshId, value.stringValue);
@@ -457,7 +592,7 @@ bool CourseObjectPropertyAdapter::Set(
         }
     }
 
-    if (changed) {
+    if (changed && markEdits_) {
         MarkCourseEdited(runtimeState_);
     }
     return true;

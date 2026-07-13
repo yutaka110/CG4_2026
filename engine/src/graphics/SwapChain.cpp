@@ -111,3 +111,17 @@ HRESULT SwapChain::Present(core::Device& dev, UINT syncInterval)
     UINT flags = (allowTearing_ && syncInterval == 0) ? DXGI_PRESENT_ALLOW_TEARING : 0;
     return swapChain_->Present(syncInterval, flags);
 }
+
+bool SwapChain::SetMaximumFrameLatency(UINT maxLatency)
+{
+    if (!swapChain_ || maxLatency == 0) {
+        return false;
+    }
+
+    ComPtr<IDXGISwapChain2> swapChain2;
+    if (FAILED(swapChain_.As(&swapChain2)) || !swapChain2) {
+        return false;
+    }
+
+    return SUCCEEDED(swapChain2->SetMaximumFrameLatency(maxLatency));
+}

@@ -765,11 +765,21 @@ CourseValidationReport BuildValidationReport(const CourseTimelineDebugPanelInput
     return ValidateCourseAsset(course, options);
 }
 
+float CourseSummaryBlockHeight() {
+    const float textHeight = ImGui::GetTextLineHeightWithSpacing() * 8.0f;
+    const float timelineHeight = 42.0f;
+    return textHeight + timelineHeight + ImGui::GetStyle().ItemSpacing.y * 3.0f;
+}
+
 void DrawTimelineBar(const CourseTimelineDebugPanelInput& input, const CourseAsset& course) {
     const float railLength = (std::max)(input.railLength, course.railPoints.empty() ? 0.0f : input.railLength);
     const ImVec2 canvasPos = ImGui::GetCursorScreenPos();
     const float canvasWidth = (std::max)(ImGui::GetContentRegionAvail().x, 240.0f);
-    constexpr float canvasHeight = 92.0f;
+    const float availableHeight = ImGui::GetContentRegionAvail().y;
+    const bool compact = availableHeight > 0.0f && availableHeight < 120.0f;
+    const float canvasHeight = compact
+        ? (std::clamp)(availableHeight - 6.0f, 26.0f, 42.0f)
+        : 92.0f;
     const ImVec2 canvasSize(canvasWidth, canvasHeight);
     ImDrawList* drawList = ImGui::GetWindowDrawList();
 
@@ -784,8 +794,8 @@ void DrawTimelineBar(const CourseTimelineDebugPanelInput& input, const CourseAss
         IM_COL32(75, 88, 104, 255),
         4.0f);
 
-    const float sectionTop = canvasPos.y + 8.0f;
-    const float sectionBottom = canvasPos.y + 42.0f;
+    const float sectionTop = canvasPos.y + (compact ? 6.0f : 8.0f);
+    const float sectionBottom = canvasPos.y + (compact ? 13.0f : 42.0f);
     for (size_t index = 0; index < course.sections.size(); ++index) {
         const CourseSection& section = course.sections[index];
         const float x0 = canvasPos.x + NormalizeDistance(section.startDistance, railLength) * canvasSize.x;
@@ -797,12 +807,16 @@ void DrawTimelineBar(const CourseTimelineDebugPanelInput& input, const CourseAss
             2.0f);
     }
 
-    const float eventBaseY = canvasPos.y + 64.0f;
+    const float eventTop = compact ? canvasPos.y + 16.0f : canvasPos.y + 48.0f;
+    const float eventBottom = compact ? canvasPos.y + canvasHeight - 6.0f : canvasPos.y + 82.0f;
+    const float eventBaseY = compact ? (eventTop + eventBottom) * 0.5f : canvasPos.y + 64.0f;
     for (const CourseEventMarker& event : course.events) {
         const float x = canvasPos.x + NormalizeDistance(event.distance, railLength) * canvasSize.x;
         const ImU32 color = ColorForEventType(event.type);
-        drawList->AddLine(ImVec2(x, canvasPos.y + 48.0f), ImVec2(x, canvasPos.y + 82.0f), color, 2.0f);
-        drawList->AddCircleFilled(ImVec2(x, eventBaseY), 4.0f, color);
+        drawList->AddLine(ImVec2(x, eventTop), ImVec2(x, eventBottom), color, compact ? 1.4f : 2.0f);
+        if (!compact) {
+            drawList->AddCircleFilled(ImVec2(x, eventBaseY), 4.0f, color);
+        }
     }
 
     const float currentX = canvasPos.x + NormalizeDistance(input.currentDistance, railLength) * canvasSize.x;
@@ -813,8 +827,8 @@ void DrawTimelineBar(const CourseTimelineDebugPanelInput& input, const CourseAss
         2.0f);
     drawList->AddTriangleFilled(
         ImVec2(currentX, canvasPos.y + 2.0f),
-        ImVec2(currentX - 5.0f, canvasPos.y + 12.0f),
-        ImVec2(currentX + 5.0f, canvasPos.y + 12.0f),
+        ImVec2(currentX - 5.0f, canvasPos.y + (compact ? 10.0f : 12.0f)),
+        ImVec2(currentX + 5.0f, canvasPos.y + (compact ? 10.0f : 12.0f)),
         IM_COL32(255, 255, 255, 255));
 
     ImGui::Dummy(canvasSize);
@@ -2132,37 +2146,52 @@ void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input) {
         authoringStatus = "Viewport object edit pending.";
     }
 
-    if (input.loadStatus != nullptr) {
-        ImGui::TextUnformatted(input.loadStatus->c_str());
-    }
-    ImGui::Text("Course: %s", course.name.c_str());
-    ImGui::Text(
-        "Distance: %.1f / %.1f  progress %.1f%%",
-        input.currentDistance,
-        railLength,
-        railLength > 0.0f ? input.currentDistance / railLength * 100.0f : 0.0f);
-    ImGui::Text(
-        "Section: %s / %s",
-        section != nullptr ? section->name.c_str() : "-",
-        section != nullptr ? section->category.c_str() : "-");
-    ImGui::Text(
-        "Next: %s %s %.1fm",
-        nextEvent != nullptr ? nextEvent->type.c_str() : "-",
-        nextEvent != nullptr ? nextEvent->id.c_str() : "-",
-        nextEvent != nullptr ? nextEvent->distance - input.currentDistance : 0.0f);
-    ImGui::Text(
-        "Shot Set: %s / %s",
-        shotSet != nullptr ? shotSet->id.c_str() : "-",
-        shotSet != nullptr ? shotSet->label.c_str() : "-");
-    ImGui::Text("Terrain placements: %zu  rock clusters: %zu", course.terrainPlacements.size(), course.rockClusters.size());
-    ImGui::Text(
-        "Visual presets: sets %zu  lighting %zu  shots %zu  materials %zu",
-        course.cinematicShotSets.size(),
-        course.lightingPresets.size(),
-        course.cinematicCameraShots.size(),
-        course.terrainMaterialPresets.size());
+    const float summaryHeight =
+        (std::min)(CourseSummaryBlockHeight(), (std::max)(ImGui::GetContentRegionAvail().y, 72.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.015f, 0.018f, 0.022f, 1.0f));
+    if (ImGui::BeginChild(
+            "CourseTimelineSummary",
+            ImVec2(0.0f, summaryHeight),
+            true,
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+        if (input.loadStatus != nullptr) {
+            ImGui::TextUnformatted(input.loadStatus->c_str());
+        }
+        ImGui::Text("Course: %s", course.name.c_str());
+        ImGui::Text(
+            "Distance: %.1f / %.1f  progress %.1f%%",
+            input.currentDistance,
+            railLength,
+            railLength > 0.0f ? input.currentDistance / railLength * 100.0f : 0.0f);
+        ImGui::Text(
+            "Section: %s / %s",
+            section != nullptr ? section->name.c_str() : "-",
+            section != nullptr ? section->category.c_str() : "-");
+        ImGui::Text(
+            "Next: %s %s %.1fm",
+            nextEvent != nullptr ? nextEvent->type.c_str() : "-",
+            nextEvent != nullptr ? nextEvent->id.c_str() : "-",
+            nextEvent != nullptr ? nextEvent->distance - input.currentDistance : 0.0f);
+        ImGui::Text(
+            "Shot Set: %s / %s",
+            shotSet != nullptr ? shotSet->id.c_str() : "-",
+            shotSet != nullptr ? shotSet->label.c_str() : "-");
+        ImGui::Text(
+            "Terrain placements: %zu  rock clusters: %zu",
+            course.terrainPlacements.size(),
+            course.rockClusters.size());
+        ImGui::Text(
+            "Visual presets: sets %zu  lighting %zu  shots %zu  materials %zu",
+            course.cinematicShotSets.size(),
+            course.lightingPresets.size(),
+            course.cinematicCameraShots.size(),
+            course.terrainMaterialPresets.size());
 
-    DrawTimelineBar(input, course);
+        ImGui::Spacing();
+        DrawTimelineBar(input, course);
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
 
     if (input.spawnRuntime != nullptr) {
         const CourseSpawnRuntime& runtime = *input.spawnRuntime;

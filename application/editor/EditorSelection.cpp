@@ -90,6 +90,8 @@ const char* ToString(EditorDomainId domain) {
     switch (domain) {
     case EditorDomainId::Unknown:
         return "Unknown";
+    case EditorDomainId::Asset:
+        return "Asset";
     case EditorDomainId::VfxEffectAsset:
         return "VFX Effect Asset";
     case EditorDomainId::VfxEffectInstance:
@@ -98,6 +100,22 @@ const char* ToString(EditorDomainId domain) {
         return "Course Terrain";
     case EditorDomainId::CourseRockCluster:
         return "Course Rock Cluster";
+    case EditorDomainId::CourseCameraKey:
+        return "Course Camera Key";
+    case EditorDomainId::CourseEventMarker:
+        return "Course Event";
+    case EditorDomainId::CourseTerrainMaterialPreset:
+        return "Course Terrain Material";
+    case EditorDomainId::TerrainGeneration:
+        return "Terrain Generation";
+    case EditorDomainId::PostProcessPass:
+        return "Post Process Pass";
+    case EditorDomainId::RenderPreset:
+        return "Render Preset";
+    case EditorDomainId::CameraRig:
+        return "Camera Rig";
+    case EditorDomainId::GameplayTuning:
+        return "Gameplay Tuning";
     case EditorDomainId::RenderGraphPass:
         return "RenderGraph Pass";
     }

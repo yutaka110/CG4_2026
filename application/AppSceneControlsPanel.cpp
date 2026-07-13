@@ -425,6 +425,7 @@ void DrawMaterialSettingsControlsPanel(
         terrain.materialBacklightRimBoost = 0.72f;
     }
     ImGui::SeparatorText("Terrain Generation");
+    ImGui::Checkbox("Freeze Course Runtime", &terrain.freezeCourseRuntime);
     ImGui::Checkbox("Auto Advance Rail Preview", &terrain.autoAdvancePreview);
     ImGui::SameLine();
     ImGui::Checkbox("Auto Reload Preset", &terrain.autoReloadPreset);

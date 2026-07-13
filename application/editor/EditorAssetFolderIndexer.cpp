@@ -1,79 +1,11 @@
 #include "EditorAssetFolderIndexer.h"
 
-#include <algorithm>
-#include <cctype>
-#include <string>
+#include "EditorAssetImportService.h"
+
+#include <filesystem>
 #include <system_error>
-#include <utility>
 
 namespace editor {
-namespace {
-
-std::string ToLower(std::string value) {
-    std::transform(
-        value.begin(),
-        value.end(),
-        value.begin(),
-        [](unsigned char ch) {
-            return static_cast<char>(std::tolower(ch));
-        });
-    return value;
-}
-
-std::string NormalizePath(std::filesystem::path path) {
-    std::string text = path.generic_string();
-    if (text.rfind("./", 0) == 0) {
-        text.erase(0, 2);
-    }
-    return text;
-}
-
-EditorAssetKind KindForExtension(
-    const std::string& extension,
-    const EditorAssetFolderIndexOptions& options) {
-    const std::string ext = ToLower(extension);
-    if (options.includeMeshes &&
-        (ext == ".obj" || ext == ".gltf" || ext == ".glb" || ext == ".fbx")) {
-        return EditorAssetKind::Mesh;
-    }
-    if (options.includeEffects && ext == ".effect") {
-        return EditorAssetKind::Effect;
-    }
-    if (options.includeCourseAssets &&
-        (ext == ".course" ||
-            ext == ".actor" ||
-            ext == ".wave" ||
-            ext == ".pattern" ||
-            ext == ".obstacle" ||
-            ext == ".terrainpreset" ||
-            ext == ".postpreset")) {
-        return EditorAssetKind::Course;
-    }
-    if (options.includeTextures &&
-        (ext == ".png" || ext == ".bmp" || ext == ".dds" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga")) {
-        return EditorAssetKind::Texture;
-    }
-    if (options.includeAudio &&
-        (ext == ".wav" || ext == ".mp3" || ext == ".ogg")) {
-        return EditorAssetKind::Audio;
-    }
-    return EditorAssetKind::Unknown;
-}
-
-std::string BuildAssetId(
-    EditorAssetKind kind,
-    const std::filesystem::path& relativePath) {
-    std::filesystem::path idPath = relativePath;
-    idPath.replace_extension();
-
-    if (kind == EditorAssetKind::Mesh) {
-        return idPath.filename().generic_string();
-    }
-
-    return NormalizePath(idPath);
-}
-
-} // namespace
 
 EditorAssetFolderIndexResult IndexEditorAssetsFromFolder(
     EditorAssetRegistry& registry,
@@ -87,6 +19,18 @@ EditorAssetFolderIndexResult IndexEditorAssetsFromFolder(
         return result;
     }
 
+    EditorAssetImportOptions importOptions{};
+    importOptions.resourcesRoot = rootPath;
+    importOptions.createMetadata = false;
+    importOptions.scanDependencies = false;
+    importOptions.replaceExisting = true;
+    importOptions.includeMeshes = options.includeMeshes;
+    importOptions.includeEffects = options.includeEffects;
+    importOptions.includeCourseAssets = options.includeCourseAssets;
+    importOptions.includeTextures = options.includeTextures;
+    importOptions.includeAudio = options.includeAudio;
+
+    EditorAssetImportService importService(registry);
     const std::filesystem::recursive_directory_iterator end;
     for (std::filesystem::recursive_directory_iterator it(
              rootPath,
@@ -104,27 +48,14 @@ EditorAssetFolderIndexResult IndexEditorAssetsFromFolder(
         }
 
         ++result.scannedFiles;
-        const std::filesystem::path path = it->path();
-        const EditorAssetKind kind = KindForExtension(path.extension().string(), options);
-        if (kind == EditorAssetKind::Unknown) {
+        if (EditorAssetKindForImportPath(it->path(), importOptions) == EditorAssetKind::Unknown) {
             ++result.skippedFiles;
             continue;
         }
 
-        std::filesystem::path relativePath = std::filesystem::relative(path, rootPath, error);
-        if (error) {
-            error.clear();
-            relativePath = path.filename();
-        }
-
-        EditorAssetRecord record{};
-        record.kind = kind;
-        record.id = BuildAssetId(kind, relativePath);
-        record.displayName = path.stem().string();
-        record.sourcePath = NormalizePath(std::filesystem::path("Resources") / relativePath);
-        record.referenceable = kind != EditorAssetKind::Mesh;
-
-        if (registry.Register(std::move(record))) {
+        const EditorAssetImportResult importResult =
+            importService.Import(it->path(), importOptions);
+        if (importResult.succeeded) {
             ++result.registeredAssets;
         } else {
             ++result.skippedFiles;

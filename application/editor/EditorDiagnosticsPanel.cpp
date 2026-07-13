@@ -1,9 +1,13 @@
 #include "EditorDiagnosticsPanel.h"
 
+#include "EditorAssetReferenceDiagnosticsAdapter.h"
+#include "EditorAssetSelection.h"
+
 #include "../../externals/imgui/imgui.h"
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace editor {
 namespace {
@@ -48,16 +52,53 @@ std::string ObjectLabel(const EditorObjectHandle& handle) {
 
 bool IssueMatchesSelection(
     const EditorValidationIssue& issue,
-    const EditorSelection* selection) {
-    if (selection == nullptr || selection->Empty()) {
-        return false;
-    }
-    for (const EditorObjectHandle& handle : selection->Handles()) {
-        if (handle.SameObject(issue.target)) {
-            return true;
+    const EditorSelection* selection,
+    const EditorAssetSelection* assetSelection) {
+    if (selection != nullptr && !selection->Empty()) {
+        for (const EditorObjectHandle& handle : selection->Handles()) {
+            if (handle.SameObject(issue.target)) {
+                return true;
+            }
         }
     }
+
+    if (issue.target.domain == EditorDomainId::Asset && assetSelection != nullptr) {
+        const EditorAssetHandle* selectedAsset = assetSelection->Primary();
+        return selectedAsset != nullptr &&
+            issue.target.stableId ==
+                BuildEditorAssetDiagnosticStableId(selectedAsset->kind, selectedAsset->id);
+    }
+
     return false;
+}
+
+bool SelectAssetFromDiagnostic(
+    const EditorValidationIssue& issue,
+    const EditorAssetRegistry* registry,
+    EditorAssetSelection* assetSelection) {
+    if (issue.target.domain != EditorDomainId::Asset ||
+        registry == nullptr ||
+        assetSelection == nullptr) {
+        return false;
+    }
+
+    constexpr std::string_view kPrefix = "asset:";
+    const std::string_view stableId(issue.target.stableId);
+    if (stableId.rfind(kPrefix, 0) != 0) {
+        return false;
+    }
+
+    EditorAssetDependencyToken token{};
+    if (!ParseEditorAssetDependencyToken(stableId.substr(kPrefix.size()), token)) {
+        return false;
+    }
+
+    const EditorAssetRecord* record = registry->Find(token.kind, token.id);
+    if (record == nullptr) {
+        return false;
+    }
+    assetSelection->SetPrimary(MakeEditorAssetHandle(*record, registry->Revision()));
+    return true;
 }
 
 } // namespace
@@ -81,7 +122,7 @@ void DrawEditorDiagnosticsPanel(const EditorDiagnosticsPanelContext& context) {
         report.warningCount,
         report.infoCount);
 
-    ImGui::Checkbox("Selected object only", &selectedOnly);
+    ImGui::Checkbox("Selected subject only", &selectedOnly);
     ImGui::SameLine();
     ImGui::Checkbox("Errors", &showErrors);
     ImGui::SameLine();
@@ -114,7 +155,7 @@ void DrawEditorDiagnosticsPanel(const EditorDiagnosticsPanelContext& context) {
         if (!SeverityEnabled(issue.severity, showErrors, showWarnings, showInfo)) {
             continue;
         }
-        if (selectedOnly && !IssueMatchesSelection(issue, context.selection)) {
+        if (selectedOnly && !IssueMatchesSelection(issue, context.selection, context.assetSelection)) {
             continue;
         }
 
@@ -126,7 +167,18 @@ void DrawEditorDiagnosticsPanel(const EditorDiagnosticsPanelContext& context) {
         ImGui::TextUnformatted(ToString(issue.target.domain));
         ImGui::TableNextColumn();
         const std::string object = ObjectLabel(issue.target);
-        ImGui::TextUnformatted(object.c_str());
+        if (issue.target.domain == EditorDomainId::Asset &&
+            context.assetRegistry != nullptr &&
+            context.assetSelection != nullptr) {
+            if (ImGui::Selectable(
+                    object.c_str(),
+                    false,
+                    ImGuiSelectableFlags_SpanAllColumns)) {
+                SelectAssetFromDiagnostic(issue, context.assetRegistry, context.assetSelection);
+            }
+        } else {
+            ImGui::TextUnformatted(object.c_str());
+        }
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(issue.propertyPath.empty() ? "-" : issue.propertyPath.c_str());
         ImGui::TableNextColumn();

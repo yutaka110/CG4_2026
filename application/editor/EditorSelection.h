@@ -10,10 +10,19 @@ namespace editor {
 
 enum class EditorDomainId : uint32_t {
     Unknown = 0,
+    Asset,
     VfxEffectAsset,
     VfxEffectInstance,
     CourseTerrainPlacement,
     CourseRockCluster,
+    CourseCameraKey,
+    CourseEventMarker,
+    CourseTerrainMaterialPreset,
+    TerrainGeneration,
+    PostProcessPass,
+    RenderPreset,
+    CameraRig,
+    GameplayTuning,
     RenderGraphPass,
 };
 

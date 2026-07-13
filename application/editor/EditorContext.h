@@ -5,6 +5,7 @@ namespace editor {
 class CourseDocumentAdapter;
 class EditorAssetRegistry;
 class EditorAssetSelection;
+class EditorAssetThumbnailService;
 class EditorCommandInputRouter;
 class EditorCommandPalette;
 class EditorCommandRegistry;
@@ -15,10 +16,13 @@ class EditorModalConfirmService;
 class EditorNotificationCenter;
 class EditorPanelLayoutService;
 class EditorPropertyAccessor;
+class EditorPropertyEditService;
 class EditorPropertyRegistry;
 class EditorPlaySessionState;
+class EditorRailRuntimePause;
 class EditorRuntimeInspector;
 class EditorSelection;
+class EditorToolRegistry;
 class EditorTransformGizmoService;
 class EditorTransactionStack;
 class EditorViewportInteractionService;
@@ -32,9 +36,11 @@ struct EditorContext {
     EditorTransactionStack* transactions = nullptr;
     EditorAssetRegistry* assets = nullptr;
     EditorAssetSelection* assetSelection = nullptr;
+    EditorAssetThumbnailService* assetThumbnails = nullptr;
     const CourseDocumentAdapter* courseDocument = nullptr;
     EditorPropertyRegistry* propertyRegistry = nullptr;
     EditorPropertyAccessor* propertyAccessor = nullptr;
+    EditorPropertyEditService* propertyEditService = nullptr;
     const EditorValidationReport* validationReport = nullptr;
     EditorDirtyStateService* dirtyState = nullptr;
     EditorDocumentLifecycleService* documentLifecycle = nullptr;
@@ -48,6 +54,8 @@ struct EditorContext {
     const EditorSaveApplyPolicyInput* saveApplyPolicy = nullptr;
     EditorRuntimeInspector* runtimeInspector = nullptr;
     EditorPlaySessionState* playSession = nullptr;
+    EditorRailRuntimePause* railRuntimePause = nullptr;
+    EditorToolRegistry* tools = nullptr;
 
     EditorCommandRegistry* commands = nullptr;
     const EditorCommandContext* commandContext = nullptr;

@@ -1,5 +1,6 @@
 #include "EditorTransformGizmoService.h"
 
+#include "EditorTransactionStack.h"
 #include "EditorViewportInteractionService.h"
 #include "EditorViewportSelectionBridge.h"
 
@@ -9,9 +10,14 @@ void EditorTransformGizmoService::Update(const EditorTransformGizmoInput& input)
     state_.selectionConnected = input.selection != nullptr;
     state_.viewportBoundaryConnected = input.viewportInteraction != nullptr;
     state_.selectionRequestConnected = input.selectionBridge != nullptr;
+    state_.transactionConnected = input.transactions != nullptr;
     state_.mode = input.requestedMode;
     state_.activeAxis = input.activeAxis;
     state_.snapEnabled = input.snapEnabled;
+    state_.undoDepth =
+        input.transactions != nullptr ? static_cast<uint32_t>(input.transactions->UndoDepth()) : 0;
+    state_.redoDepth =
+        input.transactions != nullptr ? static_cast<uint32_t>(input.transactions->RedoDepth()) : 0;
     state_.targetAvailable = false;
     state_.canManipulate = false;
     state_.target = EditorObjectHandle{};
@@ -29,6 +35,7 @@ void EditorTransformGizmoService::Update(const EditorTransformGizmoInput& input)
     state_.canManipulate =
         state_.targetAvailable &&
         requestReady &&
+        input.transactions != nullptr &&
         input.viewportInteraction != nullptr &&
         input.viewportInteraction->CanMutateAuthoring();
 
@@ -56,6 +63,9 @@ const char* EditorTransformGizmoService::ManipulationLabel() const {
     }
     if (!state_.selectionRequestConnected) {
         return "SelectionRequestMissing";
+    }
+    if (!state_.transactionConnected) {
+        return "TransactionMissing";
     }
     return state_.canManipulate ? "GizmoReady" : "GizmoBlocked";
 }

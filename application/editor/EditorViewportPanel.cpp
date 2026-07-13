@@ -121,12 +121,26 @@ void DrawEditorViewportPanel(
         return;
     }
 
+    DrawEditorViewportPanelContent(context, rect, renderInput);
+    ImGui::End();
+}
+
+void DrawEditorViewportPanelContent(
+    EditorContext& context,
+    const EditorPanelRect& rect,
+    const EditorViewportPanelRenderInput& renderInput) {
+    if (!context.developerToolsVisible || !rect.Valid()) {
+        return;
+    }
+
     DrawViewportRenderSurface(rect, renderInput);
 
-    const ImVec2 windowPos = ImGui::GetWindowPos();
-    const ImVec2 panelPos(windowPos.x + 10.0f, windowPos.y + 10.0f);
+    const ImVec2 panelPos(rect.x + 10.0f, rect.y + 10.0f);
     const ImVec2 panelSize(246.0f, 184.0f);
     ImDrawList* drawList = ImGui::GetWindowDrawList();
+    if (renderInput.drawOverlay) {
+        renderInput.drawOverlay(drawList);
+    }
     drawList->AddRectFilled(
         panelPos,
         ImVec2(panelPos.x + panelSize.x, panelPos.y + panelSize.y),
@@ -160,8 +174,6 @@ void DrawEditorViewportPanel(
         DrawOverlayLine("Mode", context.transformGizmo->ModeLabel());
         DrawOverlayLine("Axis", context.transformGizmo->AxisLabel());
     }
-
-    ImGui::End();
 }
 
 } // namespace editor

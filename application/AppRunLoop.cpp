@@ -26,6 +26,11 @@
 #include "AppRuntimeState.h"
 #include "AppSceneResources.h"
 #include "EngineContext.h"
+#include "editor/CourseObjectPropertyAdapter.h"
+#include "editor/EditorPropertyEditService.h"
+#include "editor/EditorPropertyEditSession.h"
+#include "editor/EditorPropertyRegistry.h"
+#include "editor/EditorViewportOverlay.h"
 #include "utils/dx12/BufferHelper.h"
 
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
@@ -94,6 +99,8 @@ struct RailPerfFrameSample {
     double sceneTransformsMs = 0.0;
     double syncCourseMeshMs = 0.0;
     double imguiMs = 0.0;
+    double imguiBuildUiMs = 0.0;
+    double imguiEndFrameMs = 0.0;
     double sceneRuntimeSyncMs = 0.0;
     double registerPassesMs = 0.0;
     double prepareGraphResourcesMs = 0.0;
@@ -417,6 +424,18 @@ uint32_t ReadEnvironmentUInt(const char* name, uint32_t fallback) {
         return fallback;
     }
     return static_cast<uint32_t>(parsed);
+}
+
+bool ReadEnvironmentFlag(const char* name, bool fallback) {
+    char value[16]{};
+    const DWORD length = GetEnvironmentVariableA(name, value, static_cast<DWORD>(sizeof(value)));
+    if (length == 0 || length >= sizeof(value)) {
+        return fallback;
+    }
+    if (value[0] == '0' || value[0] == 'f' || value[0] == 'F' || value[0] == 'n' || value[0] == 'N') {
+        return false;
+    }
+    return true;
 }
 
 Vector3 RailLocalPoint(
@@ -784,6 +803,214 @@ Vector3 SnapCourseObjectVector(const Vector3& value, float step) {
         SnapCourseObjectValue(value.y, step),
         SnapCourseObjectValue(value.z, step),
     };
+}
+
+std::string FormatGizmoFloat(float value) {
+    char buffer[64]{};
+    std::snprintf(buffer, sizeof(buffer), "%.6f", value);
+    return buffer;
+}
+
+std::string FormatGizmoVector3(const Vector3& value) {
+    char buffer[128]{};
+    std::snprintf(buffer, sizeof(buffer), "%.6f, %.6f, %.6f", value.x, value.y, value.z);
+    return buffer;
+}
+
+constexpr float kCourseGizmoPropertyEpsilon = 0.0001f;
+constexpr float kCourseGizmoRadiansToDegrees = 180.0f / 3.14159265358979323846f;
+
+bool CourseGizmoFloatChanged(float before, float after) {
+    return std::fabs(before - after) > kCourseGizmoPropertyEpsilon;
+}
+
+bool CourseGizmoVectorChanged(const Vector3& before, const Vector3& after) {
+    return CourseGizmoFloatChanged(before.x, after.x) ||
+        CourseGizmoFloatChanged(before.y, after.y) ||
+        CourseGizmoFloatChanged(before.z, after.z);
+}
+
+Vector3 CourseGizmoRotationDegrees(const Vector3& radians) {
+    return {
+        radians.x * kCourseGizmoRadiansToDegrees,
+        radians.y * kCourseGizmoRadiansToDegrees,
+        radians.z * kCourseGizmoRadiansToDegrees,
+    };
+}
+
+editor::EditorPropertyValue CourseGizmoFloatValue(float value) {
+    editor::EditorPropertyValue propertyValue{};
+    propertyValue.floatValue = value;
+    return propertyValue;
+}
+
+editor::EditorPropertyValue CourseGizmoVec3Value(const Vector3& value) {
+    editor::EditorPropertyValue propertyValue{};
+    propertyValue.vec3Value = value;
+    return propertyValue;
+}
+
+editor::EditorObjectHandle MakeCourseGizmoHandle(
+    editor::EditorDomainId domain,
+    const char* stablePrefix,
+    const char* displayPrefix,
+    std::size_t index,
+    uint32_t generation) {
+    editor::EditorObjectHandle handle{};
+    handle.domain = domain;
+    handle.stableId = editor::BuildStableIndexedId(stablePrefix, static_cast<uint64_t>(index));
+    handle.localIndex = static_cast<uint64_t>(index);
+    handle.generation = generation;
+    handle.displayName = std::string(displayPrefix) + " #" + std::to_string(index);
+    return handle;
+}
+
+void RegisterCourseObjectViewportGizmoProperties(editor::EditorPropertyRegistry& registry) {
+    const auto registerTransform =
+        [&](editor::EditorDomainId domain,
+            const char* propertyPath,
+            const char* displayName) {
+            editor::EditorPropertyDescriptor descriptor{};
+            descriptor.domain = domain;
+            descriptor.name = propertyPath;
+            descriptor.displayName = displayName;
+            descriptor.kind = editor::EditorPropertyKind::String;
+            descriptor.category = "Viewport Gizmo";
+            descriptor.valueType = "transform";
+            registry.Register(std::move(descriptor));
+        };
+
+    registerTransform(
+        editor::EditorDomainId::CourseTerrainPlacement,
+        "CourseTerrainPlacement.transform.translate",
+        "Transform Gizmo Translate");
+    registerTransform(
+        editor::EditorDomainId::CourseTerrainPlacement,
+        "CourseTerrainPlacement.transform.scale",
+        "Transform Gizmo Scale");
+    registerTransform(
+        editor::EditorDomainId::CourseTerrainPlacement,
+        "CourseTerrainPlacement.transform.rotation",
+        "Transform Gizmo Rotate");
+    registerTransform(
+        editor::EditorDomainId::CourseRockCluster,
+        "CourseRockCluster.transform.translate",
+        "Transform Gizmo Translate");
+    registerTransform(
+        editor::EditorDomainId::CourseRockCluster,
+        "CourseRockCluster.transform.scale",
+        "Transform Gizmo Scale");
+    registerTransform(
+        editor::EditorDomainId::CourseRockCluster,
+        "CourseRockCluster.transform.rotation",
+        "Transform Gizmo Rotate");
+}
+
+std::vector<editor::EditorPropertyEditSessionProperty> BuildCourseGizmoSessionProperties(
+    const editor::EditorPropertyRegistry& registry,
+    const editor::EditorObjectHandle& target,
+    int type,
+    int gizmoMode) {
+    std::vector<editor::EditorPropertyEditSessionProperty> properties;
+    const auto addProperty =
+        [&](const char* propertyPath) {
+            const editor::EditorPropertyDescriptor* descriptor =
+                registry.Find(target.domain, propertyPath);
+            if (descriptor == nullptr) {
+                return;
+            }
+            properties.push_back(
+                editor::EditorPropertyEditSessionProperty{
+                    target,
+                    *descriptor});
+        };
+
+    const bool scaleMode = gizmoMode == 1;
+    const bool rotateMode = gizmoMode == 2;
+    if (type == 0) {
+        if (rotateMode) {
+            addProperty("CourseTerrainPlacement.rotation");
+        } else if (scaleMode) {
+            addProperty("CourseTerrainPlacement.scale");
+        } else {
+            addProperty("CourseTerrainPlacement.lateralOffset");
+            addProperty("CourseTerrainPlacement.verticalOffset");
+            addProperty("CourseTerrainPlacement.forwardOffset");
+        }
+    } else if (type == 1) {
+        if (rotateMode) {
+            addProperty("CourseRockCluster.rotation");
+        } else if (scaleMode) {
+            addProperty("CourseRockCluster.minScale");
+            addProperty("CourseRockCluster.maxScale");
+            addProperty("CourseRockCluster.spread");
+        } else {
+            addProperty("CourseRockCluster.clearLaneRadius");
+            addProperty("CourseRockCluster.distance");
+            addProperty("CourseRockCluster.spread");
+        }
+    }
+    return properties;
+}
+
+std::string FormatGizmoTerrainTransform(
+    float distance,
+    float lateral,
+    float vertical,
+    float forward,
+    const Vector3& scale,
+    const Vector3& rotation) {
+    std::ostringstream stream;
+    stream << "distance=" << FormatGizmoFloat(distance)
+           << " lateral=" << FormatGizmoFloat(lateral)
+           << " vertical=" << FormatGizmoFloat(vertical)
+           << " forward=" << FormatGizmoFloat(forward)
+           << " scale=(" << FormatGizmoVector3(scale)
+           << ") rotationRad=(" << FormatGizmoVector3(rotation)
+           << ")";
+    return stream.str();
+}
+
+std::string FormatGizmoRockTransform(
+    float distance,
+    float minScale,
+    float maxScale,
+    const Vector3& spread,
+    float clearLaneRadius,
+    const Vector3& rotation) {
+    std::ostringstream stream;
+    stream << "distance=" << FormatGizmoFloat(distance)
+           << " minScale=" << FormatGizmoFloat(minScale)
+           << " maxScale=" << FormatGizmoFloat(maxScale)
+           << " spread=(" << FormatGizmoVector3(spread)
+           << ") clearLane=" << FormatGizmoFloat(clearLaneRadius)
+           << " rotationRad=(" << FormatGizmoVector3(rotation)
+           << ")";
+    return stream.str();
+}
+
+const char* CourseGizmoPropertySuffix(int gizmoMode) {
+    switch (gizmoMode) {
+    case 1:
+        return "scale";
+    case 2:
+        return "rotation";
+    case 0:
+    default:
+        return "translate";
+    }
+}
+
+const char* CourseGizmoLabel(int gizmoMode) {
+    switch (gizmoMode) {
+    case 1:
+        return "Transform Gizmo Scale";
+    case 2:
+        return "Transform Gizmo Rotate";
+    case 0:
+    default:
+        return "Transform Gizmo Translate";
+    }
 }
 
 void AddSelectionFrameBox(
@@ -1220,6 +1447,54 @@ AppRunLoop::AppRunLoop(
     ApplyRailShooterCourse();
     frameFenceValues_.assign((std::max)(1u, swapChain_.BufferCount()), engineContext_.GetFenceValue());
     nextFrameFenceValue_ = engineContext_.GetFenceValue() + 1;
+    ConfigureEditorPresentPolicy();
+    LogEditorPresentPolicy();
+}
+
+void AppRunLoop::ConfigureEditorPresentPolicy() {
+#if defined(_DEBUG) || defined(DEVELOP)
+    constexpr bool kDefaultLowLatencyPresent = true;
+#else
+    constexpr bool kDefaultLowLatencyPresent = false;
+#endif
+    editorLowLatencyPresent_ =
+        ReadEnvironmentFlag("GE3_EDITOR_LOW_LATENCY_PRESENT", kDefaultLowLatencyPresent);
+    presentSyncInterval_ =
+        ReadEnvironmentUInt("GE3_EDITOR_PRESENT_SYNC_INTERVAL", editorLowLatencyPresent_ ? 0u : 1u);
+    presentSyncInterval_ = (std::min)(presentSyncInterval_, 4u);
+    editorLowLatencyPresent_ = presentSyncInterval_ == 0;
+    presentTearingAllowed_ = editorLowLatencyPresent_ && swapChain_.AllowsTearing();
+
+    const uint32_t defaultMaxFrameLatency =
+        editorLowLatencyPresent_
+            ? (std::min)(2u, (std::max)(1u, swapChain_.BufferCount()))
+            : 0u;
+    presentMaxFrameLatency_ =
+        ReadEnvironmentUInt("GE3_EDITOR_MAX_FRAME_LATENCY", defaultMaxFrameLatency);
+    if (presentMaxFrameLatency_ > 0) {
+        presentMaxFrameLatency_ =
+            (std::clamp)(presentMaxFrameLatency_, 1u, (std::max)(1u, swapChain_.BufferCount()));
+        if (!swapChain_.SetMaximumFrameLatency(presentMaxFrameLatency_)) {
+            presentMaxFrameLatency_ = 0;
+        }
+    }
+}
+
+void AppRunLoop::LogEditorPresentPolicy() const {
+    std::ostringstream line;
+    line << "[EditorPresentPolicy]"
+         << " lowLatency=" << (editorLowLatencyPresent_ ? 1 : 0)
+         << " syncInterval=" << presentSyncInterval_
+         << " tearingSupported=" << (swapChain_.AllowsTearing() ? 1 : 0)
+         << " tearingAllowed=" << (presentTearingAllowed_ ? 1 : 0)
+         << " bufferCount=" << swapChain_.BufferCount()
+         << " maxFrameLatency=" << presentMaxFrameLatency_
+         << "\n";
+    OutputDebugStringA(line.str().c_str());
+    std::ofstream log("logs/rail_present_policy.log", std::ios::app);
+    if (log) {
+        log << line.str();
+    }
 }
 
 void AppRunLoop::InitializeBeam(
@@ -1813,7 +2088,7 @@ void AppRunLoop::DrawRailLockOnHud() {
 #endif
 }
 
-void AppRunLoop::DrawRailVisibilityDebugOverlay() {
+void AppRunLoop::DrawRailVisibilityDebugOverlay(ImDrawList* overlayDrawList) {
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
     const RailVisibilityDebugOverlaySettings& overlay = railVisibilityDebugOverlay_;
     if (!overlay.enabled || !railShooterInitialized_ || windowWidth_ == 0 || windowHeight_ == 0 ||
@@ -1821,13 +2096,26 @@ void AppRunLoop::DrawRailVisibilityDebugOverlay() {
         return;
     }
 
-    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    editor::EditorViewportOverlayScope viewportOverlay(
+        imguiLayer_.EditorViewportRenderTargetState(),
+        windowWidth_,
+        windowHeight_,
+        overlayDrawList);
+    if (!viewportOverlay.Active()) {
+        return;
+    }
+
+    ImDrawList* drawList = viewportOverlay.DrawList();
     if (drawList == nullptr) {
         return;
     }
 
-    const float width = static_cast<float>(windowWidth_);
-    const float height = static_cast<float>(windowHeight_);
+    const uint32_t renderWidth =
+        (std::max)(1u, static_cast<uint32_t>(std::lround(viewportOverlay.RenderWidth())));
+    const uint32_t renderHeight =
+        (std::max)(1u, static_cast<uint32_t>(std::lround(viewportOverlay.RenderHeight())));
+    const float width = static_cast<float>(renderWidth);
+    const float height = static_cast<float>(renderHeight);
     const ImVec2 viewportCenter(width * 0.5f, height * 0.5f);
     const auto makeCenteredRect = [&](float widthFraction, float heightFraction, ImVec2& outMin, ImVec2& outMax) {
         const float rectWidth = width * (std::clamp)(widthFraction, 0.05f, 1.0f);
@@ -1839,10 +2127,13 @@ void AppRunLoop::DrawRailVisibilityDebugOverlay() {
         return point.x >= min.x && point.x <= max.x && point.y >= min.y && point.y <= max.y;
     };
     const auto visibleWithMargin = [&](const Vector2& point, float margin) {
-        return point.x >= -margin && point.y >= -margin && point.x <= width + margin && point.y <= height + margin;
+        return viewportOverlay.RenderPointVisible(point.x, point.y, margin);
     };
     const auto toImVec2 = [](const Vector2& value) {
         return ImVec2(value.x, value.y);
+    };
+    const auto scaled = [&](float value) {
+        return viewportOverlay.ScaleRadius(value);
     };
 
     ImVec2 aimMin{};
@@ -1853,24 +2144,47 @@ void AppRunLoop::DrawRailVisibilityDebugOverlay() {
     makeCenteredRect(overlay.warningZoneWidth, overlay.warningZoneHeight, warningMin, warningMax);
 
     if (overlay.showAimableZone) {
-        drawList->AddRectFilled(warningMin, warningMax, IM_COL32(255, 196, 80, 12), 0.0f);
-        drawList->AddRect(warningMin, warningMax, IM_COL32(255, 196, 80, 120), 0.0f, 0, 1.4f);
-        drawList->AddRectFilled(aimMin, aimMax, IM_COL32(52, 232, 255, 16), 0.0f);
-        drawList->AddRect(aimMin, aimMax, IM_COL32(80, 238, 255, 190), 0.0f, 0, 2.0f);
+        drawList->AddRectFilled(
+            viewportOverlay.ToDisplay(warningMin),
+            viewportOverlay.ToDisplay(warningMax),
+            IM_COL32(255, 196, 80, 12),
+            0.0f);
+        drawList->AddRect(
+            viewportOverlay.ToDisplay(warningMin),
+            viewportOverlay.ToDisplay(warningMax),
+            IM_COL32(255, 196, 80, 120),
+            0.0f,
+            0,
+            scaled(1.4f));
+        drawList->AddRectFilled(
+            viewportOverlay.ToDisplay(aimMin),
+            viewportOverlay.ToDisplay(aimMax),
+            IM_COL32(52, 232, 255, 16),
+            0.0f);
+        drawList->AddRect(
+            viewportOverlay.ToDisplay(aimMin),
+            viewportOverlay.ToDisplay(aimMax),
+            IM_COL32(80, 238, 255, 190),
+            0.0f,
+            0,
+            scaled(2.0f));
         drawList->AddLine(
-            ImVec2(viewportCenter.x - 18.0f, viewportCenter.y),
-            ImVec2(viewportCenter.x + 18.0f, viewportCenter.y),
+            viewportOverlay.ToDisplay(viewportCenter.x - 18.0f, viewportCenter.y),
+            viewportOverlay.ToDisplay(viewportCenter.x + 18.0f, viewportCenter.y),
             IM_COL32(120, 244, 255, 115),
-            1.2f);
+            scaled(1.2f));
         drawList->AddLine(
-            ImVec2(viewportCenter.x, viewportCenter.y - 18.0f),
-            ImVec2(viewportCenter.x, viewportCenter.y + 18.0f),
+            viewportOverlay.ToDisplay(viewportCenter.x, viewportCenter.y - 18.0f),
+            viewportOverlay.ToDisplay(viewportCenter.x, viewportCenter.y + 18.0f),
             IM_COL32(120, 244, 255, 115),
-            1.2f);
+            scaled(1.2f));
         if (overlay.showLabels) {
-            drawList->AddText(ImVec2(aimMin.x + 8.0f, aimMin.y + 6.0f), IM_COL32(140, 248, 255, 210), "AIMABLE");
             drawList->AddText(
-                ImVec2(warningMin.x + 8.0f, warningMin.y + 6.0f),
+                viewportOverlay.ToDisplay(aimMin.x + 8.0f, aimMin.y + 6.0f),
+                IM_COL32(140, 248, 255, 210),
+                "AIMABLE");
+            drawList->AddText(
+                viewportOverlay.ToDisplay(warningMin.x + 8.0f, warningMin.y + 6.0f),
                 IM_COL32(255, 211, 96, 185),
                 "READABILITY");
         }
@@ -1880,30 +2194,47 @@ void AppRunLoop::DrawRailVisibilityDebugOverlay() {
     const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(railShooterFrameIndex_) * 0.16f);
 
     const auto drawScreenMarker = [&](const ImVec2& pos, float radius, ImU32 color, bool filled) {
+        const ImVec2 displayPos = viewportOverlay.ToDisplay(pos);
         if (filled) {
-            drawList->AddCircleFilled(pos, radius + 2.0f + pulse * 1.5f, color, 18);
+            drawList->AddCircleFilled(
+                displayPos,
+                scaled(radius + 2.0f + pulse * 1.5f),
+                color,
+                18);
         }
-        drawList->AddCircle(pos, radius + 4.0f, color, 24, 1.7f);
-        drawList->AddLine(ImVec2(pos.x - radius, pos.y), ImVec2(pos.x + radius, pos.y), color, 1.2f);
-        drawList->AddLine(ImVec2(pos.x, pos.y - radius), ImVec2(pos.x, pos.y + radius), color, 1.2f);
+        drawList->AddCircle(displayPos, scaled(radius + 4.0f), color, 24, scaled(1.7f));
+        drawList->AddLine(
+            viewportOverlay.ToDisplay(pos.x - radius, pos.y),
+            viewportOverlay.ToDisplay(pos.x + radius, pos.y),
+            color,
+            scaled(1.2f));
+        drawList->AddLine(
+            viewportOverlay.ToDisplay(pos.x, pos.y - radius),
+            viewportOverlay.ToDisplay(pos.x, pos.y + radius),
+            color,
+            scaled(1.2f));
     };
     const auto drawWorldDebugPoint = [&](const Vector3& world, const char* label, ImU32 color) {
         const RailOverlayProjectedPoint projected =
-            ProjectRailOverlayPoint(world, frameState_.viewProjectionMatrix, windowWidth_, windowHeight_);
+            ProjectRailOverlayPoint(world, frameState_.viewProjectionMatrix, renderWidth, renderHeight);
         if (!projected.inDepth || !visibleWithMargin(projected.screen, 64.0f)) {
             return;
         }
         const ImVec2 pos = toImVec2(projected.screen);
         drawList->AddRect(
-            ImVec2(pos.x - 6.0f, pos.y - 6.0f),
-            ImVec2(pos.x + 6.0f, pos.y + 6.0f),
+            viewportOverlay.ToDisplay(pos.x - 6.0f, pos.y - 6.0f),
+            viewportOverlay.ToDisplay(pos.x + 6.0f, pos.y + 6.0f),
             color,
             0.0f,
             0,
-            1.5f);
-        drawList->AddLine(viewportCenter, pos, IM_COL32(160, 210, 255, 70), 1.0f);
+            scaled(1.5f));
+        drawList->AddLine(
+            viewportOverlay.ToDisplay(viewportCenter),
+            viewportOverlay.ToDisplay(pos),
+            IM_COL32(160, 210, 255, 70),
+            scaled(1.0f));
         if (overlay.showLabels) {
-            drawList->AddText(ImVec2(pos.x + 8.0f, pos.y - 7.0f), color, label);
+            drawList->AddText(viewportOverlay.ToDisplay(pos.x + 8.0f, pos.y - 7.0f), color, label);
         }
     };
 
@@ -1916,7 +2247,7 @@ void AppRunLoop::DrawRailVisibilityDebugOverlay() {
                 enemy.desc.verticalOffset,
                 enemy.desc.distanceOffset);
             const RailOverlayProjectedPoint projected =
-                ProjectRailOverlayPoint(center, frameState_.viewProjectionMatrix, windowWidth_, windowHeight_);
+                ProjectRailOverlayPoint(center, frameState_.viewProjectionMatrix, renderWidth, renderHeight);
             if (!projected.inDepth || !visibleWithMargin(projected.screen, 88.0f)) {
                 continue;
             }
@@ -1933,7 +2264,11 @@ void AppRunLoop::DrawRailVisibilityDebugOverlay() {
             drawScreenMarker(pos, radius, color, enemy.fireSafetyAllowed);
 
             if (!inAimable) {
-                drawList->AddLine(pos, viewportCenter, IM_COL32(255, 170, 70, 72), 1.0f);
+                drawList->AddLine(
+                    viewportOverlay.ToDisplay(pos),
+                    viewportOverlay.ToDisplay(viewportCenter),
+                    IM_COL32(255, 170, 70, 72),
+                    scaled(1.0f));
             }
             if (overlay.showLabels) {
                 char label[192]{};
@@ -1947,7 +2282,7 @@ void AppRunLoop::DrawRailVisibilityDebugOverlay() {
                     enemy.desc.role.c_str(),
                     forwardDistance,
                     enemy.fireSafetyReason.c_str());
-                drawList->AddText(ImVec2(pos.x + 10.0f, pos.y - 8.0f), color, label);
+                drawList->AddText(viewportOverlay.ToDisplay(pos.x + 10.0f, pos.y - 8.0f), color, label);
             }
         }
 
@@ -1959,7 +2294,7 @@ void AppRunLoop::DrawRailVisibilityDebugOverlay() {
                 obstacle.desc.verticalOffset,
                 obstacle.desc.distanceOffset);
             const RailOverlayProjectedPoint projected =
-                ProjectRailOverlayPoint(center, frameState_.viewProjectionMatrix, windowWidth_, windowHeight_);
+                ProjectRailOverlayPoint(center, frameState_.viewProjectionMatrix, renderWidth, renderHeight);
             if (!projected.inDepth || !visibleWithMargin(projected.screen, 88.0f)) {
                 continue;
             }
@@ -1973,18 +2308,18 @@ void AppRunLoop::DrawRailVisibilityDebugOverlay() {
             const ImVec2 pos = toImVec2(projected.screen);
             const float radius = inAimable ? 8.0f : 6.0f;
             drawList->AddRect(
-                ImVec2(pos.x - radius, pos.y - radius),
-                ImVec2(pos.x + radius, pos.y + radius),
+                viewportOverlay.ToDisplay(pos.x - radius, pos.y - radius),
+                viewportOverlay.ToDisplay(pos.x + radius, pos.y + radius),
                 color,
                 0.0f,
                 0,
-                1.6f);
+                scaled(1.6f));
             if (overlay.showLabels) {
                 char label[96]{};
                 const float forwardDistance =
                     obstacle.desc.spawnDistance + obstacle.desc.distanceOffset - railShooterDistance_;
                 std::snprintf(label, sizeof(label), "O%u %.0fm", obstacle.actorId, forwardDistance);
-                drawList->AddText(ImVec2(pos.x + 9.0f, pos.y - 7.0f), color, label);
+                drawList->AddText(viewportOverlay.ToDisplay(pos.x + 9.0f, pos.y - 7.0f), color, label);
             }
         }
     }
@@ -3484,7 +3819,6 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
                 candidate.anchor.screenRadius);
         }
     }
-    DrawRailVisibilityDebugOverlay();
 #endif
 }
 
@@ -3669,7 +4003,8 @@ void AppRunLoop::LogRailShooterPerfSpike() {
         gRailPerfFrame.prepareGraphResourcesMs >= 3.0 ||
         gRailPerfFrame.renderGraphExecuteMs >= 6.0 ||
         gRailPerfFrame.endAndExecuteMs >= 4.0 ||
-        gRailPerfFrame.presentMs >= 30.0;
+        gRailPerfFrame.waitFrameSlotMs >= 8.0 ||
+        gRailPerfFrame.presentMs >= 8.0;
     if (!shouldLog) {
         return;
     }
@@ -3688,6 +4023,10 @@ void AppRunLoop::LogRailShooterPerfSpike() {
          << " updateMs=" << gRailPerfFrame.updateMs
          << " renderMs=" << gRailPerfFrame.renderMs
          << " presentMs=" << gRailPerfFrame.presentMs
+         << " presentSyncInterval=" << presentSyncInterval_
+         << " presentTearingAllowed=" << (presentTearingAllowed_ ? 1 : 0)
+         << " presentMaxFrameLatency=" << presentMaxFrameLatency_
+         << " swapBufferCount=" << swapChain_.BufferCount()
          << " collisionMs=" << gRailPerfFrame.collisionMs
          << " visualPresetMs=" << gRailPerfFrame.visualPresetMs
          << " vfxUpdateMs=" << gRailPerfFrame.vfxUpdateMs
@@ -3698,6 +4037,8 @@ void AppRunLoop::LogRailShooterPerfSpike() {
          << " sceneTransformsMs=" << gRailPerfFrame.sceneTransformsMs
          << " syncCourseMeshMs=" << gRailPerfFrame.syncCourseMeshMs
          << " imguiMs=" << gRailPerfFrame.imguiMs
+         << " imguiBuildUiMs=" << gRailPerfFrame.imguiBuildUiMs
+         << " imguiEndFrameMs=" << gRailPerfFrame.imguiEndFrameMs
          << " sceneRuntimeSyncMs=" << gRailPerfFrame.sceneRuntimeSyncMs
          << " registerPassesMs=" << gRailPerfFrame.registerPassesMs
          << " prepareGraphResourcesMs=" << gRailPerfFrame.prepareGraphResourcesMs
@@ -3815,8 +4156,12 @@ void AppRunLoop::UpdateRailShooterFrame() {
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.begin");
 
     constexpr float kFixedGameplayDeltaTime = 0.016f;
+    const bool editorRuntimeAdvance = imguiLayer_.ShouldAdvanceEditorRuntimeFrame();
+    const bool coursePreviewFrozen =
+        runtimeState_.terrain.freezeCourseRuntime || !editorRuntimeAdvance;
+    const float gameplayDeltaTime = coursePreviewFrozen ? 0.0f : kFixedGameplayDeltaTime;
     for (RailNormalShotLine& line : railNormalShotLines_) {
-        line.age += kFixedGameplayDeltaTime;
+        line.age += gameplayDeltaTime;
     }
     railNormalShotLines_.erase(
         std::remove_if(
@@ -3839,13 +4184,16 @@ void AppRunLoop::UpdateRailShooterFrame() {
     speedInput.railPath = &railPath_;
     speedInput.section = railShooterCourseRuntime_.CurrentSection();
     speedInput.distance = railShooterCourseRuntime_.Distance();
-    speedInput.deltaTime = kFixedGameplayDeltaTime;
+    speedInput.deltaTime = gameplayDeltaTime;
     const RailSpeedDirectorFrame speedFrame = railShooterSpeedDirector_.Evaluate(speedInput);
-    const std::vector<CourseEventMarker> triggeredEvents =
-        railShooterCourseRuntime_.Advance(kFixedGameplayDeltaTime, railPath_, speedFrame.smoothedSpeed);
+    std::vector<CourseEventMarker> triggeredEvents;
+    if (!coursePreviewFrozen) {
+        triggeredEvents =
+            railShooterCourseRuntime_.Advance(kFixedGameplayDeltaTime, railPath_, speedFrame.smoothedSpeed);
+    }
     railShooterDistance_ = railShooterCourseRuntime_.Distance();
     EncounterDirectorFrameInput encounterInput{};
-    encounterInput.deltaTime = kFixedGameplayDeltaTime;
+    encounterInput.deltaTime = gameplayDeltaTime;
     encounterInput.currentDistance = railShooterDistance_;
     encounterInput.triggeredEvents = triggeredEvents;
     encounterInput.spawnRuntime = &railShooterSpawnRuntime_;
@@ -3865,11 +4213,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
     fireSafetyInput.cameraStableForAiming = previousCameraSafetyFrame.stableForAiming;
     fireSafetyInput.cameraHardTransition = previousCameraSafetyFrame.hardTransition;
     fireSafetyInput.playerDistance = railShooterDistance_;
-    fireSafetyInput.deltaTime = kFixedGameplayDeltaTime;
+    fireSafetyInput.deltaTime = gameplayDeltaTime;
     fireSafetyInput.cameraReason = previousCameraSafetyFrame.comfortReason;
-    railShooterSpawnRuntime_.Update(kFixedGameplayDeltaTime, fireSafetyInput);
+    railShooterSpawnRuntime_.Update(gameplayDeltaTime, fireSafetyInput);
     CourseCollisionFrameInput collisionInput{};
-    collisionInput.deltaTime = kFixedGameplayDeltaTime;
+    collisionInput.deltaTime = gameplayDeltaTime;
     collisionInput.course = &railShooterCourse_;
     collisionInput.player.distance = railShooterDistance_;
     collisionInput.player.lateralOffset = 0.0f;
@@ -3897,8 +4245,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraInput.railPath = &railPath_;
     cameraInput.section = railShooterCourseRuntime_.CurrentSection();
     cameraInput.distance = railShooterDistance_;
-    cameraInput.deltaTime = kFixedGameplayDeltaTime;
-    cameraInput.railSpeed = speedFrame.smoothedSpeed;
+    cameraInput.deltaTime = gameplayDeltaTime;
+    cameraInput.railSpeed = coursePreviewFrozen ? 0.0f : speedFrame.smoothedSpeed;
     cameraInput.lockHeld = railShooterLockOnSystem_.Reticle().lockHeld;
     cameraInput.lockPressed = railShooterLockOnSystem_.Reticle().lockPressed;
     cameraInput.lockReleased = railShooterLockOnSystem_.Reticle().lockReleased;
@@ -3928,11 +4276,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
         runtimeState_.camera.farZ);
     frameState_.viewProjectionMatrix = Multiply(frameState_.viewMatrix, frameState_.projMatrix);
     frameState_.cameraWorldPosition = cameraPosition;
-    frameState_.deltaTime = kFixedGameplayDeltaTime;
+    frameState_.deltaTime = gameplayDeltaTime;
 
     RailLockOnFrameInput lockOnInput{};
     lockOnInput.hwnd = hwnd_;
-    lockOnInput.deltaTime = kFixedGameplayDeltaTime;
+    lockOnInput.deltaTime = gameplayDeltaTime;
     lockOnInput.playerDistance = railShooterDistance_;
     lockOnInput.viewportWidth = metrics.width;
     lockOnInput.viewportHeight = metrics.height;
@@ -4039,7 +4387,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     railInputRouteDebug_.normalAimVertical = normalAimVertical;
 
     PlayerCombatFeelFrameInput combatFeelInput{};
-    combatFeelInput.deltaTime = kFixedGameplayDeltaTime;
+    combatFeelInput.deltaTime = gameplayDeltaTime;
     combatFeelInput.playerDistance = railShooterDistance_;
     combatFeelInput.playerLateralOffset = collisionInput.player.lateralOffset;
     combatFeelInput.playerVerticalOffset = collisionInput.player.verticalOffset;
@@ -4074,13 +4422,13 @@ void AppRunLoop::UpdateRailShooterFrame() {
             railShooterCollisionSystem_.LastShotVerticalOffset(),
             0.0f);
         RailOverlayProjectedPoint muzzleScreen =
-            ProjectRailOverlayPoint(muzzleWorld, frameState_.viewProjectionMatrix, windowWidth_, windowHeight_);
+            ProjectRailOverlayPoint(muzzleWorld, frameState_.viewProjectionMatrix, metrics.width, metrics.height);
         RailOverlayProjectedPoint hitScreen =
-            ProjectRailOverlayPoint(hitWorld, frameState_.viewProjectionMatrix, windowWidth_, windowHeight_);
+            ProjectRailOverlayPoint(hitWorld, frameState_.viewProjectionMatrix, metrics.width, metrics.height);
         if (!muzzleScreen.inDepth) {
             muzzleScreen.screen = {
-                static_cast<float>(windowWidth_) * 0.5f,
-                static_cast<float>(windowHeight_) * 0.78f};
+                static_cast<float>(metrics.width) * 0.5f,
+                static_cast<float>(metrics.height) * 0.78f};
             muzzleScreen.inDepth = true;
         }
         if (hitScreen.inDepth) {
@@ -4101,7 +4449,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         }
     }
     railShooterCombatFeelSystem_.ApplyCollisionStats(collisionStats);
-    railShooterCombatFeelSystem_.Update(kFixedGameplayDeltaTime);
+    railShooterCombatFeelSystem_.Update(gameplayDeltaTime);
     gRailPerfFrame.collisionMs = ElapsedMs(collisionStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterCollision");
     if (collisionStats.playerShotEnemyHits > 0 || collisionStats.playerShotObstacleHits > 0) {
@@ -4123,11 +4471,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
     scene_.UpdateCameraWorldPosition(cameraPosition);
 
     const auto vfxUpdateStart = RailPerfClock::now();
-    vfxEngine_.Update(runtimeState_.vfx, kFixedGameplayDeltaTime);
+    vfxEngine_.Update(runtimeState_.vfx, gameplayDeltaTime);
     gRailPerfFrame.vfxUpdateMs = ElapsedMs(vfxUpdateStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterVfx");
     const auto terrainUpdateStart = RailPerfClock::now();
-    UpdateTerrainAuthoring(kFixedGameplayDeltaTime);
+    UpdateTerrainAuthoring(gameplayDeltaTime);
     gRailPerfFrame.terrainUpdateMs = ElapsedMs(terrainUpdateStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterTerrain");
     if ((railShooterFrameIndex_ % 120u) == 0u) {
@@ -4139,6 +4487,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         frameState_.deltaTime);
     gRailPerfFrame.particleUpdateMs = ElapsedMs(particleUpdateStart, RailPerfClock::now());
     gRailPerfFrame.updateMs = ElapsedMs(updateStart, RailPerfClock::now());
+    imguiLayer_.CompleteEditorRuntimeFrameAdvance(!coursePreviewFrozen);
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.end");
 }
 
@@ -4177,18 +4526,21 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
     frameState_.projMatrix = debugCamera_.GetProjectionMatrix();
 
     constexpr float kFixedPreviewDeltaTime = 0.016f;
-    ProcessReleaseShowcaseControls(kFixedPreviewDeltaTime);
-    vfxEngine_.Update(runtimeState_.vfx, kFixedPreviewDeltaTime);
-    UpdateTerrainAuthoring(kFixedPreviewDeltaTime);
+    const bool editorRuntimeAdvance = imguiLayer_.ShouldAdvanceEditorRuntimeFrame();
+    const float previewDeltaTime = editorRuntimeAdvance ? kFixedPreviewDeltaTime : 0.0f;
+    ProcessReleaseShowcaseControls(previewDeltaTime);
+    vfxEngine_.Update(runtimeState_.vfx, previewDeltaTime);
+    UpdateTerrainAuthoring(previewDeltaTime);
 
     BYTE key[256] = {};
     (void)key;
 
     frameState_.viewProjectionMatrix = debugCamera_.GetViewProjectionMatrix();
-    frameState_.deltaTime = kFixedPreviewDeltaTime;
+    frameState_.deltaTime = previewDeltaTime;
     frameState_.drawCount = particleSystem_.UpdateInstances(
         frameState_.viewProjectionMatrix,
         frameState_.deltaTime);
+    imguiLayer_.CompleteEditorRuntimeFrameAdvance(editorRuntimeAdvance);
 }
 
 void AppRunLoop::BeginFrameSystems() {
@@ -4482,6 +4834,10 @@ void AppRunLoop::ResolveCompletedRailGpuTiming(uint32_t backBufferIndex) {
              << " pacingWaitMs=" << pacingWaitMs
              << " waitFrameSlotMs=" << timingSlot.waitFrameSlotMs
              << " presentMs=" << timingSlot.presentMs
+             << " presentSyncInterval=" << presentSyncInterval_
+             << " presentTearingAllowed=" << (presentTearingAllowed_ ? 1 : 0)
+             << " presentMaxFrameLatency=" << presentMaxFrameLatency_
+             << " swapBufferCount=" << swapChain_.BufferCount()
              << " renderGraphExecuteMs=" << timingSlot.renderGraphExecuteMs
              << " endAndExecuteMs=" << timingSlot.endAndExecuteMs
              << " timestampTicks=" << ticks
@@ -4924,6 +5280,429 @@ void AppRunLoop::RestoreCourseObjectSnapshot(const CourseObjectEditSnapshot& sna
     runtimeState_.terrain.selectedCourseRockCluster = snapshot.selectedRockCluster;
 }
 
+bool AppRunLoop::BeginCourseObjectGizmoEditSession() {
+    if (!courseObjectDrag_.active || courseObjectDrag_.index < 0) {
+        return false;
+    }
+
+    const std::size_t index = static_cast<std::size_t>(courseObjectDrag_.index);
+    editor::EditorObjectHandle target{};
+    if (courseObjectDrag_.type == 0 &&
+        courseObjectDrag_.index < static_cast<int>(railShooterCourse_.terrainPlacements.size())) {
+        target =
+            MakeCourseGizmoHandle(
+                editor::EditorDomainId::CourseTerrainPlacement,
+                "course-terrain",
+                "Course Terrain",
+                index,
+                runtimeState_.terrain.courseObjectEditRevision);
+    } else if (
+        courseObjectDrag_.type == 1 &&
+        courseObjectDrag_.index < static_cast<int>(railShooterCourse_.rockClusters.size())) {
+        target =
+            MakeCourseGizmoHandle(
+                editor::EditorDomainId::CourseRockCluster,
+                "course-rock",
+                "Course Rock Cluster",
+                index,
+                runtimeState_.terrain.courseObjectEditRevision);
+    } else {
+        return false;
+    }
+
+    editor::EditorPropertyRegistry propertyRegistry;
+    editor::RegisterBuiltInCourseObjectProperties(propertyRegistry);
+    std::vector<editor::EditorPropertyEditSessionProperty> properties =
+        BuildCourseGizmoSessionProperties(
+            propertyRegistry,
+            target,
+            courseObjectDrag_.type,
+            courseObjectDrag_.gizmoMode);
+    if (properties.empty()) {
+        return false;
+    }
+
+    editor::CourseObjectPropertyAdapter previewAccessor(&railShooterCourse_, &runtimeState_, false);
+    const editor::EditorPropertyEditSessionResult result =
+        courseObjectGizmoEditSession_.Begin(
+            editor::EditorPropertyEditSessionBeginRequest{
+                &previewAccessor,
+                std::move(properties),
+                CourseGizmoLabel(courseObjectDrag_.gizmoMode),
+                target,
+                true,
+                false,
+                "viewport.gizmo"});
+    return result.applied;
+}
+
+bool AppRunLoop::PreviewCourseObjectGizmoEditSession(
+    std::vector<editor::EditorPropertyEditSessionValue> values) {
+    if (!courseObjectGizmoEditSession_.IsActive()) {
+        return false;
+    }
+    editor::CourseObjectPropertyAdapter previewAccessor(&railShooterCourse_, &runtimeState_, false);
+    const editor::EditorPropertyEditSessionResult result =
+        courseObjectGizmoEditSession_.Preview(
+            editor::EditorPropertyEditSessionPreviewRequest{
+                &previewAccessor,
+                std::move(values),
+                true,
+                false,
+                "viewport.gizmo"});
+    return result.applied && result.changed;
+}
+
+bool AppRunLoop::CancelCourseObjectDragIfNeeded() {
+    if (!courseObjectDrag_.active) {
+        return false;
+    }
+
+    if (courseObjectGizmoEditSession_.IsActive()) {
+        editor::CourseObjectPropertyAdapter previewAccessor(&railShooterCourse_, &runtimeState_, false);
+        courseObjectGizmoEditSession_.Cancel(
+            editor::EditorPropertyEditSessionCancelRequest{
+                &previewAccessor,
+                false,
+                "viewport.gizmo"});
+    }
+    courseObjectDrag_.active = false;
+    courseObjectDrag_.changed = false;
+    runtimeState_.terrain.courseObjectActiveAxis = -1;
+    return true;
+}
+
+bool AppRunLoop::ApplyCourseObjectGizmoEditThroughServiceIfPossible() {
+    if (!courseObjectDrag_.changed || courseObjectDrag_.index < 0) {
+        return false;
+    }
+
+    editor::EditorPropertyRegistry propertyRegistry;
+    editor::RegisterBuiltInCourseObjectProperties(propertyRegistry);
+    editor::CourseObjectPropertyAdapter propertyAccessor(&railShooterCourse_, &runtimeState_);
+    editor::EditorPropertyEditService propertyEditService;
+
+    std::vector<editor::EditorPropertyBatchEdit> edits;
+    const auto addFloatEdit =
+        [&](const editor::EditorObjectHandle& target,
+            const char* propertyPath,
+            float beforeValue,
+            float afterValue) {
+            if (!CourseGizmoFloatChanged(beforeValue, afterValue)) {
+                return;
+            }
+            const editor::EditorPropertyDescriptor* descriptor =
+                propertyRegistry.Find(target.domain, propertyPath);
+            if (descriptor == nullptr) {
+                return;
+            }
+            edits.push_back(
+                editor::EditorPropertyBatchEdit{
+                    target,
+                    descriptor,
+                    CourseGizmoFloatValue(afterValue)});
+        };
+    const auto addVec3Edit =
+        [&](const editor::EditorObjectHandle& target,
+            const char* propertyPath,
+            const Vector3& beforeValue,
+            const Vector3& afterValue) {
+            if (!CourseGizmoVectorChanged(beforeValue, afterValue)) {
+                return;
+            }
+            const editor::EditorPropertyDescriptor* descriptor =
+                propertyRegistry.Find(target.domain, propertyPath);
+            if (descriptor == nullptr) {
+                return;
+            }
+            edits.push_back(
+                editor::EditorPropertyBatchEdit{
+                    target,
+                    descriptor,
+                    CourseGizmoVec3Value(afterValue)});
+        };
+
+    const bool scaleMode = courseObjectDrag_.gizmoMode == 1;
+    const bool rotateMode = courseObjectDrag_.gizmoMode == 2;
+    editor::EditorObjectHandle transactionTarget{};
+
+    if (courseObjectDrag_.type == 0 &&
+        courseObjectDrag_.index < static_cast<int>(railShooterCourse_.terrainPlacements.size())) {
+        const std::size_t index = static_cast<std::size_t>(courseObjectDrag_.index);
+        CourseTerrainPlacement& placement = railShooterCourse_.terrainPlacements[index];
+        const editor::EditorObjectHandle target =
+            MakeCourseGizmoHandle(
+                editor::EditorDomainId::CourseTerrainPlacement,
+                "course-terrain",
+                "Course Terrain",
+                index,
+                runtimeState_.terrain.courseObjectEditRevision);
+        transactionTarget = target;
+
+        if (rotateMode) {
+            addVec3Edit(
+                target,
+                "CourseTerrainPlacement.rotation",
+                CourseGizmoRotationDegrees(courseObjectDrag_.startRotation),
+                CourseGizmoRotationDegrees(placement.rotation));
+        } else if (scaleMode) {
+            addVec3Edit(
+                target,
+                "CourseTerrainPlacement.scale",
+                courseObjectDrag_.startScale,
+                placement.scale);
+        } else {
+            addFloatEdit(
+                target,
+                "CourseTerrainPlacement.lateralOffset",
+                courseObjectDrag_.startLateral,
+                placement.lateralOffset);
+            addFloatEdit(
+                target,
+                "CourseTerrainPlacement.verticalOffset",
+                courseObjectDrag_.startVertical,
+                placement.verticalOffset);
+            addFloatEdit(
+                target,
+                "CourseTerrainPlacement.forwardOffset",
+                courseObjectDrag_.startForward,
+                placement.forwardOffset);
+        }
+
+        const CourseTerrainPlacement finalPlacement = placement;
+        placement.distance = courseObjectDrag_.startDistance;
+        placement.lateralOffset = courseObjectDrag_.startLateral;
+        placement.verticalOffset = courseObjectDrag_.startVertical;
+        placement.forwardOffset = courseObjectDrag_.startForward;
+        placement.scale = courseObjectDrag_.startScale;
+        placement.rotation = courseObjectDrag_.startRotation;
+        if (edits.empty()) {
+            placement = finalPlacement;
+            return false;
+        }
+        const editor::EditorPropertyBatchEditResult result =
+            propertyEditService.ApplyBatch(
+                editor::EditorPropertyBatchEditRequest{
+                    &propertyAccessor,
+                    &courseObjectTransactions_,
+                    nullptr,
+                    nullptr,
+                    std::move(edits),
+                    CourseGizmoLabel(courseObjectDrag_.gizmoMode),
+                    transactionTarget,
+                    true,
+                    false,
+                    "viewport.gizmo"});
+        if (result.applied && result.changed) {
+            return true;
+        }
+        placement = finalPlacement;
+        return false;
+    }
+
+    if (courseObjectDrag_.type == 1 &&
+        courseObjectDrag_.index < static_cast<int>(railShooterCourse_.rockClusters.size())) {
+        const std::size_t index = static_cast<std::size_t>(courseObjectDrag_.index);
+        CourseRockCluster& cluster = railShooterCourse_.rockClusters[index];
+        const editor::EditorObjectHandle target =
+            MakeCourseGizmoHandle(
+                editor::EditorDomainId::CourseRockCluster,
+                "course-rock",
+                "Course Rock Cluster",
+                index,
+                runtimeState_.terrain.courseObjectEditRevision);
+        transactionTarget = target;
+
+        if (rotateMode) {
+            addVec3Edit(
+                target,
+                "CourseRockCluster.rotation",
+                CourseGizmoRotationDegrees(courseObjectDrag_.startRotation),
+                CourseGizmoRotationDegrees(cluster.rotation));
+        } else if (scaleMode) {
+            addFloatEdit(
+                target,
+                "CourseRockCluster.minScale",
+                courseObjectDrag_.startMinScale,
+                cluster.minScale);
+            addFloatEdit(
+                target,
+                "CourseRockCluster.maxScale",
+                courseObjectDrag_.startMaxScale,
+                cluster.maxScale);
+            addVec3Edit(
+                target,
+                "CourseRockCluster.spread",
+                courseObjectDrag_.startSpread,
+                cluster.spread);
+        } else {
+            addFloatEdit(
+                target,
+                "CourseRockCluster.clearLaneRadius",
+                courseObjectDrag_.startClearLaneRadius,
+                cluster.clearLaneRadius);
+            addFloatEdit(
+                target,
+                "CourseRockCluster.distance",
+                courseObjectDrag_.startDistance,
+                cluster.distance);
+            addVec3Edit(
+                target,
+                "CourseRockCluster.spread",
+                courseObjectDrag_.startSpread,
+                cluster.spread);
+        }
+
+        const CourseRockCluster finalCluster = cluster;
+        cluster.distance = courseObjectDrag_.startDistance;
+        cluster.minScale = courseObjectDrag_.startMinScale;
+        cluster.maxScale = courseObjectDrag_.startMaxScale;
+        cluster.spread = courseObjectDrag_.startSpread;
+        cluster.clearLaneRadius = courseObjectDrag_.startClearLaneRadius;
+        cluster.rotation = courseObjectDrag_.startRotation;
+        if (edits.empty()) {
+            cluster = finalCluster;
+            return false;
+        }
+        const editor::EditorPropertyBatchEditResult result =
+            propertyEditService.ApplyBatch(
+                editor::EditorPropertyBatchEditRequest{
+                    &propertyAccessor,
+                    &courseObjectTransactions_,
+                    nullptr,
+                    nullptr,
+                    std::move(edits),
+                    CourseGizmoLabel(courseObjectDrag_.gizmoMode),
+                    transactionTarget,
+                    true,
+                    false,
+                    "viewport.gizmo"});
+        if (result.applied && result.changed) {
+            return true;
+        }
+        cluster = finalCluster;
+        return false;
+    }
+
+    return false;
+}
+
+void AppRunLoop::StageCourseObjectGizmoTransactionIfNeeded() {
+    if (!courseObjectDrag_.changed || courseObjectDrag_.index < 0) {
+        return;
+    }
+
+    editor::EditorPropertyChange change{};
+    change.displayName = CourseGizmoLabel(courseObjectDrag_.gizmoMode);
+    change.valueType = "transform";
+    change.sourceRevision = runtimeState_.terrain.courseObjectEditRevision;
+
+    const char* suffix = CourseGizmoPropertySuffix(courseObjectDrag_.gizmoMode);
+    if (courseObjectDrag_.type == 0 &&
+        courseObjectDrag_.index < static_cast<int>(railShooterCourse_.terrainPlacements.size())) {
+        const std::size_t index = static_cast<std::size_t>(courseObjectDrag_.index);
+        const CourseTerrainPlacement& placement = railShooterCourse_.terrainPlacements[index];
+        change.target.domain = editor::EditorDomainId::CourseTerrainPlacement;
+        change.target.stableId =
+            editor::BuildStableIndexedId("course-terrain", static_cast<uint64_t>(index));
+        change.target.localIndex = static_cast<uint64_t>(index);
+        change.target.generation = runtimeState_.terrain.courseObjectEditRevision;
+        change.target.displayName = "Course Terrain #" + std::to_string(index);
+        change.propertyPath = std::string("CourseTerrainPlacement.transform.") + suffix;
+        change.beforeValue =
+            FormatGizmoTerrainTransform(
+                courseObjectDrag_.startDistance,
+                courseObjectDrag_.startLateral,
+                courseObjectDrag_.startVertical,
+                courseObjectDrag_.startForward,
+                courseObjectDrag_.startScale,
+                courseObjectDrag_.startRotation);
+        change.afterValue =
+            FormatGizmoTerrainTransform(
+                placement.distance,
+                placement.lateralOffset,
+                placement.verticalOffset,
+                placement.forwardOffset,
+                placement.scale,
+                placement.rotation);
+    } else if (courseObjectDrag_.type == 1 &&
+        courseObjectDrag_.index < static_cast<int>(railShooterCourse_.rockClusters.size())) {
+        const std::size_t index = static_cast<std::size_t>(courseObjectDrag_.index);
+        const CourseRockCluster& cluster = railShooterCourse_.rockClusters[index];
+        change.target.domain = editor::EditorDomainId::CourseRockCluster;
+        change.target.stableId =
+            editor::BuildStableIndexedId("course-rock", static_cast<uint64_t>(index));
+        change.target.localIndex = static_cast<uint64_t>(index);
+        change.target.generation = runtimeState_.terrain.courseObjectEditRevision;
+        change.target.displayName = "Course Rock Cluster #" + std::to_string(index);
+        change.propertyPath = std::string("CourseRockCluster.transform.") + suffix;
+        change.beforeValue =
+            FormatGizmoRockTransform(
+                courseObjectDrag_.startDistance,
+                courseObjectDrag_.startMinScale,
+                courseObjectDrag_.startMaxScale,
+                courseObjectDrag_.startSpread,
+                courseObjectDrag_.startClearLaneRadius,
+                courseObjectDrag_.startRotation);
+        change.afterValue =
+            FormatGizmoRockTransform(
+                cluster.distance,
+                cluster.minScale,
+                cluster.maxScale,
+                cluster.spread,
+                cluster.clearLaneRadius,
+                cluster.rotation);
+    } else {
+        return;
+    }
+
+    if (change.beforeValue != change.afterValue) {
+        courseObjectTransactions_.StagePropertyDelta(std::move(change));
+    }
+}
+
+bool AppRunLoop::CommitCourseObjectDragIfNeeded() {
+    if (!courseObjectDrag_.active) {
+        return false;
+    }
+
+    bool committed = false;
+    if (courseObjectDrag_.changed) {
+        if (courseObjectGizmoEditSession_.IsActive()) {
+            editor::CourseObjectPropertyAdapter commitAccessor(&railShooterCourse_, &runtimeState_, true);
+            editor::CourseObjectPropertyAdapter previewAccessor(&railShooterCourse_, &runtimeState_, false);
+            const editor::EditorPropertyEditSessionResult result =
+                courseObjectGizmoEditSession_.Commit(
+                    editor::EditorPropertyEditSessionCommitRequest{
+                        &commitAccessor,
+                        &previewAccessor,
+                        &courseObjectTransactions_,
+                        nullptr,
+                        nullptr,
+                        true,
+                        false,
+                        "viewport.gizmo"});
+            committed = result.applied && result.changed;
+        } else if (!ApplyCourseObjectGizmoEditThroughServiceIfPossible()) {
+            StageCourseObjectGizmoTransactionIfNeeded();
+            ++runtimeState_.terrain.courseObjectEditRevision;
+            committed = true;
+        }
+    } else if (courseObjectGizmoEditSession_.IsActive()) {
+        editor::CourseObjectPropertyAdapter previewAccessor(&railShooterCourse_, &runtimeState_, false);
+        courseObjectGizmoEditSession_.Cancel(
+            editor::EditorPropertyEditSessionCancelRequest{
+                &previewAccessor,
+                false,
+                "viewport.gizmo"});
+    }
+
+    courseObjectDrag_.active = false;
+    courseObjectDrag_.changed = false;
+    runtimeState_.terrain.courseObjectActiveAxis = -1;
+    return committed;
+}
+
 void AppRunLoop::EnsureCourseObjectHistoryBaseline() {
     if (courseObjectHistoryInitialized_) {
         return;
@@ -4953,20 +5732,41 @@ void AppRunLoop::CommitCourseObjectHistoryIfNeeded() {
     }
     courseObjectTransactions_.SetMaxHistory(kMaxCourseObjectUndo);
     if (courseObjectTransactions_.HasStagedPropertyDelta()) {
-        editor::EditorPropertyChange propertyChange = courseObjectTransactions_.ConsumeStagedPropertyDelta();
-        if (propertyChange.target.domain == editor::EditorDomainId::Unknown) {
-            propertyChange.target.domain = editor::EditorDomainId::CourseTerrainPlacement;
-            propertyChange.target.stableId = "course-object-history";
-            propertyChange.target.displayName = "Course Object History";
+        std::vector<editor::EditorPropertyChange> propertyChanges =
+            courseObjectTransactions_.ConsumeStagedPropertyDeltas();
+        for (editor::EditorPropertyChange& propertyChange : propertyChanges) {
+            if (propertyChange.target.domain == editor::EditorDomainId::Unknown) {
+                propertyChange.target.domain = editor::EditorDomainId::CourseTerrainPlacement;
+                propertyChange.target.stableId = "course-object-history";
+                propertyChange.target.displayName = "Course Object History";
+            }
+            propertyChange.target.generation = editor.courseObjectEditRevision;
         }
-        propertyChange.target.generation = editor.courseObjectEditRevision;
-        courseObjectTransactions_.PushPropertyDelta(
-            propertyChange.displayName.empty() ? "Course Property Edit" : propertyChange.displayName,
-            std::move(propertyChange.target),
-            std::move(propertyChange.propertyPath),
-            std::move(propertyChange.valueType),
-            std::move(propertyChange.beforeValue),
-            std::move(propertyChange.afterValue));
+        if (propertyChanges.size() == 1) {
+            editor::EditorPropertyChange propertyChange = std::move(propertyChanges.front());
+            courseObjectTransactions_.PushPropertyDelta(
+                propertyChange.displayName.empty() ? "Course Property Edit" : propertyChange.displayName,
+                std::move(propertyChange.target),
+                std::move(propertyChange.propertyPath),
+                std::move(propertyChange.valueType),
+                std::move(propertyChange.beforeValue),
+                std::move(propertyChange.afterValue));
+        } else if (!propertyChanges.empty()) {
+            const editor::EditorPropertyChange& firstChange = propertyChanges.front();
+            editor::EditorObjectHandle transactionTarget{};
+            transactionTarget.domain = firstChange.target.domain;
+            transactionTarget.stableId = firstChange.target.stableId;
+            transactionTarget.localIndex = firstChange.target.localIndex;
+            transactionTarget.generation = editor.courseObjectEditRevision;
+            transactionTarget.displayName = firstChange.target.displayName;
+            const std::string transactionLabel = firstChange.displayName.empty()
+                ? std::string("Course Property Batch Edit")
+                : firstChange.displayName;
+            courseObjectTransactions_.PushMultiPropertyDelta(
+                transactionLabel,
+                std::move(transactionTarget),
+                std::move(propertyChanges));
+        }
     } else {
         editor::EditorObjectHandle transactionTarget{};
         transactionTarget.domain = editor::EditorDomainId::CourseTerrainPlacement;
@@ -4989,12 +5789,65 @@ void AppRunLoop::CommitCourseObjectHistoryIfNeeded() {
 void AppRunLoop::ProcessCourseObjectUndoRedo() {
     EnsureCourseObjectHistoryBaseline();
     TerrainAuthoringState& editor = runtimeState_.terrain;
+    editor::EditorPropertyRegistry propertyRegistry;
+    editor::RegisterBuiltInCourseObjectProperties(propertyRegistry);
+    RegisterCourseObjectViewportGizmoProperties(propertyRegistry);
+    editor::CourseObjectPropertyAdapter propertyAccessor(&railShooterCourse_, &runtimeState_);
+    editor::EditorPropertyEditService propertyEditService;
+
+    const auto applyPropertyDelta =
+        [&](const editor::EditorTransactionRecord& record,
+            editor::EditorTransactionApplyMode mode) {
+            if (record.payload.kind != editor::EditorTransactionPayloadKind::PropertyDelta &&
+                record.payload.kind != editor::EditorTransactionPayloadKind::MultiPropertyDelta) {
+                return false;
+            }
+            if (mode == editor::EditorTransactionApplyMode::Undo && courseObjectUndoStack_.empty()) {
+                return false;
+            }
+            if (mode == editor::EditorTransactionApplyMode::Redo && courseObjectRedoStack_.empty()) {
+                return false;
+            }
+
+            const CourseObjectEditSnapshot currentSnapshot = CaptureCourseObjectSnapshot();
+            const editor::EditorPropertyApplyDeltaResult result =
+                propertyEditService.ApplyDelta(
+                    editor::EditorPropertyApplyDeltaRequest{
+                        &propertyAccessor,
+                        nullptr,
+                        nullptr,
+                        &propertyRegistry,
+                        &record,
+                        mode,
+                        true,
+                        false,
+                        "course.undoRedo"});
+            if (!result.applied) {
+                return false;
+            }
+
+            if (mode == editor::EditorTransactionApplyMode::Undo) {
+                courseObjectRedoStack_.push_back(currentSnapshot);
+                courseObjectUndoStack_.pop_back();
+            } else {
+                courseObjectUndoStack_.push_back(currentSnapshot);
+                courseObjectRedoStack_.pop_back();
+            }
+            courseObjectHistoryBaseline_ = CaptureCourseObjectSnapshot();
+            courseObjectHistoryRevision_ = editor.courseObjectEditRevision;
+            return true;
+        };
 
     if (editor.courseObjectUndoRequested) {
         editor.courseObjectUndoRequested = false;
         if (!courseObjectUndoStack_.empty() &&
             courseObjectTransactions_.Undo(
-                [this, &editor](const editor::EditorTransactionRecord&, editor::EditorTransactionApplyMode) {
+                [this, &editor, &applyPropertyDelta](
+                    const editor::EditorTransactionRecord& record,
+                    editor::EditorTransactionApplyMode mode) {
+                    if (applyPropertyDelta(record, mode)) {
+                        return true;
+                    }
                     if (courseObjectUndoStack_.empty()) {
                         return false;
                     }
@@ -5023,7 +5876,12 @@ void AppRunLoop::ProcessCourseObjectUndoRedo() {
         editor.courseObjectRedoRequested = false;
         if (!courseObjectRedoStack_.empty() &&
             courseObjectTransactions_.Redo(
-                [this, &editor](const editor::EditorTransactionRecord&, editor::EditorTransactionApplyMode) {
+                [this, &editor, &applyPropertyDelta](
+                    const editor::EditorTransactionRecord& record,
+                    editor::EditorTransactionApplyMode mode) {
+                    if (applyPropertyDelta(record, mode)) {
+                        return true;
+                    }
                     if (courseObjectRedoStack_.empty()) {
                         return false;
                     }
@@ -5058,10 +5916,12 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
     const editor::EditorViewportAuthoringInputGuard inputGuard =
         editor::MakeEditorViewportAuthoringInputGuard(!editor.courseObjectAuthoringInputLocked);
     if (!inputGuard.CanMutate()) {
+        if (CommitCourseObjectDragIfNeeded()) {
+            CommitCourseObjectHistoryIfNeeded();
+        }
         editor.courseObjectUndoRequested = false;
         editor.courseObjectRedoRequested = false;
         editor.courseObjectActiveAxis = -1;
-        courseObjectDrag_.active = false;
         courseObjectDrag_.changed = false;
         previousCourseEditorLeftMouseDown_ = leftMouseDown;
         return;
@@ -5077,14 +5937,14 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
     if (!inputGuard.CanUseViewportInput(editor.enableCourseObjectViewportEditing) ||
         hwnd_ == nullptr ||
         railPath_.Length() <= 0.0f) {
-        courseObjectDrag_.active = false;
+        CancelCourseObjectDragIfNeeded();
         previousCourseEditorLeftMouseDown_ = leftMouseDown;
         return;
     }
 
     POINT cursor{};
     if (!GetCursorPos(&cursor) || !ScreenToClient(hwnd_, &cursor)) {
-        courseObjectDrag_.active = false;
+        CancelCourseObjectDragIfNeeded();
         previousCourseEditorLeftMouseDown_ = leftMouseDown;
         return;
     }
@@ -5151,6 +6011,7 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
             courseObjectDrag_.type = hit.type;
             courseObjectDrag_.index = hit.index;
             courseObjectDrag_.axis = pickedAxis;
+            courseObjectDrag_.gizmoMode = editor.courseObjectGizmoMode;
             courseObjectDrag_.startMouse = viewportCursor;
             if (hit.type == 0 &&
                 hit.index >= 0 &&
@@ -5175,17 +6036,21 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                 courseObjectDrag_.startClearLaneRadius = cluster.clearLaneRadius;
                 courseObjectDrag_.startRotation = cluster.rotation;
             }
+            if (!BeginCourseObjectGizmoEditSession()) {
+                courseObjectDrag_.active = false;
+                editor.courseObjectActiveAxis = -1;
+            }
         } else {
             editor.selectedCourseTerrainPlacement = -1;
             editor.selectedCourseRockCluster = -1;
             editor.courseObjectActiveAxis = -1;
-            courseObjectDrag_.active = false;
+            CancelCourseObjectDragIfNeeded();
         }
     }
 
     if (courseObjectDrag_.active && leftMouseDown) {
         if (!cursorInViewport) {
-            courseObjectDrag_.active = false;
+            CancelCourseObjectDragIfNeeded();
             previousCourseEditorLeftMouseDown_ = leftMouseDown;
             return;
         }
@@ -5206,6 +6071,14 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
             courseObjectDrag_.index < static_cast<int>(railShooterCourse_.terrainPlacements.size())) {
             CourseTerrainPlacement& placement =
                 railShooterCourse_.terrainPlacements[static_cast<size_t>(courseObjectDrag_.index)];
+            const std::size_t index = static_cast<std::size_t>(courseObjectDrag_.index);
+            const editor::EditorObjectHandle target =
+                MakeCourseGizmoHandle(
+                    editor::EditorDomainId::CourseTerrainPlacement,
+                    "course-terrain",
+                    "Course Terrain",
+                    index,
+                    runtimeState_.terrain.courseObjectEditRevision);
             if (rotateMode) {
                 Vector3 rotation = courseObjectDrag_.startRotation;
                 float delta = signedDrag * (std::max)(0.0001f, editor.courseObjectRotateSensitivity);
@@ -5226,7 +6099,14 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     placement.rotation.x != rotation.x ||
                     placement.rotation.y != rotation.y ||
                     placement.rotation.z != rotation.z;
-                placement.rotation = rotation;
+                changed =
+                    PreviewCourseObjectGizmoEditSession(
+                        {
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseTerrainPlacement.rotation",
+                                CourseGizmoVec3Value(CourseGizmoRotationDegrees(rotation))},
+                        }) || changed;
             } else if (scaleMode) {
                 Vector3 scale = Scale(courseObjectDrag_.startScale, scaleFactor);
                 if (axis == 0) {
@@ -5249,7 +6129,14 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     placement.scale.x != scale.x ||
                     placement.scale.y != scale.y ||
                     placement.scale.z != scale.z;
-                placement.scale = scale;
+                changed =
+                    PreviewCourseObjectGizmoEditSession(
+                        {
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseTerrainPlacement.scale",
+                                CourseGizmoVec3Value(scale)},
+                        }) || changed;
             } else {
                 float lateral = courseObjectDrag_.startLateral + dx * moveSensitivity;
                 float vertical = courseObjectDrag_.startVertical;
@@ -5279,15 +6166,36 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     placement.lateralOffset != lateral ||
                     placement.verticalOffset != vertical ||
                     placement.forwardOffset != forward;
-                placement.lateralOffset = lateral;
-                placement.verticalOffset = vertical;
-                placement.forwardOffset = forward;
+                changed =
+                    PreviewCourseObjectGizmoEditSession(
+                        {
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseTerrainPlacement.lateralOffset",
+                                CourseGizmoFloatValue(lateral)},
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseTerrainPlacement.verticalOffset",
+                                CourseGizmoFloatValue(vertical)},
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseTerrainPlacement.forwardOffset",
+                                CourseGizmoFloatValue(forward)},
+                        }) || changed;
             }
         } else if (courseObjectDrag_.type == 1 &&
             courseObjectDrag_.index >= 0 &&
             courseObjectDrag_.index < static_cast<int>(railShooterCourse_.rockClusters.size())) {
             CourseRockCluster& cluster =
                 railShooterCourse_.rockClusters[static_cast<size_t>(courseObjectDrag_.index)];
+            const std::size_t index = static_cast<std::size_t>(courseObjectDrag_.index);
+            const editor::EditorObjectHandle target =
+                MakeCourseGizmoHandle(
+                    editor::EditorDomainId::CourseRockCluster,
+                    "course-rock",
+                    "Course Rock Cluster",
+                    index,
+                    runtimeState_.terrain.courseObjectEditRevision);
             if (rotateMode) {
                 Vector3 rotation = courseObjectDrag_.startRotation;
                 float delta = signedDrag * (std::max)(0.0001f, editor.courseObjectRotateSensitivity);
@@ -5308,7 +6216,14 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     cluster.rotation.x != rotation.x ||
                     cluster.rotation.y != rotation.y ||
                     cluster.rotation.z != rotation.z;
-                cluster.rotation = rotation;
+                changed =
+                    PreviewCourseObjectGizmoEditSession(
+                        {
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseRockCluster.rotation",
+                                CourseGizmoVec3Value(CourseGizmoRotationDegrees(rotation))},
+                        }) || changed;
             } else if (scaleMode) {
                 float minScale = courseObjectDrag_.startMinScale * scaleFactor;
                 float maxScale = courseObjectDrag_.startMaxScale * scaleFactor;
@@ -5345,9 +6260,22 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     cluster.spread.x != spread.x ||
                     cluster.spread.y != spread.y ||
                     cluster.spread.z != spread.z;
-                cluster.minScale = minScale;
-                cluster.maxScale = maxScale;
-                cluster.spread = spread;
+                changed =
+                    PreviewCourseObjectGizmoEditSession(
+                        {
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseRockCluster.minScale",
+                                CourseGizmoFloatValue(minScale)},
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseRockCluster.maxScale",
+                                CourseGizmoFloatValue(maxScale)},
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseRockCluster.spread",
+                                CourseGizmoVec3Value(spread)},
+                        }) || changed;
             } else {
                 float clearLane = courseObjectDrag_.startClearLaneRadius + dx * moveSensitivity;
                 float distance = courseObjectDrag_.startDistance;
@@ -5381,9 +6309,22 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     cluster.spread.x != spread.x ||
                     cluster.spread.y != spread.y ||
                     cluster.spread.z != spread.z;
-                cluster.clearLaneRadius = clearLane;
-                cluster.distance = distance;
-                cluster.spread = spread;
+                changed =
+                    PreviewCourseObjectGizmoEditSession(
+                        {
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseRockCluster.clearLaneRadius",
+                                CourseGizmoFloatValue(clearLane)},
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseRockCluster.distance",
+                                CourseGizmoFloatValue(distance)},
+                            editor::EditorPropertyEditSessionValue{
+                                target,
+                                "CourseRockCluster.spread",
+                                CourseGizmoVec3Value(spread)},
+                        }) || changed;
             }
         }
 
@@ -5393,11 +6334,7 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
     }
 
     if (leftMouseReleased) {
-        if (courseObjectDrag_.active && courseObjectDrag_.changed) {
-            ++editor.courseObjectEditRevision;
-        }
-        courseObjectDrag_.active = false;
-        editor.courseObjectActiveAxis = -1;
+        CommitCourseObjectDragIfNeeded();
     }
     previousCourseEditorLeftMouseDown_ = leftMouseDown;
     CommitCourseObjectHistoryIfNeeded();
@@ -5795,6 +6732,14 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     const auto renderStart = RailPerfClock::now();
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.begin");
     BeginFrameSystems();
+    bool imguiFrameOpen = true;
+    const auto closeImguiFrameOnAbort = [&]() {
+        if (!imguiFrameOpen) {
+            return;
+        }
+        imguiLayer_.EndFrame();
+        imguiFrameOpen = false;
+    };
     imguiLayer_.RefreshEditorViewportRenderTargetLayout();
     ApplyEditorViewportRenderTargetForRender();
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterBeginFrameSystems");
@@ -5805,6 +6750,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     if (!WaitForFrameSlot(backBufferIndex)) {
         gRailPerfFrame.waitFrameSlotMs = ElapsedMs(waitStart, RailPerfClock::now());
         LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.waitForFrameSlotFailed");
+        closeImguiFrameOnAbort();
         return;
     }
     gRailPerfFrame.waitFrameSlotMs = ElapsedMs(waitStart, RailPerfClock::now());
@@ -5816,6 +6762,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     gRailPerfFrame.commandListBeginMs = ElapsedMs(commandBeginStart, RailPerfClock::now());
     if (commandList == nullptr) {
         LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.commandListBeginFailed");
+        closeImguiFrameOnAbort();
         return;
     }
     BeginRailGpuTiming(commandList.Get(), backBufferIndex);
@@ -5859,6 +6806,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         runtimeState_.useMonsterBall ? scene_.textureSrvHandleGPU2 : scene_.textureSrvHandleGPU;
 
     const auto imguiStart = RailPerfClock::now();
+    const auto imguiBuildUiStart = RailPerfClock::now();
     imguiLayer_.BuildUi(
         AppImGuiFrameContext{
             &runtimeState_,
@@ -5887,6 +6835,9 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             &vfxEngine_.GpuParticles(),
             &frameState_,
             srvDescriptorHeap_.Get(),
+            commandList.Get(),
+            fence_ != nullptr ? fence_->GetCompletedValue() : 0,
+            nextFrameFenceValue_,
             spriteTextureHandle,
             engineContext_.GetDepthSrvGpuHandle(),
             &railShooterCourse_,
@@ -5897,6 +6848,9 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             &railShooterCourseLoadStatus_,
             &railShooterCoursePath_,
             railShooterDistance_,
+            (runtimeState_.terrain.freezeCourseRuntime || !imguiLayer_.ShouldAdvanceEditorRuntimeFrame())
+                ? 0.0f
+                : railShooterSpeedDirector_.LastFrame().smoothedSpeed,
             railPath_.Length(),
             [&](std::string* errorMessage) {
                 return SaveRailShooterCourse(errorMessage);
@@ -5923,8 +6877,15 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             [&]() {
                 DrawRailLockOnDebugPanel();
             },
+            [&](ImDrawList* drawList) {
+                DrawRailVisibilityDebugOverlay(drawList);
+            },
             &courseObjectTransactions_});
+    gRailPerfFrame.imguiBuildUiMs = ElapsedMs(imguiBuildUiStart, RailPerfClock::now());
+    const auto imguiEndFrameStart = RailPerfClock::now();
     imguiLayer_.EndFrame();
+    imguiFrameOpen = false;
+    gRailPerfFrame.imguiEndFrameMs = ElapsedMs(imguiEndFrameStart, RailPerfClock::now());
     gRailPerfFrame.imguiMs = ElapsedMs(imguiStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterImgui");
 
@@ -6113,7 +7074,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterSignalFrame");
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.beforePresent");
     const auto presentStart = RailPerfClock::now();
-    const HRESULT presentHr = swapChain_.Present(dev_, 1);
+    const HRESULT presentHr = swapChain_.Present(dev_, presentSyncInterval_);
     gRailPerfFrame.presentMs = ElapsedMs(presentStart, RailPerfClock::now());
     gRailPerfFrame.renderMs = ElapsedMs(renderStart, RailPerfClock::now());
     RecordRailCameraTuningSample(

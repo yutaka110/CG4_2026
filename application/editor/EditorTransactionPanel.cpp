@@ -42,6 +42,31 @@ void DrawEditorTransactionPanel(const EditorTransactionStack& transactions) {
                 "Value: %s -> %s",
                 last->payload.beforeSummary.c_str(),
                 last->payload.afterSummary.c_str());
+        } else if (last->payload.kind == EditorTransactionPayloadKind::MultiPropertyDelta) {
+            ImGui::Text("Properties: %u", static_cast<unsigned int>(last->payload.propertyChanges.size()));
+            for (const EditorPropertyChange& change : last->payload.propertyChanges) {
+                ImGui::BulletText(
+                    "%s  %s -> %s",
+                    change.propertyPath.c_str(),
+                    change.beforeValue.c_str(),
+                    change.afterValue.c_str());
+            }
+        } else if (last->payload.kind == EditorTransactionPayloadKind::AssetMutation) {
+            const EditorAssetMutationChange& change = last->payload.assetMutation;
+            ImGui::Text(
+                "Asset: %s %s:%s",
+                ToString(change.kind),
+                ToString(change.beforeRecord.kind),
+                change.beforeRecord.id.c_str());
+            if (change.kind != EditorAssetMutationKind::Delete) {
+                ImGui::Text(
+                    "After: %s:%s",
+                    ToString(change.afterRecord.kind),
+                    change.afterRecord.id.c_str());
+            }
+            ImGui::Text(
+                "Reference rewrites: %u",
+                static_cast<unsigned int>(change.dependencyRewrites.size()));
         }
     } else {
         ImGui::TextUnformatted("Last: none");
@@ -49,10 +74,11 @@ void DrawEditorTransactionPanel(const EditorTransactionStack& transactions) {
 
     if (const EditorPropertyChange* staged = transactions.StagedPropertyDelta()) {
         ImGui::Text(
-            "Staged property: %s  %s -> %s",
+            "Staged property: %s  %s -> %s  Count %u",
             staged->propertyPath.c_str(),
             staged->beforeValue.c_str(),
-            staged->afterValue.c_str());
+            staged->afterValue.c_str(),
+            static_cast<unsigned int>(transactions.StagedPropertyDeltaCount()));
     }
 
     DrawLegacyMirror(transactions.LegacyMirror());

@@ -36,6 +36,7 @@
 #include "AppSceneState.h"
 #include "AppSceneStateManager.h"
 #include "VfxEngine.h"
+#include "editor/EditorPropertyEditSession.h"
 #include "editor/EditorTransactionStack.h"
 #include "editor/EditorViewportAuthoringInputGuard.h"
 
@@ -47,6 +48,7 @@ class AppRenderResources;
 struct AppRuntimeState;
 class AppSceneResources;
 class EngineContext;
+struct ImDrawList;
 
 class AppRunLoop : private AppSceneHost {
 public:
@@ -106,6 +108,12 @@ private:
     CourseObjectEditSnapshot CaptureCourseObjectSnapshot() const;
     std::string BuildCourseObjectSnapshotSummary(const CourseObjectEditSnapshot& snapshot) const;
     void RestoreCourseObjectSnapshot(const CourseObjectEditSnapshot& snapshot);
+    bool ApplyCourseObjectGizmoEditThroughServiceIfPossible();
+    bool BeginCourseObjectGizmoEditSession();
+    bool PreviewCourseObjectGizmoEditSession(std::vector<editor::EditorPropertyEditSessionValue> values);
+    bool CancelCourseObjectDragIfNeeded();
+    void StageCourseObjectGizmoTransactionIfNeeded();
+    bool CommitCourseObjectDragIfNeeded();
     void EnsureCourseObjectHistoryBaseline();
     void CommitCourseObjectHistoryIfNeeded();
     void ProcessCourseObjectUndoRedo();
@@ -128,7 +136,7 @@ private:
     void ApplyRailShooterVisualPresets(float distance);
     void DrawRailLockOnHud();
     void DrawRailLockOnDebugPanel();
-    void DrawRailVisibilityDebugOverlay();
+    void DrawRailVisibilityDebugOverlay(ImDrawList* drawList = nullptr);
     bool EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList);
     bool BuildRailLockOnHudAtlasQuads();
     void RegisterRailLockOnHudPass(
@@ -153,6 +161,8 @@ private:
     void BeginRailGpuTiming(ID3D12GraphicsCommandList* commandList, uint32_t backBufferIndex);
     void EndRailGpuTiming(ID3D12GraphicsCommandList* commandList, uint32_t backBufferIndex);
     void CaptureRailGpuTimingCpuMetadata(uint32_t backBufferIndex);
+    void ConfigureEditorPresentPolicy();
+    void LogEditorPresentPolicy() const;
     bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
@@ -231,6 +241,10 @@ private:
     uint32_t vfxTelemetryFrameIndex_ = 0;
     std::vector<uint64_t> frameFenceValues_;
     uint64_t nextFrameFenceValue_ = 1;
+    uint32_t presentSyncInterval_ = 1;
+    uint32_t presentMaxFrameLatency_ = 0;
+    bool editorLowLatencyPresent_ = false;
+    bool presentTearingAllowed_ = false;
     struct RailGpuTimingSlot {
         bool pending = false;
         uint32_t frame = 0;
@@ -373,6 +387,7 @@ private:
         int type = -1;
         int index = -1;
         int axis = -1;
+        int gizmoMode = 0;
         POINT startMouse{};
         float startDistance = 0.0f;
         float startLateral = 0.0f;
@@ -392,6 +407,7 @@ private:
     uint32_t courseObjectHistoryRevision_ = 0;
     bool courseObjectHistoryInitialized_ = false;
     CourseObjectDragState courseObjectDrag_{};
+    editor::EditorPropertyEditSession courseObjectGizmoEditSession_{};
     bool previousCourseEditorLeftMouseDown_ = false;
     bool releaseShowcaseInitialized_ = false;
     bool releaseShowcaseTitleDirty_ = true;

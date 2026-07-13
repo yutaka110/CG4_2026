@@ -110,9 +110,12 @@ LRESULT Window::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_DROPFILES: {
         if (onDrop_) {
             HDROP drop = (HDROP)w;
-            wchar_t path[MAX_PATH]{};
-            if (DragQueryFileW(drop, 0, path, MAX_PATH)) {
-                onDrop_(path);
+            const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+            for (UINT index = 0; index < count; ++index) {
+                wchar_t path[MAX_PATH]{};
+                if (DragQueryFileW(drop, index, path, MAX_PATH)) {
+                    onDrop_(path);
+                }
             }
             DragFinish(drop);
         }

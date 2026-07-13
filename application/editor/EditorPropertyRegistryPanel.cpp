@@ -15,8 +15,24 @@ void DrawTransactionPropertyLookup(
 
     const EditorTransactionRecord* last = transactions->LastTransaction();
     if (last == nullptr ||
-        last->payload.kind != EditorTransactionPayloadKind::PropertyDelta) {
+        (last->payload.kind != EditorTransactionPayloadKind::PropertyDelta &&
+            last->payload.kind != EditorTransactionPayloadKind::MultiPropertyDelta)) {
         ImGui::TextUnformatted("Last property transaction: none");
+        return;
+    }
+
+    if (last->payload.kind == EditorTransactionPayloadKind::MultiPropertyDelta) {
+        ImGui::Text(
+            "Last property transaction: batch (%u)",
+            static_cast<unsigned int>(last->payload.propertyChanges.size()));
+        for (const EditorPropertyChange& change : last->payload.propertyChanges) {
+            const EditorPropertyDescriptor* descriptor =
+                registry.Find(change.target.domain, change.propertyPath);
+            ImGui::BulletText(
+                "%s: %s",
+                change.propertyPath.c_str(),
+                descriptor != nullptr ? "resolved" : "descriptor missing");
+        }
         return;
     }
 
@@ -53,7 +69,7 @@ void DrawEditorPropertyRegistryPanel(
 
     if (!ImGui::BeginTable(
             "EditorPropertyRegistryTable",
-            7,
+            9,
             ImGuiTableFlags_Borders |
                 ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_Resizable |
@@ -68,6 +84,8 @@ void DrawEditorPropertyRegistryPanel(
     ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 72.0f);
     ImGui::TableSetupColumn("Category", ImGuiTableColumnFlags_WidthFixed, 130.0f);
     ImGui::TableSetupColumn("Options", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+    ImGui::TableSetupColumn("Flags", ImGuiTableColumnFlags_WidthFixed, 96.0f);
+    ImGui::TableSetupColumn("Default", ImGuiTableColumnFlags_WidthFixed, 96.0f);
     ImGui::TableSetupColumn("Range");
     ImGui::TableHeadersRow();
 
@@ -89,6 +107,21 @@ void DrawEditorPropertyRegistryPanel(
         } else {
             ImGui::TextUnformatted("-");
         }
+        ImGui::TableNextColumn();
+        ImGui::Text(
+            "%s%s%s",
+            descriptor.readOnly ? "R" : "-",
+            descriptor.runtimeOnly ? "T" : "-",
+            descriptor.resettable ? "D" : "-");
+        if ((!descriptor.readOnlyReason.empty() || !descriptor.validationHint.empty()) && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "%s%s%s",
+                descriptor.readOnlyReason.empty() ? "" : descriptor.readOnlyReason.c_str(),
+                (!descriptor.readOnlyReason.empty() && !descriptor.validationHint.empty()) ? "\n" : "",
+                descriptor.validationHint.empty() ? "" : descriptor.validationHint.c_str());
+        }
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(descriptor.defaultValue.empty() ? "-" : descriptor.defaultValue.c_str());
         ImGui::TableNextColumn();
         if (descriptor.hasRange) {
             ImGui::Text("%.2f..%.2f", descriptor.minValue, descriptor.maxValue);

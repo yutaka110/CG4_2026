@@ -2,12 +2,25 @@
 
 #include "EditorAssetRegistry.h"
 #include "EditorAssetSelection.h"
+#include "EditorAssetThumbnailService.h"
+
+#include <filesystem>
+#include <vector>
+#include <Windows.h>
 
 namespace editor {
 
+class EditorNotificationCenter;
+class EditorTransactionStack;
+
 struct EditorAssetBrowserPanelContext {
-    const EditorAssetRegistry* registry = nullptr;
+    EditorAssetRegistry* registry = nullptr;
     EditorAssetSelection* assetSelection = nullptr;
+    EditorAssetThumbnailService* thumbnails = nullptr;
+    EditorTransactionStack* transactions = nullptr;
+    EditorNotificationCenter* notifications = nullptr;
+    HWND nativeDialogOwner = nullptr;
+    std::vector<std::filesystem::path>* pendingExternalImportPaths = nullptr;
 };
 
 void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context);

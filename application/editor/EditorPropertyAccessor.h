@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 #include "EditorPropertyRegistry.h"
 #include "EditorPropertyValue.h"
@@ -28,5 +29,10 @@ public:
 std::string FormatEditorPropertyValue(
     const EditorPropertyDescriptor& descriptor,
     const EditorPropertyValue& value);
+bool ParseEditorPropertyValue(
+    const EditorPropertyDescriptor& descriptor,
+    std::string_view text,
+    EditorPropertyValue& outValue,
+    std::string* errorMessage = nullptr);
 
 } // namespace editor
