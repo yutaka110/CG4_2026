@@ -320,6 +320,12 @@ const char* ToString(EditorPropertyKind kind) {
         return "AssetRef";
     case EditorPropertyKind::ObjectRef:
         return "ObjectRef";
+    case EditorPropertyKind::Array:
+        return "Array";
+    case EditorPropertyKind::Map:
+        return "Map";
+    case EditorPropertyKind::Struct:
+        return "Struct";
     }
     return "Unknown";
 }

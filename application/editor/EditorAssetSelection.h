@@ -1,11 +1,21 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <string>
 
 #include "EditorAssetRegistry.h"
 
 namespace editor {
+
+inline constexpr const char* kEditorAssetDragDropPayloadId = "EDITOR_ASSET";
+
+struct EditorAssetDragDropPayload {
+    EditorAssetKind kind = EditorAssetKind::Unknown;
+    std::array<char, 65> guid{};
+    std::array<char, 256> id{};
+    std::array<char, 128> displayName{};
+};
 
 struct EditorAssetHandle {
     EditorAssetKind kind = EditorAssetKind::Unknown;

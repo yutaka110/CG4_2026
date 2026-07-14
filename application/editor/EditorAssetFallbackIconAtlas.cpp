@@ -194,6 +194,11 @@ bool BuildEditorAssetFallbackIconPixels(
         DrawEffectIcon(outPixels, accent);
         break;
     case EditorAssetKind::Course:
+    case EditorAssetKind::Prefab:
+    case EditorAssetKind::MaterialGraph:
+    case EditorAssetKind::VfxGraph:
+    case EditorAssetKind::AnimationStateMachine:
+    case EditorAssetKind::GameplayVisualScript:
         DrawDocumentIcon(outPixels, accent);
         break;
     default:

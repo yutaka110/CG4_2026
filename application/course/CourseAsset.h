@@ -17,6 +17,9 @@ struct CourseCameraKey {
     float lookForwardOffset = 8.0f;
     float fovY = 0.30f * 3.14159265358979323846f;
     float roll = 0.0f;
+    std::string editorGuid;
+    bool editorVisible = true;
+    bool editorLocked = false;
 };
 
 struct CourseSection {
@@ -31,6 +34,9 @@ struct CourseEventMarker {
     std::string type;
     std::string id;
     std::string payload;
+    std::string editorGuid;
+    bool editorVisible = true;
+    bool editorLocked = false;
 };
 
 enum class CourseTerrainLayer {
@@ -74,6 +80,9 @@ struct CourseTerrainPlacement {
     int renderPriority = 0;
     float cullBehindDistance = -1.0f;
     float cullAheadDistance = -1.0f;
+    std::string editorGuid;
+    bool editorVisible = true;
+    bool editorLocked = false;
 };
 
 struct CourseRockCluster {
@@ -97,6 +106,9 @@ struct CourseRockCluster {
         Vector3 rotation = {0.0f, 0.0f, 0.0f};
     };
     std::vector<InstanceTransformOverride> instanceOverrides;
+    std::string editorGuid;
+    bool editorVisible = true;
+    bool editorLocked = false;
 };
 
 struct CourseLightingPreset {
@@ -220,6 +232,8 @@ struct CourseAsset {
 
     bool LoadFromFile(const std::string& path, std::string* errorMessage = nullptr);
     bool SaveToFile(const std::string& path, std::string* errorMessage = nullptr) const;
+    bool LoadFromString(const std::string& text, std::string* errorMessage = nullptr);
+    bool SaveToString(std::string* text, std::string* errorMessage = nullptr) const;
     void BuildFallbackCanyon(float corridorRadius);
     void SortForRuntime();
     void ApplyToRailPath(RailPath& railPath) const;

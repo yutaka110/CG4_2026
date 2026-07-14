@@ -27,7 +27,8 @@ void AddIssue(
 }
 
 bool RequiresDurableGuid(EditorAssetMutationKind kind) {
-    return kind == EditorAssetMutationKind::Rename ||
+    return kind == EditorAssetMutationKind::Duplicate ||
+        kind == EditorAssetMutationKind::Rename ||
         kind == EditorAssetMutationKind::Move;
 }
 
@@ -47,12 +48,16 @@ void AddDependents(
 
 const char* ToString(EditorAssetMutationKind kind) {
     switch (kind) {
+    case EditorAssetMutationKind::Duplicate:
+        return "Duplicate";
     case EditorAssetMutationKind::Rename:
         return "Rename";
     case EditorAssetMutationKind::Move:
         return "Move";
     case EditorAssetMutationKind::Delete:
         return "Delete";
+    case EditorAssetMutationKind::RepairReferences:
+        return "Repair References";
     }
     return "Unknown";
 }
@@ -87,18 +92,27 @@ EditorAssetMutationSafetyReport EvaluateEditorAssetMutationSafety(
     if (target.missing) {
         AddIssue(report, EditorAssetMutationRisk::Blocked, "Asset source file is missing.");
     }
-    if (RequiresDurableGuid(kind) && (!target.hasMetadata || target.provisionalGuid)) {
+    if (RequiresDurableGuid(kind) &&
+        (!target.hasMetadata || target.provisionalGuid || !IsDurableEditorAssetGuid(target.guid))) {
         AddIssue(
             report,
             EditorAssetMutationRisk::Blocked,
-            "Rename/Move requires durable .meta GUID metadata. Run Create Asset .meta first.");
+            "Duplicate/Rename/Move requires durable .meta GUID metadata. Run Create Asset .meta first.");
+    }
+    if (RequiresDurableGuid(kind) && registry.FindAllByGuid(target.guid).size() > 1) {
+        AddIssue(
+            report,
+            EditorAssetMutationRisk::Blocked,
+            "Duplicate/Rename/Move is blocked because the durable GUID is duplicated.");
     }
     if (kind == EditorAssetMutationKind::Delete && report.dependentCount > 0) {
         AddIssue(
             report,
             EditorAssetMutationRisk::Blocked,
             "Delete is blocked because other indexed assets depend on this asset.");
-    } else if (RequiresDurableGuid(kind) && report.dependentCount > 0) {
+    } else if ((kind == EditorAssetMutationKind::Rename ||
+                   kind == EditorAssetMutationKind::Move) &&
+        report.dependentCount > 0) {
         AddIssue(
             report,
             EditorAssetMutationRisk::Warning,
@@ -112,6 +126,13 @@ EditorAssetMutationSafetyReport EvaluateEditorAssetMutationSafety(
             report,
             EditorAssetMutationRisk::Warning,
             "Deleting a legacy path-only asset cannot update GUID-backed references.");
+    }
+    if (kind == EditorAssetMutationKind::RepairReferences &&
+        (!target.hasMetadata || target.provisionalGuid || target.metadataPath.empty())) {
+        AddIssue(
+            report,
+            EditorAssetMutationRisk::Blocked,
+            "Reference repair requires durable owner .meta metadata.");
     }
     if (report.issues.empty()) {
         AddIssue(report, EditorAssetMutationRisk::Allowed, "No blocking asset safety issues were found.");

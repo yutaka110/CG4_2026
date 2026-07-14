@@ -1,11 +1,13 @@
 #include "EditorAssetImportService.h"
 
 #include "EditorAssetThumbnailService.h"
+#include "io/EditorFileTransaction.h"
 
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <system_error>
 #include <utility>
@@ -284,13 +286,17 @@ bool ReadAssetMetadata(
         const std::string value = Trim(line.substr(equals + 1));
         if (key == "guid") {
             record.guid = value;
-            record.provisionalGuid = false;
+            record.provisionalGuid = !IsDurableEditorAssetGuid(value);
         } else if (key == "logicalPath") {
             record.logicalPath = value;
         } else if (key == "tags") {
             record.tags = SplitList(value);
         } else if (key == "dependencies") {
             record.dependencies = SplitList(value);
+        } else if (key == "guidDependencies") {
+            record.guidDependencies = SplitList(value);
+        } else if (key == "pathOnlyReferences") {
+            record.pathOnlyReferences = SplitList(value);
         }
     }
 
@@ -298,8 +304,54 @@ bool ReadAssetMetadata(
     return true;
 }
 
-bool WriteAssetMetadata(
+std::string SerializeAssetMetadata(
+    const EditorAssetRecord& record) {
+    std::ostringstream output;
+    output << "guid=" << record.guid << '\n';
+    output << "logicalPath=" << (record.logicalPath.empty() ? record.sourcePath : record.logicalPath) << '\n';
+    if (!record.tags.empty()) {
+        output << "tags=";
+        for (std::size_t i = 0; i < record.tags.size(); ++i) {
+            if (i > 0) {
+                output << ',';
+            }
+            output << record.tags[i];
+        }
+        output << '\n';
+    }
+    if (!record.dependencies.empty()) {
+        output << "dependencies=";
+        for (std::size_t i = 0; i < record.dependencies.size(); ++i) {
+            if (i > 0) {
+                output << ',';
+            }
+            output << record.dependencies[i];
+        }
+        output << '\n';
+    }
+    if (!record.guidDependencies.empty()) {
+        output << "guidDependencies=";
+        for (std::size_t i = 0; i < record.guidDependencies.size(); ++i) {
+            if (i > 0) output << ',';
+            output << record.guidDependencies[i];
+        }
+        output << '\n';
+    }
+    if (!record.pathOnlyReferences.empty()) {
+        output << "pathOnlyReferences=";
+        for (std::size_t i = 0; i < record.pathOnlyReferences.size(); ++i) {
+            if (i > 0) output << ',';
+            output << record.pathOnlyReferences[i];
+        }
+        output << '\n';
+    }
+    return output.str();
+}
+
+bool CommitAssetMetadataAndRegistry(
+    EditorAssetRegistry& registry,
     const EditorAssetRecord& record,
+    const EditorAssetRecord* previousRecord,
     std::string* errorMessage) {
     if (record.metadataPath.empty()) {
         if (errorMessage != nullptr) {
@@ -308,47 +360,45 @@ bool WriteAssetMetadata(
         return false;
     }
 
-    std::error_code error;
-    const std::filesystem::path metadataPath(record.metadataPath);
-    if (metadataPath.has_parent_path()) {
-        std::filesystem::create_directories(metadataPath.parent_path(), error);
-        if (error) {
-            if (errorMessage != nullptr) {
-                *errorMessage = "Failed to create metadata directory: " + error.message();
-            }
-            return false;
-        }
-    }
-
-    std::ofstream file(metadataPath, std::ios::trunc);
-    if (!file.is_open()) {
-        if (errorMessage != nullptr) {
-            *errorMessage = "Failed to write metadata file.";
-        }
+    EditorFileTransaction transaction(std::filesystem::current_path());
+    if (!transaction.StageTextWrite(
+            record.metadataPath,
+            SerializeAssetMetadata(record),
+            [&record](const std::filesystem::path& stagedPath, std::string* validationError) {
+                EditorAssetRecord validated{};
+                if (!ReadAssetMetadata(stagedPath, validated) ||
+                    validated.guid != record.guid ||
+                    validated.logicalPath !=
+                        (record.logicalPath.empty() ? record.sourcePath : record.logicalPath)) {
+                    if (validationError != nullptr) {
+                        *validationError = "Asset metadata read-back validation failed.";
+                    }
+                    return false;
+                }
+                return true;
+            },
+            errorMessage)) {
         return false;
     }
 
-    file << "guid=" << record.guid << '\n';
-    file << "logicalPath=" << (record.logicalPath.empty() ? record.sourcePath : record.logicalPath) << '\n';
-    if (!record.tags.empty()) {
-        file << "tags=";
-        for (std::size_t i = 0; i < record.tags.size(); ++i) {
-            if (i > 0) {
-                file << ',';
-            }
-            file << record.tags[i];
-        }
-        file << '\n';
+    EditorFileTransactionReceipt receipt{};
+    if (!transaction.ApplyPrepared(&receipt, errorMessage)) {
+        return false;
     }
-    if (!record.dependencies.empty()) {
-        file << "dependencies=";
-        for (std::size_t i = 0; i < record.dependencies.size(); ++i) {
-            if (i > 0) {
-                file << ',';
-            }
-            file << record.dependencies[i];
+    if (!registry.Register(record)) {
+        transaction.RollbackPrepared(&receipt, nullptr);
+        if (errorMessage != nullptr) {
+            *errorMessage = "Failed to register imported asset.";
         }
-        file << '\n';
+        return false;
+    }
+    if (!transaction.CommitPrepared(&receipt, errorMessage)) {
+        if (previousRecord != nullptr) {
+            registry.Register(*previousRecord);
+        } else {
+            registry.Remove(record.kind, record.id);
+        }
+        return false;
     }
     return true;
 }
@@ -372,7 +422,7 @@ EditorAssetRecord BuildRecordForSource(
     record.logicalPath = record.sourcePath;
     record.metadataPath = record.sourcePath + ".meta";
     record.sourceTimestamp = SourceTimestamp(physicalSource);
-    record.referenceable = record.kind != EditorAssetKind::Mesh;
+    record.referenceable = record.kind != EditorAssetKind::Unknown;
 
     std::error_code error;
     record.missing = !std::filesystem::exists(physicalSource, error);
@@ -436,23 +486,38 @@ EditorAssetImportResult EditorAssetImportService::ImportInternal(
         return Fail("Unsupported asset type for import.");
     }
 
+    std::optional<EditorAssetRecord> previousRecord;
     if (const EditorAssetRecord* existing = registry_.Find(record.kind, record.id)) {
         if (!options.replaceExisting) {
             return Fail("Asset already exists and replaceExisting is disabled.");
         }
+        previousRecord = *existing;
         PreserveExistingIdentity(*existing, record);
     }
 
     EnsureEditorAssetIdentity(record);
     if (options.createMetadata) {
+        if (!IsDurableEditorAssetGuid(record.guid) || record.provisionalGuid) {
+            record.guid = GenerateEditorAssetGuid();
+        }
+        if (const EditorAssetRecord* guidOwner = registry_.FindByGuid(record.guid)) {
+            if (guidOwner->kind != record.kind || guidOwner->id != record.id) {
+                return Fail(
+                    "Asset import rejected duplicate durable GUID " + record.guid +
+                    " already owned by " + std::string(ToString(guidOwner->kind)) +
+                    ":" + guidOwner->id + ".");
+            }
+        }
         record.hasMetadata = true;
         record.provisionalGuid = false;
-        if (!WriteAssetMetadata(record, &error)) {
+        if (!CommitAssetMetadataAndRegistry(
+                registry_,
+                record,
+                previousRecord ? &*previousRecord : nullptr,
+                &error)) {
             return Fail(error.empty() ? std::string("Failed to write imported asset metadata.") : error);
         }
-    }
-
-    if (!registry_.Register(record)) {
+    } else if (!registry_.Register(record)) {
         return Fail("Failed to register imported asset.");
     }
 
@@ -648,23 +713,22 @@ EditorAssetImportResult EditorAssetImportService::BatchMigrateMetadata(
             continue;
         }
 
+        const EditorAssetRecord previousRecord = record;
         EnsureEditorAssetIdentity(record);
+        if (!IsDurableEditorAssetGuid(record.guid) || record.provisionalGuid) {
+            record.guid = GenerateEditorAssetGuid();
+        }
         record.hasMetadata = true;
         record.provisionalGuid = false;
 
         std::string error;
-        if (!WriteAssetMetadata(record, &error)) {
+        if (!CommitAssetMetadataAndRegistry(registry_, record, &previousRecord, &error)) {
             result.warning = true;
             ++result.skippedCount;
             continue;
         }
-        if (registry_.Register(record)) {
-            ++result.migratedCount;
-            result.record = std::move(record);
-        } else {
-            result.warning = true;
-            ++result.skippedCount;
-        }
+        ++result.migratedCount;
+        result.record = std::move(record);
     }
 
     FinalizeAssetRegistryChange(options);
@@ -709,6 +773,21 @@ EditorAssetKind EditorAssetKindForImportPath(
             ext == ".terrainpreset" ||
             ext == ".postpreset")) {
         return EditorAssetKind::Course;
+    }
+    if (options.includePrefabs && ext == ".prefab") {
+        return EditorAssetKind::Prefab;
+    }
+    if (options.includeMaterialGraphs && (ext == ".material" || ext == ".materialgraph")) {
+        return EditorAssetKind::MaterialGraph;
+    }
+    if (options.includeVfxGraphs && (ext == ".vfxgraph" || ext == ".vfxsystem")) {
+        return EditorAssetKind::VfxGraph;
+    }
+    if (options.includeAnimationStateMachines && (ext == ".animsm" || ext == ".animstate")) {
+        return EditorAssetKind::AnimationStateMachine;
+    }
+    if (options.includeGameplayVisualScripts && (ext == ".gameplay" || ext == ".visualscript")) {
+        return EditorAssetKind::GameplayVisualScript;
     }
     if (options.includeTextures &&
         (ext == ".png" || ext == ".bmp" || ext == ".dds" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga")) {

@@ -17,6 +17,8 @@ struct EditorPlaySessionLifecycleRequest {
     AppRuntimeState* runtimeState = nullptr;
     EditorNotificationCenter* notifications = nullptr;
     const char* source = "editor.playSession.lifecycle";
+    EffectRuntime* effectRuntime = nullptr;
+    PostProcessStack* postProcessStack = nullptr;
 };
 
 struct EditorPlaySessionLifecycleResult {

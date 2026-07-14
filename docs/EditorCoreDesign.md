@@ -1001,6 +1001,58 @@ Current staged implementation:
   spawn/collision/combat stats, and RenderGraph pass/resource summaries. The
   builder owns observation only; runtime edits still route through explicit
   services, commands, and transactions.
+- Phase 10-E replaces the fixed Course/Terrain snapshot implementation with
+  `IEditorPlayIsolationProvider`, `EditorPlayIsolationRegistry`, and a
+  type-erased `EditorPlaySnapshot`. Production providers cover Course,
+  Terrain/Gameplay Tuning, VFX Authoring Assets, and Post-process. Capture is
+  published only after every provider succeeds; Restore first captures a
+  rollback snapshot and reverts all partially restored providers on failure.
+  The Runtime Changes panel exposes provider fingerprints and Apply/Ignore
+  selection. Keep Changes adopts only selected providers and records their
+  Course/Terrain/VFX/Post-process state as one undoable grouped transaction.
+- Phase 10-F completes the Transaction Core migration. Asset Mutation and
+  Runtime Apply now register immutable `IEditorUndoCommand` implementations
+  and resolve Domain execution through `EditorExecutionContext`. The shared
+  stack no longer contains Asset/Runtime payload kinds, concrete records,
+  file-transaction cleanup, or Domain apply branches. Disk-backed trash is
+  owned by the Asset command lifetime, while Runtime Apply stores only the
+  selected provider deltas in one grouped command.
+- Phase 10-G adds the Generic Document Model. Stable document IDs and a
+  provider registry now own multi-document open/active/dirty state. Save All
+  validates and stages every document before committing one file transaction;
+  autosave writes revisioned recovery data without touching the source.
+  External content hashes block silent overwrite, and schema migration writes
+  a backup and report before publishing migrated data. Course authoring is the
+  first live provider; Scene, Effect/VFX, Material/Render Preset, and Project
+  Settings providers use the same lifecycle contract.
+- Phase 10-H adds the Editor World Model. Domain-neutral records use the
+  document ID, provider ID, and persistent object GUID as their canonical
+  identity; array indices remain compatibility locators only. A deterministic
+  provider registry aggregates Course terrain, rock, camera, and event objects
+  with read-only VFX asset/runtime objects. Course schema v3 persists GUIDs,
+  Outliner visibility, and lock state, and migrates schema v1/v2 through the
+  Generic Document lifecycle. Duplicate
+  handles, missing parents, and hierarchy cycles are reported before the
+  Outliner consumes the model.
+- Phase 10-I adds the World Outliner and the domain-neutral World mutation
+  boundary. The panel renders cached hierarchy queries with search/type and
+  runtime/missing filters, multi-selection, visibility, lock, inline rename,
+  duplicate/delete confirmation, and capability-driven drag reparent. Viewport
+  picking and Diagnostics publish the same canonical persistent handles to
+  `EditorSelection`, which remains the sole Details selection source. Provider
+  mutation plans are validated and applied through an immutable World command;
+  undo/redo uses an execution service, while failed apply/refresh/history
+  publication rolls the provider state back. Course schema v3 persists
+  visibility and lock state; runtime VFX objects remain explicitly read-only.
+- Phase 10-J promotes the Course transform gizmo from pixel-delta debug input
+  to a production manipulation path. Domain-neutral Gizmo Math owns ray-plane,
+  ray-axis, signed-angle, basis projection, and snap calculations; all pointer
+  input is converted through the formal viewport coordinate contract. The
+  viewport exposes axis, plane, and uniform handles with World/Local space and
+  Active/Median/Individual pivot modes. Same-domain multi-selection is captured
+  in one property edit session, previews through the same accessor used by
+  Details, commits as one grouped command, and restores every begin value on
+  Escape, viewport loss, or Play/Sim authoring lock.
 
 ### Phase 11: Extensibility And Tool Registration
 
@@ -1127,6 +1179,272 @@ Current staged implementation:
   service budgets. The new artifacts are
   `logs/editor_feature_guard_report.log` and
   `logs/editor_performance_budget_report.log`.
+- Phase 12-D closes the Phase D editor integration milestone. The runner now
+  emits `editor.commercialCompletion.v4`; `commercialCompletionReady` is true
+  only when every gate passes and both blocked and attention counts are zero.
+  `editor.phaseDIntegration` composes Material, VFX, Animation, and Gameplay
+  tools in one Document Manager, Transaction Stack, and Execution Context, then
+  verifies deterministic compilation, cross-domain Undo/Redo, atomic Save All,
+  Content Browser classification, Autosave, and Recovery. The independent
+  `editor.northStarWorkflow` gate verifies durable asset selection, viewport
+  drop, shared world selection, Scene Entity/Component authoring, transaction-
+  backed transform mutations, Scene Save/Reload, Play isolation, selective
+  Apply, Undo Apply, and interrupted-save recovery.
+
+### Phase 13: Viewport Correctness And Authoring Parity
+
+Goal: make the editor viewport a formal coordinate contract instead of a set of
+parallel formulas owned by HUD, picking, gizmo, and input code.
+
+Current staged implementation:
+
+- Phase 13-A introduces `EditorViewportCoordinateService` as the shared
+  conversion path for display-space, viewport-local, render-space, NDC, and
+  world-ray coordinates. `EditorViewportInteractionService` now obtains mouse
+  render coordinates through this service, `EditorViewportOverlayScope` uses it
+  for HUD/debug overlay placement and scaling, and App-level screen-ray helpers
+  use the same world-ray construction used by future picking/gizmo code.
+- The commercial automation runner now includes `editor.viewportCorrectness`.
+  This gate validates center/edge coordinate mapping, NDC orientation, identity
+  view-projection world ray construction, render-to-display scale parity, and
+  out-of-viewport rejection. Its artifact is
+  `logs/editor_viewport_correctness_report.log`.
+- Phase 13-B extends the same contract to world projection. The coordinate
+  service now owns world-to-NDC, world-to-render, world-to-display, depth,
+  behind-camera, and onscreen classification. Rail/HUD overlay projection now
+  goes through this service instead of a local formula, viewport client-point
+  conversion shares the same display-to-render path, and
+  `EditorTransformGizmoService` requires a connected viewport projection
+  contract before reporting manipulations ready. The viewport correctness gate
+  now verifies world projection, offscreen-but-in-depth projection, and gizmo
+  projection connectivity.
+- Phase 13-C completes the B-4 viewport overlay boundary. Domain producers now
+  submit render-space primitives and labels through eight stable overlay layers;
+  only `EditorViewportOverlayService::Render` receives `ImDrawList`. Gameplay HUD
+  and editor overlays have independent visibility, settings round-trip through
+  atomic layout persistence, and clean screenshot suppression hides configured
+  editor layers. Object labels use selection/distance/zoom filters, bounded
+  overlap placement, and icon fallback. The commercial performance gate covers
+  10,000 label candidates with a 50 ms Debug budget and a 128-result visual cap.
+- Phase 13-D completes the B-5 Scene/Entity/Component authoring foundation.
+  `EditorScene` is the versioned Scene Document live model; stable Entity GUIDs,
+  parent GUID hierarchy, required Transform, typed Components, and Entity/Asset
+  references are validated before deterministic serialization. The Scene World
+  provider routes Outliner creation/hierarchy and Details Component changes
+  through generic World transactions. Content Browser Asset drag payloads are
+  accepted by the Viewport to create typed Scene Entities. Regression verifies
+  Undo/Redo plus File Transaction Save/Reload identity preservation.
+- Phase 13-E completes C-1 Durable Asset Identity. Imported and migrated assets
+  receive independent durable GUID metadata through atomic file transactions;
+  registry audits expose coverage, missing metadata, and duplicate GUIDs.
+  Project asset metadata is version-controlled and the headless
+  `--editor-asset-meta-migrate` entry point migrates legacy content and fails
+  when coverage is incomplete or duplicate GUIDs remain.
+  Rename/Move requires unique durable identity and persists old ID/path aliases
+  in the project redirect table. Dependency scanning separates canonical GUID
+  references from path-only references, and the transaction-backed repair
+  command rewrites resolvable paths while preserving Undo/Redo. Diagnostics,
+  Details asset pickers, and missing-reference repair share the same
+  GUID/path/redirect resolver.
+- Phase 13-F completes C-2 Content Browser production workflows. A versioned,
+  atomically persisted state model restores folder, filters, view mode,
+  collection/favorite membership, and durable-GUID selection across sessions.
+  Folder Tree and combined search/kind/tag/collection filters feed both Grid and
+  List views. Both views emit the same GUID drag payload accepted by Viewport and
+  compatible Details AssetRef fields. Provider-backed SCM/dirty/cook columns and
+  dependency/reference inspection expose production status without guessing a
+  source-control backend. Duplicate joins Rename/Move/Delete/Repair in the Asset
+  Mutation Core and atomically creates a new source plus durable metadata with
+  Undo/Redo.
+- Phase 13-G completes C-3 Right Inspector evolution. Details is the default
+  Inspector tab and legacy VFX Inspector state migrates to it. The former
+  monolithic panel is split into VFX Details, VFX Runtime, Scene Lighting, Post
+  Process, Render Debug Views, and Performance responsibilities. Details owns an
+  atomically persisted search/category/favorite/changed view state, highlights
+  default and transaction deltas, evaluates descriptor edit conditions, and
+  binds validation issues to individual property rows. Array/Map/Struct kinds,
+  Asset and World Object pickers, and a provider-neutral Prefab override/revert
+  contract extend the descriptor architecture without coupling the editor core
+  to a future Prefab backend.
+- Phase 13-G validation passes Debug v143 build, 30/30 regression cases, and
+  10/10 smoke steps. The optimized Development v143 commercial run passes all
+  9 gates and 124 checks, including all six service performance budgets.
+- Phase 13-H completes C-4 Bottom Dock evolution. Panel descriptors expose a
+  four-area classification, pin/close capabilities, and warning/error badge
+  providers. The Bottom Dock host adds compact area navigation, search,
+  overflow, Pin/Close/Reopen, context move, drag-to-area, and a persisted
+  Developer-panel visibility boundary. Layout schema v2 atomically restores
+  active area/tab, search, visibility, pin, and group overrides while retaining
+  v1 compatibility. Performance moves from the Inspector into Profiling.
+- Phase 13-H validation passes Debug v143 build, an 8-second live-frame probe,
+  31/31 regression cases, and 10/10 smoke steps. Development v143 passes all 9
+  commercial gates and 124 checks with zero failed, warning, or blocked checks;
+  Feature Guard separately reports one pre-existing Property-accessor attention.
+- Phase 13-I completes C-5 Menu/Toolbar/Status Bar evolution. Menu registration
+  now maps commands into a stable File/Edit/Window/Tools/Build/Play/Help model,
+  while document-type metadata hides Course actions outside the active Course
+  document. The responsive toolbar prioritizes Save, Undo/Redo, transform and
+  Play controls, measures button labels, and moves the remaining commands into
+  an overflow popup. Transform mode, space, and snap labels reflect the shared
+  gizmo state and execute exclusively through the command registry.
+- Phase 13-I also separates `EditorStatusBarSnapshot` from ImGui presentation.
+  It aggregates validation, dirty/autosave state, preview/GPU background work,
+  active document/session, latest command, and provider-backed SCM/cook status.
+  Missing Shader Compile and Memory providers remain explicitly `Unbound`; a
+  responsive compact row preserves the highest-priority health signals and a
+  details popup exposes the complete status model.
+- Phase 13-I validation passes Debug v143 build, an 8-second live-frame probe,
+  32/32 regression cases, and 10/10 smoke steps. Development v143 passes all 9
+  commercial gates and 124 checks with zero failed, warning, or blocked checks.
+- Phase 13-J completes D-1 Course Timeline Track Provider evolution. A
+  Course-independent `EditorSequencerService` owns provider registration,
+  key selection, interactive preview/commit/cancel, snapping, clipboard,
+  scrub preview, and generic transaction commands. Mutation application is
+  rollback-safe across providers and a failed transaction registration restores
+  the pre-preview state.
+- `CourseSequencerTrackProvider` adapts persistent Course object GUIDs into
+  Event, Placement, Camera, Lighting, Material, VFX, and Gameplay Trigger
+  tracks. The provider owns Course-specific capture, move, remove, insert, and
+  duplicate behavior while the timeline UI consumes only generic track/key
+  records. Scrubbing routes through an explicit callback to the Course runtime
+  preview instead of coupling Sequencer Core to runtime classes.
+- Phase 13-J validation passes Debug v143 build, an 8-second live-frame probe,
+  33/33 regression cases, and 10/10 smoke steps. Development v143 passes all 9
+  commercial gates and 124 checks with zero failed, warning, or blocked checks.
+- Phase 13-K completes D-2 Prefab authoring. `.prefab` is a durable Asset and a
+  generic Document type with validated v2 serialization. Scene schema v2 stores
+  persistent Prefab instance identity, source-to-instance Entity bindings, and
+  property/structural overrides while migrating legacy Scene v1 documents.
+- `EditorPrefabService` instantiates Asset templates, enforces an eight-level
+  nested depth and cycle rejection, creates recoverable Missing Asset
+  placeholders, and exposes Apply, Revert, and recovery through Details and
+  Viewport/Content Browser workflows. World Outliner distinguishes connected
+  instances, members, and missing sources.
+- Every Prefab mutation uses a `prefab` generic command. Apply atomically
+  snapshots both Scene and source Prefab Asset, so Undo/Redo and failed command
+  registration restore both sides together. Property rows consume the existing
+  provider-neutral override contract backed by the production Prefab service.
+- Phase 13-K validation passes Debug and Development v143 builds, an 8-second
+  live-frame probe, 34/34 regression cases, and 10/10 smoke steps. Development
+  passes all 9 commercial gates and 124 checks with zero failed, warning, or
+  blocked checks and all six performance budgets within limits.
+- Phase 13-L completes D-3 Material Graph foundation. `EditorGraph` is a
+  domain-independent typed graph core with stable node/link identity, pin
+  cardinality, conversion rules, cycle rejection, and bounded node/link counts.
+  Material-specific node definitions and compilation remain in the Material
+  module rather than leaking into Graph Core.
+- `.material`/`.materialgraph` are durable `MaterialGraph` Assets and generic
+  Documents. The v2 format persists graph/settings identity, supports v1
+  migration, remains saveable while authoring compile errors exist, and uses
+  the existing atomic Save/Autosave/Recovery lifecycle.
+- `EditorMaterialGraphService` creates snapshot Commands in the shared
+  Transaction stack. Add/remove/connect/disconnect/property/move operations,
+  global Undo/Redo, Dirty state, and notifications have no private history or
+  save system. The deterministic compiler emits fingerprinted HLSL source and
+  retains the last successful artifact when a later authoring compile fails.
+- The Authoring Bottom Dock provides the Material canvas, typed connection
+  controls, node property editing, compile diagnostics, and generated HLSL.
+  Unified validation resolves Texture references by durable Asset GUID.
+- Phase 13-L validation passes Debug/Development v143 builds with zero
+  warnings/errors, an 8-second live-frame probe, 35/35 Editor Core regression
+  cases, and 10/10 smoke steps.
+  Development passes all 9 commercial gates and 124 checks with zero failed,
+  warning, or blocked checks; all performance budgets remain within limits.
+- Phase 13-M completes D-3 Advanced VFX Graph. The domain-independent
+  `EditorGraph` core is reused by a VFX schema containing System Output,
+  Emitter, Spawn Rate/Burst, Initialize Velocity, Gravity/Drag, and
+  Sprite/Ribbon/Beam Render modules. VFX types do not leak into Graph Core.
+- `.vfxgraph`/`.vfxsystem` are durable `VfxGraph` Assets and generic Documents.
+  Schema v2 persists CPU/GPU target, bounded particle capacity, fixed time
+  step, stable graph identity, and supports v1 migration through existing
+  Atomic Save/Autosave/Recovery services.
+- The deterministic compiler produces a fingerprinted staged execution program,
+  simulation HLSL, emitter runtime descriptors, and durable dependencies. The
+  service keeps the last successful artifact when later edits fail validation.
+- All graph/settings mutations use the `vfx-graph` snapshot Command domain and
+  shared global Undo/Redo, Dirty, notification, and validation services. Preview
+  apply resolves Material/Texture GUIDs and publishes only a successful artifact
+  to the existing EffectRuntime, preventing partial authoring state from leaking.
+- The VFX Bottom Dock provides typed connections, full node-property selection,
+  simulation settings, compile diagnostics, generated program/HLSL inspection,
+  and explicit runtime preview apply. Regression coverage increases to 36 cases.
+- Phase 13-M validation passes Debug/Development v143 builds with zero
+  warnings/errors, 36/36 Editor Core regression cases, and 10/10 smoke steps.
+- Phase 13-N completes D-3 Animation State Machine. `EditorGraphSchema` now
+  carries a domain-neutral cycle policy: Material/VFX remain acyclic while
+  Animation State transitions can form valid loops without weakening other
+  graph validation contracts.
+- Runtime `AnimationStateMachineInstance` evaluates Bool/Float/Int/Trigger
+  parameters, priority, thresholds, normalized exit time, loop/speed, and
+  cross-fade progress deterministically. `ApplyAnimationBlend` blends per-joint
+  translation, rotation, and scale before the existing skeleton update path.
+- `.animsm`/`.animstate` are durable `AnimationStateMachine` Assets and generic
+  Documents. Schema v2 persists typed Parameters and stable Entry/State/
+  Transition nodes, remains saveable with authoring diagnostics, supports v1
+  migration, and uses common Atomic Save/Autosave/Recovery.
+- State, Transition, Parameter, property, connection, and move mutations use
+  the `animation-state-machine` snapshot Command domain with global Undo/Redo,
+  Dirty state, notifications, and last-known-good runtime programs.
+- The Animation Bottom Dock provides cyclic graph authoring, all-node property
+  editing, Parameter creation/removal and typed Preview values, step/reset,
+  compile diagnostics, and generated-program inspection. Unified diagnostics
+  resolves animation source GUIDs to durable skinned Mesh Assets.
+- Phase 13-N validation passes Debug/Development v143 builds with zero
+  warnings/errors, 37/37 Editor Core regression cases, and 10/10 smoke steps.
+  The tiered validation policy intentionally defers the Development Commercial
+  Gate and live-frame probe to the release/integration checkpoint.
+- Phase 13-O completes D-3 Gameplay Visual Scripting. The editor-independent
+  `GameplayVisualScriptInstance` executes compiled BeginPlay/Tick programs with
+  Bool/Float/Int/String values, typed variables, expressions, Branch, Set,
+  Print, Emit Event, Return, deterministic trace, and host callbacks. Runtime
+  execution is bounded by a per-Asset instruction budget and expression-depth
+  guard, so cyclic Exec flow cannot hang the engine frame.
+- Gameplay Schema reuses the domain-independent Graph Core and distinguishes
+  typed Data pins from Exec pins. Data-expression cycles are rejected by the
+  compiler while intentional Exec cycles and flow merges remain valid under the
+  Runtime budget. Stable Node IDs produce a fingerprinted, deterministic
+  expression/instruction/event-entry program.
+- `.gameplay`/`.visualscript` are durable `GameplayVisualScript` Assets and
+  generic Documents. Schema v2 persists typed variables, execution budget,
+  nodes/properties/links, supports v1 migration, and uses shared Atomic Save,
+  Autosave, Recovery, Dirty, notification, and global Undo/Redo services.
+- The Gameplay Bottom Dock provides typed connection authoring, all-node
+  property editing, variable/budget controls, BeginPlay/Tick preview, execution
+  trace/output, diagnostics, and generated-program inspection. Failed edits keep
+  the last successful Runtime Program instead of publishing partial state.
+- Phase 13-O validation passes Debug/Development v143 builds with zero
+  warnings/errors, 38/38 Editor Core regression cases, and 10/10 smoke steps.
+  The tiered validation policy defers Commercial Gate and live-frame probing to
+  the Phase D integration checkpoint.
+- Phase 13-P is an independent Editor Font Foundation inserted before further
+  Gameplay Visual Scripting evolution. `EditorFontService` owns a versioned
+  regular/monospace font preference, pixel sizes, UI scale, and Japanese glyph
+  policy without coupling those settings to Gameplay, Graph, or runtime code.
+  Font files are accepted only from `Resources/Editor/Fonts`, must be relative
+  `.ttf`/`.otf`/`.ttc` paths inside that root, and are bounded to 64 MiB.
+- Font preferences are persisted through `EditorFileTransaction`; invalid,
+  missing, or unloadable custom fonts fall back to ImGui's built-in font so an
+  editor restart cannot make the UI unusable. The D3D12 font atlas is rebuilt
+  only during ImGui initialization, while the Bottom Dock `Editor Fonts` panel
+  records changes for the next restart and reports pending state explicitly.
+- Phase 13-P validation passes Debug/Development v143 builds with zero
+  warnings/errors, 39/39 Editor Core regression cases, and 10/10 smoke steps.
+  A normal Debug editor frame remained stable for an 8-second D3D12/ImGui font
+  atlas probe. This independent insertion does not move the active milestone
+  away from the Phase D integration/commercial completion gate.
+- Phase 13-Q completes Phase D integration. Scene Entity handles are now valid
+  Production Gizmo targets, and `EditorWorldMutationKind::SetComponentProperty`
+  carries component type, property name, and serialized value through the
+  domain-neutral World mutation plan. `SceneWorldObjectProvider` applies these
+  changes from immutable before/after snapshots, so translation, rotation, and
+  scale are atomic and globally undoable. Feature Guard attention is now a hard
+  completion failure rather than an informational result.
+- Development x64 validation passes 39/39 Editor Core regression cases and the
+  complete commercial runner with 11/11 gates, 155/155 checks, zero blocked,
+  zero attention, and zero performance warnings. This completes the editor
+  milestone; the engine-wide Commercial Release Gate still requires shipping
+  packaging, runtime/editor target separation, soak/GPU coverage, crash
+  reporting, and licensing checks.
 
 ## Commercial Completion Scorecard
 
@@ -1137,14 +1455,14 @@ workflow-based, not file-count based.
 | --- | ---: | --- |
 | Core service architecture | 80% | All authoring mutation uses shared context, command, transaction, dirty, validation, and notification services. |
 | Existing feature protection | 85% | Feature Guard covers every migration-sensitive VFX, Course, RenderGraph, runtime, asset, and viewport workflow. |
-| Workspace layout | 45% | Persistent dock layout, panel host areas, restored tabs, default layouts, and overlap-free viewport. |
-| Viewport authoring | 60% | Accurate render target, picking, gizmo manipulation, HUD composition, input capture, and play locks. |
-| Property/details | 65% | Full descriptor coverage, multi-selection, validation hints, reset/copy/paste, and transaction-backed edits. |
-| Asset/content browser | 50% | GUID/meta, dependency graph, thumbnails where useful, safe rename/move/delete, and repair commands. |
+| Workspace layout | 70% | Persistent dock layout, classified production Bottom Dock, panel search/overflow/pin/close/reopen/move, Developer isolation, badges, restored tabs, default layouts, and overlap-free viewport. |
+| Viewport authoring | 80% | Accurate render target, picking, gizmo manipulation, HUD composition, input capture, and play locks. |
+| Property/details | 82% | Search/category/favorite persistence, container descriptors, Asset/Object pickers, edit conditions, row validation, changed highlights, Prefab override provider, multi-selection, and transaction-backed edits. |
+| Asset/content browser | 82% | Durable GUID/meta, persistent Folder/Grid/List/filter/collection workflows, dependency graph, provider-backed SCM/cook status, thumbnails, drag/drop, and atomic mutation commands. |
 | Diagnostics/profiling | 70% | Unified diagnostics with source navigation, profiling views, severity filters, and domain adapters. |
 | Play/simulate isolation | 60% | Runtime clone/snapshot boundary, explicit apply changes, pause/step, and safe stop restoration. |
 | Extensibility | 80% | Versioned registration APIs and App-level module startup/frame pipelines for commands, panels, assets, properties, validation, Details sections, menus, toolbar entries, and Runtime Watch providers. |
-| Automation/hardening | 55% | Structured commercial gate runner, unit/smoke/regression aggregation, recovery scenario gates, Feature Guard gates, performance budgets, and recovery tests covering critical editor workflows. |
+| Automation/hardening | 60% | Structured commercial gate runner, unit/smoke/regression aggregation, recovery scenario gates, Feature Guard gates, performance budgets, viewport correctness gates, and recovery tests covering critical editor workflows. |
 
 The editor should not be called commercial-ready until every area is at least
 90%, no critical area is below 85%, and Feature Guard reports no blocked

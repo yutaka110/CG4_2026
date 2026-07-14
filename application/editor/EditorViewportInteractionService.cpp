@@ -1,5 +1,7 @@
 #include "EditorViewportInteractionService.h"
 
+#include "EditorViewportCoordinateService.h"
+
 namespace editor {
 
 void EditorViewportInteractionService::Update(const EditorViewportInteractionInput& input) {
@@ -15,14 +17,17 @@ void EditorViewportInteractionService::Update(const EditorViewportInteractionInp
     state_.mouseViewportX = 0.0f;
     state_.mouseViewportY = 0.0f;
     if (state_.mouseInsideViewport && input.renderWidth > 0 && input.renderHeight > 0) {
-        const float scaleX = input.viewportRect.width > 0.0f
-            ? static_cast<float>(input.renderWidth) / input.viewportRect.width
-            : 1.0f;
-        const float scaleY = input.viewportRect.height > 0.0f
-            ? static_cast<float>(input.renderHeight) / input.viewportRect.height
-            : 1.0f;
-        state_.mouseViewportX = (input.mouseX - input.viewportRect.x) * scaleX;
-        state_.mouseViewportY = (input.mouseY - input.viewportRect.y) * scaleY;
+        EditorViewportCoordinateService coordinates;
+        coordinates.Update(EditorViewportCoordinateContext{
+            input.viewportRect,
+            input.renderWidth,
+            input.renderHeight});
+        const EditorViewportCoordinatePoint renderPoint =
+            coordinates.DisplayToRender(input.mouseX, input.mouseY);
+        if (renderPoint.valid) {
+            state_.mouseViewportX = renderPoint.x;
+            state_.mouseViewportY = renderPoint.y;
+        }
     }
     state_.imguiWantsMouse = input.imguiWantsMouse;
     state_.developerToolsVisible = input.developerToolsVisible;

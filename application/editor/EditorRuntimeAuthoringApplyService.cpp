@@ -1,6 +1,7 @@
 #include "EditorRuntimeAuthoringApplyService.h"
 
 #include "EditorNotificationCenter.h"
+#include "play/EditorRuntimeApplyUndoCommand.h"
 
 #include <cstdint>
 #include <cstddef>
@@ -148,6 +149,10 @@ uint64_t TerrainSignature(const TerrainAuthoringState& terrain) {
     hash = HashValue(hash, terrain.previewDistance);
     hash = HashValue(hash, terrain.selectedCourseTerrainPlacement);
     hash = HashValue(hash, terrain.selectedCourseRockCluster);
+    hash = HashValue(hash, terrain.courseObjectGizmoSpace);
+    hash = HashValue(hash, terrain.courseObjectPivotMode);
+    for (const int index : terrain.selectedCourseTerrainPlacements) hash = HashValue(hash, index);
+    for (const int index : terrain.selectedCourseRockClusters) hash = HashValue(hash, index);
     hash = HashValue(hash, terrain.settings.seed);
     hash = HashValue(hash, terrain.settings.chunkLength);
     hash = HashValue(hash, terrain.settings.visibleAheadChunks);
@@ -270,31 +275,85 @@ EditorRuntimeAuthoringApplyResult EditorRuntimeAuthoringApplyService::Apply(
         return Fail(request, "Play/Sim snapshot is missing authoring state.");
     }
 
-    const std::string beforeSummary = BuildSummary(*beforeCourse, *beforeTerrain);
-    std::string afterSummary = BuildSummary(*request.course, request.runtimeState->terrain);
-    if (beforeSummary == afterSummary) {
+    std::string changeSetError;
+    if (!request.snapshot->RefreshRuntimeChangeSet(
+            EditorPlaySessionIsolationSnapshotTarget{
+                request.course, request.runtimeState, request.effectRuntime, request.postProcessStack},
+            &changeSetError)) {
+        return Fail(
+            request,
+            changeSetError.empty()
+                ? std::string("Failed to inspect runtime authoring changes.")
+                : changeSetError);
+    }
+    const EditorRuntimeChangeSet& runtimeChanges = request.snapshot->RuntimeChanges();
+    if (!runtimeChanges.HasChanges()) {
         return Fail(request, "No runtime authoring changes to apply.");
     }
+    if (!runtimeChanges.HasSelectedChanges()) {
+        return Fail(request, "No runtime authoring changes are selected for Keep Changes.");
+    }
 
-    ++request.runtimeState->terrain.courseObjectEditRevision;
-    afterSummary = BuildSummary(*request.course, request.runtimeState->terrain);
+    const bool keepCourse = runtimeChanges.ProviderSelected(kCoursePlayIsolationProviderId);
+    const bool keepTerrain = runtimeChanges.ProviderSelected(kTerrainPlayIsolationProviderId);
+    const bool keepVfx = runtimeChanges.ProviderSelected(kVfxPlayIsolationProviderId);
+    const bool keepPostProcess = runtimeChanges.ProviderSelected(kPostProcessPlayIsolationProviderId);
+    const std::size_t selectedChangeCount = runtimeChanges.SelectedCount();
+    const uint32_t previousTerrainRevision = request.runtimeState->terrain.courseObjectEditRevision;
+    if (keepTerrain) {
+        ++request.runtimeState->terrain.courseObjectEditRevision;
+    }
 
-    EditorRuntimeAuthoringApplyChange change{};
+    EditorRuntimeApplyChange change{};
     change.sessionSerial = request.playSession->SessionSerial();
+    change.includesCourse = keepCourse;
     change.beforeCourse = *beforeCourse;
-    change.afterCourse = *request.course;
+    change.afterCourse = keepCourse ? *request.course : *beforeCourse;
+    change.includesTerrain = keepTerrain;
     change.beforeTerrain = *beforeTerrain;
-    change.afterTerrain = request.runtimeState->terrain;
+    change.afterTerrain = keepTerrain ? request.runtimeState->terrain : *beforeTerrain;
+    if (keepVfx) {
+        const EditorVfxAuthoringSnapshot* beforeVfx = request.snapshot->CapturedVfxAuthoring();
+        if (beforeVfx == nullptr || request.effectRuntime == nullptr) {
+            request.runtimeState->terrain.courseObjectEditRevision = previousTerrainRevision;
+            return Fail(request, "VFX authoring snapshot is unavailable for Keep Changes.");
+        }
+        change.includesVfxAuthoring = true;
+        change.beforeVfxAuthoring = *beforeVfx;
+        change.afterVfxAuthoring = request.effectRuntime->Assets();
+    }
+    if (keepPostProcess) {
+        const EditorPostProcessAuthoringSnapshot* beforePostProcess = request.snapshot->CapturedPostProcess();
+        if (beforePostProcess == nullptr || request.postProcessStack == nullptr) {
+            request.runtimeState->terrain.courseObjectEditRevision = previousTerrainRevision;
+            return Fail(request, "Post-process snapshot is unavailable for Keep Changes.");
+        }
+        change.includesPostProcess = true;
+        change.beforePostProcess = *beforePostProcess;
+        change.afterPostProcess = request.postProcessStack->Passes();
+    }
+    const std::string beforeSummary = BuildSummary(change.beforeCourse, change.beforeTerrain);
+    const std::string afterSummary = BuildSummary(change.afterCourse, change.afterTerrain);
 
-    request.transactions->PushRuntimeAuthoringApply(
-        "Apply Runtime Changes To Authoring",
-        RuntimeApplyTarget(change.sessionSerial),
-        change);
+    auto command = std::make_shared<EditorRuntimeApplyUndoCommand>(change);
+    const EditorObjectHandle commandTarget = RuntimeApplyTarget(change.sessionSerial);
+    EditorError transactionError;
+    if (!request.transactions->CanPushCommand(
+            "Keep Selected Runtime Changes", commandTarget, command, &transactionError)) {
+        request.runtimeState->terrain.courseObjectEditRevision = previousTerrainRevision;
+        return Fail(
+            request,
+            transactionError.message.empty()
+                ? std::string("Runtime Apply command cannot be stored in transaction history.")
+                : transactionError.message);
+    }
 
     std::string adoptError;
-    if (!request.snapshot->Adopt(
-            EditorPlaySessionIsolationSnapshotTarget{request.course, request.runtimeState},
+    if (!request.snapshot->AdoptSelected(
+            EditorPlaySessionIsolationSnapshotTarget{
+                request.course, request.runtimeState, request.effectRuntime, request.postProcessStack},
             &adoptError)) {
+        request.runtimeState->terrain.courseObjectEditRevision = previousTerrainRevision;
         return Fail(
             request,
             adoptError.empty()
@@ -302,6 +361,15 @@ EditorRuntimeAuthoringApplyResult EditorRuntimeAuthoringApplyService::Apply(
                 : adoptError);
     }
     request.snapshot->BindSession(request.playSession->SessionSerial());
+    if (!request.transactions->PushCommand(
+            "Keep Selected Runtime Changes", commandTarget, std::move(command), &transactionError)) {
+        request.runtimeState->terrain.courseObjectEditRevision = previousTerrainRevision;
+        return Fail(
+            request,
+            transactionError.message.empty()
+                ? std::string("Failed to register Runtime Apply command.")
+                : transactionError.message);
+    }
     MarkRuntimeApplyDirty(request);
 
     EditorRuntimeAuthoringApplyResult result{};
@@ -310,43 +378,9 @@ EditorRuntimeAuthoringApplyResult EditorRuntimeAuthoringApplyService::Apply(
     result.sessionSerial = request.playSession->SessionSerial();
     result.beforeSummary = beforeSummary;
     result.afterSummary = afterSummary;
-    result.message = "Applied runtime changes to authoring.";
-    NotifySuccess(request, result.message);
-    return result;
-}
-
-EditorRuntimeAuthoringApplyResult EditorRuntimeAuthoringApplyService::ApplyTransaction(
-    const EditorRuntimeAuthoringApplyRequest& request,
-    const EditorTransactionRecord& record,
-    EditorTransactionApplyMode mode) const {
-    if (record.payload.kind != EditorTransactionPayloadKind::RuntimeAuthoringApply) {
-        return Fail(request, "Transaction is not a runtime authoring apply payload.");
-    }
-    if (request.course == nullptr || request.runtimeState == nullptr) {
-        return Fail(request, "Runtime apply transaction target is unavailable.");
-    }
-
-    const EditorRuntimeAuthoringApplyChange& change = record.payload.runtimeAuthoringApply;
-    if (mode == EditorTransactionApplyMode::Undo) {
-        *request.course = change.beforeCourse;
-        request.runtimeState->terrain = change.beforeTerrain;
-    } else {
-        *request.course = change.afterCourse;
-        request.runtimeState->terrain = change.afterTerrain;
-    }
-    ++request.runtimeState->terrain.courseObjectEditRevision;
-    MarkRuntimeApplyDirty(request);
-
-    EditorRuntimeAuthoringApplyResult result{};
-    result.succeeded = true;
-    result.changed = true;
-    result.sessionSerial = change.sessionSerial;
-    result.beforeSummary = BuildSummary(change.beforeCourse, change.beforeTerrain);
-    result.afterSummary = BuildSummary(change.afterCourse, change.afterTerrain);
     result.message =
-        mode == EditorTransactionApplyMode::Undo
-            ? "Undid runtime authoring apply."
-            : "Redid runtime authoring apply.";
+        "Kept " + std::to_string(selectedChangeCount) +
+        " selected runtime change provider(s).";
     NotifySuccess(request, result.message);
     return result;
 }

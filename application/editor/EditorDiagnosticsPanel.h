@@ -7,12 +7,14 @@
 namespace editor {
 
 class EditorAssetSelection;
+class EditorWorldModel;
 
 struct EditorDiagnosticsPanelContext {
     const EditorValidationReport* validationReport = nullptr;
-    const EditorSelection* selection = nullptr;
+    EditorSelection* selection = nullptr;
     const EditorAssetRegistry* assetRegistry = nullptr;
     EditorAssetSelection* assetSelection = nullptr;
+    const EditorWorldModel* worldModel = nullptr;
 };
 
 void DrawEditorDiagnosticsPanel(const EditorDiagnosticsPanelContext& context);

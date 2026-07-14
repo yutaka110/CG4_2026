@@ -2,7 +2,10 @@
 
 #include "EditorAssetMutationSafety.h"
 #include "EditorTransactionStack.h"
+#include "asset/EditorAssetMutationChange.h"
+#include "asset/IEditorAssetExecutionService.h"
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -28,16 +31,22 @@ struct EditorAssetMutationResult {
     EditorAssetMutationChange transactionChange;
 };
 
-class EditorAssetMutationExecutor {
+class EditorAssetMutationExecutor final : public IEditorAssetExecutionService {
 public:
-    explicit EditorAssetMutationExecutor(EditorAssetRegistry& registry);
+    explicit EditorAssetMutationExecutor(
+        EditorAssetRegistry& registry,
+        std::filesystem::path projectRoot = std::filesystem::current_path());
 
     EditorAssetMutationResult Execute(const EditorAssetMutationRequest& request);
-    EditorAssetMutationResult ApplyTransaction(
-        const EditorTransactionRecord& transaction,
-        EditorTransactionApplyMode mode);
+    EditorUndoResult ApplyAssetMutation(
+        const EditorAssetMutationChange& change,
+        EditorTransactionApplyMode mode) override;
 
 private:
+    EditorAssetMutationResult DuplicateAsset(
+        const EditorAssetRecord& target,
+        const EditorAssetMutationRequest& request,
+        const EditorAssetMutationSafetyReport& safety);
     EditorAssetMutationResult RenameAsset(
         const EditorAssetRecord& target,
         const EditorAssetMutationRequest& request,
@@ -50,8 +59,13 @@ private:
         const EditorAssetRecord& target,
         const EditorAssetMutationSafetyReport& safety,
         const EditorAssetMutationRequest& request);
+    EditorAssetMutationResult RepairReferences(
+        const EditorAssetRecord& target,
+        const EditorAssetMutationSafetyReport& safety,
+        const EditorAssetMutationRequest& request);
 
     EditorAssetRegistry& registry_;
+    std::filesystem::path projectRoot_;
 };
 
 } // namespace editor

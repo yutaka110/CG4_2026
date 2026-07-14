@@ -18,6 +18,20 @@ enum class EditorPanelHostArea {
     Diagnostics,
 };
 
+enum class EditorBottomDockGroup {
+    Output,
+    Profiling,
+    Authoring,
+    Developer,
+};
+
+struct EditorPanelBadge {
+    uint32_t warningCount = 0;
+    uint32_t errorCount = 0;
+
+    bool Empty() const { return warningCount == 0 && errorCount == 0; }
+};
+
 struct EditorPanelDescriptor {
     std::string id;
     std::string label;
@@ -25,6 +39,10 @@ struct EditorPanelDescriptor {
     EditorPanelHostArea area = EditorPanelHostArea::Diagnostics;
     bool visible = true;
     std::function<void()> draw;
+    EditorBottomDockGroup bottomDockGroup = EditorBottomDockGroup::Output;
+    bool closeable = true;
+    bool pinnable = true;
+    std::function<EditorPanelBadge()> badge;
 };
 
 class EditorPanelRegistry {
@@ -46,5 +64,9 @@ private:
 };
 
 const char* ToString(EditorPanelHostArea area);
+const char* ToString(EditorBottomDockGroup group);
+bool EditorBottomDockGroupFromString(
+    std::string_view text,
+    EditorBottomDockGroup& outGroup);
 
 } // namespace editor

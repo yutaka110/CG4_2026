@@ -492,6 +492,11 @@ bool EditorAssetKindSupportsThumbnailPreview(EditorAssetKind kind) {
         kind == EditorAssetKind::Mesh ||
         kind == EditorAssetKind::Effect ||
         kind == EditorAssetKind::Course ||
+        kind == EditorAssetKind::Prefab ||
+        kind == EditorAssetKind::MaterialGraph ||
+        kind == EditorAssetKind::VfxGraph ||
+        kind == EditorAssetKind::AnimationStateMachine ||
+        kind == EditorAssetKind::GameplayVisualScript ||
         kind == EditorAssetKind::Audio;
 }
 

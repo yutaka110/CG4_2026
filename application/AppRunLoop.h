@@ -49,6 +49,7 @@ struct AppRuntimeState;
 class AppSceneResources;
 class EngineContext;
 struct ImDrawList;
+namespace editor { class EditorViewportOverlayService; }
 
 class AppRunLoop : private AppSceneHost {
 public:
@@ -134,9 +135,8 @@ private:
     void TeleportRailShooterCourse(float distance);
     void LogCourseEvents(const std::vector<CourseEventMarker>& events);
     void ApplyRailShooterVisualPresets(float distance);
-    void DrawRailLockOnHud();
     void DrawRailLockOnDebugPanel();
-    void DrawRailVisibilityDebugOverlay(ImDrawList* drawList = nullptr);
+    void BuildRailVisibilityDebugOverlay(editor::EditorViewportOverlayService& overlay);
     bool EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList);
     bool BuildRailLockOnHudAtlasQuads();
     void RegisterRailLockOnHudPass(
@@ -380,8 +380,24 @@ private:
         int selectionType = 0;
         int selectedTerrainPlacement = -1;
         int selectedRockCluster = -1;
+        std::vector<int> selectedTerrainPlacements{};
+        std::vector<int> selectedRockClusters{};
     };
     struct CourseObjectDragState {
+        struct Item {
+            int type = -1;
+            int index = -1;
+            float distance = 0.0f;
+            float lateral = 0.0f;
+            float vertical = 0.0f;
+            float forward = 0.0f;
+            Vector3 scale = {1.0f, 1.0f, 1.0f};
+            Vector3 rotation = {};
+            float minScale = 0.0f;
+            float maxScale = 0.0f;
+            Vector3 spread = {};
+            float clearLaneRadius = 0.0f;
+        };
         bool active = false;
         bool changed = false;
         int type = -1;
@@ -399,6 +415,21 @@ private:
         float startMaxScale = 0.0f;
         Vector3 startSpread = {};
         float startClearLaneRadius = 0.0f;
+        Vector3 pivotWorld = {};
+        Vector3 localAxes[3] = {
+            {1.0f, 0.0f, 0.0f},
+            {0.0f, 1.0f, 0.0f},
+            {0.0f, 0.0f, 1.0f}};
+        Vector3 handleAxes[3] = {
+            {1.0f, 0.0f, 0.0f},
+            {0.0f, 1.0f, 0.0f},
+            {0.0f, 0.0f, 1.0f}};
+        Vector3 constraintPlaneNormal = {};
+        Vector3 startConstraintPoint = {};
+        float startAxisParameter = 0.0f;
+        float handleLength = 1.0f;
+        bool constraintValid = false;
+        std::vector<Item> items{};
     };
     std::vector<CourseObjectEditSnapshot> courseObjectUndoStack_;
     std::vector<CourseObjectEditSnapshot> courseObjectRedoStack_;

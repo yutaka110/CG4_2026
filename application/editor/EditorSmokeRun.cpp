@@ -24,9 +24,14 @@
 #include "EditorTransactionStack.h"
 #include "EditorValidationService.h"
 #include "EditorViewportAuthoringInputGuard.h"
+#include "EditorViewportCoordinateService.h"
 #include "EditorViewportInteractionService.h"
+#include "EditorViewportOverlay.h"
 #include "EditorViewportRenderTarget.h"
 #include "EditorViewportSelectionBridge.h"
+#include "asset/EditorAssetMutationUndoCommand.h"
+#include "core/EditorExecutionContext.h"
+#include "play/EditorRuntimeApplyUndoCommand.h"
 
 #include "../AppRuntimeState.h"
 #include "../course/CourseAsset.h"
@@ -227,22 +232,52 @@ void RunViewportCoordinateGate(SmokeRun& smoke, std::ostream& log) {
         "100.0",
         "120.0");
     EditorTransformGizmoService gizmo;
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(
+        EditorViewportCoordinateContext{
+            viewportRect,
+            renderState.renderWidth,
+            renderState.renderHeight,
+            MakeIdentity4x4()});
     gizmo.Update(
         EditorTransformGizmoInput{
             &selection,
             &interaction,
+            &coordinates,
             &bridge,
             &transactions,
             EditorTransformGizmoMode::Translate,
             EditorTransformGizmoAxis::X,
+            EditorTransformGizmoSpace::Local,
+            EditorTransformGizmoPivotMode::Active,
             true});
     smoke.Expect(gizmo.State().targetAvailable, "gizmo should target viewport selection");
     smoke.Expect(gizmo.State().canManipulate, "gizmo should be manipulable when viewport boundary is open");
+
+    EditorViewportOverlayService overlay;
+    overlay.BeginFrame(EditorViewportOverlayFrameContext{
+        renderState,
+        renderState.renderWidth,
+        renderState.renderHeight,
+        &coordinates,
+        Vector3{},
+        1.0f});
+    overlay.Sink(EditorViewportOverlayLayerId::GameplayHud).Label(
+        300.0f, 24.0f, "HUD", 0xffffffffu);
+    overlay.Sink(EditorViewportOverlayLayerId::ObjectLabels).Label(
+        300.0f, 180.0f, "Object", 0xffffffffu);
+    overlay.SetScreenshotSuppression(true);
+    overlay.Resolve();
+    smoke.Expect(
+        overlay.ResolvedCommands().size() == 1 &&
+            overlay.ResolvedCommands().front().layer == EditorViewportOverlayLayerId::GameplayHud,
+        "clean screenshot should suppress editor overlay independently from gameplay HUD");
 
     log << "viewport render=" << renderState.renderWidth << "x" << renderState.renderHeight
         << " mouse=" << interaction.State().mouseViewportX << "," << interaction.State().mouseViewportY
         << " pickHandles=" << bridge.State().bridgedHandleCount
         << " gizmo=" << gizmo.ManipulationLabel()
+        << " overlayResolved=" << overlay.Stats().resolved
         << '\n';
 }
 
@@ -276,11 +311,9 @@ void RunAssetMutationExecutorGate(SmokeRun& smoke, std::ostream& log) {
 
     EditorAssetMutationExecutor executor(registry);
     EditorTransactionStack transactions;
-    const auto applyAssetTransaction =
-        [&](const EditorTransactionRecord& record, EditorTransactionApplyMode mode) {
-            const EditorAssetMutationResult result = executor.ApplyTransaction(record, mode);
-            return result.succeeded;
-        };
+    EditorExecutionContext assetContext;
+    EditorError assetError;
+    smoke.Expect(assetContext.Register(executor, &assetError), "asset execution service should register");
     const EditorAssetMutationResult renameResult =
         executor.Execute(
             EditorAssetMutationRequest{
@@ -310,8 +343,9 @@ void RunAssetMutationExecutorGate(SmokeRun& smoke, std::ostream& log) {
     const EditorTransactionRecord* renameTransaction = transactions.LastTransaction();
     smoke.Expect(
         renameTransaction != nullptr &&
-            renameTransaction->payload.kind == EditorTransactionPayloadKind::AssetMutation,
-        "asset rename should use an asset mutation transaction");
+            renameTransaction->payload.kind == EditorTransactionPayloadKind::Command &&
+            dynamic_cast<const EditorAssetMutationUndoCommand*>(renameTransaction->command.get()) != nullptr,
+        "asset rename should use a generic asset command");
 
     const std::filesystem::path moveDestination = root / "moved";
     const EditorAssetMutationResult moveResult =
@@ -364,26 +398,26 @@ void RunAssetMutationExecutorGate(SmokeRun& smoke, std::ostream& log) {
     smoke.Expect(!std::filesystem::exists(dependent.metadataPath), "deleted asset metadata should be removed");
     smoke.Expect(transactions.UndoDepth() == 3, "asset delete should push an undo transaction");
 
-    smoke.Expect(transactions.Undo(applyAssetTransaction), "asset delete undo should apply");
+    smoke.Expect(transactions.Undo(assetContext, &assetError), "asset delete undo should apply");
     smoke.Expect(
         registry.Find(EditorAssetKind::Course, "smoke_course") != nullptr,
         "asset delete undo should restore registry record");
     smoke.Expect(std::filesystem::exists(dependent.sourcePath), "asset delete undo should restore source file");
     smoke.Expect(std::filesystem::exists(dependent.metadataPath), "asset delete undo should restore metadata file");
 
-    smoke.Expect(transactions.Redo(applyAssetTransaction), "asset delete redo should apply");
+    smoke.Expect(transactions.Redo(assetContext, &assetError), "asset delete redo should apply");
     smoke.Expect(
         registry.Find(EditorAssetKind::Course, "smoke_course") == nullptr,
         "asset delete redo should remove registry record again");
 
-    smoke.Expect(transactions.Undo(applyAssetTransaction), "asset delete second undo should restore dependent");
-    smoke.Expect(transactions.Undo(applyAssetTransaction), "asset move undo should apply");
+    smoke.Expect(transactions.Undo(assetContext, &assetError), "asset delete second undo should restore dependent");
+    smoke.Expect(transactions.Undo(assetContext, &assetError), "asset move undo should apply");
     const EditorAssetRecord* movedBack = registry.Find(EditorAssetKind::Mesh, "smoke_asset_renamed");
     smoke.Expect(
         movedBack != nullptr && movedBack->sourcePath.find("/source/") != std::string::npos,
         "asset move undo should restore original source directory");
 
-    smoke.Expect(transactions.Undo(applyAssetTransaction), "asset rename undo should apply");
+    smoke.Expect(transactions.Undo(assetContext, &assetError), "asset rename undo should apply");
     const EditorAssetRecord* originalMesh = registry.Find(EditorAssetKind::Mesh, "smoke_asset");
     smoke.Expect(originalMesh != nullptr, "asset rename undo should restore original id");
     const EditorAssetRecord* restoredDependent =
@@ -397,7 +431,7 @@ void RunAssetMutationExecutorGate(SmokeRun& smoke, std::ostream& log) {
         originalMesh != nullptr && registry.CountDependents(*originalMesh) == 1,
         "dependency graph should restore after rename undo");
 
-    smoke.Expect(transactions.Redo(applyAssetTransaction), "asset rename redo should apply");
+    smoke.Expect(transactions.Redo(assetContext, &assetError), "asset rename redo should apply");
     const EditorAssetRecord* redoneMesh = registry.Find(EditorAssetKind::Mesh, "smoke_asset_renamed");
     smoke.Expect(redoneMesh != nullptr, "asset rename redo should restore renamed id");
     const EditorAssetRecord* redoneDependent =
@@ -533,8 +567,9 @@ void RunPlaySessionBoundaryGate(SmokeRun& smoke, std::ostream& log) {
     smoke.Expect(applyResult.succeeded, "runtime apply should accept explicit authoring apply");
     smoke.Expect(
         transactions.LastTransaction() != nullptr &&
-            transactions.LastTransaction()->payload.kind == EditorTransactionPayloadKind::RuntimeAuthoringApply,
-        "runtime apply should push a transaction");
+            transactions.LastTransaction()->payload.kind == EditorTransactionPayloadKind::Command &&
+            dynamic_cast<const EditorRuntimeApplyUndoCommand*>(transactions.LastTransaction()->command.get()) != nullptr,
+        "runtime apply should push a generic command");
     course.events.front().payload = "runtime-not-applied";
     runtimeState.terrain.previewSpeed = 120.0f;
     smoke.Expect(runtimeControl.ResetRuntime(controlRequest).succeeded, "runtime reset should restore applied snapshot");
@@ -708,9 +743,12 @@ void RunWorkflowProbe(SmokeRun& smoke, std::ostream& log) {
             &selection,
             nullptr,
             nullptr,
+            nullptr,
             &transactions,
             EditorTransformGizmoMode::Translate,
             EditorTransformGizmoAxis::X,
+            EditorTransformGizmoSpace::Local,
+            EditorTransformGizmoPivotMode::Active,
             true});
     smoke.Expect(gizmo.State().targetAvailable, "gizmo should see selected course target");
     smoke.Expect(gizmo.State().transactionConnected, "gizmo should see transaction service");
@@ -939,7 +977,10 @@ void RunAssetImportReimportGate(SmokeRun& smoke, std::ostream& log) {
             batchExternalPolicy);
     smoke.Expect(batchExternalImport.succeeded, "smoke batch external import should succeed");
     smoke.Expect(batchExternalImport.warning, "smoke batch external import should warn on unsupported files");
-    smoke.Expect(batchExternalImport.importedCount == 2, "smoke batch external import should import valid files");
+    smoke.Expect(
+        batchExternalImport.importedCount == 2,
+        "smoke batch external import should import valid files: " +
+            batchExternalImport.message);
     smoke.Expect(batchExternalImport.skippedCount == 1, "smoke batch external import should count unsupported files");
     thumbnails.ProcessPreviewJobs(8);
     thumbnails.ProcessGpuThumbnails(8);

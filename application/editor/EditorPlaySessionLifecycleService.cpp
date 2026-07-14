@@ -79,7 +79,8 @@ EditorPlaySessionLifecycleResult EditorPlaySessionLifecycleService::Begin(
 
     std::string snapshotError;
     if (!request.snapshot->Capture(
-            EditorPlaySessionIsolationSnapshotTarget{request.course, request.runtimeState},
+            EditorPlaySessionIsolationSnapshotTarget{
+                request.course, request.runtimeState, request.effectRuntime, request.postProcessStack},
             &snapshotError)) {
         return Fail(
             request,
@@ -126,7 +127,8 @@ EditorPlaySessionLifecycleResult EditorPlaySessionLifecycleService::Stop(
 
     std::string restoreError;
     if (!request.snapshot->Restore(
-            EditorPlaySessionIsolationSnapshotTarget{request.course, request.runtimeState},
+            EditorPlaySessionIsolationSnapshotTarget{
+                request.course, request.runtimeState, request.effectRuntime, request.postProcessStack},
             &restoreError)) {
         return Fail(
             request,

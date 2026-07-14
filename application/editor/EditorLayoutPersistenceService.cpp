@@ -1,4 +1,5 @@
 #include "EditorLayoutPersistenceService.h"
+#include "io/EditorFileTransaction.h"
 
 #include <algorithm>
 #include <charconv>
@@ -9,7 +10,7 @@
 namespace editor {
 namespace {
 
-constexpr int kLayoutPersistenceVersion = 1;
+constexpr int kLayoutPersistenceVersion = 2;
 constexpr std::chrono::milliseconds kLayoutSaveDebounce(750);
 
 bool StartsWith(std::string_view value, std::string_view prefix) {
@@ -226,6 +227,83 @@ void EditorLayoutPersistenceService::SetPanelVisible(
     MarkDirty();
 }
 
+bool EditorLayoutPersistenceService::IsPanelPinned(
+    std::string_view panelId,
+    bool fallback) const {
+    const auto found = panelPinned_.find(std::string(panelId));
+    return found != panelPinned_.end() ? found->second : fallback;
+}
+
+void EditorLayoutPersistenceService::SetPanelPinned(
+    std::string_view panelId,
+    bool pinned) {
+    if (panelId.empty()) return;
+    std::string id(panelId);
+    const auto found = panelPinned_.find(id);
+    if (found != panelPinned_.end() && found->second == pinned) return;
+    panelPinned_[std::move(id)] = pinned;
+    MarkDirty();
+}
+
+EditorBottomDockGroup EditorLayoutPersistenceService::BottomDockGroup(
+    std::string_view panelId,
+    EditorBottomDockGroup fallback) const {
+    const auto found = bottomDockGroups_.find(std::string(panelId));
+    return found != bottomDockGroups_.end() ? found->second : fallback;
+}
+
+void EditorLayoutPersistenceService::SetBottomDockGroup(
+    std::string_view panelId,
+    EditorBottomDockGroup group) {
+    if (panelId.empty()) return;
+    std::string id(panelId);
+    const auto found = bottomDockGroups_.find(id);
+    if (found != bottomDockGroups_.end() && found->second == group) return;
+    bottomDockGroups_[std::move(id)] = group;
+    MarkDirty();
+}
+
+void EditorLayoutPersistenceService::SetActiveBottomDockGroup(
+    EditorBottomDockGroup group) {
+    if (activeBottomDockGroup_ == group) return;
+    activeBottomDockGroup_ = group;
+    MarkDirty();
+}
+
+void EditorLayoutPersistenceService::SetBottomDockSearch(std::string search) {
+    if (bottomDockSearch_ == search) return;
+    bottomDockSearch_ = std::move(search);
+    MarkDirty();
+}
+
+void EditorLayoutPersistenceService::SetBottomDockDeveloperPanelsVisible(
+    bool visible) {
+    if (bottomDockDeveloperPanelsVisible_ == visible) return;
+    bottomDockDeveloperPanelsVisible_ = visible;
+    if (!visible && activeBottomDockGroup_ == EditorBottomDockGroup::Developer) {
+        activeBottomDockGroup_ = EditorBottomDockGroup::Output;
+    }
+    MarkDirty();
+}
+
+bool EditorLayoutPersistenceService::OverlayOption(
+    std::string_view optionId,
+    bool fallback) const {
+    const auto found = overlayOptions_.find(std::string(optionId));
+    return found != overlayOptions_.end() ? found->second : fallback;
+}
+
+void EditorLayoutPersistenceService::SetOverlayOption(
+    std::string_view optionId,
+    bool enabled) {
+    if (optionId.empty()) return;
+    std::string id(optionId);
+    const auto found = overlayOptions_.find(id);
+    if (found != overlayOptions_.end() && found->second == enabled) return;
+    overlayOptions_[std::move(id)] = enabled;
+    MarkDirty();
+}
+
 std::string EditorLayoutPersistenceService::ActivePanel(EditorPanelHostArea area) const {
     const auto found = activePanels_.find(area);
     return found != activePanels_.end() ? found->second : std::string{};
@@ -305,6 +383,20 @@ bool EditorLayoutPersistenceService::Load() {
         } else if (StartsWith(key, "panel.") && ParseBool(value, parsedBool)) {
             panelVisibility_[key.substr(6)] = parsedBool;
             ++parsedLines;
+        } else if (StartsWith(key, "pinned.") && ParseBool(value, parsedBool)) {
+            panelPinned_[key.substr(7)] = parsedBool;
+            ++parsedLines;
+        } else if (StartsWith(key, "dockGroup.")) {
+            EditorBottomDockGroup group = EditorBottomDockGroup::Output;
+            if (EditorBottomDockGroupFromString(value, group)) {
+                bottomDockGroups_[key.substr(10)] = group;
+                ++parsedLines;
+            } else {
+                ++ignoredLines;
+            }
+        } else if (StartsWith(key, "overlay.") && ParseBool(value, parsedBool)) {
+            overlayOptions_[key.substr(8)] = parsedBool;
+            ++parsedLines;
         } else if (StartsWith(key, "active.")) {
             EditorPanelHostArea area = EditorPanelHostArea::Diagnostics;
             if (AreaFromKey(std::string_view(key).substr(7), area)) {
@@ -315,6 +407,20 @@ bool EditorLayoutPersistenceService::Load() {
             }
         } else if (key == "workspacePreset") {
             workspacePreset_ = value.empty() ? std::string("Authoring") : value;
+            ++parsedLines;
+        } else if (key == "bottomDockGroup") {
+            EditorBottomDockGroup group = EditorBottomDockGroup::Output;
+            if (EditorBottomDockGroupFromString(value, group)) {
+                activeBottomDockGroup_ = group;
+                ++parsedLines;
+            } else {
+                ++ignoredLines;
+            }
+        } else if (key == "bottomDockSearch") {
+            bottomDockSearch_ = value;
+            ++parsedLines;
+        } else if (key == "bottomDockDeveloperPanels" && ParseBool(value, parsedBool)) {
+            bottomDockDeveloperPanelsVisible_ = parsedBool;
             ++parsedLines;
         } else if (key == "version") {
             ++parsedLines;
@@ -357,11 +463,7 @@ bool EditorLayoutPersistenceService::Save() {
         }
     }
 
-    std::ofstream output(path_, std::ios::trunc);
-    if (!output) {
-        statusMessage_ = "Failed to write editor layout file: " + PathText(path_);
-        return false;
-    }
+    std::ostringstream output;
 
     output << "# CG4 editor layout persistence\n";
     output << "version=" << kLayoutPersistenceVersion << "\n";
@@ -370,6 +472,10 @@ bool EditorLayoutPersistenceService::Save() {
     output << "diagnosticsHeightRatio=" << diagnosticsHeightRatio_ << "\n";
     output << "contentBrowserWidthRatio=" << contentBrowserWidthRatio_ << "\n";
     output << "workspacePreset=" << workspacePreset_ << "\n";
+    output << "bottomDockGroup=" << ToString(activeBottomDockGroup_) << "\n";
+    output << "bottomDockSearch=" << bottomDockSearch_ << "\n";
+    output << "bottomDockDeveloperPanels="
+           << (bottomDockDeveloperPanelsVisible_ ? "1" : "0") << "\n";
     for (const auto& entry : activePanels_) {
         output << "active."
                << AreaKey(entry.first)
@@ -384,9 +490,33 @@ bool EditorLayoutPersistenceService::Save() {
                << (entry.second ? "1" : "0")
                << "\n";
     }
+    for (const auto& entry : panelPinned_) {
+        output << "pinned."
+               << entry.first
+               << "="
+               << (entry.second ? "1" : "0")
+               << "\n";
+    }
+    for (const auto& entry : bottomDockGroups_) {
+        output << "dockGroup."
+               << entry.first
+               << "="
+               << ToString(entry.second)
+               << "\n";
+    }
+    for (const auto& entry : overlayOptions_) {
+        output << "overlay."
+               << entry.first
+               << "="
+               << (entry.second ? "1" : "0")
+               << "\n";
+    }
 
-    if (!output) {
-        statusMessage_ = "Failed to flush editor layout file: " + PathText(path_);
+    EditorFileTransaction transaction(std::filesystem::current_path());
+    std::string transactionError;
+    if (!transaction.StageTextWrite(path_, output.str(), {}, &transactionError) ||
+        !transaction.Execute(nullptr, &transactionError)) {
+        statusMessage_ = "Failed to atomically save editor layout: " + transactionError;
         return false;
     }
 
@@ -487,7 +617,13 @@ void EditorLayoutPersistenceService::ResetToDefaults() {
     contentBrowserWidthRatio_ = 0.32f;
     workspacePreset_ = "Authoring";
     panelVisibility_.clear();
+    panelPinned_.clear();
+    bottomDockGroups_.clear();
+    overlayOptions_.clear();
     activePanels_.clear();
+    activeBottomDockGroup_ = EditorBottomDockGroup::Output;
+    bottomDockSearch_.clear();
+    bottomDockDeveloperPanelsVisible_ = false;
 }
 
 } // namespace editor

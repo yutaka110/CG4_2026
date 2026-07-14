@@ -78,4 +78,40 @@ const char* ToString(EditorPanelHostArea area) {
     return "Unknown";
 }
 
+const char* ToString(EditorBottomDockGroup group) {
+    switch (group) {
+    case EditorBottomDockGroup::Output:
+        return "Output";
+    case EditorBottomDockGroup::Profiling:
+        return "Profiling";
+    case EditorBottomDockGroup::Authoring:
+        return "Authoring";
+    case EditorBottomDockGroup::Developer:
+        return "Developer";
+    }
+    return "Output";
+}
+
+bool EditorBottomDockGroupFromString(
+    std::string_view text,
+    EditorBottomDockGroup& outGroup) {
+    if (text == "Output") {
+        outGroup = EditorBottomDockGroup::Output;
+        return true;
+    }
+    if (text == "Profiling") {
+        outGroup = EditorBottomDockGroup::Profiling;
+        return true;
+    }
+    if (text == "Authoring") {
+        outGroup = EditorBottomDockGroup::Authoring;
+        return true;
+    }
+    if (text == "Developer") {
+        outGroup = EditorBottomDockGroup::Developer;
+        return true;
+    }
+    return false;
+}
+
 } // namespace editor

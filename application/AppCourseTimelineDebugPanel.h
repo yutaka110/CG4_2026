@@ -14,6 +14,7 @@ namespace editor {
 class EditorDirtyStateService;
 class EditorDocumentLifecycleService;
 class EditorModalConfirmService;
+class EditorSequencerService;
 class EditorTransactionStack;
 }
 
@@ -37,6 +38,7 @@ struct CourseTimelineDebugPanelInput {
     editor::EditorDocumentLifecycleService* documentLifecycle = nullptr;
     editor::EditorModalConfirmService* confirmService = nullptr;
     bool canMutateAuthoring = true;
+    editor::EditorSequencerService* sequencer = nullptr;
 };
 
 void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input);

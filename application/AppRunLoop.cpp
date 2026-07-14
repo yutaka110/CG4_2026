@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <memory>
 #include <sstream>
 #include <thread>
@@ -30,7 +31,13 @@
 #include "editor/EditorPropertyEditService.h"
 #include "editor/EditorPropertyEditSession.h"
 #include "editor/EditorPropertyRegistry.h"
+#include "editor/EditorTransformGizmoMath.h"
+#include "editor/EditorViewportCoordinateService.h"
 #include "editor/EditorViewportOverlay.h"
+#include "editor/course/CourseEditorExecutionService.h"
+#include "editor/course/CoursePropertyUndoCommand.h"
+#include "editor/io/EditorFileRecoveryService.h"
+#include "editor/io/EditorFileTransaction.h"
 #include "utils/dx12/BufferHelper.h"
 
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
@@ -463,36 +470,23 @@ RailOverlayProjectedPoint ProjectRailOverlayPoint(
     const Matrix4x4& matrix,
     uint32_t width,
     uint32_t height) {
-    const float x =
-        point.x * matrix.m[0][0] + point.y * matrix.m[1][0] + point.z * matrix.m[2][0] + matrix.m[3][0];
-    const float y =
-        point.x * matrix.m[0][1] + point.y * matrix.m[1][1] + point.z * matrix.m[2][1] + matrix.m[3][1];
-    const float z =
-        point.x * matrix.m[0][2] + point.y * matrix.m[1][2] + point.z * matrix.m[2][2] + matrix.m[3][2];
-    const float w =
-        point.x * matrix.m[0][3] + point.y * matrix.m[1][3] + point.z * matrix.m[2][3] + matrix.m[3][3];
-
-    RailOverlayProjectedPoint result{};
-    if (w <= 0.00001f) {
-        result.behind = true;
-        return result;
-    }
-
-    const float ndcX = x / w;
-    const float ndcY = y / w;
-    result.depth = z / w;
-    result.screen = {
-        (ndcX * 0.5f + 0.5f) * static_cast<float>(width),
-        (1.0f - (ndcY * 0.5f + 0.5f)) * static_cast<float>(height),
-    };
-    result.inDepth = result.depth >= 0.0f && result.depth <= 1.0f;
-    result.onscreen =
-        result.inDepth &&
-        result.screen.x >= 0.0f &&
-        result.screen.y >= 0.0f &&
-        result.screen.x <= static_cast<float>(width) &&
-        result.screen.y <= static_cast<float>(height);
-    return result;
+    editor::EditorViewportCoordinateService coordinates;
+    coordinates.Update(editor::EditorViewportCoordinateContext{
+        editor::EditorPanelRect{
+            0.0f,
+            0.0f,
+            static_cast<float>(width),
+            static_cast<float>(height)},
+        width,
+        height,
+        matrix});
+    const editor::EditorViewportProjectedPoint projected = coordinates.ProjectWorld(point);
+    return RailOverlayProjectedPoint{
+        Vector2{projected.render.x, projected.render.y},
+        projected.depth,
+        projected.behind,
+        projected.inDepth,
+        projected.onscreen};
 }
 
 struct CourseObjectBounds {
@@ -628,15 +622,23 @@ bool MakeScreenRay(
         return false;
     }
 
-    const float x = (static_cast<float>(clientPoint.x) / static_cast<float>(windowWidth)) * 2.0f - 1.0f;
-    const float y = 1.0f - (static_cast<float>(clientPoint.y) / static_cast<float>(windowHeight)) * 2.0f;
-
-    Matrix4x4 viewProjectionCopy = viewProjection;
-    const Matrix4x4 inverseViewProjection = Inverse(viewProjectionCopy);
-    const Vector3 nearPoint = TransformCoord({x, y, 0.0f}, inverseViewProjection);
-    const Vector3 farPoint = TransformCoord({x, y, 1.0f}, inverseViewProjection);
-    outOrigin = nearPoint;
-    outDirection = NormalizeOr(Subtract(farPoint, nearPoint), {0.0f, 0.0f, 1.0f});
+    editor::EditorViewportCoordinateService coordinates;
+    coordinates.Update(editor::EditorViewportCoordinateContext{
+        editor::EditorPanelRect{
+            0.0f,
+            0.0f,
+            static_cast<float>(windowWidth),
+            static_cast<float>(windowHeight)},
+        windowWidth,
+        windowHeight,
+        viewProjection});
+    const editor::EditorViewportWorldRay ray =
+        coordinates.RenderToWorldRay(static_cast<float>(clientPoint.x), static_cast<float>(clientPoint.y));
+    if (!ray.valid) {
+        return false;
+    }
+    outOrigin = ray.origin;
+    outDirection = ray.direction;
     return true;
 }
 
@@ -720,12 +722,37 @@ bool PickCourseObjectGizmoAxis(
     const Vector3& rayOrigin,
     const Vector3& rayDirection,
     float padding,
+    int gizmoMode,
     int& outAxis) {
     const float length = CourseObjectGizmoLength(bounds, padding);
     const float threshold = (std::clamp)(length * 0.075f, 0.65f, 4.0f);
     const Vector3 axes[3] = {bounds.axisX, bounds.axisY, bounds.axisZ};
     float bestRayT = 1000000.0f;
     int bestAxis = -1;
+    if (gizmoMode != 2) {
+        constexpr int pairs[3][2] = {{0, 1}, {1, 2}, {2, 0}};
+        for (int plane = 0; plane < 3; ++plane) {
+            const Vector3& first = axes[pairs[plane][0]];
+            const Vector3& second = axes[pairs[plane][1]];
+            const Vector3 normal = NormalizeOr(Cross(first, second), {0.0f, 1.0f, 0.0f});
+            Vector3 point{};
+            float rayT = 0.0f;
+            if (!editor::IntersectEditorGizmoRayPlane(
+                    rayOrigin, rayDirection, bounds.center, normal, &point, &rayT)) {
+                continue;
+            }
+            const Vector3 offset = Subtract(point, bounds.center);
+            const float firstDistance = Dot(offset, first);
+            const float secondDistance = Dot(offset, second);
+            const float minimum = length * 0.12f;
+            const float maximum = length * 0.38f;
+            if (firstDistance >= minimum && firstDistance <= maximum &&
+                secondDistance >= minimum && secondDistance <= maximum && rayT < bestRayT) {
+                bestRayT = rayT;
+                bestAxis = 3 + plane;
+            }
+        }
+    }
     for (int axis = 0; axis < 3; ++axis) {
         const Vector3 start = bounds.center;
         const Vector3 end = Add(bounds.center, Scale(axes[axis], length));
@@ -734,6 +761,15 @@ bool PickCourseObjectGizmoAxis(
         if (distance <= threshold && rayT < bestRayT) {
             bestRayT = rayT;
             bestAxis = axis;
+        }
+    }
+    if (gizmoMode == 1) {
+        float centerRayT = 0.0f;
+        const float centerExtent = (std::max)(0.5f, length * 0.07f);
+        if (RayIntersectsAabb(
+                rayOrigin, rayDirection, bounds.center,
+                {centerExtent, centerExtent, centerExtent}, centerRayT) && centerRayT < bestRayT) {
+            bestAxis = 6;
         }
     }
     outAxis = bestAxis;
@@ -791,10 +827,7 @@ bool PickCourseObject(
 }
 
 float SnapCourseObjectValue(float value, float step) {
-    if (step <= 0.00001f) {
-        return value;
-    }
-    return std::round(value / step) * step;
+    return editor::SnapEditorGizmoValue(value, step);
 }
 
 Vector3 SnapCourseObjectVector(const Vector3& value, float step) {
@@ -1022,18 +1055,23 @@ void AddSelectionFrameBox(
     const Vector3& axisZ,
     float padding,
     const Vector4& color,
-    int gizmoMode) {
+    int gizmoMode,
+    bool drawGizmo = true,
+    bool drawFrame = true) {
     const float safePadding = (std::clamp)(padding, 1.0f, 2.0f);
     const Vector3 e = {
         (std::max)(0.25f, std::abs(extents.x) * safePadding),
         (std::max)(0.25f, std::abs(extents.y) * safePadding),
         (std::max)(0.25f, std::abs(extents.z) * safePadding),
     };
-    debugDraw.AddBox(
-        {center.x - e.x, center.y - e.y, center.z - e.z},
-        {center.x + e.x, center.y + e.y, center.z + e.z},
-        color);
-    debugDraw.AddPoint(center, 1.25f, color);
+    if (drawFrame) {
+        debugDraw.AddBox(
+            {center.x - e.x, center.y - e.y, center.z - e.z},
+            {center.x + e.x, center.y + e.y, center.z + e.z},
+            color);
+        debugDraw.AddPoint(center, 1.25f, color);
+    }
+    if (!drawGizmo) return;
     CourseObjectBounds visualBounds{};
     visualBounds.center = center;
     visualBounds.extents = extents;
@@ -1061,6 +1099,22 @@ void AddSelectionFrameBox(
         debugDraw.AddCircle(center, axisY, axisZ, radius, {1.0f, 0.18f, 0.12f, 1.0f}, 48);
         debugDraw.AddCircle(center, axisX, axisZ, radius, {0.24f, 1.0f, 0.22f, 1.0f}, 48);
         debugDraw.AddCircle(center, axisX, axisY, radius, {0.25f, 0.55f, 1.0f, 1.0f}, 48);
+    } else {
+        constexpr int pairs[3][2] = {{0, 1}, {1, 2}, {2, 0}};
+        const Vector3 axes[3] = {axisX, axisY, axisZ};
+        const Vector4 colors[3] = {
+            {1.0f, 0.85f, 0.18f, 0.8f},
+            {0.18f, 1.0f, 0.85f, 0.8f},
+            {0.85f, 0.18f, 1.0f, 0.8f}};
+        for (int plane = 0; plane < 3; ++plane) {
+            const Vector3 a = Scale(axes[pairs[plane][0]], gizmoLength * 0.28f);
+            const Vector3 b = Scale(axes[pairs[plane][1]], gizmoLength * 0.28f);
+            const Vector3 cornerA = Add(center, a);
+            const Vector3 cornerB = Add(center, b);
+            const Vector3 cornerAB = Add(cornerA, b);
+            debugDraw.AddLine(cornerA, cornerAB, colors[plane]);
+            debugDraw.AddLine(cornerAB, cornerB, colors[plane]);
+        }
     }
 }
 
@@ -1075,51 +1129,74 @@ void AppendCourseObjectSelectionDebugDraw(
 
     constexpr Vector4 kTerrainColor = {0.25f, 0.92f, 1.0f, 1.0f};
     constexpr Vector4 kRockColor = {1.0f, 0.84f, 0.22f, 1.0f};
-    if (authoring.courseObjectSelectionType == 0 &&
-        authoring.selectedCourseTerrainPlacement >= 0 &&
-        authoring.selectedCourseTerrainPlacement < static_cast<int>(course.terrainPlacements.size())) {
+    Vector3 medianCenter{};
+    uint32_t medianCount = 0;
+    CourseObjectBounds medianTemplate{};
+    Vector4 medianColor = kTerrainColor;
+    const auto drawBounds = [&](CourseObjectBounds bounds, const Vector4& color, bool active) {
+        const Vector3 axisX = authoring.courseObjectGizmoSpace == 0
+            ? Vector3{1.0f, 0.0f, 0.0f} : bounds.axisX;
+        const Vector3 axisY = authoring.courseObjectGizmoSpace == 0
+            ? Vector3{0.0f, 1.0f, 0.0f} : bounds.axisY;
+        const Vector3 axisZ = authoring.courseObjectGizmoSpace == 0
+            ? Vector3{0.0f, 0.0f, 1.0f} : bounds.axisZ;
+        AddSelectionFrameBox(
+            debugDraw, bounds.center, bounds.extents, axisX, axisY, axisZ,
+            authoring.courseObjectFramePadding, color, authoring.courseObjectGizmoMode,
+            authoring.courseObjectPivotMode == 2 ||
+                (authoring.courseObjectPivotMode == 0 && active));
+        if (authoring.courseObjectPivotMode == 1 &&
+            bounds.type == authoring.courseObjectSelectionType) {
+            medianCenter = Add(medianCenter, bounds.center);
+            ++medianCount;
+            if (active) {
+                medianTemplate = bounds;
+                medianColor = color;
+            }
+        }
+    };
+
+    std::vector<int> terrainSelection = authoring.selectedCourseTerrainPlacements;
+    if (terrainSelection.empty() && authoring.courseObjectSelectionType == 0 &&
+        authoring.selectedCourseTerrainPlacement >= 0) {
+        terrainSelection.push_back(authoring.selectedCourseTerrainPlacement);
+    }
+    for (const int index : terrainSelection) {
+        if (index < 0 || index >= static_cast<int>(course.terrainPlacements.size())) continue;
         CourseObjectBounds bounds{};
         if (!BuildCourseTerrainPlacementBounds(
-                course.terrainPlacements[static_cast<size_t>(authoring.selectedCourseTerrainPlacement)],
-                authoring.selectedCourseTerrainPlacement,
-                railPath,
-                bounds)) {
-            return;
-        }
-        AddSelectionFrameBox(
-            debugDraw,
-            bounds.center,
-            bounds.extents,
-            bounds.axisX,
-            bounds.axisY,
-            bounds.axisZ,
-            authoring.courseObjectFramePadding,
-            kTerrainColor,
-            authoring.courseObjectGizmoMode);
-        return;
+                course.terrainPlacements[static_cast<size_t>(index)], index, railPath, bounds)) continue;
+        drawBounds(bounds, kTerrainColor,
+            authoring.courseObjectSelectionType == 0 &&
+            index == authoring.selectedCourseTerrainPlacement);
     }
 
-    if (authoring.courseObjectSelectionType == 1 &&
-        authoring.selectedCourseRockCluster >= 0 &&
-        authoring.selectedCourseRockCluster < static_cast<int>(course.rockClusters.size())) {
+    std::vector<int> rockSelection = authoring.selectedCourseRockClusters;
+    if (rockSelection.empty() && authoring.courseObjectSelectionType == 1 &&
+        authoring.selectedCourseRockCluster >= 0) {
+        rockSelection.push_back(authoring.selectedCourseRockCluster);
+    }
+    for (const int index : rockSelection) {
+        if (index < 0 || index >= static_cast<int>(course.rockClusters.size())) continue;
         CourseObjectBounds bounds{};
         if (!BuildCourseRockClusterBounds(
-                course.rockClusters[static_cast<size_t>(authoring.selectedCourseRockCluster)],
-                authoring.selectedCourseRockCluster,
-                railPath,
-                bounds)) {
-            return;
-        }
+                course.rockClusters[static_cast<size_t>(index)], index, railPath, bounds)) continue;
+        drawBounds(bounds, kRockColor,
+            authoring.courseObjectSelectionType == 1 &&
+            index == authoring.selectedCourseRockCluster);
+    }
+    if (authoring.courseObjectPivotMode == 1 && medianCount > 0) {
+        medianTemplate.center = Scale(medianCenter, 1.0f / medianCount);
+        const Vector3 axisX = authoring.courseObjectGizmoSpace == 0
+            ? Vector3{1.0f, 0.0f, 0.0f} : medianTemplate.axisX;
+        const Vector3 axisY = authoring.courseObjectGizmoSpace == 0
+            ? Vector3{0.0f, 1.0f, 0.0f} : medianTemplate.axisY;
+        const Vector3 axisZ = authoring.courseObjectGizmoSpace == 0
+            ? Vector3{0.0f, 0.0f, 1.0f} : medianTemplate.axisZ;
         AddSelectionFrameBox(
-            debugDraw,
-            bounds.center,
-            bounds.extents,
-            bounds.axisX,
-            bounds.axisY,
-            bounds.axisZ,
-            authoring.courseObjectFramePadding,
-            kRockColor,
-            authoring.courseObjectGizmoMode);
+            debugDraw, medianTemplate.center, medianTemplate.extents,
+            axisX, axisY, axisZ, authoring.courseObjectFramePadding,
+            medianColor, authoring.courseObjectGizmoMode, true, false);
     }
 }
 
@@ -1346,19 +1423,23 @@ bool IntersectScreenPointWithZPlane(
     if (windowWidth == 0 || windowHeight == 0) {
         return false;
     }
-
-    const float x = (static_cast<float>(clientPoint.x) / static_cast<float>(windowWidth)) * 2.0f - 1.0f;
-    const float y = 1.0f - (static_cast<float>(clientPoint.y) / static_cast<float>(windowHeight)) * 2.0f;
-
-    Matrix4x4 viewProjectionCopy = viewProjection;
-    const Matrix4x4 inverseViewProjection = Inverse(viewProjectionCopy);
-    const Vector3 nearPoint = TransformCoord({x, y, 0.0f}, inverseViewProjection);
-    const Vector3 farPoint = TransformCoord({x, y, 1.0f}, inverseViewProjection);
-    const Vector3 direction = {
-        farPoint.x - nearPoint.x,
-        farPoint.y - nearPoint.y,
-        farPoint.z - nearPoint.z,
-    };
+    editor::EditorViewportCoordinateService coordinates;
+    coordinates.Update(editor::EditorViewportCoordinateContext{
+        editor::EditorPanelRect{
+            0.0f,
+            0.0f,
+            static_cast<float>(windowWidth),
+            static_cast<float>(windowHeight)},
+        windowWidth,
+        windowHeight,
+        viewProjection});
+    const editor::EditorViewportWorldRay ray =
+        coordinates.RenderToWorldRay(static_cast<float>(clientPoint.x), static_cast<float>(clientPoint.y));
+    if (!ray.valid) {
+        return false;
+    }
+    const Vector3& nearPoint = ray.origin;
+    const Vector3& direction = ray.direction;
     if (std::abs(direction.z) <= 0.00001f) {
         return false;
     }
@@ -1440,6 +1521,18 @@ AppRunLoop::AppRunLoop(
       commandQueue_(commandQueue),
       fence_(fence),
       fenceEvent_(fenceEvent) {
+    const editor::EditorFileRecoveryReport recovery =
+        editor::EditorFileRecoveryService(std::filesystem::current_path()).Recover();
+    if (!recovery.succeeded || recovery.recoveredPreparedCount > 0) {
+        std::ostringstream message;
+        message << "[EditorFileRecovery] recovered=" << recovery.recoveredPreparedCount
+                << " finalized=" << recovery.finalizedCommittedCount
+                << " errors=" << recovery.errors.size() << '\n';
+        for (const std::string& error : recovery.errors) {
+            message << "  " << error << '\n';
+        }
+        OutputDebugStringA(message.str().c_str());
+    }
     sceneStateManager_.Initialize(std::make_unique<RailShooterSceneState>(), *this);
     std::string presetError;
     terrainPresetStore_.Load(runtimeState_.terrain, &presetError);
@@ -1555,7 +1648,45 @@ void AppRunLoop::ApplyRailShooterCourse() {
 bool AppRunLoop::SaveRailShooterCourse(std::string* errorMessage) {
     std::string error;
     railShooterCourse_.SortForRuntime();
-    if (!railShooterCourse_.SaveToFile(railShooterCoursePath_, &error)) {
+    const std::string transactionId = editor::EditorFileTransaction::GenerateTransactionId();
+    const std::filesystem::path serializationPath =
+        std::filesystem::current_path() / ".editor" / "serialization" /
+        (transactionId + ".course.tmp");
+    std::error_code filesystemError;
+    std::filesystem::create_directories(serializationPath.parent_path(), filesystemError);
+    if (filesystemError ||
+        !railShooterCourse_.SaveToFile(serializationPath.generic_string(), &error)) {
+        if (error.empty()) {
+            error = "Failed to create course serialization staging directory: " +
+                filesystemError.message();
+        }
+        railShooterCourseLoadStatus_ = "Save failed. " + error;
+        OutputDebugStringA(("[Course] " + railShooterCourseLoadStatus_ + "\n").c_str());
+        if (errorMessage != nullptr) {
+            *errorMessage = error;
+        }
+        return false;
+    }
+
+    std::ifstream serializedFile(serializationPath, std::ios::binary);
+    std::vector<uint8_t> serializedBytes{
+        std::istreambuf_iterator<char>(serializedFile),
+        std::istreambuf_iterator<char>()};
+    const bool serializedRead = serializedFile.good() || serializedFile.eof();
+    serializedFile.close();
+    std::filesystem::remove(serializationPath, filesystemError);
+
+    editor::EditorFileTransaction transaction(std::filesystem::current_path(), transactionId);
+    if (!serializedRead ||
+        !transaction.StageWrite(
+            railShooterCoursePath_,
+            std::move(serializedBytes),
+            [](const std::filesystem::path& stagedPath, std::string* validationError) {
+                CourseAsset candidate{};
+                return candidate.LoadFromFile(stagedPath.generic_string(), validationError);
+            },
+            &error) ||
+        !transaction.Execute(nullptr, &error)) {
         railShooterCourseLoadStatus_ = "Save failed. " + error;
         OutputDebugStringA(("[Course] " + railShooterCourseLoadStatus_ + "\n").c_str());
         if (errorMessage != nullptr) {
@@ -1867,273 +1998,43 @@ void AppRunLoop::ApplyRailShooterVisualPresets(float distance) {
     runtimeState_.materialData.specularMode = 1;
 }
 
-void AppRunLoop::DrawRailLockOnHud() {
-    return;
-#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
-    if (!railShooterInitialized_ || windowWidth_ == 0 || windowHeight_ == 0) {
-        return;
-    }
 
-    const RailLockDebugFrame& debug = railShooterLockOnSystem_.DebugFrame();
-    const RailReticleState& reticle = debug.reticle;
-    if (!reticle.initialized) {
-        return;
-    }
-
-    ImDrawList* drawList = ImGui::GetForegroundDrawList();
-    if (drawList == nullptr) {
-        return;
-    }
-
-    const auto toImVec2 = [](const Vector2& value) {
-        return ImVec2(value.x, value.y);
-    };
-    const auto screenVisible = [this](const Vector2& value, float margin) {
-        return value.x >= -margin &&
-            value.y >= -margin &&
-            value.x <= static_cast<float>(windowWidth_) + margin &&
-            value.y <= static_cast<float>(windowHeight_) + margin;
-    };
-
-    const ImVec2 reticlePos = toImVec2(reticle.currentScreenPosition);
-    const float pulse =
-        0.5f + 0.5f * std::sin(static_cast<float>(railShooterFrameIndex_) * 0.18f);
-    const int tokenCount = static_cast<int>(debug.tokens.size());
-    const int maxLocks = (std::max)(1, railShooterLockOnSystem_.Settings().maxLocks);
-    const bool maxLock = tokenCount >= maxLocks;
-    const bool releaseReady = tokenCount > 0;
-    const float acquireHudPulse = debug.acceptedThisFrame > 0 ? 1.0f : 0.0f;
-
-    const ImU32 candidateColor = IM_COL32(80, 218, 255, 170);
-    const ImU32 candidateHotColor = IM_COL32(110, 255, 190, 230);
-    const ImU32 lockedColor = maxLock ? IM_COL32(255, 218, 80, 255) : IM_COL32(80, 236, 255, 255);
-    const ImU32 lockedSoftColor = maxLock ? IM_COL32(255, 184, 70, 95) : IM_COL32(80, 210, 255, 95);
-    const ImU32 reticleColor = reticle.lockHeld
-        ? (maxLock ? IM_COL32(255, 214, 74, 255) : IM_COL32(96, 230, 255, 255))
-        : IM_COL32(220, 238, 246, 190);
-
-    int shownCandidates = 0;
-    for (const RailLockCandidate& candidate : debug.candidates) {
-        if (!candidate.lockable ||
-            candidate.rejectReason == RailLockRejectReason::AlreadyLocked ||
-            !screenVisible(candidate.anchor.screenPosition, 64.0f)) {
-            continue;
-        }
-        if (shownCandidates++ >= 10) {
-            break;
-        }
-
-        const ImVec2 pos = toImVec2(candidate.anchor.screenPosition);
-        const float radius = (std::clamp)(candidate.anchor.screenRadius, 18.0f, 58.0f);
-        const float hot = 1.0f - (std::clamp)(
-            candidate.distanceToReticle /
-                (railShooterLockOnSystem_.Settings().assistRadius + radius),
-            0.0f,
-            1.0f);
-        const ImU32 color = hot > 0.35f ? candidateHotColor : candidateColor;
-        const float thickness = 1.2f + hot * 1.8f;
-        drawList->AddCircle(pos, radius + 2.0f + pulse * 2.0f, color, 40, thickness);
-        drawList->AddCircle(pos, radius * 0.56f, IM_COL32(120, 245, 255, 95), 32, 1.0f);
-        drawList->AddLine(
-            ImVec2(pos.x - radius * 0.34f, pos.y),
-            ImVec2(pos.x - radius * 0.12f, pos.y),
-            color,
-            thickness);
-        drawList->AddLine(
-            ImVec2(pos.x + radius * 0.12f, pos.y),
-            ImVec2(pos.x + radius * 0.34f, pos.y),
-            color,
-            thickness);
-        drawList->AddLine(
-            ImVec2(pos.x, pos.y - radius * 0.34f),
-            ImVec2(pos.x, pos.y - radius * 0.12f),
-            color,
-            thickness);
-        drawList->AddLine(
-            ImVec2(pos.x, pos.y + radius * 0.12f),
-            ImVec2(pos.x, pos.y + radius * 0.34f),
-            color,
-            thickness);
-    }
-
-    for (int index = 0; index < tokenCount; ++index) {
-        const RailLockToken& token = debug.tokens[static_cast<size_t>(index)];
-        if (!screenVisible(token.acquiredScreenPosition, 72.0f)) {
-            continue;
-        }
-
-        const ImVec2 pos = toImVec2(token.acquiredScreenPosition);
-        const float acquiredAge = (std::max)(0.0f, debug.elapsedTime - token.acquiredTime);
-        const float acquirePulse = 1.0f - (std::clamp)(acquiredAge / 0.36f, 0.0f, 1.0f);
-        const float radius = 23.0f + pulse * 2.0f + acquirePulse * 13.0f;
-        const ImU32 tokenSoftColor = maxLock
-            ? IM_COL32(255, 184, 70, static_cast<int>(95.0f + acquirePulse * 92.0f))
-            : IM_COL32(80, 210, 255, static_cast<int>(95.0f + acquirePulse * 100.0f));
-        const ImU32 flashColor = maxLock
-            ? IM_COL32(255, 245, 160, static_cast<int>(acquirePulse * 220.0f))
-            : IM_COL32(190, 252, 255, static_cast<int>(acquirePulse * 220.0f));
-
-        drawList->AddLine(reticlePos, pos, tokenSoftColor, 1.3f + acquirePulse * 2.6f);
-        drawList->AddCircleFilled(pos, radius + 5.0f, tokenSoftColor, 36);
-        if (acquirePulse > 0.0f) {
-            drawList->AddCircleFilled(pos, radius + 17.0f * acquirePulse, flashColor, 44);
-            drawList->AddCircle(pos, radius + 22.0f * acquirePulse, flashColor, 44, 3.0f * acquirePulse);
-        }
-        drawList->AddCircle(pos, radius + 6.0f, lockedColor, 36, maxLock ? 3.0f : 2.0f);
-        drawList->AddCircle(pos, radius, IM_COL32(12, 24, 32, 180), 36, 2.0f);
-
-        const char numberText[8] = {
-            static_cast<char>('0' + ((index + 1) / 10)),
-            static_cast<char>('0' + ((index + 1) % 10)),
-            '\0',
-        };
-        const char* label = index + 1 >= 10 ? numberText : numberText + 1;
-        const ImVec2 textSize = ImGui::CalcTextSize(label);
-        drawList->AddText(
-            ImVec2(pos.x - textSize.x * 0.5f, pos.y - textSize.y * 0.5f),
-            IM_COL32(245, 252, 255, 255),
-            label);
-    }
-
-    for (const RailLockToken& token : debug.acquiredTokens) {
-        if (!screenVisible(token.acquiredScreenPosition, 72.0f)) {
-            continue;
-        }
-        const float acquiredAge = (std::max)(0.0f, debug.elapsedTime - token.acquiredTime);
-        const float tracerT = (std::clamp)(acquiredAge / 0.16f, 0.0f, 1.0f);
-        const float tracerAlpha = 1.0f - (std::clamp)(acquiredAge / 0.24f, 0.0f, 1.0f);
-        if (tracerAlpha <= 0.0f) {
-            continue;
-        }
-
-        const ImVec2 targetPos = toImVec2(token.acquiredScreenPosition);
-        const ImVec2 head(
-            reticlePos.x + (targetPos.x - reticlePos.x) * tracerT,
-            reticlePos.y + (targetPos.y - reticlePos.y) * tracerT);
-        const ImVec2 tail(
-            reticlePos.x + (targetPos.x - reticlePos.x) * (std::max)(0.0f, tracerT - 0.22f),
-            reticlePos.y + (targetPos.y - reticlePos.y) * (std::max)(0.0f, tracerT - 0.22f));
-        const ImU32 tracerColor = IM_COL32(
-            210,
-            255,
-            255,
-            static_cast<int>(tracerAlpha * 235.0f));
-        drawList->AddLine(tail, head, tracerColor, 4.0f);
-        drawList->AddCircleFilled(head, 4.5f + tracerAlpha * 3.5f, tracerColor, 18);
-    }
-
-    if (screenVisible(reticle.currentScreenPosition, 96.0f)) {
-        const float radius = reticle.lockHeld ? 27.0f + pulse * 3.0f + acquireHudPulse * 5.0f : 21.0f;
-        drawList->AddCircle(reticlePos, radius + 10.0f, IM_COL32(20, 32, 40, 145), 48, 3.0f);
-        drawList->AddCircle(reticlePos, radius, reticleColor, 48, reticle.lockHeld ? 2.6f : 1.8f);
-        drawList->AddLine(
-            ImVec2(reticlePos.x - radius - 14.0f, reticlePos.y),
-            ImVec2(reticlePos.x - radius * 0.44f, reticlePos.y),
-            reticleColor,
-            2.0f);
-        drawList->AddLine(
-            ImVec2(reticlePos.x + radius * 0.44f, reticlePos.y),
-            ImVec2(reticlePos.x + radius + 14.0f, reticlePos.y),
-            reticleColor,
-            2.0f);
-        drawList->AddLine(
-            ImVec2(reticlePos.x, reticlePos.y - radius - 14.0f),
-            ImVec2(reticlePos.x, reticlePos.y - radius * 0.44f),
-            reticleColor,
-            2.0f);
-        drawList->AddLine(
-            ImVec2(reticlePos.x, reticlePos.y + radius * 0.44f),
-            ImVec2(reticlePos.x, reticlePos.y + radius + 14.0f),
-            reticleColor,
-            2.0f);
-
-        if (releaseReady) {
-            const char* stateLabel = maxLock ? "MAX" : "LOCK";
-            const ImVec2 labelSize = ImGui::CalcTextSize(stateLabel);
-            drawList->AddText(
-                ImVec2(reticlePos.x - labelSize.x * 0.5f, reticlePos.y + radius + 15.0f),
-                reticleColor,
-                stateLabel);
-        }
-    }
-
-    const float meterWidth = static_cast<float>(maxLocks) * 18.0f + 18.0f;
-    const ImVec2 meterOrigin(
-        static_cast<float>(windowWidth_) * 0.5f - meterWidth * 0.5f,
-        static_cast<float>(windowHeight_) - 78.0f);
-    drawList->AddRectFilled(
-        ImVec2(meterOrigin.x - 14.0f, meterOrigin.y - 12.0f),
-        ImVec2(meterOrigin.x + meterWidth + 14.0f, meterOrigin.y + 26.0f),
-        IM_COL32(5, 12, 18, 126),
-        6.0f);
-    for (int index = 0; index < maxLocks; ++index) {
-        const bool filled = index < tokenCount;
-        float meterPulse = 0.0f;
-        if (filled && index == tokenCount - 1 && debug.acceptedThisFrame > 0) {
-            meterPulse = 1.0f;
-        }
-        const ImVec2 center(meterOrigin.x + 16.0f + static_cast<float>(index) * 18.0f, meterOrigin.y + 7.0f);
-        drawList->AddCircleFilled(
-            center,
-            filled ? 6.0f + meterPulse * 4.0f : 4.0f,
-            filled ? lockedColor : IM_COL32(96, 116, 128, 135),
-            18);
-        drawList->AddCircle(
-            center,
-            8.0f + meterPulse * 6.0f,
-            IM_COL32(190, 230, 245, filled ? 180 + static_cast<int>(meterPulse * 55.0f) : 70),
-            18,
-            1.0f + meterPulse * 1.6f);
-    }
-#endif
-}
-
-void AppRunLoop::DrawRailVisibilityDebugOverlay(ImDrawList* overlayDrawList) {
+void AppRunLoop::BuildRailVisibilityDebugOverlay(
+    editor::EditorViewportOverlayService& overlayService) {
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
     const RailVisibilityDebugOverlaySettings& overlay = railVisibilityDebugOverlay_;
-    if (!overlay.enabled || !railShooterInitialized_ || windowWidth_ == 0 || windowHeight_ == 0 ||
-        railPath_.Length() <= 0.0f) {
+    if (!overlay.enabled || !railShooterInitialized_ || railPath_.Length() <= 0.0f) {
         return;
     }
 
-    editor::EditorViewportOverlayScope viewportOverlay(
-        imguiLayer_.EditorViewportRenderTargetState(),
-        windowWidth_,
-        windowHeight_,
-        overlayDrawList);
-    if (!viewportOverlay.Active()) {
-        return;
-    }
-
-    ImDrawList* drawList = viewportOverlay.DrawList();
-    if (drawList == nullptr) {
-        return;
-    }
-
-    const uint32_t renderWidth =
-        (std::max)(1u, static_cast<uint32_t>(std::lround(viewportOverlay.RenderWidth())));
-    const uint32_t renderHeight =
-        (std::max)(1u, static_cast<uint32_t>(std::lround(viewportOverlay.RenderHeight())));
+    const editor::EditorViewportOverlayFrameContext& frame = overlayService.FrameContext();
+    const uint32_t renderWidth = (std::max)(1u, frame.viewport.renderWidth);
+    const uint32_t renderHeight = (std::max)(1u, frame.viewport.renderHeight);
     const float width = static_cast<float>(renderWidth);
     const float height = static_cast<float>(renderHeight);
     const ImVec2 viewportCenter(width * 0.5f, height * 0.5f);
-    const auto makeCenteredRect = [&](float widthFraction, float heightFraction, ImVec2& outMin, ImVec2& outMax) {
-        const float rectWidth = width * (std::clamp)(widthFraction, 0.05f, 1.0f);
-        const float rectHeight = height * (std::clamp)(heightFraction, 0.05f, 1.0f);
-        outMin = ImVec2(viewportCenter.x - rectWidth * 0.5f, viewportCenter.y - rectHeight * 0.5f);
-        outMax = ImVec2(viewportCenter.x + rectWidth * 0.5f, viewportCenter.y + rectHeight * 0.5f);
+    auto safeFrame = overlayService.Sink(editor::EditorViewportOverlayLayerId::CameraSafeFrame);
+    auto navigation = overlayService.Sink(editor::EditorViewportOverlayLayerId::CourseNavigation);
+    auto labels = overlayService.Sink(editor::EditorViewportOverlayLayerId::ObjectLabels);
+    auto helpers = overlayService.Sink(editor::EditorViewportOverlayLayerId::AuthoringHelpers);
+
+    const auto visible = [width, height](const ImVec2& point, float margin) {
+        return point.x >= -margin && point.y >= -margin &&
+            point.x <= width + margin && point.y <= height + margin;
     };
-    const auto pointInRect = [](const Vector2& point, const ImVec2& min, const ImVec2& max) {
-        return point.x >= min.x && point.x <= max.x && point.y >= min.y && point.y <= max.y;
+    const auto pointInRect = [](const Vector2& point, const ImVec2& minimum, const ImVec2& maximum) {
+        return point.x >= minimum.x && point.x <= maximum.x &&
+            point.y >= minimum.y && point.y <= maximum.y;
     };
-    const auto visibleWithMargin = [&](const Vector2& point, float margin) {
-        return viewportOverlay.RenderPointVisible(point.x, point.y, margin);
-    };
-    const auto toImVec2 = [](const Vector2& value) {
-        return ImVec2(value.x, value.y);
-    };
-    const auto scaled = [&](float value) {
-        return viewportOverlay.ScaleRadius(value);
+    const auto makeCenteredRect = [width, height](
+        float normalizedWidth,
+        float normalizedHeight,
+        ImVec2& outMin,
+        ImVec2& outMax) {
+        const float halfWidth = width * (std::clamp)(normalizedWidth, 0.0f, 1.0f) * 0.5f;
+        const float halfHeight = height * (std::clamp)(normalizedHeight, 0.0f, 1.0f) * 0.5f;
+        outMin = ImVec2(width * 0.5f - halfWidth, height * 0.5f - halfHeight);
+        outMax = ImVec2(width * 0.5f + halfWidth, height * 0.5f + halfHeight);
     };
 
     ImVec2 aimMin{};
@@ -2144,190 +2045,123 @@ void AppRunLoop::DrawRailVisibilityDebugOverlay(ImDrawList* overlayDrawList) {
     makeCenteredRect(overlay.warningZoneWidth, overlay.warningZoneHeight, warningMin, warningMax);
 
     if (overlay.showAimableZone) {
-        drawList->AddRectFilled(
-            viewportOverlay.ToDisplay(warningMin),
-            viewportOverlay.ToDisplay(warningMax),
-            IM_COL32(255, 196, 80, 12),
-            0.0f);
-        drawList->AddRect(
-            viewportOverlay.ToDisplay(warningMin),
-            viewportOverlay.ToDisplay(warningMax),
-            IM_COL32(255, 196, 80, 120),
-            0.0f,
-            0,
-            scaled(1.4f));
-        drawList->AddRectFilled(
-            viewportOverlay.ToDisplay(aimMin),
-            viewportOverlay.ToDisplay(aimMax),
-            IM_COL32(52, 232, 255, 16),
-            0.0f);
-        drawList->AddRect(
-            viewportOverlay.ToDisplay(aimMin),
-            viewportOverlay.ToDisplay(aimMax),
-            IM_COL32(80, 238, 255, 190),
-            0.0f,
-            0,
-            scaled(2.0f));
-        drawList->AddLine(
-            viewportOverlay.ToDisplay(viewportCenter.x - 18.0f, viewportCenter.y),
-            viewportOverlay.ToDisplay(viewportCenter.x + 18.0f, viewportCenter.y),
-            IM_COL32(120, 244, 255, 115),
-            scaled(1.2f));
-        drawList->AddLine(
-            viewportOverlay.ToDisplay(viewportCenter.x, viewportCenter.y - 18.0f),
-            viewportOverlay.ToDisplay(viewportCenter.x, viewportCenter.y + 18.0f),
-            IM_COL32(120, 244, 255, 115),
-            scaled(1.2f));
+        safeFrame.RectFilled(warningMin.x, warningMin.y, warningMax.x, warningMax.y, IM_COL32(255, 196, 80, 12));
+        safeFrame.Rect(warningMin.x, warningMin.y, warningMax.x, warningMax.y, IM_COL32(255, 196, 80, 120), 1.4f);
+        safeFrame.RectFilled(aimMin.x, aimMin.y, aimMax.x, aimMax.y, IM_COL32(52, 232, 255, 16));
+        safeFrame.Rect(aimMin.x, aimMin.y, aimMax.x, aimMax.y, IM_COL32(80, 238, 255, 190), 2.0f);
+        safeFrame.Line(viewportCenter.x - 18.0f, viewportCenter.y, viewportCenter.x + 18.0f, viewportCenter.y, IM_COL32(120, 244, 255, 115), 1.2f);
+        safeFrame.Line(viewportCenter.x, viewportCenter.y - 18.0f, viewportCenter.x, viewportCenter.y + 18.0f, IM_COL32(120, 244, 255, 115), 1.2f);
         if (overlay.showLabels) {
-            drawList->AddText(
-                viewportOverlay.ToDisplay(aimMin.x + 8.0f, aimMin.y + 6.0f),
-                IM_COL32(140, 248, 255, 210),
-                "AIMABLE");
-            drawList->AddText(
-                viewportOverlay.ToDisplay(warningMin.x + 8.0f, warningMin.y + 6.0f),
-                IM_COL32(255, 211, 96, 185),
-                "READABILITY");
+            editor::EditorViewportOverlayItemOptions labelOptions{};
+            labelOptions.priority = 80;
+            labelOptions.iconFallback = false;
+            safeFrame.Label(aimMin.x + 8.0f, aimMin.y + 6.0f, "AIMABLE", IM_COL32(140, 248, 255, 210), labelOptions);
+            safeFrame.Label(warningMin.x + 8.0f, warningMin.y + 6.0f, "READABILITY", IM_COL32(255, 211, 96, 185), labelOptions);
         }
     }
 
-    const RailCameraDirectorFrame& cameraFrame = railShooterCameraDirector_.LastFrame();
     const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(railShooterFrameIndex_) * 0.16f);
-
-    const auto drawScreenMarker = [&](const ImVec2& pos, float radius, ImU32 color, bool filled) {
-        const ImVec2 displayPos = viewportOverlay.ToDisplay(pos);
-        if (filled) {
-            drawList->AddCircleFilled(
-                displayPos,
-                scaled(radius + 2.0f + pulse * 1.5f),
-                color,
-                18);
-        }
-        drawList->AddCircle(displayPos, scaled(radius + 4.0f), color, 24, scaled(1.7f));
-        drawList->AddLine(
-            viewportOverlay.ToDisplay(pos.x - radius, pos.y),
-            viewportOverlay.ToDisplay(pos.x + radius, pos.y),
-            color,
-            scaled(1.2f));
-        drawList->AddLine(
-            viewportOverlay.ToDisplay(pos.x, pos.y - radius),
-            viewportOverlay.ToDisplay(pos.x, pos.y + radius),
-            color,
-            scaled(1.2f));
+    const auto submitMarker = [&navigation, pulse](const ImVec2& position, float radius, ImU32 color, bool filled) {
+        if (filled) navigation.CircleFilled(position.x, position.y, radius + 2.0f + pulse * 1.5f, color);
+        navigation.Circle(position.x, position.y, radius + 4.0f, color, 1.7f);
+        navigation.Line(position.x - radius, position.y, position.x + radius, position.y, color, 1.2f);
+        navigation.Line(position.x, position.y - radius, position.x, position.y + radius, color, 1.2f);
     };
-    const auto drawWorldDebugPoint = [&](const Vector3& world, const char* label, ImU32 color) {
-        const RailOverlayProjectedPoint projected =
-            ProjectRailOverlayPoint(world, frameState_.viewProjectionMatrix, renderWidth, renderHeight);
-        if (!projected.inDepth || !visibleWithMargin(projected.screen, 64.0f)) {
-            return;
-        }
-        const ImVec2 pos = toImVec2(projected.screen);
-        drawList->AddRect(
-            viewportOverlay.ToDisplay(pos.x - 6.0f, pos.y - 6.0f),
-            viewportOverlay.ToDisplay(pos.x + 6.0f, pos.y + 6.0f),
-            color,
-            0.0f,
-            0,
-            scaled(1.5f));
-        drawList->AddLine(
-            viewportOverlay.ToDisplay(viewportCenter),
-            viewportOverlay.ToDisplay(pos),
-            IM_COL32(160, 210, 255, 70),
-            scaled(1.0f));
-        if (overlay.showLabels) {
-            drawList->AddText(viewportOverlay.ToDisplay(pos.x + 8.0f, pos.y - 7.0f), color, label);
-        }
+    const auto project = [&frame](const Vector3& world) {
+        RailOverlayProjectedPoint result{};
+        if (frame.coordinates == nullptr) return result;
+        const editor::EditorViewportProjectedPoint projected = frame.coordinates->ProjectWorld(world);
+        result.screen = Vector2{projected.render.x, projected.render.y};
+        result.depth = projected.depth;
+        result.behind = projected.behind;
+        result.inDepth = projected.inDepth;
+        result.onscreen = projected.onscreen;
+        return result;
     };
 
     if (overlay.showActors) {
         for (const CourseEnemyActor& enemy : railShooterSpawnRuntime_.Enemies()) {
             const Vector3 center = RailLocalPoint(
-                railPath_,
-                enemy.desc.spawnDistance,
-                enemy.desc.lateralOffset,
-                enemy.desc.verticalOffset,
-                enemy.desc.distanceOffset);
-            const RailOverlayProjectedPoint projected =
-                ProjectRailOverlayPoint(center, frameState_.viewProjectionMatrix, renderWidth, renderHeight);
-            if (!projected.inDepth || !visibleWithMargin(projected.screen, 88.0f)) {
-                continue;
-            }
+                railPath_, enemy.desc.spawnDistance, enemy.desc.lateralOffset,
+                enemy.desc.verticalOffset, enemy.desc.distanceOffset);
+            const RailOverlayProjectedPoint projected = project(center);
+            if (!projected.inDepth || !visible(ImVec2(projected.screen.x, projected.screen.y), 88.0f)) continue;
 
+            const ImVec2 position(projected.screen.x, projected.screen.y);
             const bool inAimable = projected.onscreen && pointInRect(projected.screen, aimMin, aimMax);
             const bool inWarning = projected.onscreen && pointInRect(projected.screen, warningMin, warningMax);
             const ImU32 color =
                 inAimable && enemy.fireSafetyAllowed ? IM_COL32(88, 255, 176, 235) :
                 inAimable ? IM_COL32(255, 214, 82, 235) :
-                inWarning ? IM_COL32(255, 160, 70, 210) :
-                IM_COL32(255, 78, 72, 185);
+                inWarning ? IM_COL32(255, 160, 70, 210) : IM_COL32(255, 78, 72, 185);
             const float radius = inAimable ? 9.0f : (inWarning ? 7.0f : 5.5f);
-            const ImVec2 pos = toImVec2(projected.screen);
-            drawScreenMarker(pos, radius, color, enemy.fireSafetyAllowed);
-
+            submitMarker(position, radius, color, enemy.fireSafetyAllowed);
             if (!inAimable) {
-                drawList->AddLine(
-                    viewportOverlay.ToDisplay(pos),
-                    viewportOverlay.ToDisplay(viewportCenter),
-                    IM_COL32(255, 170, 70, 72),
-                    scaled(1.0f));
+                navigation.Line(position.x, position.y, viewportCenter.x, viewportCenter.y, IM_COL32(255, 170, 70, 72));
             }
             if (overlay.showLabels) {
-                char label[192]{};
                 const float forwardDistance =
                     enemy.desc.spawnDistance + enemy.desc.distanceOffset - railShooterDistance_;
+                char label[192]{};
                 std::snprintf(
-                    label,
-                    sizeof(label),
-                    "E%u %s %.0fm %s",
-                    enemy.actorId,
-                    enemy.desc.role.c_str(),
-                    forwardDistance,
-                    enemy.fireSafetyReason.c_str());
-                drawList->AddText(viewportOverlay.ToDisplay(pos.x + 10.0f, pos.y - 8.0f), color, label);
+                    label, sizeof(label), "E%u %s %.0fm %s", enemy.actorId,
+                    enemy.desc.role.c_str(), forwardDistance, enemy.fireSafetyReason.c_str());
+                editor::EditorViewportOverlayItemOptions options{};
+                options.distance = std::fabs(forwardDistance);
+                options.minZoom = 0.60f;
+                options.priority = inAimable ? 50 : 10;
+                labels.Label(position.x + 10.0f, position.y - 8.0f, label, color, options);
             }
         }
 
         for (const CourseObstacleActor& obstacle : railShooterSpawnRuntime_.Obstacles()) {
             const Vector3 center = RailLocalPoint(
-                railPath_,
-                obstacle.desc.spawnDistance,
-                obstacle.desc.lateralOffset,
-                obstacle.desc.verticalOffset,
-                obstacle.desc.distanceOffset);
-            const RailOverlayProjectedPoint projected =
-                ProjectRailOverlayPoint(center, frameState_.viewProjectionMatrix, renderWidth, renderHeight);
-            if (!projected.inDepth || !visibleWithMargin(projected.screen, 88.0f)) {
-                continue;
-            }
+                railPath_, obstacle.desc.spawnDistance, obstacle.desc.lateralOffset,
+                obstacle.desc.verticalOffset, obstacle.desc.distanceOffset);
+            const RailOverlayProjectedPoint projected = project(center);
+            if (!projected.inDepth || !visible(ImVec2(projected.screen.x, projected.screen.y), 88.0f)) continue;
 
+            const ImVec2 position(projected.screen.x, projected.screen.y);
             const bool inAimable = projected.onscreen && pointInRect(projected.screen, aimMin, aimMax);
             const bool inWarning = projected.onscreen && pointInRect(projected.screen, warningMin, warningMax);
-            const ImU32 color =
-                inAimable ? IM_COL32(108, 208, 255, 210) :
-                inWarning ? IM_COL32(255, 184, 76, 185) :
-                IM_COL32(255, 92, 72, 150);
-            const ImVec2 pos = toImVec2(projected.screen);
+            const ImU32 color = inAimable ? IM_COL32(108, 208, 255, 210) :
+                inWarning ? IM_COL32(255, 184, 76, 185) : IM_COL32(255, 92, 72, 150);
             const float radius = inAimable ? 8.0f : 6.0f;
-            drawList->AddRect(
-                viewportOverlay.ToDisplay(pos.x - radius, pos.y - radius),
-                viewportOverlay.ToDisplay(pos.x + radius, pos.y + radius),
-                color,
-                0.0f,
-                0,
-                scaled(1.6f));
+            navigation.Rect(
+                position.x - radius, position.y - radius,
+                position.x + radius, position.y + radius, color, 1.6f);
             if (overlay.showLabels) {
-                char label[96]{};
                 const float forwardDistance =
                     obstacle.desc.spawnDistance + obstacle.desc.distanceOffset - railShooterDistance_;
+                char label[96]{};
                 std::snprintf(label, sizeof(label), "O%u %.0fm", obstacle.actorId, forwardDistance);
-                drawList->AddText(viewportOverlay.ToDisplay(pos.x + 9.0f, pos.y - 7.0f), color, label);
+                editor::EditorViewportOverlayItemOptions options{};
+                options.distance = std::fabs(forwardDistance);
+                options.minZoom = 0.60f;
+                options.priority = inAimable ? 40 : 5;
+                labels.Label(position.x + 9.0f, position.y - 7.0f, label, color, options);
             }
         }
     }
 
     if (overlay.showThreatCenter) {
-        drawWorldDebugPoint(cameraFrame.baseTarget, "BASE", IM_COL32(155, 190, 255, 170));
-        drawWorldDebugPoint(cameraFrame.threatCenter, "THREAT", IM_COL32(255, 120, 215, 220));
+        const RailCameraDirectorFrame& cameraFrame = railShooterCameraDirector_.LastFrame();
+        const auto submitWorldHelper = [&helpers, &project, &visible, viewportCenter](
+            const Vector3& world, const char* label, ImU32 color) {
+            const RailOverlayProjectedPoint projected = project(world);
+            const ImVec2 position(projected.screen.x, projected.screen.y);
+            if (!projected.inDepth || !visible(position, 64.0f)) return;
+            helpers.Rect(position.x - 6.0f, position.y - 6.0f, position.x + 6.0f, position.y + 6.0f, color, 1.5f);
+            helpers.Line(viewportCenter.x, viewportCenter.y, position.x, position.y, IM_COL32(160, 210, 255, 70));
+            editor::EditorViewportOverlayItemOptions options{};
+            options.priority = 70;
+            helpers.Label(position.x + 8.0f, position.y - 7.0f, label, color, options);
+        };
+        submitWorldHelper(cameraFrame.baseTarget, "BASE", IM_COL32(155, 190, 255, 170));
+        submitWorldHelper(cameraFrame.threatCenter, "THREAT", IM_COL32(255, 120, 215, 220));
     }
+#else
+    (void)overlayService;
 #endif
 }
 
@@ -2857,7 +2691,9 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
 void AppRunLoop::RegisterRailLockOnHudPass(
     ID3D12GraphicsCommandList* commandList,
     const std::string& targetResourceName) {
-    if (targetResourceName.empty()) {
+    if (targetResourceName.empty() ||
+        !imguiLayer_.EditorViewportOverlay().LayerVisible(
+            editor::EditorViewportOverlayLayerId::GameplayHud)) {
         return;
     }
 
@@ -4589,20 +4425,23 @@ bool AppRunLoop::ResolveEditorViewportClientPoint(
             return false;
         }
 
-        const float localX = static_cast<float>(clientPoint.x) - rect.x;
-        const float localY = static_cast<float>(clientPoint.y) - rect.y;
-        const float scaleX = rect.width > 0.0f
-            ? static_cast<float>(editorViewport.renderWidth) / rect.width
-            : 1.0f;
-        const float scaleY = rect.height > 0.0f
-            ? static_cast<float>(editorViewport.renderHeight) / rect.height
-            : 1.0f;
+        editor::EditorViewportCoordinateService coordinates;
+        coordinates.Update(editor::EditorViewportCoordinateContext{
+            rect,
+            editorViewport.renderWidth,
+            editorViewport.renderHeight,
+            frameState_.viewProjectionMatrix});
+        const editor::EditorViewportCoordinatePoint renderPoint =
+            coordinates.DisplayToRender(static_cast<float>(clientPoint.x), static_cast<float>(clientPoint.y));
+        if (!renderPoint.valid) {
+            return false;
+        }
         outViewportPoint.x = static_cast<LONG>((std::clamp)(
-            std::lround(localX * scaleX),
+            std::lround(renderPoint.x),
             0l,
             static_cast<long>((std::max)(1u, editorViewport.renderWidth) - 1u)));
         outViewportPoint.y = static_cast<LONG>((std::clamp)(
-            std::lround(localY * scaleY),
+            std::lround(renderPoint.y),
             0l,
             static_cast<long>((std::max)(1u, editorViewport.renderHeight) - 1u)));
         outViewportWidth = editorViewport.renderWidth;
@@ -5259,6 +5098,9 @@ AppRunLoop::CourseObjectEditSnapshot AppRunLoop::CaptureCourseObjectSnapshot() c
     snapshot.selectionType = runtimeState_.terrain.courseObjectSelectionType;
     snapshot.selectedTerrainPlacement = runtimeState_.terrain.selectedCourseTerrainPlacement;
     snapshot.selectedRockCluster = runtimeState_.terrain.selectedCourseRockCluster;
+    snapshot.selectedTerrainPlacements =
+        runtimeState_.terrain.selectedCourseTerrainPlacements;
+    snapshot.selectedRockClusters = runtimeState_.terrain.selectedCourseRockClusters;
     return snapshot;
 }
 
@@ -5278,6 +5120,8 @@ void AppRunLoop::RestoreCourseObjectSnapshot(const CourseObjectEditSnapshot& sna
     runtimeState_.terrain.courseObjectSelectionType = snapshot.selectionType;
     runtimeState_.terrain.selectedCourseTerrainPlacement = snapshot.selectedTerrainPlacement;
     runtimeState_.terrain.selectedCourseRockCluster = snapshot.selectedRockCluster;
+    runtimeState_.terrain.selectedCourseTerrainPlacements = snapshot.selectedTerrainPlacements;
+    runtimeState_.terrain.selectedCourseRockClusters = snapshot.selectedRockClusters;
 }
 
 bool AppRunLoop::BeginCourseObjectGizmoEditSession() {
@@ -5285,39 +5129,34 @@ bool AppRunLoop::BeginCourseObjectGizmoEditSession() {
         return false;
     }
 
-    const std::size_t index = static_cast<std::size_t>(courseObjectDrag_.index);
+    editor::EditorPropertyRegistry propertyRegistry;
+    editor::RegisterBuiltInCourseObjectProperties(propertyRegistry);
+    std::vector<editor::EditorPropertyEditSessionProperty> properties;
     editor::EditorObjectHandle target{};
-    if (courseObjectDrag_.type == 0 &&
-        courseObjectDrag_.index < static_cast<int>(railShooterCourse_.terrainPlacements.size())) {
-        target =
-            MakeCourseGizmoHandle(
+    for (const CourseObjectDragState::Item& item : courseObjectDrag_.items) {
+        const std::size_t index = static_cast<std::size_t>(item.index);
+        const editor::EditorObjectHandle itemTarget = item.type == 0
+            ? MakeCourseGizmoHandle(
                 editor::EditorDomainId::CourseTerrainPlacement,
                 "course-terrain",
                 "Course Terrain",
                 index,
-                runtimeState_.terrain.courseObjectEditRevision);
-    } else if (
-        courseObjectDrag_.type == 1 &&
-        courseObjectDrag_.index < static_cast<int>(railShooterCourse_.rockClusters.size())) {
-        target =
-            MakeCourseGizmoHandle(
+                runtimeState_.terrain.courseObjectEditRevision)
+            : MakeCourseGizmoHandle(
                 editor::EditorDomainId::CourseRockCluster,
                 "course-rock",
                 "Course Rock Cluster",
                 index,
                 runtimeState_.terrain.courseObjectEditRevision);
-    } else {
-        return false;
+        if (item.index == courseObjectDrag_.index) target = itemTarget;
+        std::vector<editor::EditorPropertyEditSessionProperty> itemProperties =
+            BuildCourseGizmoSessionProperties(
+                propertyRegistry, itemTarget, item.type, courseObjectDrag_.gizmoMode);
+        properties.insert(
+            properties.end(),
+            std::make_move_iterator(itemProperties.begin()),
+            std::make_move_iterator(itemProperties.end()));
     }
-
-    editor::EditorPropertyRegistry propertyRegistry;
-    editor::RegisterBuiltInCourseObjectProperties(propertyRegistry);
-    std::vector<editor::EditorPropertyEditSessionProperty> properties =
-        BuildCourseGizmoSessionProperties(
-            propertyRegistry,
-            target,
-            courseObjectDrag_.type,
-            courseObjectDrag_.gizmoMode);
     if (properties.empty()) {
         return false;
     }
@@ -5340,6 +5179,105 @@ bool AppRunLoop::PreviewCourseObjectGizmoEditSession(
     std::vector<editor::EditorPropertyEditSessionValue> values) {
     if (!courseObjectGizmoEditSession_.IsActive()) {
         return false;
+    }
+    values.reserve(values.size() * (std::max)(std::size_t{1}, courseObjectDrag_.items.size()));
+    const auto findValue = [&](std::string_view path) -> const editor::EditorPropertyValue* {
+        const auto found = std::find_if(values.begin(), values.end(), [&](const auto& value) {
+            return value.target.localIndex == static_cast<uint64_t>(courseObjectDrag_.index) &&
+                value.propertyPath == path;
+        });
+        return found != values.end() ? &found->value : nullptr;
+    };
+    const float safeEpsilon = 0.0001f;
+    for (const CourseObjectDragState::Item& item : courseObjectDrag_.items) {
+        if (item.index == courseObjectDrag_.index) continue;
+        const std::size_t index = static_cast<std::size_t>(item.index);
+        const editor::EditorObjectHandle target = item.type == 0
+            ? MakeCourseGizmoHandle(
+                editor::EditorDomainId::CourseTerrainPlacement,
+                "course-terrain", "Course Terrain", index,
+                runtimeState_.terrain.courseObjectEditRevision)
+            : MakeCourseGizmoHandle(
+                editor::EditorDomainId::CourseRockCluster,
+                "course-rock", "Course Rock Cluster", index,
+                runtimeState_.terrain.courseObjectEditRevision);
+        if (item.type == 0) {
+            if (courseObjectDrag_.gizmoMode == 2) {
+                if (const auto* value = findValue("CourseTerrainPlacement.rotation")) {
+                    const Vector3 before = CourseGizmoRotationDegrees(courseObjectDrag_.startRotation);
+                    values.push_back({target, "CourseTerrainPlacement.rotation", CourseGizmoVec3Value({
+                        CourseGizmoRotationDegrees(item.rotation).x + value->vec3Value.x - before.x,
+                        CourseGizmoRotationDegrees(item.rotation).y + value->vec3Value.y - before.y,
+                        CourseGizmoRotationDegrees(item.rotation).z + value->vec3Value.z - before.z})});
+                }
+            } else if (courseObjectDrag_.gizmoMode == 1) {
+                if (const auto* value = findValue("CourseTerrainPlacement.scale")) {
+                    const Vector3 start = courseObjectDrag_.startScale;
+                    values.push_back({target, "CourseTerrainPlacement.scale", CourseGizmoVec3Value({
+                        item.scale.x * value->vec3Value.x / (std::max)(safeEpsilon, start.x),
+                        item.scale.y * value->vec3Value.y / (std::max)(safeEpsilon, start.y),
+                        item.scale.z * value->vec3Value.z / (std::max)(safeEpsilon, start.z)})});
+                }
+            } else {
+                const auto* lateral = findValue("CourseTerrainPlacement.lateralOffset");
+                const auto* vertical = findValue("CourseTerrainPlacement.verticalOffset");
+                const auto* forward = findValue("CourseTerrainPlacement.forwardOffset");
+                if (lateral != nullptr) values.push_back({target,
+                    "CourseTerrainPlacement.lateralOffset", CourseGizmoFloatValue(
+                        item.lateral + lateral->floatValue - courseObjectDrag_.startLateral)});
+                if (vertical != nullptr) values.push_back({target,
+                    "CourseTerrainPlacement.verticalOffset", CourseGizmoFloatValue(
+                        item.vertical + vertical->floatValue - courseObjectDrag_.startVertical)});
+                if (forward != nullptr) values.push_back({target,
+                    "CourseTerrainPlacement.forwardOffset", CourseGizmoFloatValue(
+                        item.forward + forward->floatValue - courseObjectDrag_.startForward)});
+            }
+        } else {
+            if (courseObjectDrag_.gizmoMode == 2) {
+                if (const auto* value = findValue("CourseRockCluster.rotation")) {
+                    const Vector3 before = CourseGizmoRotationDegrees(courseObjectDrag_.startRotation);
+                    const Vector3 itemDegrees = CourseGizmoRotationDegrees(item.rotation);
+                    values.push_back({target, "CourseRockCluster.rotation", CourseGizmoVec3Value({
+                        itemDegrees.x + value->vec3Value.x - before.x,
+                        itemDegrees.y + value->vec3Value.y - before.y,
+                        itemDegrees.z + value->vec3Value.z - before.z})});
+                }
+            } else if (courseObjectDrag_.gizmoMode == 1) {
+                const auto* minScale = findValue("CourseRockCluster.minScale");
+                const auto* maxScale = findValue("CourseRockCluster.maxScale");
+                const auto* spread = findValue("CourseRockCluster.spread");
+                if (minScale != nullptr) values.push_back({target, "CourseRockCluster.minScale",
+                    CourseGizmoFloatValue(item.minScale * minScale->floatValue /
+                        (std::max)(safeEpsilon, courseObjectDrag_.startMinScale))});
+                if (maxScale != nullptr) values.push_back({target, "CourseRockCluster.maxScale",
+                    CourseGizmoFloatValue(item.maxScale * maxScale->floatValue /
+                        (std::max)(safeEpsilon, courseObjectDrag_.startMaxScale))});
+                if (spread != nullptr) values.push_back({target, "CourseRockCluster.spread",
+                    CourseGizmoVec3Value({
+                        item.spread.x * spread->vec3Value.x /
+                            (std::max)(safeEpsilon, courseObjectDrag_.startSpread.x),
+                        item.spread.y * spread->vec3Value.y /
+                            (std::max)(safeEpsilon, courseObjectDrag_.startSpread.y),
+                        item.spread.z * spread->vec3Value.z /
+                            (std::max)(safeEpsilon, courseObjectDrag_.startSpread.z)})});
+            } else {
+                const auto* clearLane = findValue("CourseRockCluster.clearLaneRadius");
+                const auto* distance = findValue("CourseRockCluster.distance");
+                const auto* spread = findValue("CourseRockCluster.spread");
+                if (clearLane != nullptr) values.push_back({target,
+                    "CourseRockCluster.clearLaneRadius", CourseGizmoFloatValue(
+                        item.clearLaneRadius + clearLane->floatValue -
+                            courseObjectDrag_.startClearLaneRadius)});
+                if (distance != nullptr) values.push_back({target,
+                    "CourseRockCluster.distance", CourseGizmoFloatValue(
+                        item.distance + distance->floatValue - courseObjectDrag_.startDistance)});
+                if (spread != nullptr) values.push_back({target,
+                    "CourseRockCluster.spread", CourseGizmoVec3Value({
+                        item.spread.x + spread->vec3Value.x - courseObjectDrag_.startSpread.x,
+                        item.spread.y + spread->vec3Value.y - courseObjectDrag_.startSpread.y,
+                        item.spread.z + spread->vec3Value.z - courseObjectDrag_.startSpread.z})});
+            }
+        }
     }
     editor::CourseObjectPropertyAdapter previewAccessor(&railShooterCourse_, &runtimeState_, false);
     const editor::EditorPropertyEditSessionResult result =
@@ -5742,30 +5680,42 @@ void AppRunLoop::CommitCourseObjectHistoryIfNeeded() {
             }
             propertyChange.target.generation = editor.courseObjectEditRevision;
         }
-        if (propertyChanges.size() == 1) {
-            editor::EditorPropertyChange propertyChange = std::move(propertyChanges.front());
-            courseObjectTransactions_.PushPropertyDelta(
-                propertyChange.displayName.empty() ? "Course Property Edit" : propertyChange.displayName,
-                std::move(propertyChange.target),
-                std::move(propertyChange.propertyPath),
-                std::move(propertyChange.valueType),
-                std::move(propertyChange.beforeValue),
-                std::move(propertyChange.afterValue));
-        } else if (!propertyChanges.empty()) {
+        if (!propertyChanges.empty()) {
             const editor::EditorPropertyChange& firstChange = propertyChanges.front();
-            editor::EditorObjectHandle transactionTarget{};
-            transactionTarget.domain = firstChange.target.domain;
-            transactionTarget.stableId = firstChange.target.stableId;
-            transactionTarget.localIndex = firstChange.target.localIndex;
+            editor::EditorObjectHandle transactionTarget = firstChange.target;
             transactionTarget.generation = editor.courseObjectEditRevision;
-            transactionTarget.displayName = firstChange.target.displayName;
             const std::string transactionLabel = firstChange.displayName.empty()
-                ? std::string("Course Property Batch Edit")
+                ? (propertyChanges.size() == 1
+                    ? std::string("Course Property Edit")
+                    : std::string("Course Property Batch Edit"))
                 : firstChange.displayName;
-            courseObjectTransactions_.PushMultiPropertyDelta(
+
+            editor::EditorError commandError{};
+            const bool commandRegistered = courseObjectTransactions_.PushCommand(
                 transactionLabel,
-                std::move(transactionTarget),
-                std::move(propertyChanges));
+                transactionTarget,
+                std::make_shared<editor::CoursePropertyUndoCommand>(
+                    editor::MakeCoursePropertyUndoChanges(propertyChanges)),
+                &commandError);
+            if (!commandRegistered) {
+                // Compatibility bridge: a property edit must not become non-undoable while
+                // legacy Asset/Runtime transactions are still being migrated.
+                if (propertyChanges.size() == 1) {
+                    editor::EditorPropertyChange propertyChange = std::move(propertyChanges.front());
+                    courseObjectTransactions_.PushPropertyDelta(
+                        transactionLabel,
+                        std::move(propertyChange.target),
+                        std::move(propertyChange.propertyPath),
+                        std::move(propertyChange.valueType),
+                        std::move(propertyChange.beforeValue),
+                        std::move(propertyChange.afterValue));
+                } else {
+                    courseObjectTransactions_.PushMultiPropertyDelta(
+                        transactionLabel,
+                        std::move(transactionTarget),
+                        std::move(propertyChanges));
+                }
+            }
         }
     } else {
         editor::EditorObjectHandle transactionTarget{};
@@ -5794,6 +5744,16 @@ void AppRunLoop::ProcessCourseObjectUndoRedo() {
     RegisterCourseObjectViewportGizmoProperties(propertyRegistry);
     editor::CourseObjectPropertyAdapter propertyAccessor(&railShooterCourse_, &runtimeState_);
     editor::EditorPropertyEditService propertyEditService;
+    editor::CourseEditorExecutionService courseExecutionService(
+        propertyAccessor,
+        propertyRegistry,
+        nullptr,
+        nullptr,
+        true);
+    editor::EditorExecutionContext executionContext;
+    editor::EditorError executionContextError{};
+    const bool executionContextReady =
+        executionContext.Register(courseExecutionService, &executionContextError);
 
     const auto applyPropertyDelta =
         [&](const editor::EditorTransactionRecord& record,
@@ -5840,7 +5800,21 @@ void AppRunLoop::ProcessCourseObjectUndoRedo() {
 
     if (editor.courseObjectUndoRequested) {
         editor.courseObjectUndoRequested = false;
-        if (!courseObjectUndoStack_.empty() &&
+        const editor::EditorTransactionRecord* nextUndo =
+            courseObjectTransactions_.NextUndoTransaction();
+        const bool commandPending = nextUndo != nullptr && nextUndo->command != nullptr;
+        if (commandPending) {
+            if (executionContextReady && !courseObjectUndoStack_.empty()) {
+                const CourseObjectEditSnapshot currentSnapshot = CaptureCourseObjectSnapshot();
+                editor::EditorError undoError{};
+                if (courseObjectTransactions_.Undo(executionContext, &undoError)) {
+                    courseObjectRedoStack_.push_back(currentSnapshot);
+                    courseObjectUndoStack_.pop_back();
+                    courseObjectHistoryBaseline_ = CaptureCourseObjectSnapshot();
+                    courseObjectHistoryRevision_ = editor.courseObjectEditRevision;
+                }
+            }
+        } else if (!courseObjectUndoStack_.empty() &&
             courseObjectTransactions_.Undo(
                 [this, &editor, &applyPropertyDelta](
                     const editor::EditorTransactionRecord& record,
@@ -5874,7 +5848,21 @@ void AppRunLoop::ProcessCourseObjectUndoRedo() {
 
     if (editor.courseObjectRedoRequested) {
         editor.courseObjectRedoRequested = false;
-        if (!courseObjectRedoStack_.empty() &&
+        const editor::EditorTransactionRecord* nextRedo =
+            courseObjectTransactions_.NextRedoTransaction();
+        const bool commandPending = nextRedo != nullptr && nextRedo->command != nullptr;
+        if (commandPending) {
+            if (executionContextReady && !courseObjectRedoStack_.empty()) {
+                const CourseObjectEditSnapshot currentSnapshot = CaptureCourseObjectSnapshot();
+                editor::EditorError redoError{};
+                if (courseObjectTransactions_.Redo(executionContext, &redoError)) {
+                    courseObjectUndoStack_.push_back(currentSnapshot);
+                    courseObjectRedoStack_.pop_back();
+                    courseObjectHistoryBaseline_ = CaptureCourseObjectSnapshot();
+                    courseObjectHistoryRevision_ = editor.courseObjectEditRevision;
+                }
+            }
+        } else if (!courseObjectRedoStack_.empty() &&
             courseObjectTransactions_.Redo(
                 [this, &editor, &applyPropertyDelta](
                     const editor::EditorTransactionRecord& record,
@@ -5916,9 +5904,7 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
     const editor::EditorViewportAuthoringInputGuard inputGuard =
         editor::MakeEditorViewportAuthoringInputGuard(!editor.courseObjectAuthoringInputLocked);
     if (!inputGuard.CanMutate()) {
-        if (CommitCourseObjectDragIfNeeded()) {
-            CommitCourseObjectHistoryIfNeeded();
-        }
+        CancelCourseObjectDragIfNeeded();
         editor.courseObjectUndoRequested = false;
         editor.courseObjectRedoRequested = false;
         editor.courseObjectActiveAxis = -1;
@@ -5966,27 +5952,61 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
     if (leftMousePressed && cursorInViewport && !imguiWantsMouse) {
         Vector3 rayOrigin{};
         Vector3 rayDirection{};
+        bool rayValid = false;
         CourseObjectBounds hit{};
+        CourseObjectBounds localHit{};
         int pickedAxis = -1;
         bool picked = false;
-        if (MakeScreenRay(
+        if ((rayValid = MakeScreenRay(
                 viewportCursor,
                 viewportWidth,
                 viewportHeight,
                 frameState_.viewProjectionMatrix,
                 rayOrigin,
-                rayDirection)) {
+                rayDirection))) {
             CourseObjectBounds selectedBounds{};
-            if (BuildSelectedCourseObjectBounds(
+            const bool selectedBoundsAvailable = BuildSelectedCourseObjectBounds(
                     railShooterCourse_,
                     railPath_,
                     editor,
-                    selectedBounds) &&
+                    selectedBounds);
+            if (selectedBoundsAvailable && editor.courseObjectPivotMode == 1) {
+                const std::vector<int>& indices = selectedBounds.type == 0
+                    ? editor.selectedCourseTerrainPlacements
+                    : editor.selectedCourseRockClusters;
+                Vector3 centerSum{};
+                uint32_t centerCount = 0;
+                for (const int index : indices) {
+                    CourseObjectBounds itemBounds{};
+                    const bool built = selectedBounds.type == 0
+                        ? (index >= 0 && index < static_cast<int>(railShooterCourse_.terrainPlacements.size()) &&
+                            BuildCourseTerrainPlacementBounds(
+                                railShooterCourse_.terrainPlacements[static_cast<std::size_t>(index)],
+                                index, railPath_, itemBounds))
+                        : (index >= 0 && index < static_cast<int>(railShooterCourse_.rockClusters.size()) &&
+                            BuildCourseRockClusterBounds(
+                                railShooterCourse_.rockClusters[static_cast<std::size_t>(index)],
+                                index, railPath_, itemBounds));
+                    if (built) {
+                        centerSum = Add(centerSum, itemBounds.center);
+                        ++centerCount;
+                    }
+                }
+                if (centerCount > 0) selectedBounds.center = Scale(centerSum, 1.0f / centerCount);
+            }
+            localHit = selectedBounds;
+            if (selectedBoundsAvailable && editor.courseObjectGizmoSpace == 0) {
+                selectedBounds.axisX = {1.0f, 0.0f, 0.0f};
+                selectedBounds.axisY = {0.0f, 1.0f, 0.0f};
+                selectedBounds.axisZ = {0.0f, 0.0f, 1.0f};
+            }
+            if (selectedBoundsAvailable &&
                 PickCourseObjectGizmoAxis(
                     selectedBounds,
                     rayOrigin,
                     rayDirection,
                     editor.courseObjectFramePadding,
+                    editor.courseObjectGizmoMode,
                     pickedAxis)) {
                 hit = selectedBounds;
                 picked = true;
@@ -5998,6 +6018,7 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     rayDirection,
                     editor.courseObjectFramePadding,
                     hit);
+                localHit = hit;
             }
         }
         if (picked) {
@@ -6013,6 +6034,15 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
             courseObjectDrag_.axis = pickedAxis;
             courseObjectDrag_.gizmoMode = editor.courseObjectGizmoMode;
             courseObjectDrag_.startMouse = viewportCursor;
+            courseObjectDrag_.pivotWorld = hit.center;
+            courseObjectDrag_.localAxes[0] = localHit.axisX;
+            courseObjectDrag_.localAxes[1] = localHit.axisY;
+            courseObjectDrag_.localAxes[2] = localHit.axisZ;
+            courseObjectDrag_.handleAxes[0] = hit.axisX;
+            courseObjectDrag_.handleAxes[1] = hit.axisY;
+            courseObjectDrag_.handleAxes[2] = hit.axisZ;
+            courseObjectDrag_.handleLength = CourseObjectGizmoLength(
+                hit, editor.courseObjectFramePadding);
             if (hit.type == 0 &&
                 hit.index >= 0 &&
                 hit.index < static_cast<int>(railShooterCourse_.terrainPlacements.size())) {
@@ -6036,6 +6066,95 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                 courseObjectDrag_.startClearLaneRadius = cluster.clearLaneRadius;
                 courseObjectDrag_.startRotation = cluster.rotation;
             }
+            const std::vector<int>& selectedIndices = hit.type == 0
+                ? editor.selectedCourseTerrainPlacements
+                : editor.selectedCourseRockClusters;
+            const bool primaryInSelection = std::find(
+                selectedIndices.begin(), selectedIndices.end(), hit.index) != selectedIndices.end();
+            const auto captureItem = [&](int index) {
+                CourseObjectDragState::Item item{};
+                item.type = hit.type;
+                item.index = index;
+                if (hit.type == 0 && index >= 0 &&
+                    index < static_cast<int>(railShooterCourse_.terrainPlacements.size())) {
+                    const CourseTerrainPlacement& value =
+                        railShooterCourse_.terrainPlacements[static_cast<std::size_t>(index)];
+                    item.distance = value.distance;
+                    item.lateral = value.lateralOffset;
+                    item.vertical = value.verticalOffset;
+                    item.forward = value.forwardOffset;
+                    item.scale = value.scale;
+                    item.rotation = value.rotation;
+                    courseObjectDrag_.items.push_back(item);
+                } else if (hit.type == 1 && index >= 0 &&
+                    index < static_cast<int>(railShooterCourse_.rockClusters.size())) {
+                    const CourseRockCluster& value =
+                        railShooterCourse_.rockClusters[static_cast<std::size_t>(index)];
+                    item.distance = value.distance;
+                    item.minScale = value.minScale;
+                    item.maxScale = value.maxScale;
+                    item.spread = value.spread;
+                    item.rotation = value.rotation;
+                    item.clearLaneRadius = value.clearLaneRadius;
+                    courseObjectDrag_.items.push_back(item);
+                }
+            };
+            if (primaryInSelection) {
+                for (const int index : selectedIndices) captureItem(index);
+            } else {
+                captureItem(hit.index);
+            }
+            if (editor.courseObjectPivotMode == 1 && courseObjectDrag_.items.size() > 1) {
+                Vector3 sum{};
+                uint32_t count = 0;
+                for (const CourseObjectDragState::Item& item : courseObjectDrag_.items) {
+                    CourseObjectBounds itemBounds{};
+                    const bool built = item.type == 0
+                        ? BuildCourseTerrainPlacementBounds(
+                            railShooterCourse_.terrainPlacements[static_cast<std::size_t>(item.index)],
+                            item.index, railPath_, itemBounds)
+                        : BuildCourseRockClusterBounds(
+                            railShooterCourse_.rockClusters[static_cast<std::size_t>(item.index)],
+                            item.index, railPath_, itemBounds);
+                    if (built) {
+                        sum = Add(sum, itemBounds.center);
+                        ++count;
+                    }
+                }
+                if (count > 0) courseObjectDrag_.pivotWorld = Scale(sum, 1.0f / count);
+            }
+            if (rayValid && pickedAxis >= 0 && pickedAxis <= 2) {
+                courseObjectDrag_.constraintValid = editor::ClosestEditorGizmoRayAxisParameter(
+                    rayOrigin,
+                    rayDirection,
+                    courseObjectDrag_.pivotWorld,
+                    courseObjectDrag_.handleAxes[pickedAxis],
+                    &courseObjectDrag_.startAxisParameter);
+                if (editor.courseObjectGizmoMode == 2) {
+                    courseObjectDrag_.constraintPlaneNormal =
+                        courseObjectDrag_.handleAxes[pickedAxis];
+                    courseObjectDrag_.constraintValid = editor::IntersectEditorGizmoRayPlane(
+                        rayOrigin,
+                        rayDirection,
+                        courseObjectDrag_.pivotWorld,
+                        courseObjectDrag_.constraintPlaneNormal,
+                        &courseObjectDrag_.startConstraintPoint);
+                }
+            } else if (rayValid && pickedAxis >= 3 && pickedAxis <= 5) {
+                constexpr int planePairs[3][2] = {{0, 1}, {1, 2}, {2, 0}};
+                const int plane = pickedAxis - 3;
+                courseObjectDrag_.constraintPlaneNormal = NormalizeOr(
+                    Cross(
+                        courseObjectDrag_.handleAxes[planePairs[plane][0]],
+                        courseObjectDrag_.handleAxes[planePairs[plane][1]]),
+                    {0.0f, 1.0f, 0.0f});
+                courseObjectDrag_.constraintValid = editor::IntersectEditorGizmoRayPlane(
+                    rayOrigin,
+                    rayDirection,
+                    courseObjectDrag_.pivotWorld,
+                    courseObjectDrag_.constraintPlaneNormal,
+                    &courseObjectDrag_.startConstraintPoint);
+            }
             if (!BeginCourseObjectGizmoEditSession()) {
                 courseObjectDrag_.active = false;
                 editor.courseObjectActiveAxis = -1;
@@ -6046,6 +6165,12 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
             editor.courseObjectActiveAxis = -1;
             CancelCourseObjectDragIfNeeded();
         }
+    }
+
+    if (courseObjectDrag_.active && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0) {
+        CancelCourseObjectDragIfNeeded();
+        previousCourseEditorLeftMouseDown_ = leftMouseDown;
+        return;
     }
 
     if (courseObjectDrag_.active && leftMouseDown) {
@@ -6061,9 +6186,93 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
         const float scaleSensitivity = (std::max)(0.0001f, editor.courseObjectScaleSensitivity);
         const bool scaleMode = editor.courseObjectGizmoMode == 1;
         const bool rotateMode = editor.courseObjectGizmoMode == 2;
-        const float scaleFactor = (std::max)(0.05f, 1.0f + (dx - dy) * scaleSensitivity);
+        float scaleFactor = (std::max)(0.05f, 1.0f + (dx - dy) * scaleSensitivity);
         const float signedDrag = dx - dy;
+        Vector3 localTranslationDelta{
+            dx * moveSensitivity,
+            -dy * moveSensitivity,
+            -dy * moveSensitivity};
+        float rotationDelta = signedDrag *
+            (std::max)(0.0001f, editor.courseObjectRotateSensitivity);
         const int axis = courseObjectDrag_.axis;
+        Vector3 currentRayOrigin{};
+        Vector3 currentRayDirection{};
+        if (courseObjectDrag_.constraintValid &&
+            MakeScreenRay(
+                viewportCursor,
+                viewportWidth,
+                viewportHeight,
+                frameState_.viewProjectionMatrix,
+                currentRayOrigin,
+                currentRayDirection)) {
+            if (rotateMode && axis >= 0 && axis <= 2) {
+                Vector3 currentPoint{};
+                if (editor::IntersectEditorGizmoRayPlane(
+                        currentRayOrigin,
+                        currentRayDirection,
+                        courseObjectDrag_.pivotWorld,
+                        courseObjectDrag_.constraintPlaneNormal,
+                        &currentPoint)) {
+                    const Vector3 before = NormalizeOr(
+                        Subtract(
+                            courseObjectDrag_.startConstraintPoint,
+                            courseObjectDrag_.pivotWorld),
+                        courseObjectDrag_.handleAxes[(std::max)(0, (axis + 1) % 3)]);
+                    const Vector3 after = NormalizeOr(
+                        Subtract(currentPoint, courseObjectDrag_.pivotWorld), before);
+                    rotationDelta = editor::EditorGizmoSignedAngle(
+                        before, after, courseObjectDrag_.constraintPlaneNormal);
+                }
+            } else if (axis >= 0 && axis <= 2) {
+                float currentParameter = 0.0f;
+                if (editor::ClosestEditorGizmoRayAxisParameter(
+                        currentRayOrigin,
+                        currentRayDirection,
+                        courseObjectDrag_.pivotWorld,
+                        courseObjectDrag_.handleAxes[axis],
+                        &currentParameter)) {
+                    const Vector3 worldDelta = Scale(
+                        courseObjectDrag_.handleAxes[axis],
+                        currentParameter - courseObjectDrag_.startAxisParameter);
+                    localTranslationDelta = editor::ProjectEditorGizmoWorldDeltaToBasis(
+                        worldDelta,
+                        courseObjectDrag_.localAxes[0],
+                        courseObjectDrag_.localAxes[1],
+                        courseObjectDrag_.localAxes[2]);
+                    if (scaleMode) {
+                        scaleFactor = (std::max)(0.05f,
+                            1.0f + (currentParameter - courseObjectDrag_.startAxisParameter) /
+                                (std::max)(0.01f, courseObjectDrag_.handleLength));
+                    }
+                }
+            } else if (axis >= 3 && axis <= 5) {
+                Vector3 currentPoint{};
+                if (editor::IntersectEditorGizmoRayPlane(
+                        currentRayOrigin,
+                        currentRayDirection,
+                        courseObjectDrag_.pivotWorld,
+                        courseObjectDrag_.constraintPlaneNormal,
+                        &currentPoint)) {
+                    const Vector3 worldDelta = Subtract(
+                        currentPoint, courseObjectDrag_.startConstraintPoint);
+                    localTranslationDelta = editor::ProjectEditorGizmoWorldDeltaToBasis(
+                        worldDelta,
+                        courseObjectDrag_.localAxes[0],
+                        courseObjectDrag_.localAxes[1],
+                        courseObjectDrag_.localAxes[2]);
+                    if (scaleMode) {
+                        constexpr int planePairs[3][2] = {{0, 1}, {1, 2}, {2, 0}};
+                        const int plane = axis - 3;
+                        const float signedDistance =
+                            Dot(worldDelta, courseObjectDrag_.handleAxes[planePairs[plane][0]]) +
+                            Dot(worldDelta, courseObjectDrag_.handleAxes[planePairs[plane][1]]);
+                        scaleFactor = (std::max)(0.05f,
+                            1.0f + signedDistance /
+                                (std::max)(0.01f, courseObjectDrag_.handleLength));
+                    }
+                }
+            }
+        }
         bool changed = false;
 
         if (courseObjectDrag_.type == 0 &&
@@ -6081,14 +6290,19 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     runtimeState_.terrain.courseObjectEditRevision);
             if (rotateMode) {
                 Vector3 rotation = courseObjectDrag_.startRotation;
-                float delta = signedDrag * (std::max)(0.0001f, editor.courseObjectRotateSensitivity);
+                float delta = rotationDelta;
                 if (editor.courseObjectSnapEnabled) {
                     const float snapRadians =
                         editor.courseObjectRotateSnapDegrees * 3.14159265358979323846f / 180.0f;
                     delta = SnapCourseObjectValue(delta, snapRadians);
                 }
                 const int rotateAxis = axis >= 0 ? axis : 1;
-                if (rotateAxis == 0) {
+                if (editor.courseObjectGizmoSpace == 0 && rotateAxis >= 0 && rotateAxis <= 2) {
+                    const Vector3& worldAxis = courseObjectDrag_.handleAxes[rotateAxis];
+                    rotation.x += delta * Dot(worldAxis, courseObjectDrag_.localAxes[0]);
+                    rotation.y += delta * Dot(worldAxis, courseObjectDrag_.localAxes[1]);
+                    rotation.z += delta * Dot(worldAxis, courseObjectDrag_.localAxes[2]);
+                } else if (rotateAxis == 0) {
                     rotation.x = courseObjectDrag_.startRotation.x + delta;
                 } else if (rotateAxis == 1) {
                     rotation.y = courseObjectDrag_.startRotation.y + delta;
@@ -6109,7 +6323,16 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                         }) || changed;
             } else if (scaleMode) {
                 Vector3 scale = Scale(courseObjectDrag_.startScale, scaleFactor);
-                if (axis == 0) {
+                if (editor.courseObjectGizmoSpace == 0 && axis >= 0 && axis <= 2) {
+                    const Vector3& worldAxis = courseObjectDrag_.handleAxes[axis];
+                    scale = courseObjectDrag_.startScale;
+                    scale.x *= 1.0f + (scaleFactor - 1.0f) *
+                        std::abs(Dot(worldAxis, courseObjectDrag_.localAxes[0]));
+                    scale.y *= 1.0f + (scaleFactor - 1.0f) *
+                        std::abs(Dot(worldAxis, courseObjectDrag_.localAxes[1]));
+                    scale.z *= 1.0f + (scaleFactor - 1.0f) *
+                        std::abs(Dot(worldAxis, courseObjectDrag_.localAxes[2]));
+                } else if (axis == 0) {
                     scale = courseObjectDrag_.startScale;
                     scale.x = courseObjectDrag_.startScale.x * scaleFactor;
                 } else if (axis == 1) {
@@ -6118,6 +6341,18 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                 } else if (axis == 2) {
                     scale = courseObjectDrag_.startScale;
                     scale.z = courseObjectDrag_.startScale.z * scaleFactor;
+                } else if (axis == 3) {
+                    scale = courseObjectDrag_.startScale;
+                    scale.x *= scaleFactor;
+                    scale.y *= scaleFactor;
+                } else if (axis == 4) {
+                    scale = courseObjectDrag_.startScale;
+                    scale.y *= scaleFactor;
+                    scale.z *= scaleFactor;
+                } else if (axis == 5) {
+                    scale = courseObjectDrag_.startScale;
+                    scale.z *= scaleFactor;
+                    scale.x *= scaleFactor;
                 }
                 if (editor.courseObjectSnapEnabled) {
                     scale = SnapCourseObjectVector(scale, editor.courseObjectScaleSnap);
@@ -6138,25 +6373,11 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                                 CourseGizmoVec3Value(scale)},
                         }) || changed;
             } else {
-                float lateral = courseObjectDrag_.startLateral + dx * moveSensitivity;
-                float vertical = courseObjectDrag_.startVertical;
-                float forward = courseObjectDrag_.startForward;
-                if (axis == 0) {
-                    vertical = courseObjectDrag_.startVertical;
-                    forward = courseObjectDrag_.startForward;
-                } else if (axis == 1) {
-                    lateral = courseObjectDrag_.startLateral;
-                    vertical = courseObjectDrag_.startVertical - dy * moveSensitivity;
-                    forward = courseObjectDrag_.startForward;
-                } else if (axis == 2) {
-                    lateral = courseObjectDrag_.startLateral;
-                    vertical = courseObjectDrag_.startVertical;
-                    forward = courseObjectDrag_.startForward - dy * moveSensitivity;
-                } else if (shiftDown) {
-                    forward = courseObjectDrag_.startForward - dy * moveSensitivity;
-                } else {
-                    vertical = courseObjectDrag_.startVertical - dy * moveSensitivity;
-                }
+                float lateral = courseObjectDrag_.startLateral + localTranslationDelta.x;
+                float vertical = courseObjectDrag_.startVertical + localTranslationDelta.y;
+                float forward = courseObjectDrag_.startForward + localTranslationDelta.z;
+                if (axis < 0 && !shiftDown) forward = courseObjectDrag_.startForward;
+                if (axis < 0 && shiftDown) vertical = courseObjectDrag_.startVertical;
                 if (editor.courseObjectSnapEnabled) {
                     lateral = SnapCourseObjectValue(lateral, editor.courseObjectMoveSnap);
                     vertical = SnapCourseObjectValue(vertical, editor.courseObjectMoveSnap);
@@ -6198,14 +6419,19 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     runtimeState_.terrain.courseObjectEditRevision);
             if (rotateMode) {
                 Vector3 rotation = courseObjectDrag_.startRotation;
-                float delta = signedDrag * (std::max)(0.0001f, editor.courseObjectRotateSensitivity);
+                float delta = rotationDelta;
                 if (editor.courseObjectSnapEnabled) {
                     const float snapRadians =
                         editor.courseObjectRotateSnapDegrees * 3.14159265358979323846f / 180.0f;
                     delta = SnapCourseObjectValue(delta, snapRadians);
                 }
                 const int rotateAxis = axis >= 0 ? axis : 1;
-                if (rotateAxis == 0) {
+                if (editor.courseObjectGizmoSpace == 0 && rotateAxis >= 0 && rotateAxis <= 2) {
+                    const Vector3& worldAxis = courseObjectDrag_.handleAxes[rotateAxis];
+                    rotation.x += delta * Dot(worldAxis, courseObjectDrag_.localAxes[0]);
+                    rotation.y += delta * Dot(worldAxis, courseObjectDrag_.localAxes[1]);
+                    rotation.z += delta * Dot(worldAxis, courseObjectDrag_.localAxes[2]);
+                } else if (rotateAxis == 0) {
                     rotation.x = courseObjectDrag_.startRotation.x + delta;
                 } else if (rotateAxis == 1) {
                     rotation.y = courseObjectDrag_.startRotation.y + delta;
@@ -6228,7 +6454,18 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                 float minScale = courseObjectDrag_.startMinScale * scaleFactor;
                 float maxScale = courseObjectDrag_.startMaxScale * scaleFactor;
                 Vector3 spread = Scale(courseObjectDrag_.startSpread, scaleFactor);
-                if (axis == 0) {
+                if (editor.courseObjectGizmoSpace == 0 && axis >= 0 && axis <= 2) {
+                    const Vector3& worldAxis = courseObjectDrag_.handleAxes[axis];
+                    minScale = courseObjectDrag_.startMinScale;
+                    maxScale = courseObjectDrag_.startMaxScale;
+                    spread = courseObjectDrag_.startSpread;
+                    spread.x *= 1.0f + (scaleFactor - 1.0f) *
+                        std::abs(Dot(worldAxis, courseObjectDrag_.localAxes[0]));
+                    spread.y *= 1.0f + (scaleFactor - 1.0f) *
+                        std::abs(Dot(worldAxis, courseObjectDrag_.localAxes[1]));
+                    spread.z *= 1.0f + (scaleFactor - 1.0f) *
+                        std::abs(Dot(worldAxis, courseObjectDrag_.localAxes[2]));
+                } else if (axis == 0) {
                     minScale = courseObjectDrag_.startMinScale;
                     maxScale = courseObjectDrag_.startMaxScale;
                     spread = courseObjectDrag_.startSpread;
@@ -6243,6 +6480,24 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                     maxScale = courseObjectDrag_.startMaxScale;
                     spread = courseObjectDrag_.startSpread;
                     spread.z = courseObjectDrag_.startSpread.z * scaleFactor;
+                } else if (axis == 3) {
+                    minScale = courseObjectDrag_.startMinScale;
+                    maxScale = courseObjectDrag_.startMaxScale;
+                    spread = courseObjectDrag_.startSpread;
+                    spread.x *= scaleFactor;
+                    spread.y *= scaleFactor;
+                } else if (axis == 4) {
+                    minScale = courseObjectDrag_.startMinScale;
+                    maxScale = courseObjectDrag_.startMaxScale;
+                    spread = courseObjectDrag_.startSpread;
+                    spread.y *= scaleFactor;
+                    spread.z *= scaleFactor;
+                } else if (axis == 5) {
+                    minScale = courseObjectDrag_.startMinScale;
+                    maxScale = courseObjectDrag_.startMaxScale;
+                    spread = courseObjectDrag_.startSpread;
+                    spread.z *= scaleFactor;
+                    spread.x *= scaleFactor;
                 }
                 if (editor.courseObjectSnapEnabled) {
                     minScale = SnapCourseObjectValue(minScale, editor.courseObjectScaleSnap);
@@ -6277,22 +6532,12 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
                                 CourseGizmoVec3Value(spread)},
                         }) || changed;
             } else {
-                float clearLane = courseObjectDrag_.startClearLaneRadius + dx * moveSensitivity;
-                float distance = courseObjectDrag_.startDistance;
+                float clearLane = courseObjectDrag_.startClearLaneRadius + localTranslationDelta.x;
+                float distance = courseObjectDrag_.startDistance + localTranslationDelta.z;
                 Vector3 spread = courseObjectDrag_.startSpread;
-                if (axis == 0) {
-                    spread = courseObjectDrag_.startSpread;
-                } else if (axis == 1) {
-                    clearLane = courseObjectDrag_.startClearLaneRadius;
-                    spread.y = courseObjectDrag_.startSpread.y - dy * moveSensitivity;
-                } else if (axis == 2) {
-                    clearLane = courseObjectDrag_.startClearLaneRadius;
-                    distance = courseObjectDrag_.startDistance - dy * moveSensitivity;
-                } else if (shiftDown) {
-                    distance = courseObjectDrag_.startDistance - dy * moveSensitivity;
-                } else {
-                    spread.y = courseObjectDrag_.startSpread.y - dy * moveSensitivity;
-                }
+                spread.y += localTranslationDelta.y;
+                if (axis < 0 && !shiftDown) distance = courseObjectDrag_.startDistance;
+                if (axis < 0 && shiftDown) spread.y = courseObjectDrag_.startSpread.y;
                 if (editor.courseObjectSnapEnabled) {
                     clearLane = SnapCourseObjectValue(clearLane, editor.courseObjectMoveSnap);
                     distance = SnapCourseObjectValue(distance, editor.courseObjectMoveSnap);
@@ -6877,8 +7122,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             [&]() {
                 DrawRailLockOnDebugPanel();
             },
-            [&](ImDrawList* drawList) {
-                DrawRailVisibilityDebugOverlay(drawList);
+            [&](editor::EditorViewportOverlayService& overlay) {
+                BuildRailVisibilityDebugOverlay(overlay);
             },
             &courseObjectTransactions_});
     gRailPerfFrame.imguiBuildUiMs = ElapsedMs(imguiBuildUiStart, RailPerfClock::now());

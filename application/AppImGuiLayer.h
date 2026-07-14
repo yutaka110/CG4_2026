@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <memory>
 #include <Windows.h>
 #include <d3d12.h>
 
@@ -16,8 +17,10 @@ struct ImDrawList;
 #include "editor/EditorCommandInputRouter.h"
 #include "editor/EditorCommandPalette.h"
 #include "editor/EditorCommandRegistry.h"
+#include "editor/EditorContentBrowserState.h"
 #include "editor/CourseDocumentAdapter.h"
 #include "editor/EditorDirtyStateService.h"
+#include "editor/EditorDetailsViewState.h"
 #include "editor/EditorDocumentLifecycleService.h"
 #include "editor/EditorLayoutService.h"
 #include "editor/EditorLayoutPersistenceService.h"
@@ -39,12 +42,48 @@ struct ImDrawList;
 #include "editor/EditorRuntimeInspector.h"
 #include "editor/EditorRuntimeAuthoringApplyService.h"
 #include "editor/EditorSelection.h"
+#include "editor/EditorFontService.h"
+#include "editor/EditorFontSettingsPanel.h"
+#include "editor/sequencer/EditorSequencer.h"
+#include "editor/course/CourseSequencerTrackProvider.h"
+#include "editor/prefab/EditorPrefabService.h"
+#include "editor/material/EditorMaterialGraph.h"
+#include "editor/material/EditorMaterialGraphPanel.h"
+#include "editor/material/EditorMaterialGraphDiagnosticsAdapter.h"
+#include "editor/vfx/EditorVfxGraph.h"
+#include "editor/vfx/EditorVfxGraphPanel.h"
+#include "editor/vfx/EditorVfxGraphDiagnosticsAdapter.h"
+#include "editor/animation/EditorAnimationStateMachine.h"
+#include "editor/animation/EditorAnimationStateMachinePanel.h"
+#include "editor/animation/EditorAnimationStateMachineDiagnosticsAdapter.h"
+#include "editor/gameplay/EditorGameplayVisualScript.h"
+#include "editor/gameplay/EditorGameplayVisualScriptPanel.h"
+#include "editor/gameplay/EditorGameplayVisualScriptDiagnosticsAdapter.h"
 #include "editor/EditorToolRegistration.h"
 #include "editor/EditorTransformGizmoService.h"
 #include "editor/EditorTransactionStack.h"
+#include "editor/EditorViewportCoordinateService.h"
 #include "editor/EditorViewportInteractionService.h"
+#include "editor/EditorViewportOverlay.h"
 #include "editor/EditorViewportSelectionBridge.h"
 #include "editor/EditorViewportRenderTarget.h"
+#include "editor/documents/EditorAutosaveService.h"
+#include "editor/documents/EditorCourseDocumentProvider.h"
+#include "editor/documents/EditorSceneDocumentProvider.h"
+#include "editor/documents/EditorPrefabDocumentProvider.h"
+#include "editor/documents/EditorMaterialGraphDocumentProvider.h"
+#include "editor/documents/EditorVfxGraphDocumentProvider.h"
+#include "editor/documents/EditorAnimationStateMachineDocumentProvider.h"
+#include "editor/documents/EditorGameplayVisualScriptDocumentProvider.h"
+#include "editor/documents/EditorDocumentRecoveryService.h"
+#include "editor/documents/EditorDocumentSaveService.h"
+#include "editor/documents/EditorTextDocumentProvider.h"
+#include "editor/world/CourseWorldObjectProvider.h"
+#include "editor/world/SceneWorldObjectProvider.h"
+#include "editor/world/EditorWorldModel.h"
+#include "editor/world/EditorWorldMutationService.h"
+#include "editor/world/EditorWorldOutlinerPanel.h"
+#include "editor/world/VfxWorldObjectProvider.h"
 
 struct AppRuntimeState;
 struct FrameLoopState;
@@ -108,7 +147,7 @@ struct AppImGuiFrameContext {
     std::function<void(float)> onTeleportCourseToDistance;
     std::function<void()> onAddParticle;
     std::function<void()> onDrawRailLockOnDebugPanel;
-    std::function<void(ImDrawList*)> onDrawEditorViewportOverlay;
+    std::function<void(editor::EditorViewportOverlayService&)> onBuildEditorViewportOverlay;
     editor::EditorTransactionStack* editorTransactions = nullptr;
 };
 
@@ -129,6 +168,7 @@ public:
     bool ShouldAdvanceEditorRuntimeFrame() const;
     void CompleteEditorRuntimeFrameAdvance(bool advanced);
     const editor::EditorViewportRenderTargetState& EditorViewportRenderTargetState() const;
+    const editor::EditorViewportOverlayService& EditorViewportOverlay() const;
 
     void Shutdown();
 
@@ -166,14 +206,58 @@ private:
     editor::EditorCommandPalette editorCommandPalette_{};
     editor::EditorCommandExecutionStatus editorCommandExecutionStatus_{};
     editor::EditorDirtyStateService editorDirtyState_{};
+    editor::EditorFontService editorFonts_{};
     editor::EditorDocumentLifecycleService editorDocumentLifecycle_{};
+    editor::EditorCourseDocumentProvider editorCourseDocumentProvider_{};
+    editor::EditorSceneDocumentProvider editorSceneDocumentProvider_{};
+    editor::EditorPrefabDocumentProvider editorPrefabDocumentProvider_{};
+    editor::EditorMaterialGraphDocumentProvider editorMaterialGraphDocumentProvider_{};
+    editor::EditorVfxGraphDocumentProvider editorVfxGraphDocumentProvider_{};
+    editor::EditorAnimationStateMachineDocumentProvider editorAnimationStateMachineDocumentProvider_{};
+    editor::EditorGameplayVisualScriptDocumentProvider editorGameplayVisualScriptDocumentProvider_{};
+    editor::EditorTextDocumentProvider editorEffectDocumentProvider_{
+        std::string(editor::EditorDocumentTypes::Effect), "Effect/VFX", {".effect", ".vfx"}, 1};
+    editor::EditorTextDocumentProvider editorRenderPresetDocumentProvider_{
+        std::string(editor::EditorDocumentTypes::RenderPreset), "Material/Render Preset",
+        {".renderpreset"}, 1};
+    editor::EditorTextDocumentProvider editorProjectSettingsDocumentProvider_{
+        std::string(editor::EditorDocumentTypes::ProjectSettings), "Project Settings",
+        {".settings", ".projectsettings"}, 1};
+    editor::EditorDocumentRegistry editorDocumentRegistry_{};
+    editor::EditorDocumentManager editorDocumentManager_{editorDocumentRegistry_};
+    editor::EditorExternalChangeMonitor editorExternalChangeMonitor_{};
+    editor::EditorDocumentSaveService editorDocumentSaveService_{
+        editorDocumentManager_, editorExternalChangeMonitor_};
+    editor::EditorAutosaveService editorAutosaveService_{editorDocumentManager_};
+    editor::EditorDocumentRecoveryService editorDocumentRecoveryService_{
+        editorDocumentRegistry_, editorDocumentManager_};
+    editor::CourseWorldObjectProvider editorCourseWorldProvider_{};
+    editor::SceneWorldObjectProvider editorSceneWorldProvider_{};
+    editor::VfxWorldObjectProvider editorVfxWorldProvider_{};
+    editor::EditorWorldObjectRegistry editorWorldObjectRegistry_{};
+    editor::EditorWorldModel editorWorldModel_{editorWorldObjectRegistry_};
+    editor::EditorWorldMutationService editorWorldMutationService_{
+        editorWorldObjectRegistry_, editorWorldModel_};
+    editor::EditorWorldMutationExecutionService editorWorldMutationExecution_{
+        editorWorldObjectRegistry_, &editorWorldModel_};
+    editor::EditorWorldOutlinerState editorWorldOutlinerState_{};
     editor::EditorLayoutService editorLayout_{};
     editor::EditorLayoutPersistenceService editorLayoutPersistence_{};
+    editor::EditorContentBrowserState editorContentBrowserState_{};
+    editor::EditorAssetWorkspaceStatusRegistry editorAssetWorkspaceStatus_{};
+    editor::EditorDetailsViewState editorDetailsViewState_{};
+    editor::EditorPrefabService editorPrefabs_{};
+    editor::EditorMaterialGraphService editorMaterialGraphs_{};
+    editor::EditorVfxGraphService editorVfxGraphs_{};
+    editor::EditorAnimationStateMachineService editorAnimationStateMachines_{};
+    editor::EditorGameplayVisualScriptService editorGameplayVisualScripts_{};
     editor::EditorPanelHost editorPanelHost_{};
     editor::EditorPanelLayoutService editorPanelLayout_{};
     editor::EditorPanelRegistry editorPanelRegistry_{};
     editor::EditorDetailsSectionProviderRegistry editorDetailsSectionProviders_{};
+    editor::EditorViewportCoordinateService editorViewportCoordinates_{};
     editor::EditorViewportInteractionService editorViewportInteraction_{};
+    editor::EditorViewportOverlayService editorViewportOverlay_{};
     editor::EditorViewportSelectionBridge editorViewportSelectionBridge_{};
     editor::EditorViewportRenderTarget editorViewportRenderTarget_{};
     editor::EditorTransformGizmoService editorTransformGizmo_{};
@@ -190,12 +274,19 @@ private:
     editor::EditorRuntimeInspector editorRuntimeInspector_{};
     editor::EditorRuntimeAuthoringApplyService editorRuntimeAuthoringApply_{};
     editor::EditorSelection editorSelection_{};
+    editor::CourseSequencerTrackProvider editorCourseSequencerProvider_{};
+    editor::EditorSequencerService editorSequencer_{};
     editor::EditorToolRegistry editorToolRegistry_{};
     editor::EditorTransactionStack editorTransactions_{};
     std::vector<std::filesystem::path> pendingExternalAssetImportPaths_{};
     bool editorCourseDocumentOpen_ = true;
     std::string editorCourseDocumentPath_;
+    std::filesystem::path editorSceneDocumentPath_{"Resources/Scenes/Editor.scene"};
+    editor::EditorDocumentId editorSceneDocumentId_{};
     bool editorCourseObjectDirtyRevisionInitialized_ = false;
     uint32_t editorCourseObjectDirtyRevision_ = 0;
+    uint64_t editorDocumentServiceFrame_ = 0;
+    uint64_t editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+    bool editorDocumentRecoveryScanned_ = false;
     bool editorAssetRegistryInitialized_ = false;
 };

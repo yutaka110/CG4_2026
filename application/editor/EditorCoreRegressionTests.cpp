@@ -3,6 +3,7 @@
 #include "EditorAssetMutationExecutor.h"
 #include "EditorAssetMutationSafety.h"
 #include "EditorAssetFallbackIconAtlas.h"
+#include "EditorAssetFolderIndexer.h"
 #include "EditorAssetImportService.h"
 #include "EditorAssetMeshThumbnailPreviewRenderer.h"
 #include "EditorAssetPreviewSceneRenderer.h"
@@ -16,10 +17,17 @@
 #include "EditorAssetThumbnailTextureLoader.h"
 #include "EditorThumbnailUploadRetirementQueue.h"
 #include "EditorDirtyStateService.h"
+#include "EditorDocumentLifecycleService.h"
+#include "EditorModalConfirmService.h"
 #include "EditorDetailsEditController.h"
 #include "EditorCompositePropertyAccessor.h"
+#include "EditorContentBrowserState.h"
+#include "EditorContext.h"
+#include "CourseObjectPropertyAdapter.h"
 #include "EditorBuiltinDetailsSectionProviders.h"
 #include "EditorDetailsSectionProvider.h"
+#include "EditorDetailsViewState.h"
+#include "EditorFontService.h"
 #include "EditorLayoutPersistenceService.h"
 #include "EditorPanelLayoutService.h"
 #include "EditorPanelRegistry.h"
@@ -29,6 +37,7 @@
 #include "EditorRuntimeAuthoringApplyService.h"
 #include "EditorRuntimeWatchBuilder.h"
 #include "EditorMenuBar.h"
+#include "EditorStatusBar.h"
 #include "EditorToolbar.h"
 #include "EditorToolRegistration.h"
 #include "EditorPropertyClipboardService.h"
@@ -38,11 +47,56 @@
 #include "EditorPropertyRegistry.h"
 #include "EditorSelection.h"
 #include "EditorTransactionStack.h"
+#include "EditorTransformGizmoMath.h"
+#include "EditorTransformGizmoService.h"
+#include "EditorViewportCoordinateService.h"
+#include "EditorViewportInteractionService.h"
+#include "EditorViewportOverlay.h"
 #include "EditorValidationService.h"
 #include "ExistingFeatureProtection.h"
+#include "core/EditorExecutionContext.h"
+#include "course/CourseEditorExecutionService.h"
+#include "course/CoursePropertyUndoCommand.h"
+#include "course/CourseSequencerTrackProvider.h"
+#include "sequencer/EditorSequencer.h"
+#include "asset/EditorAssetMutationUndoCommand.h"
+#include "io/EditorFileRecoveryService.h"
+#include "io/EditorFileTransaction.h"
+#include "io/EditorProjectPathPolicy.h"
+#include "documents/EditorAutosaveService.h"
+#include "documents/EditorCourseDocumentProvider.h"
+#include "documents/EditorDocumentRecoveryService.h"
+#include "documents/EditorDocumentSaveService.h"
+#include "documents/EditorSceneDocumentProvider.h"
+#include "documents/EditorPrefabDocumentProvider.h"
+#include "documents/EditorMaterialGraphDocumentProvider.h"
+#include "documents/EditorVfxGraphDocumentProvider.h"
+#include "documents/EditorAnimationStateMachineDocumentProvider.h"
+#include "documents/EditorGameplayVisualScriptDocumentProvider.h"
+#include "documents/EditorTextDocumentProvider.h"
+#include "prefab/EditorPrefabService.h"
+#include "material/EditorMaterialGraph.h"
+#include "vfx/EditorVfxGraph.h"
+#include "animation/EditorAnimationStateMachine.h"
+#include "gameplay/EditorGameplayVisualScript.h"
+#include "play/EditorPlayIsolationRegistry.h"
+#include "play/EditorPlayMutationGuard.h"
+#include "play/EditorPlaySnapshot.h"
+#include "play/EditorRuntimeChangeSet.h"
+#include "play/EditorRuntimeApplyExecutionService.h"
+#include "play/EditorRuntimeApplyUndoCommand.h"
+#include "world/CourseWorldIdentity.h"
+#include "world/CourseWorldObjectProvider.h"
+#include "../../externals/imgui/imgui.h"
+#include "world/EditorWorldModel.h"
+#include "world/EditorWorldMutationService.h"
+#include "world/SceneWorldObjectProvider.h"
+#include "world/IEditorWorldMutationProvider.h"
+#include "world/VfxWorldObjectProvider.h"
 
 #include "../AppEditorToolModules.h"
 #include "../AppRuntimeState.h"
+#include "../Skeleton.h"
 #include "../EffectAssetLoader.h"
 #include "../EffectRuntime.h"
 #include "../EffectSystem.h"
@@ -94,6 +148,7 @@ public:
             log_ << "[FAIL] " << testCase.name << " :: unknown exception\n";
         }
         currentCase_.clear();
+        log_.flush();
     }
 
     void Expect(bool condition, std::string_view message) {
@@ -116,6 +171,60 @@ private:
     std::string currentCase_;
     uint32_t caseCount_ = 0;
     uint32_t failedCount_ = 0;
+};
+
+class RegressionTransactionService final : public IEditorExecutionService {
+public:
+    static constexpr std::string_view kServiceId = "test.transaction.execution";
+
+    std::string_view ServiceId() const noexcept override { return kServiceId; }
+
+    int value = 0;
+    bool failApply = false;
+    bool attemptReentry = false;
+    bool reentryRejected = false;
+    EditorTransactionStack* stack = nullptr;
+};
+
+class RegressionUndoCommand final : public IEditorUndoCommand {
+public:
+    explicit RegressionUndoCommand(std::size_t estimatedBytes = 64)
+        : estimatedBytes_(estimatedBytes) {}
+
+    EditorUndoResult Apply(
+        EditorTransactionApplyMode mode,
+        EditorExecutionContext& context) const override {
+        auto* service = dynamic_cast<RegressionTransactionService*>(
+            context.Find(RegressionTransactionService::kServiceId));
+        if (service == nullptr) {
+            return EditorUndoResult::Failure(
+                EditorErrorCode::MissingService,
+                "Regression transaction service is unavailable.");
+        }
+        if (service->failApply) {
+            return EditorUndoResult::Failure(
+                EditorErrorCode::ApplyFailed,
+                "Regression command rejected apply.");
+        }
+        if (service->attemptReentry && service->stack != nullptr) {
+            EditorError reentryError{};
+            service->reentryRejected = !service->stack->PushCommand(
+                "Nested command",
+                {},
+                std::make_shared<RegressionUndoCommand>(),
+                &reentryError) &&
+                reentryError.code == EditorErrorCode::Busy;
+        }
+        service->value += mode == EditorTransactionApplyMode::Undo ? -1 : 1;
+        return EditorUndoResult::Success();
+    }
+
+    std::size_t EstimatedBytes() const noexcept override { return estimatedBytes_; }
+    std::string_view DomainId() const noexcept override { return "test"; }
+    std::string_view TypeId() const noexcept override { return "test.command"; }
+
+private:
+    std::size_t estimatedBytes_ = 64;
 };
 
 class FakeThumbnailGpuBackend final : public EditorAssetGpuThumbnailBackend {
@@ -564,16 +673,222 @@ void TestTransactionStack(RegressionRunner& runner) {
     EditorObjectHandle assetTarget{};
     assetTarget.domain = EditorDomainId::Asset;
     assetTarget.stableId = "Mesh:asset_before";
-    stack.PushAssetMutation("Rename Asset", assetTarget, assetChange);
+    EditorError assetCommandError;
+    runner.Expect(
+        stack.PushCommand(
+            "Rename Asset",
+            assetTarget,
+            std::make_shared<EditorAssetMutationUndoCommand>(assetChange),
+            &assetCommandError),
+        "asset mutation command should register");
     last = stack.LastTransaction();
     runner.Expect(last != nullptr, "asset mutation should push a transaction");
+    const auto* assetCommand = last != nullptr
+        ? dynamic_cast<const EditorAssetMutationUndoCommand*>(last->command.get())
+        : nullptr;
     runner.Expect(
-        last->payload.kind == EditorTransactionPayloadKind::AssetMutation,
-        "asset mutation should use asset payload kind");
+        last->payload.kind == EditorTransactionPayloadKind::Command && assetCommand != nullptr,
+        "asset mutation should use the generic command payload kind");
     runner.Expect(
-        last->payload.assetMutation.beforeRecord.id == "asset_before" &&
-            last->payload.assetMutation.afterRecord.id == "asset_after",
-        "asset mutation payload should preserve before and after records");
+        assetCommand != nullptr && assetCommand->Change().beforeRecord.id == "asset_before" &&
+            assetCommand->Change().afterRecord.id == "asset_after",
+        "asset mutation command should preserve before and after records");
+}
+
+void TestDomainIndependentTransactionCommands(RegressionRunner& runner) {
+    EditorTransactionStack stack;
+    RegressionTransactionService service;
+    service.stack = &stack;
+    EditorExecutionContext context;
+    EditorError error{};
+    runner.Expect(context.Register(service, &error), "execution service should register");
+
+    EditorUndoCommandPtr command = std::make_shared<RegressionUndoCommand>();
+    runner.Expect(
+        stack.PushCommand("Domain command", MakeCourseObject(8), command, &error),
+        "domain-independent command should register");
+    command.reset();
+    runner.Expect(stack.Undo(context, &error), "domain-independent command undo should succeed");
+    runner.Expect(service.value == -1, "undo command should run through the execution service");
+    runner.Expect(
+        stack.UndoDepth() == 0 && stack.RedoDepth() == 1,
+        "successful command undo should move history position");
+
+    service.failApply = true;
+    const std::size_t undoDepthBeforeFailure = stack.UndoDepth();
+    const std::size_t redoDepthBeforeFailure = stack.RedoDepth();
+    runner.Expect(!stack.Redo(context, &error), "failed command redo should be rejected");
+    runner.Expect(error.code == EditorErrorCode::ApplyFailed, "failed command should report apply error");
+    runner.Expect(
+        stack.UndoDepth() == undoDepthBeforeFailure &&
+            stack.RedoDepth() == redoDepthBeforeFailure,
+        "failed command apply must not move history position");
+    service.failApply = false;
+    runner.Expect(stack.Redo(context, &error), "command redo should recover after service failure clears");
+    runner.Expect(service.value == 0, "redo command should restore the service value");
+
+    service.attemptReentry = true;
+    runner.Expect(stack.Undo(context, &error), "command undo with reentry attempt should still succeed");
+    runner.Expect(service.reentryRejected, "transaction registration during apply should be rejected");
+    service.attemptReentry = false;
+
+    runner.Expect(
+        stack.PushCommand(
+            "Replacement command",
+            MakeCourseObject(9),
+            std::make_shared<RegressionUndoCommand>(),
+            &error),
+        "new command should register after undo");
+    runner.Expect(stack.RedoDepth() == 0, "new command should clear redo history");
+
+    EditorTransactionStack missingServiceStack;
+    runner.Expect(
+        missingServiceStack.PushCommand(
+            "Missing service",
+            MakeCourseObject(10),
+            std::make_shared<RegressionUndoCommand>(),
+            &error),
+        "missing-service command should register");
+    EditorExecutionContext emptyContext;
+    runner.Expect(
+        !missingServiceStack.Undo(emptyContext, &error),
+        "command should fail when its execution service is missing");
+    runner.Expect(error.code == EditorErrorCode::MissingService, "missing service should be explicit");
+    runner.Expect(
+        missingServiceStack.UndoDepth() == 1 && missingServiceStack.RedoDepth() == 0,
+        "missing service failure must preserve history position");
+
+    EditorTransactionStack budgetStack;
+    runner.Expect(
+        budgetStack.PushCommand(
+            "Budget probe",
+            MakeCourseObject(19),
+            std::make_shared<RegressionUndoCommand>(128),
+            &error),
+        "budget probe command should register");
+    const std::size_t measuredRecordBytes = budgetStack.HistoryBytes();
+    budgetStack.Clear();
+    runner.Expect(
+        measuredRecordBytes > 0 &&
+            budgetStack.SetMemoryBudgetBytes(measuredRecordBytes * 4, &error),
+        "positive transaction memory budget should be accepted");
+    for (int i = 0; i < 12; ++i) {
+        const bool pushed = budgetStack.PushCommand(
+            "Budget command " + std::to_string(i),
+            MakeCourseObject(static_cast<uint64_t>(20 + i)),
+            std::make_shared<RegressionUndoCommand>(128),
+            &error);
+        runner.Expect(
+            pushed,
+            "bounded command should register: " + error.message);
+    }
+    runner.Expect(
+        budgetStack.HistoryBytes() <= budgetStack.MemoryBudgetBytes(),
+        "history bytes should remain inside the configured budget");
+    runner.Expect(
+        budgetStack.UndoDepth() < 12 && budgetStack.UndoDepth() > 0,
+        "memory budget should evict oldest commands only as required");
+    runner.Expect(
+        budgetStack.SetMemoryBudgetBytes(1, &error),
+        "lower positive memory budget should be accepted");
+    runner.Expect(
+        budgetStack.HistoryBytes() == 0 && budgetStack.UndoDepth() == 0,
+        "lowered memory budget should evict all records that no longer fit");
+
+    EditorTransactionStack oversizeStack;
+    runner.Expect(
+        oversizeStack.SetMemoryBudgetBytes(128, &error),
+        "small positive memory budget should be accepted");
+    runner.Expect(
+        !oversizeStack.PushCommand(
+            "Oversize command",
+            MakeCourseObject(99),
+            std::make_shared<RegressionUndoCommand>(4096),
+            &error),
+        "oversized command should be rejected");
+    runner.Expect(
+        error.code == EditorErrorCode::MemoryBudgetExceeded && oversizeStack.UndoDepth() == 0,
+        "oversized rejection should be explicit and leave history unchanged");
+    runner.Expect(
+        !oversizeStack.SetMemoryBudgetBytes(0, &error) &&
+            error.code == EditorErrorCode::InvalidArgument,
+        "zero-byte memory budget should be rejected");
+
+    const EditorObjectHandle courseTarget = MakeCourseObject(120);
+    EditorPropertyRegistry courseRegistry;
+    EditorPropertyDescriptor courseDescriptor{};
+    courseDescriptor.domain = courseTarget.domain;
+    courseDescriptor.name = "CourseTerrainPlacement.testDistance";
+    courseDescriptor.displayName = "Test Distance";
+    courseDescriptor.kind = EditorPropertyKind::Float;
+    courseDescriptor.valueType = "float";
+    runner.Expect(courseRegistry.Register(courseDescriptor), "course command descriptor should register");
+    RegressionPropertyAccessor courseAccessor(courseTarget, courseDescriptor.name, 20.0f);
+    CourseEditorExecutionService courseService(courseAccessor, courseRegistry);
+    EditorExecutionContext courseContext;
+    runner.Expect(courseContext.Register(courseService, &error), "course execution service should register");
+
+    std::vector<CoursePropertyUndoChange> courseChanges{
+        CoursePropertyUndoChange{
+            courseTarget,
+            courseDescriptor.name,
+            courseDescriptor.valueType,
+            "10.000",
+            "20.000",
+            courseTarget.generation}};
+    EditorTransactionStack courseStack;
+    runner.Expect(
+        courseStack.PushCommand(
+            "Course property command",
+            courseTarget,
+            std::make_shared<CoursePropertyUndoCommand>(courseChanges),
+            &error),
+        "course property command should register");
+    runner.Expect(courseStack.Undo(courseContext, &error), "course property command undo should succeed");
+    runner.Expect(std::abs(courseAccessor.Value() - 10.0f) < 0.001f, "course undo should restore before value");
+    runner.Expect(courseStack.Redo(courseContext, &error), "course property command redo should succeed");
+    runner.Expect(std::abs(courseAccessor.Value() - 20.0f) < 0.001f, "course redo should restore after value");
+}
+
+void TestTransactionCoreDependencyBoundary(RegressionRunner& runner) {
+    const std::vector<std::filesystem::path> coreFiles{
+        "application/editor/core/EditorError.h",
+        "application/editor/core/EditorExecutionService.h",
+        "application/editor/core/EditorExecutionContext.h",
+        "application/editor/core/EditorExecutionContext.cpp",
+        "application/editor/core/EditorUndoCommand.h",
+        "application/editor/core/EditorTransactionMemoryBudget.h",
+        "application/editor/core/EditorTransactionMemoryBudget.cpp",
+        "application/editor/EditorTransactionStack.h",
+        "application/editor/EditorTransactionStack.cpp",
+    };
+    const std::vector<std::string> forbiddenDependencies{
+        "CourseAsset",
+        "TerrainAuthoringState",
+        "AppRuntimeState",
+        "EditorAssetMutation",
+        "EditorRuntimeAuthoringApply",
+        "EditorAssetRecord",
+        "EditorRuntimeApplyChange",
+        "PushAssetMutation",
+        "PushRuntimeAuthoringApply",
+        "EditorAssetMutationChange",
+        "../course/",
+        "application/course/",
+    };
+
+    for (const std::filesystem::path& path : coreFiles) {
+        std::ifstream input(path, std::ios::binary);
+        runner.Expect(input.is_open(), "transaction core dependency file should exist: " + path.generic_string());
+        std::ostringstream contents;
+        contents << input.rdbuf();
+        const std::string text = contents.str();
+        for (const std::string& forbidden : forbiddenDependencies) {
+            runner.Expect(
+                text.find(forbidden) == std::string::npos,
+                "transaction core must not depend on " + forbidden + " in " + path.generic_string());
+        }
+    }
 }
 
 void TestSelectionAndPropertyRegistry(RegressionRunner& runner) {
@@ -1952,8 +2267,9 @@ void TestRuntimeAuthoringApplyService(RegressionRunner& runner) {
     const EditorTransactionRecord* lastTransaction = transactions.LastTransaction();
     runner.Expect(
         lastTransaction != nullptr &&
-            lastTransaction->payload.kind == EditorTransactionPayloadKind::RuntimeAuthoringApply,
-        "runtime apply should push a runtime authoring transaction");
+            lastTransaction->payload.kind == EditorTransactionPayloadKind::Command &&
+            dynamic_cast<const EditorRuntimeApplyUndoCommand*>(lastTransaction->command.get()) != nullptr,
+        "runtime apply should push a generic runtime command");
     runner.Expect(
         snapshot.CapturedTerrain() != nullptr &&
             std::fabs(snapshot.CapturedTerrain()->previewSpeed - 88.0f) < 0.001f,
@@ -1968,53 +2284,22 @@ void TestRuntimeAuthoringApplyService(RegressionRunner& runner) {
         std::fabs(runtimeState.terrain.previewSpeed - 88.0f) < 0.001f,
         "stop should keep applied runtime terrain changes");
 
-    bool undoApplied = false;
+    EditorRuntimeApplyExecutionService runtimeExecution(
+        EditorRuntimeApplyExecutionTargets{
+            &course, &runtimeState, nullptr, nullptr, &dirtyState, &notifications,
+            "regression.runtimeApply.command"});
+    EditorExecutionContext runtimeContext;
+    EditorError runtimeContextError;
+    runner.Expect(runtimeContext.Register(runtimeExecution, &runtimeContextError), "runtime execution service should register");
     runner.Expect(
-        transactions.Undo(
-            [&](const EditorTransactionRecord& record, EditorTransactionApplyMode mode) {
-                const EditorRuntimeAuthoringApplyResult result =
-                    runtimeApply.ApplyTransaction(
-                        EditorRuntimeAuthoringApplyRequest{
-                            nullptr,
-                            nullptr,
-                            &course,
-                            &runtimeState,
-                            &transactions,
-                            &dirtyState,
-                            &notifications,
-                            0,
-                            "regression.runtimeApply.undo"},
-                        record,
-                        mode);
-                undoApplied = result.succeeded && course.events.front().payload == "authoring";
-                return result.succeeded;
-            }),
+        transactions.Undo(runtimeContext, &runtimeContextError),
         "runtime apply transaction undo should run");
-    runner.Expect(undoApplied, "runtime apply undo should restore original authoring data");
+    runner.Expect(course.events.front().payload == "authoring", "runtime apply undo should restore original authoring data");
 
-    bool redoApplied = false;
     runner.Expect(
-        transactions.Redo(
-            [&](const EditorTransactionRecord& record, EditorTransactionApplyMode mode) {
-                const EditorRuntimeAuthoringApplyResult result =
-                    runtimeApply.ApplyTransaction(
-                        EditorRuntimeAuthoringApplyRequest{
-                            nullptr,
-                            nullptr,
-                            &course,
-                            &runtimeState,
-                            &transactions,
-                            &dirtyState,
-                            &notifications,
-                            0,
-                            "regression.runtimeApply.redo"},
-                        record,
-                        mode);
-                redoApplied = result.succeeded && course.events.front().payload == "applied-runtime";
-                return result.succeeded;
-            }),
+        transactions.Redo(runtimeContext, &runtimeContextError),
         "runtime apply transaction redo should run");
-    runner.Expect(redoApplied, "runtime apply redo should restore applied runtime data");
+    runner.Expect(course.events.front().payload == "applied-runtime", "runtime apply redo should restore applied runtime data");
 
     runner.Expect(
         lifecycle.Begin(lifecycleRequest, EditorPlaySessionMode::Simulating).succeeded,
@@ -2033,6 +2318,264 @@ void TestRuntimeAuthoringApplyService(RegressionRunner& runner) {
                 1,
                 "regression.runtimeApply.validation"}).succeeded,
         "runtime apply should reject validation errors");
+}
+
+void TestPlayIsolationProviderArchitecture(RegressionRunner& runner) {
+    class IntegerIsolationProvider final : public IEditorPlayIsolationProvider {
+    public:
+        IntegerIsolationProvider(std::string id, int order, int* value)
+            : id_(std::move(id)), order_(order), value_(value) {}
+
+        std::string_view Id() const noexcept override { return id_; }
+        std::string_view Label() const noexcept override { return id_; }
+        int Order() const noexcept override { return order_; }
+        bool Available() const noexcept override { return value_ != nullptr; }
+        bool Capture(EditorPlaySnapshot& snapshot, EditorError* error) const override {
+            if (failCapture_) {
+                SetEditorError(error, EditorErrorCode::ApplyFailed, "injected capture failure");
+                return false;
+            }
+            return snapshot.Store(id_, *value_, AuthoringFingerprint(), error);
+        }
+        bool Restore(const EditorPlaySnapshot& snapshot, EditorError* error) const override {
+            if (failNextRestore_) {
+                failNextRestore_ = false;
+                SetEditorError(error, EditorErrorCode::ApplyFailed, "injected restore failure");
+                return false;
+            }
+            const int* captured = snapshot.Read<int>(id_, error);
+            if (captured == nullptr) return false;
+            *value_ = *captured;
+            ClearEditorError(error);
+            return true;
+        }
+        bool BuildRuntimeChangeSet(
+            const EditorPlaySnapshot& snapshot,
+            EditorRuntimeChangeSet& changes,
+            EditorError* error) const override {
+            if (failBuildChangeSet_) {
+                SetEditorError(error, EditorErrorCode::ApplyFailed, "injected change-set failure");
+                return false;
+            }
+            const EditorPlaySnapshotEntry* entry = snapshot.Find(id_);
+            if (entry == nullptr) {
+                SetEditorError(error, EditorErrorCode::NotAvailable, "integer snapshot missing");
+                return false;
+            }
+            changes.Add(EditorRuntimeChange{
+                id_, "value", id_ + " value", entry->authoringFingerprint,
+                AuthoringFingerprint(), true});
+            ClearEditorError(error);
+            return true;
+        }
+        uint64_t AuthoringFingerprint() const override {
+            return value_ == nullptr ? 0 : static_cast<uint64_t>(static_cast<int64_t>(*value_));
+        }
+
+        void FailCapture(bool fail) { failCapture_ = fail; }
+        void FailBuildChangeSet(bool fail) { failBuildChangeSet_ = fail; }
+        void FailNextRestore() const { failNextRestore_ = true; }
+
+    private:
+        std::string id_;
+        int order_ = 0;
+        int* value_ = nullptr;
+        bool failCapture_ = false;
+        bool failBuildChangeSet_ = false;
+        mutable bool failNextRestore_ = false;
+    };
+
+    int first = 10;
+    int second = 20;
+    IntegerIsolationProvider firstProvider("test.first", 20, &first);
+    IntegerIsolationProvider secondProvider("test.second", 10, &second);
+    EditorPlayIsolationRegistry registry;
+    EditorError error;
+    runner.Expect(registry.Register(&firstProvider, &error), "first isolation provider should register");
+    runner.Expect(registry.Register(&secondProvider, &error), "second isolation provider should register");
+    runner.Expect(
+        registry.Providers().front()->Id() == "test.second",
+        "isolation providers should execute in deterministic order");
+    runner.Expect(
+        !registry.Register(&firstProvider, &error),
+        "duplicate isolation provider ids should be rejected");
+
+    EditorPlaySnapshot snapshot;
+    runner.Expect(registry.CaptureAll(snapshot, &error), "provider registry should capture all domains atomically");
+    runner.Expect(snapshot.Count() == 2, "provider snapshot should cover every registered domain");
+
+    first = 11;
+    second = 21;
+    EditorRuntimeChangeSet changes;
+    runner.Expect(
+        registry.BuildRuntimeChangeSet(snapshot, changes, &error),
+        "provider registry should build a runtime change set");
+    runner.Expect(changes.Count() == 2, "runtime change set should list each changed provider");
+    changes.SetSelected("test.second", "value", false);
+    const uint32_t stableChangeSetRevision = changes.Revision();
+    secondProvider.FailBuildChangeSet(true);
+    runner.Expect(
+        !registry.BuildRuntimeChangeSet(snapshot, changes, &error),
+        "provider change-set failure should reject the refresh");
+    runner.Expect(
+        changes.Count() == 2 && changes.Revision() == stableChangeSetRevision &&
+            !changes.ProviderSelected("test.second"),
+        "failed change-set refresh should preserve the last complete result and selections");
+    secondProvider.FailBuildChangeSet(false);
+    runner.Expect(
+        registry.AdoptSelected(snapshot, changes, &error),
+        "selected provider changes should be adopted into the restore baseline");
+
+    first = 100;
+    second = 200;
+    runner.Expect(registry.RestoreAll(snapshot, &error), "provider registry should restore all domains");
+    runner.Expect(
+        first == 11 && second == 20,
+        "restore should keep selected provider changes and discard ignored changes");
+    runner.Expect(
+        registry.FingerprintsMatch(snapshot, &error),
+        "restored authoring fingerprints should match the provider snapshot");
+
+    first = 77;
+    second = 88;
+    firstProvider.FailNextRestore();
+    runner.Expect(
+        !registry.RestoreAll(snapshot, &error),
+        "injected provider restore failure should fail the restore operation");
+    runner.Expect(
+        first == 77 && second == 88,
+        "failed multi-provider restore should rollback every partially restored domain");
+
+    firstProvider.FailCapture(true);
+    EditorPlaySnapshot failedCapture = snapshot;
+    runner.Expect(
+        !registry.CaptureAll(failedCapture, &error),
+        "injected provider capture failure should reject the new snapshot");
+    runner.Expect(
+        failedCapture.Find("test.first")->authoringFingerprint == snapshot.Find("test.first")->authoringFingerprint,
+        "failed capture should not publish a partial snapshot");
+
+    EditorPlaySessionState session;
+    EditorPlayMutationGuard guard(&session);
+    runner.Expect(
+        guard.Allows(EditorPlayMutationIntent::Authoring, &error),
+        "mutation guard should allow authoring while stopped");
+    session.Simulate();
+    runner.Expect(
+        !guard.Allows(EditorPlayMutationIntent::Authoring, &error) &&
+            guard.Allows(EditorPlayMutationIntent::Runtime, &error) &&
+            guard.Allows(EditorPlayMutationIntent::KeepChanges, &error),
+        "mutation guard should block direct authoring but allow runtime and explicit Keep Changes");
+}
+
+void TestSelectiveRuntimeKeepChanges(RegressionRunner& runner) {
+    EditorPlaySessionState playSession;
+    EditorPlaySessionIsolationSnapshot snapshot;
+    EditorPlaySessionLifecycleService lifecycle;
+    EditorRuntimeAuthoringApplyService runtimeApply;
+    EditorTransactionStack transactions;
+    EditorDirtyStateService dirtyState;
+    CourseAsset course;
+    CourseEventMarker event{};
+    event.id = "selective_keep";
+    event.payload = "authoring";
+    course.events.push_back(event);
+    AppRuntimeState runtimeState;
+    runtimeState.terrain.previewSpeed = 30.0f;
+    EffectSystem effectSystem;
+    EffectRuntime effectRuntime(&effectSystem);
+    EffectAsset effectAsset{};
+    effectAsset.name = "selective_effect";
+    effectAsset.lifetime = 1.0f;
+    effectRuntime.MutableAssets()[effectAsset.name] = effectAsset;
+    PostProcessStack postProcess;
+    postProcess.ResetToVfxDefaults();
+    const float originalPostIntensity = postProcess.Passes().empty()
+        ? 0.0f
+        : postProcess.Passes().front().intensity;
+    const EditorPlaySessionLifecycleRequest lifecycleRequest{
+        &playSession, &snapshot, &course, &runtimeState, nullptr, "regression.selectiveKeep",
+        &effectRuntime, &postProcess};
+    runner.Expect(
+        lifecycle.Begin(lifecycleRequest, EditorPlaySessionMode::Simulating).succeeded,
+        "selective Keep Changes session should begin");
+
+    course.events.front().payload = "keep-course";
+    runtimeState.terrain.previewSpeed = 90.0f;
+    effectRuntime.MutableAssets().at("selective_effect").lifetime = 2.0f;
+    if (!postProcess.MutablePasses().empty()) postProcess.MutablePasses().front().intensity = 3.0f;
+    std::string changeError;
+    runner.Expect(
+        snapshot.RefreshRuntimeChangeSet(
+            EditorPlaySessionIsolationSnapshotTarget{
+                &course, &runtimeState, &effectRuntime, &postProcess},
+            &changeError),
+        "selective Keep Changes should enumerate runtime differences");
+    runner.Expect(
+        snapshot.RuntimeChanges().SetSelected(
+            kTerrainPlayIsolationProviderId,
+            "terrain.authoring",
+            false),
+        "terrain runtime difference should be individually selectable");
+    runner.Expect(
+        snapshot.RuntimeChanges().SetSelected(
+            kPostProcessPlayIsolationProviderId,
+            "postProcess.stack",
+            false),
+        "Post-process runtime difference should be individually selectable");
+
+    const EditorRuntimeAuthoringApplyResult keepResult = runtimeApply.Apply(
+        EditorRuntimeAuthoringApplyRequest{
+            &playSession, &snapshot, &course, &runtimeState, &transactions,
+            &dirtyState, nullptr, 0, "regression.selectiveKeep.apply",
+            &effectRuntime, &postProcess});
+    runner.Expect(keepResult.succeeded, "selected Course runtime change should be kept");
+
+    course.events.front().payload = "discard-later-course";
+    runtimeState.terrain.previewSpeed = 140.0f;
+    effectRuntime.MutableAssets().at("selective_effect").lifetime = 4.0f;
+    if (!postProcess.MutablePasses().empty()) postProcess.MutablePasses().front().intensity = 5.0f;
+    runner.Expect(lifecycle.Stop(lifecycleRequest).succeeded, "selective Keep Changes session should stop");
+    runner.Expect(
+        course.events.front().payload == "keep-course" &&
+            std::fabs(runtimeState.terrain.previewSpeed - 30.0f) < 0.001f &&
+            std::fabs(effectRuntime.Assets().at("selective_effect").lifetime - 2.0f) < 0.001f &&
+            (postProcess.Passes().empty() ||
+                std::fabs(postProcess.Passes().front().intensity - originalPostIntensity) < 0.001f),
+        "Stop should retain selected Course/VFX providers and discard Terrain/Post-process runtime changes");
+    const auto* runtimeCommand = transactions.LastTransaction() != nullptr
+        ? dynamic_cast<const EditorRuntimeApplyUndoCommand*>(transactions.LastTransaction()->command.get())
+        : nullptr;
+    runner.Expect(
+        runtimeCommand != nullptr && runtimeCommand->Change().afterTerrain.previewSpeed == 30.0f,
+        "grouped Keep Changes transaction should contain only selected provider state");
+    runner.Expect(
+        runtimeCommand != nullptr && runtimeCommand->Change().includesCourse &&
+            !runtimeCommand->Change().includesTerrain &&
+            runtimeCommand->Change().includesVfxAuthoring &&
+            !runtimeCommand->Change().includesPostProcess,
+        "grouped Keep Changes transaction should include only selected optional providers");
+    EditorRuntimeApplyExecutionService selectiveExecution(
+        EditorRuntimeApplyExecutionTargets{
+            &course, &runtimeState, &effectRuntime, &postProcess, &dirtyState, nullptr,
+            "regression.selectiveKeep.command"});
+    EditorExecutionContext selectiveContext;
+    EditorError selectiveError;
+    runner.Expect(selectiveContext.Register(selectiveExecution, &selectiveError), "selective runtime service should register");
+    runner.Expect(
+        transactions.Undo(selectiveContext, &selectiveError),
+        "grouped Keep Changes transaction should undo all selected providers together");
+    runner.Expect(
+        course.events.front().payload == "authoring" &&
+            std::fabs(effectRuntime.Assets().at("selective_effect").lifetime - 1.0f) < 0.001f,
+        "Keep Changes undo should restore Course and VFX authoring together");
+    runner.Expect(
+        transactions.Redo(selectiveContext, &selectiveError),
+        "grouped Keep Changes transaction should redo all selected providers together");
+    runner.Expect(
+        course.events.front().payload == "keep-course" &&
+            std::fabs(effectRuntime.Assets().at("selective_effect").lifetime - 2.0f) < 0.001f,
+        "Keep Changes redo should restore Course and VFX authoring together");
 }
 
 void TestAssetRegistryAndMutationSafety(RegressionRunner& runner) {
@@ -2183,13 +2726,14 @@ void TestAssetRegistryAndMutationSafety(RegressionRunner& runner) {
             "OBJ mesh preview should expose bounds, material texture stamp, and camera preset");
         EditorAssetThumbnailPixelData decodedPixels;
         std::string decodeError;
+        const bool decoded = LoadEditorAssetTextureThumbnailPixels(
+            thumbnailDecodeTexture.generic_string(),
+            8,
+            decodedPixels,
+            decodeError);
         runner.Expect(
-            LoadEditorAssetTextureThumbnailPixels(
-                thumbnailDecodeTexture.generic_string(),
-                8,
-                decodedPixels,
-                decodeError),
-            "texture thumbnail loader should decode valid TGA pixels");
+            decoded,
+            "texture thumbnail loader should decode valid TGA pixels: " + decodeError);
         runner.Expect(
             decodedPixels.width == 8 &&
                 decodedPixels.height == 4 &&
@@ -2490,6 +3034,175 @@ void TestAssetRegistryAndMutationSafety(RegressionRunner& runner) {
     }
 }
 
+void TestFileTransactionCore(RegressionRunner& runner) {
+    const std::filesystem::path projectRoot = std::filesystem::current_path();
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" / "file_transaction";
+    RemoveTreeIfPresent(root);
+
+    std::vector<std::string> transactionIds;
+    try {
+        EditorProjectPathPolicy pathPolicy(projectRoot);
+        runner.Expect(
+            pathPolicy.Resolve(root / "inside.txt").accepted,
+            "project path policy should accept project-local files");
+        runner.Expect(
+            !pathPolicy.Resolve(projectRoot.parent_path() / "outside.txt").accepted,
+            "project path policy should reject absolute paths outside the project");
+        runner.Expect(
+            !pathPolicy.Resolve(std::filesystem::path{".."} / "outside.txt").accepted,
+            "project path policy should reject relative path traversal");
+
+        const std::filesystem::path atomicPath = root / "atomic.txt";
+        const std::vector<EditorFileTransactionFailurePoint> failurePoints{
+            EditorFileTransactionFailurePoint::AfterPrepare,
+            EditorFileTransactionFailurePoint::AfterJournalPrepared,
+            EditorFileTransactionFailurePoint::BeforeOperation,
+            EditorFileTransactionFailurePoint::AfterOperation,
+            EditorFileTransactionFailurePoint::BeforeCommit,
+        };
+        for (EditorFileTransactionFailurePoint failurePoint : failurePoints) {
+            WriteTextFile(atomicPath, "before");
+            EditorFileTransaction transaction(projectRoot);
+            transactionIds.push_back(transaction.TransactionId());
+            std::string error;
+            runner.Expect(
+                transaction.StageTextWrite(atomicPath, "after", {}, &error),
+                "failure-injection atomic write should stage: " + error);
+            EditorFileTransactionOptions options{};
+            options.failurePoint = failurePoint;
+            options.operationIndex = 0;
+            runner.Expect(
+                !transaction.Execute(nullptr, &error, options),
+                "injected file transaction failure should fail the transaction");
+            std::ifstream file(atomicPath);
+            std::string contents;
+            std::getline(file, contents);
+            runner.Expect(
+                contents == "before",
+                "every injected failure point should preserve the previous complete file");
+            runner.Expect(
+                !std::filesystem::exists(
+                    projectRoot / ".editor" / "journal" /
+                    (transaction.TransactionId() + ".journal")),
+                "handled transaction failure should not leave a recovery journal");
+        }
+
+        const std::filesystem::path crashWritePath = root / "crash-write.txt";
+        const std::filesystem::path crashDeletePath = root / "crash-delete.txt";
+        WriteTextFile(crashWritePath, "stable");
+        WriteTextFile(crashDeletePath, "restore me");
+        EditorFileTransaction crashTransaction(projectRoot);
+        transactionIds.push_back(crashTransaction.TransactionId());
+        std::string error;
+        runner.Expect(
+            crashTransaction.StageTextWrite(crashWritePath, "uncommitted", {}, &error),
+            "crash recovery write should stage: " + error);
+        runner.Expect(
+            crashTransaction.StageDelete(crashDeletePath, &error),
+            "crash recovery delete should stage: " + error);
+        EditorFileTransactionOptions crashOptions{};
+        crashOptions.failurePoint = EditorFileTransactionFailurePoint::AfterOperation;
+        crashOptions.operationIndex = 1;
+        crashOptions.simulateCrash = true;
+        runner.Expect(
+            !crashTransaction.Execute(nullptr, &error, crashOptions),
+            "simulated crash should leave a prepared transaction");
+        runner.Expect(
+            error.find("Injected file transaction failure") != std::string::npos,
+            "simulated crash should reach the requested failure point: " + error);
+        runner.Expect(
+            !std::filesystem::exists(crashDeletePath),
+            "simulated crash should occur after the delete was applied");
+        runner.Expect(
+            std::filesystem::exists(
+                projectRoot / ".editor" / "journal" /
+                (crashTransaction.TransactionId() + ".journal")),
+            "simulated crash should retain the prepared journal");
+
+        const EditorFileRecoveryReport recovery = EditorFileRecoveryService(projectRoot).Recover();
+        runner.Expect(recovery.succeeded, "prepared journal recovery should succeed");
+        runner.Expect(
+            recovery.recoveredPreparedCount == 1,
+            "recovery should roll back exactly one prepared transaction");
+        std::ifstream recoveredWrite(crashWritePath);
+        std::string recoveredContents;
+        std::getline(recoveredWrite, recoveredContents);
+        runner.Expect(
+            recoveredContents == "stable" && std::filesystem::exists(crashDeletePath),
+            "recovery should restore both replaced and trashed files");
+
+        const std::filesystem::path largeAssetPath = root / "large.mesh";
+        const std::filesystem::path largeMetadataPath = root / "large.mesh.meta";
+        constexpr std::size_t kLargeAssetBytes = 2u * 1024u * 1024u;
+        WriteBinaryFile(largeAssetPath, std::vector<unsigned char>(kLargeAssetBytes, 0x5a));
+        WriteTextFile(
+            largeMetadataPath,
+            "guid=guid-large-file-transaction\nlogicalPath=" +
+                largeAssetPath.generic_string() + "\n");
+
+        EditorAssetRegistry registry;
+        EditorAssetRecord largeAsset = MakeAsset(
+            EditorAssetKind::Mesh,
+            "large_file_transaction_asset",
+            largeAssetPath.generic_string(),
+            true,
+            "guid-large-file-transaction");
+        largeAsset.logicalPath = largeAsset.sourcePath;
+        runner.Expect(registry.Register(largeAsset), "large transaction asset should register");
+        EditorAssetMutationExecutor executor(registry, projectRoot);
+        EditorTransactionStack history;
+        const EditorAssetMutationResult deleted = executor.Execute(
+            EditorAssetMutationRequest{
+                EditorAssetMutationKind::Delete,
+                EditorAssetKind::Mesh,
+                largeAsset.id,
+                {},
+                {},
+                &history});
+        runner.Expect(deleted.succeeded, "large asset disk-backed delete should succeed");
+        runner.Expect(
+            deleted.transactionChange.diskBacked &&
+                deleted.transactionChange.sourceBytes.empty() &&
+                deleted.transactionChange.metadataBytes.empty(),
+            "large asset delete should store disk references instead of byte snapshots");
+        runner.Expect(
+            history.HistoryBytes() < 512u * 1024u,
+            "large asset delete should keep transaction history memory bounded");
+        runner.Expect(
+            std::filesystem::exists(deleted.transactionChange.sourceTrashPath),
+            "large asset delete should retain the source in transaction trash");
+
+        EditorExecutionContext assetContext;
+        EditorError assetError;
+        runner.Expect(assetContext.Register(executor, &assetError), "disk-backed asset service should register");
+        runner.Expect(history.Undo(assetContext, &assetError), "disk-backed delete undo should succeed");
+        runner.Expect(
+            std::filesystem::file_size(largeAssetPath) == kLargeAssetBytes &&
+                registry.Find(EditorAssetKind::Mesh, largeAsset.id) != nullptr,
+            "disk-backed delete undo should restore the full asset and registry record");
+        runner.Expect(history.Redo(assetContext, &assetError), "disk-backed delete redo should succeed");
+        runner.Expect(
+            !std::filesystem::exists(largeAssetPath) &&
+                std::filesystem::exists(deleted.transactionChange.sourceTrashPath),
+            "disk-backed delete redo should return the asset to the same trash location");
+        history.Clear();
+        runner.Expect(
+            !std::filesystem::exists(deleted.transactionChange.sourceTrashPath),
+            "evicting delete history should release transaction trash");
+    } catch (...) {
+        for (const std::string& transactionId : transactionIds) {
+            EditorTrashService(EditorProjectPathPolicy(projectRoot)).Cleanup(transactionId, nullptr);
+            EditorFileTransactionJournal(EditorProjectPathPolicy(projectRoot))
+                .Remove(transactionId, nullptr);
+        }
+        RemoveTreeIfPresent(root);
+        throw;
+    }
+
+    RemoveTreeIfPresent(root);
+}
+
 void TestAssetMigrationPipeline(RegressionRunner& runner) {
     const std::filesystem::path root =
         std::filesystem::path{"Resources"} / "__editor_asset_migration_regression";
@@ -2549,12 +3262,13 @@ void TestAssetMigrationPipeline(RegressionRunner& runner) {
 
         EditorAssetRecord migratedMesh = *meshRecord;
         EnsureEditorAssetIdentity(migratedMesh);
+        migratedMesh.guid = GenerateEditorAssetGuid();
+        migratedMesh.provisionalGuid = false;
         WriteTextFile(
             migratedMesh.metadataPath,
             "guid=" + migratedMesh.guid + "\n"
             "logicalPath=" + migratedMesh.logicalPath + "\n");
         migratedMesh.hasMetadata = true;
-        migratedMesh.provisionalGuid = false;
         runner.Expect(registry.Register(migratedMesh), "migrated mesh should re-register with durable metadata");
         runner.Expect(
             !IsEditorAssetHandleCurrent(registry, legacyHandle),
@@ -2591,17 +3305,20 @@ void TestAssetMigrationPipeline(RegressionRunner& runner) {
 
         EditorAssetMutationExecutor executor(registry);
         EditorTransactionStack transactions;
+        EditorExecutionContext assetContext;
+        EditorError assetContextError;
+        runner.Expect(assetContext.Register(executor, &assetContextError), "migration asset service should register");
         std::string lastAssetTransactionError;
-        const auto applyAssetTransaction =
-            [&](const EditorTransactionRecord& record, EditorTransactionApplyMode mode) {
-                const EditorAssetMutationResult result = executor.ApplyTransaction(record, mode);
-                if (!result.succeeded) {
-                    lastAssetTransactionError = result.message.empty()
-                        ? record.label + " " + std::string(ToString(mode)) + " returned an empty error."
-                        : result.message;
-                }
-                return result.succeeded;
-            };
+        const auto undoAsset = [&]() {
+            const bool result = transactions.Undo(assetContext, &assetContextError);
+            if (!result) lastAssetTransactionError = assetContextError.message;
+            return result;
+        };
+        const auto redoAsset = [&]() {
+            const bool result = transactions.Redo(assetContext, &assetContextError);
+            if (!result) lastAssetTransactionError = assetContextError.message;
+            return result;
+        };
 
         const EditorAssetMutationResult renameResult =
             executor.Execute(
@@ -2612,7 +3329,9 @@ void TestAssetMigrationPipeline(RegressionRunner& runner) {
                     "migration_mesh_renamed",
                     {},
                     &transactions});
-        runner.Expect(renameResult.succeeded, "migrated asset rename should succeed");
+        runner.Expect(
+            renameResult.succeeded,
+            "migrated asset rename should succeed: " + renameResult.message);
         runner.Expect(
             registry.Find(EditorAssetKind::Mesh, "migration_mesh") == nullptr,
             "renamed migration asset should remove old id");
@@ -2693,8 +3412,8 @@ void TestAssetMigrationPipeline(RegressionRunner& runner) {
             registry.Find(EditorAssetKind::Mesh, "migration_mesh_renamed") == nullptr,
             "migration mesh delete should remove registry record");
 
-        runner.Expect(transactions.Undo(applyAssetTransaction), "migration mesh delete undo should restore mesh");
-        runner.Expect(transactions.Undo(applyAssetTransaction), "migration dependent delete undo should restore course");
+        runner.Expect(undoAsset(), "migration mesh delete undo should restore mesh");
+        runner.Expect(undoAsset(), "migration dependent delete undo should restore course");
         const EditorTransactionRecord* nextMoveUndo = transactions.NextUndoTransaction();
         runner.Expect(
             nextMoveUndo != nullptr,
@@ -2703,9 +3422,9 @@ void TestAssetMigrationPipeline(RegressionRunner& runner) {
             nextMoveUndo->label == "Move Asset",
             "migration move undo expected Move Asset, got " + nextMoveUndo->label);
         runner.Expect(
-            transactions.Undo(applyAssetTransaction),
+            undoAsset(),
             "migration move undo should restore source folder: " + lastAssetTransactionError);
-        runner.Expect(transactions.Undo(applyAssetTransaction), "migration rename undo should restore original id");
+        runner.Expect(undoAsset(), "migration rename undo should restore original id");
         runner.Expect(
             registry.Find(EditorAssetKind::Mesh, "migration_mesh") != nullptr,
             "migration rename undo should restore original mesh id");
@@ -2717,8 +3436,8 @@ void TestAssetMigrationPipeline(RegressionRunner& runner) {
                 restoredCourse->dependencies.front() == "Mesh:migration_mesh",
             "migration undo should restore original dependency token");
 
-        runner.Expect(transactions.Redo(applyAssetTransaction), "migration rename redo should apply");
-        runner.Expect(transactions.Redo(applyAssetTransaction), "migration move redo should apply");
+        runner.Expect(redoAsset(), "migration rename redo should apply");
+        runner.Expect(redoAsset(), "migration move redo should apply");
         runner.Expect(
             registry.Find(EditorAssetKind::Mesh, "migration_mesh_renamed") != nullptr,
             "migration redo should restore moved renamed mesh");
@@ -2764,6 +3483,8 @@ void TestAssetImportReimportPipeline(RegressionRunner& runner) {
         runner.Expect(meshImport.record.kind == EditorAssetKind::Mesh, "mesh import should classify mesh kind");
         runner.Expect(meshImport.record.hasMetadata, "mesh import should create durable metadata");
         runner.Expect(!meshImport.record.provisionalGuid, "mesh import should clear provisional GUID state");
+        runner.Expect(meshImport.record.referenceable,
+            "durable imported Mesh should be eligible for Viewport/Details drag and drop");
         runner.Expect(std::filesystem::exists(meshImport.record.metadataPath), "mesh import should write .meta file");
         const std::string meshGuid = meshImport.record.guid;
 
@@ -2951,6 +3672,1557 @@ void TestAssetImportReimportPipeline(RegressionRunner& runner) {
     RemoveTreeIfPresent(externalRoot);
 }
 
+void TestDurableAssetIdentity(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"Resources"} / "__editor_c1_identity_regression";
+    RemoveTreeIfPresent(root);
+    try {
+        EditorAssetRegistry registry;
+        registry.ConfigureRedirectStore(root / ".assetredirects");
+        std::string error;
+        runner.Expect(registry.LoadRedirects(&error),
+            "empty Durable Identity redirect store should load");
+
+        EditorAssetRecord target = MakeAsset(
+            EditorAssetKind::Mesh, "c1_target", "", true);
+        target.guid = GenerateEditorAssetGuid();
+        target.provisionalGuid = false;
+        target.hasMetadata = true;
+        target.sourcePath = (root / "c1_target.mesh").generic_string();
+        target.logicalPath = target.sourcePath;
+        target.metadataPath = target.sourcePath + ".meta";
+        WriteTextFile(target.sourcePath, "c1 durable target");
+        WriteTextFile(target.metadataPath,
+            "guid=" + target.guid + "\nlogicalPath=" + target.logicalPath + "\n");
+
+        EditorAssetRecord owner = MakeAsset(
+            EditorAssetKind::Effect, "c1_owner", "", true);
+        owner.guid = GenerateEditorAssetGuid();
+        owner.provisionalGuid = false;
+        owner.hasMetadata = true;
+        owner.sourcePath = (root / "c1_owner.effect").generic_string();
+        owner.logicalPath = owner.sourcePath;
+        owner.metadataPath = owner.sourcePath + ".meta";
+        owner.dependencies = {BuildEditorAssetDependencyToken(target)};
+        owner.pathOnlyReferences = {target.sourcePath};
+        WriteTextFile(owner.sourcePath, "mesh=" + target.sourcePath + "\n");
+        WriteTextFile(owner.metadataPath,
+            "guid=" + owner.guid + "\nlogicalPath=" + owner.logicalPath +
+            "\ndependencies=" + owner.dependencies.front() +
+            "\npathOnlyReferences=" + target.sourcePath + "\n");
+
+        runner.Expect(registry.Register(target) && registry.Register(owner),
+            "durable target and owner assets should register");
+        runner.Expect(registry.CountDurableAssets() == 2 &&
+                registry.CountMetadataEligibleAssets() == 2 &&
+                std::abs(registry.MetadataCoveragePercent() - 100.0) < 0.001,
+            "metadata coverage should report 100 percent for durable eligible assets");
+
+        EditorAssetRecord duplicate = target;
+        duplicate.id = "c1_duplicate";
+        duplicate.sourcePath = (root / "c1_duplicate.mesh").generic_string();
+        duplicate.logicalPath = duplicate.sourcePath;
+        duplicate.metadataPath = duplicate.sourcePath + ".meta";
+        runner.Expect(registry.Register(duplicate) && registry.DuplicateGuids().size() == 1,
+            "registry audit should detect duplicate durable GUIDs");
+        EditorAssetReferenceDiagnosticsAdapter diagnostics(&registry);
+        EditorValidationReport duplicateReport{};
+        diagnostics.Validate(duplicateReport);
+        runner.Expect(duplicateReport.errorCount >= 2,
+            "Diagnostics should publish duplicate GUID errors for every conflicting asset");
+        runner.Expect(EvaluateEditorAssetMutationSafety(
+                registry, *registry.Find(EditorAssetKind::Mesh, target.id),
+                EditorAssetMutationKind::Rename).Blocked(),
+            "Rename should block while durable GUID identity is ambiguous");
+        registry.Remove(duplicate.kind, duplicate.id);
+
+        EditorAssetMutationExecutor executor(registry);
+        EditorExecutionContext executionContext;
+        EditorError executionError;
+        runner.Expect(executionContext.Register(executor, &executionError),
+            "Durable Asset execution service should register");
+        EditorTransactionStack transactions;
+        EditorAssetMutationResult repaired = executor.Execute(
+            EditorAssetMutationRequest{
+                EditorAssetMutationKind::RepairReferences,
+                owner.kind,
+                owner.id,
+                {},
+                {},
+                &transactions});
+        runner.Expect(repaired.succeeded && repaired.rewrittenReferenceCount == 1,
+            "path-only repair should convert one resolvable reference");
+        const EditorAssetRecord* repairedOwner = registry.Find(owner.kind, owner.id);
+        runner.Expect(repairedOwner != nullptr && repairedOwner->pathOnlyReferences.empty() &&
+                repairedOwner->guidDependencies.size() == 1 &&
+                repairedOwner->guidDependencies.front() == target.guid,
+            "reference repair should persist the target durable GUID");
+        EditorValidationReport repairedReport{};
+        diagnostics.Validate(repairedReport);
+        runner.Expect(std::none_of(repairedReport.issues.begin(), repairedReport.issues.end(),
+                [](const EditorValidationIssue& issue) {
+                    return issue.title == "Path-only asset reference";
+                }),
+            "Diagnostics should clear the path-only warning after repair");
+        runner.Expect(transactions.Undo(executionContext, &executionError),
+            "path-only reference repair should undo");
+        runner.Expect(!registry.Find(owner.kind, owner.id)->pathOnlyReferences.empty(),
+            "reference repair undo should restore legacy path metadata");
+        runner.Expect(transactions.Redo(executionContext, &executionError),
+            "path-only reference repair should redo");
+
+        const std::string stableGuid = target.guid;
+        const std::string oldId = target.id;
+        const std::string oldPath = target.sourcePath;
+        EditorAssetMutationResult renamed = executor.Execute(
+            EditorAssetMutationRequest{
+                EditorAssetMutationKind::Rename,
+                target.kind,
+                target.id,
+                "c1_target_renamed",
+                {},
+                &transactions});
+        runner.Expect(renamed.succeeded && renamed.updatedRecord.guid == stableGuid,
+            "Rename should preserve the durable GUID");
+        const EditorAssetReferenceResolution oldIdResolution =
+            registry.ResolveReference(target.kind, oldId);
+        const EditorAssetReferenceResolution oldPathResolution =
+            registry.ResolveReference(target.kind, oldPath);
+        const EditorAssetReferenceResolution guidResolution = registry.ResolveReference(
+            target.kind, BuildEditorAssetGuidReference(stableGuid));
+        runner.Expect(oldIdResolution.resolved && oldIdResolution.requiresRepair &&
+                oldIdResolution.source == EditorAssetReferenceResolutionSource::Redirect &&
+                oldPathResolution.resolved && guidResolution.resolved &&
+                guidResolution.record == oldIdResolution.record,
+            "Rename redirect should resolve old id/path and canonical GUID to one asset");
+        runner.Expect(std::filesystem::is_regular_file(root / ".assetredirects"),
+            "Rename should persist the redirect table atomically");
+        repairedOwner = registry.Find(owner.kind, owner.id);
+        runner.Expect(repairedOwner != nullptr && repairedOwner->guidDependencies.front() == stableGuid,
+            "GUID-backed dependent reference should remain unchanged after Rename");
+
+        EditorAssetRegistry reloaded;
+        reloaded.ConfigureRedirectStore(root / ".assetredirects");
+        runner.Expect(reloaded.Register(renamed.updatedRecord) &&
+                reloaded.Register(*repairedOwner) && reloaded.LoadRedirects(&error),
+            "persisted redirect table should reload into a fresh registry");
+        const EditorAssetReferenceResolution reloadedOld =
+            reloaded.ResolveReference(target.kind, oldPath);
+        runner.Expect(reloadedOld.resolved && reloadedOld.record != nullptr &&
+                reloadedOld.record->guid == stableGuid,
+            "reloaded redirect should repair an old path to the current durable asset");
+
+        EditorAssetRecord legacy = MakeAsset(
+            EditorAssetKind::Texture, "c1_legacy", "", false);
+        legacy.sourcePath = (root / "c1_legacy.png").generic_string();
+        legacy.logicalPath = legacy.sourcePath;
+        legacy.metadataPath = legacy.sourcePath + ".meta";
+        WriteTextFile(legacy.sourcePath, "legacy");
+        runner.Expect(registry.Register(legacy), "legacy C-1 asset should register provisionally");
+        const std::string provisionalGuid = registry.Find(legacy.kind, legacy.id)->guid;
+        EditorAssetImportService importService(registry);
+        const EditorAssetImportResult migration = importService.BatchMigrateMetadata();
+        const EditorAssetRecord* migrated = registry.Find(legacy.kind, legacy.id);
+        runner.Expect(migration.succeeded && migrated != nullptr && migrated->hasMetadata &&
+                IsDurableEditorAssetGuid(migrated->guid) &&
+                migrated->guid != provisionalGuid &&
+                std::abs(registry.MetadataCoveragePercent() - 100.0) < 0.001,
+            "Batch migration should replace provisional path identity and reach 100 percent coverage");
+
+        const std::filesystem::path collisionRoot = root / "id_collision";
+        WriteTextFile(collisionRoot / "shared_name.obj", "mesh-a");
+        WriteTextFile(collisionRoot / "shared_name.gltf", "mesh-b");
+        EditorAssetRegistry collisionRegistry;
+        const EditorAssetFolderIndexResult collisionIndex =
+            IndexEditorAssetsFromFolder(collisionRegistry, collisionRoot);
+        runner.Expect(collisionIndex.registeredAssets == 1 &&
+                collisionIndex.identityCollisions == 1 &&
+                collisionRegistry.Records().size() == 1,
+            "folder indexing should reject source paths that collapse to one Kind/ID");
+    } catch (...) {
+        RemoveTreeIfPresent(root);
+        throw;
+    }
+    RemoveTreeIfPresent(root);
+}
+
+void TestProductionContentBrowser(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"Resources"} / "__editor_c2_content_browser_regression";
+    RemoveTreeIfPresent(root);
+    try {
+        const std::filesystem::path source = root / "Textures" / "c2_asset.png";
+        EditorAssetRecord asset = MakeAsset(
+            EditorAssetKind::Texture,
+            "__editor_c2_content_browser_regression/Textures/c2_asset",
+            "",
+            true);
+        asset.guid = GenerateEditorAssetGuid();
+        asset.hasMetadata = true;
+        asset.provisionalGuid = false;
+        asset.sourcePath = source.generic_string();
+        asset.logicalPath = asset.sourcePath;
+        asset.metadataPath = asset.sourcePath + ".meta";
+        asset.tags = {"Environment", "UI"};
+        WriteTextFile(source, "c2 texture source");
+        WriteTextFile(
+            asset.metadataPath,
+            "guid=" + asset.guid + "\nlogicalPath=" + asset.logicalPath +
+                "\ntags=Environment,UI\n");
+
+        EditorAssetRegistry registry;
+        runner.Expect(registry.Register(asset), "C-2 Asset fixture should register");
+
+        const std::filesystem::path statePath = root / "ContentBrowserState.ini";
+        EditorContentBrowserState state;
+        state.SetPath(statePath);
+        state.EnsureLoaded();
+        runner.Expect(state.CreateCollection("Review"), "Content Browser collection should create");
+        runner.Expect(state.AddToCollection("Review", asset.guid),
+            "Asset should enter a Content Browser collection");
+        runner.Expect(state.ToggleFavorite(asset.guid), "Asset favorite should toggle");
+        state.SetSelectedFolder((root / "Textures").generic_string());
+        state.SetSearchText("c2_asset");
+        state.SetTagFilter("Environment");
+        state.SetKindFilter(EditorAssetKind::Texture);
+        state.SetViewMode(EditorContentBrowserViewMode::List);
+        state.SetSelectedAssetGuid(asset.guid);
+        state.SetActiveCollection("Review");
+        runner.Expect(state.FilterAssets(registry).size() == 1,
+            "Folder/search/tag/kind/collection filters should retain the matching Asset");
+        runner.Expect(state.Save() && std::filesystem::is_regular_file(statePath),
+            "Content Browser state should save through an atomic file transaction: " +
+                state.StatusMessage());
+
+        EditorContentBrowserState restored;
+        restored.SetPath(statePath);
+        runner.Expect(restored.Load() && restored.LastLoadValid(),
+            "Content Browser state should reload with a valid schema");
+        runner.Expect(
+            restored.SelectedFolder() == state.SelectedFolder() &&
+                restored.SearchText() == "c2_asset" &&
+                restored.TagFilter() == "Environment" &&
+                restored.KindFilter() == EditorAssetKind::Texture &&
+                restored.ViewMode() == EditorContentBrowserViewMode::List &&
+                restored.SelectedAssetGuid() == asset.guid &&
+                restored.ActiveCollection() == "Review" &&
+                restored.IsFavorite(asset.guid) &&
+                restored.IsInCollection("Review", asset.guid),
+            "Folder/filter/view/selection/favorite/collection should survive a session reload");
+        const std::vector<std::string> folders = restored.BuildFolders(registry);
+        runner.Expect(
+            std::find(folders.begin(), folders.end(),
+                (root / "Textures").generic_string()) != folders.end(),
+            "Folder Tree should be derived from registered Asset paths");
+
+        EditorAssetWorkspaceStatusRegistry statuses;
+        EditorAssetWorkspaceStatus published{};
+        published.sourceControl = EditorAssetSourceControlStatus::Modified;
+        published.cook = EditorAssetCookStatus::OutOfDate;
+        published.dirty = true;
+        published.detail = "C-2 status fixture";
+        runner.Expect(statuses.Publish(asset.guid, published),
+            "source-control/cook provider status should publish by durable GUID");
+        const EditorAssetWorkspaceStatus resolvedStatus = statuses.QueryStatus(asset);
+        runner.Expect(
+            resolvedStatus.sourceControl == EditorAssetSourceControlStatus::Modified &&
+                resolvedStatus.cook == EditorAssetCookStatus::OutOfDate &&
+                resolvedStatus.dirty,
+            "Content Browser should resolve SCM/dirty/cook state by durable GUID");
+
+        EditorAssetMutationExecutor executor(registry);
+        EditorExecutionContext executionContext;
+        EditorError error;
+        runner.Expect(executionContext.Register(executor, &error),
+            "C-2 Asset execution service should register");
+        EditorTransactionStack transactions;
+        const EditorAssetMutationResult duplicated = executor.Execute(
+            EditorAssetMutationRequest{
+                EditorAssetMutationKind::Duplicate,
+                asset.kind,
+                asset.id,
+                "c2_asset_copy",
+                {},
+                &transactions});
+        runner.Expect(
+            duplicated.succeeded && duplicated.updatedRecord.guid != asset.guid &&
+                IsDurableEditorAssetGuid(duplicated.updatedRecord.guid) &&
+                std::filesystem::is_regular_file(duplicated.updatedRecord.sourcePath) &&
+                std::filesystem::is_regular_file(duplicated.updatedRecord.metadataPath),
+            "Duplicate should atomically create source and a distinct durable .meta GUID");
+        const EditorAssetRecord duplicateRecord = duplicated.updatedRecord;
+        runner.Expect(transactions.Undo(executionContext, &error) &&
+                registry.Find(duplicateRecord.kind, duplicateRecord.id) == nullptr &&
+                !std::filesystem::exists(duplicateRecord.sourcePath) &&
+                !std::filesystem::exists(duplicateRecord.metadataPath),
+            "Duplicate Undo should atomically remove source, metadata, and Registry state");
+        runner.Expect(transactions.Redo(executionContext, &error) &&
+                registry.Find(duplicateRecord.kind, duplicateRecord.id) != nullptr &&
+                registry.Find(duplicateRecord.kind, duplicateRecord.id)->guid == duplicateRecord.guid &&
+                std::filesystem::is_regular_file(duplicateRecord.sourcePath) &&
+                std::filesystem::is_regular_file(duplicateRecord.metadataPath),
+            "Duplicate Redo should restore the same durable identity and files");
+    } catch (...) {
+        RemoveTreeIfPresent(root);
+        throw;
+    }
+    RemoveTreeIfPresent(root);
+}
+
+void TestRightInspectorEvolution(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" / "right_inspector_evolution";
+    RemoveTreeIfPresent(root);
+    try {
+        EditorPropertyDescriptor arrayDescriptor{};
+        arrayDescriptor.domain = EditorDomainId::SceneEntity;
+        arrayDescriptor.name = "Scene.Tags";
+        arrayDescriptor.displayName = "Tags";
+        arrayDescriptor.category = "Metadata";
+        arrayDescriptor.kind = EditorPropertyKind::Array;
+        arrayDescriptor.valueType = "array<string>";
+        arrayDescriptor.containerElementType = "string";
+        arrayDescriptor.editConditionProperty = "Scene.Enabled";
+        arrayDescriptor.editConditionExpectedValue = "true";
+        arrayDescriptor.prefabOverrideCapable = true;
+
+        EditorPropertyDescriptor mapDescriptor = arrayDescriptor;
+        mapDescriptor.name = "Scene.Attributes";
+        mapDescriptor.displayName = "Attributes";
+        mapDescriptor.kind = EditorPropertyKind::Map;
+        mapDescriptor.valueType = "map<string,float>";
+        mapDescriptor.containerKeyType = "string";
+        mapDescriptor.containerElementType = "float";
+
+        EditorPropertyDescriptor structDescriptor = arrayDescriptor;
+        structDescriptor.name = "Scene.Bounds";
+        structDescriptor.displayName = "Bounds";
+        structDescriptor.kind = EditorPropertyKind::Struct;
+        structDescriptor.valueType = "Bounds";
+        structDescriptor.containerElementType = "Bounds";
+
+        EditorPropertyRegistry propertyRegistry;
+        runner.Expect(
+            propertyRegistry.Register(arrayDescriptor) &&
+                propertyRegistry.Register(mapDescriptor) &&
+                propertyRegistry.Register(structDescriptor),
+            "Array/Map/Struct property descriptors should register");
+        runner.Expect(
+            propertyRegistry.Find(EditorDomainId::SceneEntity, arrayDescriptor.name) != nullptr &&
+                propertyRegistry.Find(EditorDomainId::SceneEntity, arrayDescriptor.name)
+                    ->editConditionProperty == "Scene.Enabled" &&
+                propertyRegistry.Find(EditorDomainId::SceneEntity, arrayDescriptor.name)
+                    ->prefabOverrideCapable,
+            "Edit Condition and Prefab override metadata should survive registration");
+
+        EditorPropertyValue containerValue{};
+        std::string parseError;
+        runner.Expect(ParseEditorPropertyValue(
+                arrayDescriptor, "[Player, Enemy]", containerValue, &parseError) &&
+                FormatEditorPropertyValue(arrayDescriptor, containerValue) == "[Player, Enemy]",
+            "Array property values should round-trip through the generic container representation");
+        runner.Expect(ParseEditorPropertyValue(
+                mapDescriptor, "{Health: 100}", containerValue, &parseError) &&
+                FormatEditorPropertyValue(mapDescriptor, containerValue) == "{Health: 100}",
+            "Map property values should round-trip through the generic container representation");
+        runner.Expect(ParseEditorPropertyValue(
+                structDescriptor, "{Min: 0, Max: 1}", containerValue, &parseError) &&
+                FormatEditorPropertyValue(structDescriptor, containerValue) == "{Min: 0, Max: 1}",
+            "Struct property values should round-trip through the generic container representation");
+
+        EditorDetailsViewState state;
+        state.SetPath(root / "DetailsState.ini");
+        state.EnsureLoaded();
+        state.SetSearchText("Tags");
+        state.SetFavoritesOnly(true);
+        state.SetChangedOnly(true);
+        state.SetCategoryOpen("Metadata", false);
+        runner.Expect(state.ToggleFavorite(arrayDescriptor.domain, arrayDescriptor.name),
+            "Details property Favorite should toggle");
+        runner.Expect(state.Matches(arrayDescriptor) && !state.Matches(mapDescriptor),
+            "Details property search and Favorite filters should match descriptor metadata");
+        runner.Expect(state.Save(), "Details state should save atomically");
+
+        EditorDetailsViewState restored;
+        restored.SetPath(root / "DetailsState.ini");
+        runner.Expect(restored.Load() && restored.LastLoadValid(),
+            "Details state should reload with a valid schema");
+        runner.Expect(
+            restored.SearchText() == "Tags" && restored.FavoritesOnly() &&
+                restored.ChangedOnly() && !restored.IsCategoryOpen("Metadata") &&
+                restored.IsFavorite(arrayDescriptor.domain, arrayDescriptor.name),
+            "Details Search/Category/Favorite/Changed state should survive a session reload");
+
+        EditorObjectHandle object{};
+        object.domain = EditorDomainId::SceneEntity;
+        object.stableId = "scene:entity:c3";
+        object.displayName = "C3 Entity";
+        EditorPrefabOverrideRegistry overrides;
+        EditorPrefabOverrideInfo overrideInfo{};
+        overrideInfo.state = EditorPrefabOverrideState::Overridden;
+        overrideInfo.canRevert = true;
+        overrideInfo.sourcePrefab = "prefab://C3";
+        overrideInfo.detail = "Local property override";
+        runner.Expect(overrides.Publish(object, arrayDescriptor, overrideInfo),
+            "Prefab override provider should publish property state");
+        runner.Expect(
+            overrides.QueryOverride(object, arrayDescriptor).state ==
+                EditorPrefabOverrideState::Overridden,
+            "Details should query Prefab override state per object/property");
+        runner.Expect(overrides.RevertOverride(object, arrayDescriptor, &parseError) &&
+                overrides.QueryOverride(object, arrayDescriptor).state ==
+                    EditorPrefabOverrideState::NotApplicable,
+            "Prefab override provider should support a revert operation");
+
+        EditorPanelRegistry panels;
+        const std::array<std::pair<const char*, const char*>, 6> inspectorPanels{{
+            {"editor.details", "Details"},
+            {"vfx.details", "VFX Details"},
+            {"vfx.runtimeInspector", "VFX Runtime"},
+            {"scene.lighting", "Scene Lighting"},
+            {"postprocess.inspector", "Post Process"},
+            {"render.debugViews", "Render Debug Views"},
+        }};
+        for (const auto& panel : inspectorPanels) {
+            runner.Expect(panels.Register(EditorPanelDescriptor{
+                    panel.first,
+                    panel.second,
+                    "C3",
+                    EditorPanelHostArea::RightInspector,
+                    true,
+                    []() {}}),
+                std::string("C-3 Inspector panel should register: ") + panel.first);
+        }
+        runner.Expect(panels.Count(EditorPanelHostArea::RightInspector) == 6,
+            "Right Inspector should expose Details plus focused authoring responsibilities");
+
+        EditorLayoutPersistenceService layout;
+        layout.SetPath(root / "EditorLayout.ini");
+        layout.EnsureLoaded();
+        layout.SetActivePanelFromUser(EditorPanelHostArea::RightInspector, "editor.details");
+        runner.Expect(layout.Save(), "Details default tab should persist");
+        EditorLayoutPersistenceService restoredLayout;
+        restoredLayout.SetPath(root / "EditorLayout.ini");
+        runner.Expect(restoredLayout.Load() &&
+                restoredLayout.ActivePanel(EditorPanelHostArea::RightInspector) == "editor.details",
+            "Right Inspector should restore Details as the active tab");
+    } catch (...) {
+        RemoveTreeIfPresent(root);
+        throw;
+    }
+    RemoveTreeIfPresent(root);
+}
+
+void TestBottomDockEvolution(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" /
+        "bottom_dock_evolution";
+    RemoveTreeIfPresent(root);
+    try {
+        EditorPanelRegistry panels;
+        EditorPanelDescriptor diagnostics{
+            "editor.diagnostics",
+            "Diagnostics",
+            "Editor",
+            EditorPanelHostArea::BottomDock,
+            true,
+            []() {}};
+        diagnostics.bottomDockGroup = EditorBottomDockGroup::Output;
+        diagnostics.badge = []() { return EditorPanelBadge{2, 1}; };
+        EditorPanelDescriptor timeline{
+            "course.timeline",
+            "Course Timeline",
+            "Course",
+            EditorPanelHostArea::BottomDock,
+            true,
+            []() {}};
+        timeline.bottomDockGroup = EditorBottomDockGroup::Authoring;
+        EditorPanelDescriptor featureGuard{
+            "editor.featureGuard",
+            "Feature Guard",
+            "Editor",
+            EditorPanelHostArea::BottomDock,
+            true,
+            []() {}};
+        featureGuard.bottomDockGroup = EditorBottomDockGroup::Developer;
+        runner.Expect(
+            panels.Register(std::move(diagnostics)) &&
+                panels.Register(std::move(timeline)) &&
+                panels.Register(std::move(featureGuard)),
+            "C-4 Bottom Dock descriptors should register");
+        runner.Expect(
+            panels.AllPanels().front().badge &&
+                panels.AllPanels().front().badge().warningCount == 2 &&
+                panels.AllPanels().front().badge().errorCount == 1,
+            "Bottom Dock panel badges should expose warning and error counts");
+
+        EditorBottomDockGroup parsedGroup = EditorBottomDockGroup::Output;
+        runner.Expect(
+            EditorBottomDockGroupFromString("Profiling", parsedGroup) &&
+                parsedGroup == EditorBottomDockGroup::Profiling &&
+                std::string(ToString(EditorBottomDockGroup::Authoring)) == "Authoring",
+            "Bottom Dock group names should round-trip");
+
+        EditorLayoutPersistenceService state;
+        state.SetPath(root / "EditorLayout.ini");
+        state.EnsureLoaded();
+        state.CaptureRegistryDefaults(panels);
+        state.SetPanelPinned("editor.diagnostics", true);
+        state.SetPanelVisible("editor.featureGuard", false);
+        state.SetBottomDockGroup("course.timeline", EditorBottomDockGroup::Profiling);
+        state.SetActiveBottomDockGroup(EditorBottomDockGroup::Profiling);
+        state.SetActivePanelFromUser(
+            EditorPanelHostArea::BottomDock, "course.timeline");
+        state.SetBottomDockSearch("timeline");
+        state.SetBottomDockDeveloperPanelsVisible(true);
+        runner.Expect(state.Save(), "C-4 Bottom Dock state should save atomically");
+
+        EditorLayoutPersistenceService restored;
+        restored.SetPath(root / "EditorLayout.ini");
+        runner.Expect(
+            restored.Load() && restored.LastLoadValid(),
+            "C-4 Bottom Dock state should load with a valid v2 schema");
+        runner.Expect(
+            restored.IsPanelPinned("editor.diagnostics") &&
+                !restored.IsPanelVisible("editor.featureGuard") &&
+                restored.BottomDockGroup(
+                    "course.timeline", EditorBottomDockGroup::Authoring) ==
+                    EditorBottomDockGroup::Profiling &&
+                restored.ActiveBottomDockGroup() == EditorBottomDockGroup::Profiling &&
+                restored.ActivePanel(EditorPanelHostArea::BottomDock) ==
+                    "course.timeline" &&
+                restored.BottomDockSearch() == "timeline" &&
+                restored.BottomDockDeveloperPanelsVisible(),
+            "Bottom Dock Pin/Close/Move/Search/Developer state should survive reload");
+        restored.SetActiveBottomDockGroup(EditorBottomDockGroup::Developer);
+        restored.SetBottomDockDeveloperPanelsVisible(false);
+        runner.Expect(
+            restored.ActiveBottomDockGroup() == EditorBottomDockGroup::Output,
+            "hiding Developer panels should recover to the Output area");
+    } catch (...) {
+        RemoveTreeIfPresent(root);
+        throw;
+    }
+    RemoveTreeIfPresent(root);
+}
+
+void TestMenuToolbarStatusEvolution(RegressionRunner& runner) {
+    EditorCommandRegistry commands;
+    const auto registerCommand = [&commands](
+        std::string id,
+        std::string label,
+        std::string category = "Editor") {
+        return commands.Register(EditorCommand{
+            std::move(id),
+            std::move(label),
+            std::move(category),
+            {},
+            []() { return true; },
+            {},
+            []() { return EditorCommandResult{true, "ok"}; }});
+    };
+    runner.Expect(
+        registerCommand("editor.saveAll", "Save All", "File") &&
+            registerCommand("editor.undo", "Undo", "Edit") &&
+            registerCommand("editor.transform.translate", "Move", "Edit") &&
+            registerCommand("window.bottomDock.output", "Output", "Window") &&
+            registerCommand("asset.reimport", "Reimport", "Asset") &&
+            registerCommand("editor.play", "Play", "Play") &&
+            registerCommand("editor.help.evolutionDesign", "Evolution Design", "Help") &&
+            registerCommand("course.reload", "Reload Course", "Course"),
+        "C-5 representative commands should register");
+
+    EditorToolRegistry tools;
+    tools.BeginFrame();
+    RegisterDefaultEditorMenu(tools, commands);
+    const std::vector<EditorMenuSectionDescriptor>& sections = tools.Menu().Sections();
+    runner.Expect(
+        sections.size() == 7 && sections[0].label == "File" && sections[1].label == "Edit" &&
+            sections[2].label == "Window" && sections[3].label == "Tools" &&
+            sections[4].label == "Build" && sections[5].label == "Play" &&
+            sections[6].label == "Help",
+        "C-5 menu should expose the stable File/Edit/Window/Tools/Build/Play/Help order");
+
+    const auto menuItem = [&tools](std::string_view commandId) {
+        const auto& items = tools.Menu().Items();
+        return std::find_if(
+            items.begin(), items.end(),
+            [commandId](const EditorMenuItemDescriptor& item) {
+                return item.commandId == commandId;
+            });
+    };
+    runner.Expect(
+        menuItem("editor.saveAll") != tools.Menu().Items().end() &&
+            menuItem("editor.saveAll")->sectionId == "menu.file" &&
+            menuItem("editor.transform.translate")->sectionId == "menu.edit" &&
+            menuItem("window.bottomDock.output")->sectionId == "menu.window" &&
+            menuItem("asset.reimport")->sectionId == "menu.build" &&
+            menuItem("editor.play")->sectionId == "menu.play" &&
+            menuItem("editor.help.evolutionDesign")->sectionId == "menu.help",
+        "C-5 commands should route into responsibility-based menus");
+    runner.Expect(
+        menuItem("course.reload") != tools.Menu().Items().end() &&
+            menuItem("course.reload")->contextualDocumentType == EditorDocumentTypes::Course,
+        "Course menu commands should be scoped to the active Course document");
+
+    RegisterDefaultEditorToolbar(tools);
+    const auto toolbarItem = [&tools](std::string_view commandId) {
+        const auto& items = tools.Toolbar().Items();
+        return std::find_if(
+            items.begin(), items.end(),
+            [commandId](const EditorToolbarItemDescriptor& item) {
+                return item.commandId == commandId;
+            });
+    };
+    runner.Expect(
+        toolbarItem("editor.saveAll") != tools.Toolbar().Items().end() &&
+            toolbarItem("editor.transform.translate") != tools.Toolbar().Items().end() &&
+            toolbarItem("editor.transform.rotate") != tools.Toolbar().Items().end() &&
+            toolbarItem("editor.transform.scale") != tools.Toolbar().Items().end() &&
+            toolbarItem("editor.transform.toggleSpace") != tools.Toolbar().Items().end() &&
+            toolbarItem("editor.transform.toggleSnap") != tools.Toolbar().Items().end() &&
+            toolbarItem("editor.play") != tools.Toolbar().Items().end(),
+        "C-5 toolbar should prioritize save, edit, transform, and play workflows");
+    runner.Expect(
+        toolbarItem("course.apply") != tools.Toolbar().Items().end() &&
+            toolbarItem("course.apply")->contextualDocumentType == EditorDocumentTypes::Course,
+        "Course toolbar commands should be contextual rather than globally permanent");
+
+    EditorValidationReport validation;
+    validation.errorCount = 2;
+    validation.warningCount = 3;
+    EditorCommandExecutionStatus executionStatus;
+    executionStatus.hasResult = true;
+    executionStatus.commandId = "editor.saveAll";
+    executionStatus.succeeded = true;
+    commands.SetExecutionStatus(&executionStatus);
+    EditorContext context;
+    context.validationReport = &validation;
+    context.commands = &commands;
+    const EditorStatusBarSnapshot snapshot = BuildEditorStatusBarSnapshot(context);
+    runner.Expect(
+        snapshot.errorCount == 2 && snapshot.warningCount == 3 &&
+            snapshot.command == "editor.saveAll OK" &&
+            snapshot.shaderCompile == "Unbound" && snapshot.memory == "Unbound",
+        "C-5 status snapshot should expose truthful health data and explicit unbound providers");
+}
+
+void TestCourseSequencerTrackProvider(RegressionRunner& runner) {
+    const std::vector<std::filesystem::path> coreFiles{
+        "application/editor/sequencer/EditorSequencer.h",
+        "application/editor/sequencer/EditorSequencer.cpp",
+    };
+    for (const std::filesystem::path& path : coreFiles) {
+        std::ifstream input(path, std::ios::binary);
+        runner.Expect(input.is_open(), "D-1 Sequencer Core file should exist");
+        std::ostringstream contents;
+        contents << input.rdbuf();
+        const std::string text = contents.str();
+        runner.Expect(
+            text.find("CourseAsset") == std::string::npos &&
+                text.find("CourseEventMarker") == std::string::npos &&
+                text.find("application/course") == std::string::npos,
+            "Sequencer Core must not include Course domain types");
+    }
+
+    CourseAsset course;
+    course.name = "Sequencer Regression";
+    CourseEventMarker vfx;
+    vfx.distance = 10.0f;
+    vfx.type = "vfx";
+    vfx.id = "vfx_key";
+    CourseEventMarker gameplay;
+    gameplay.distance = 30.0f;
+    gameplay.type = "enemy_wave";
+    gameplay.id = "gameplay_key";
+    CourseEventMarker event;
+    event.distance = 50.0f;
+    event.type = "setpiece";
+    event.id = "event_key";
+    course.events = {vfx, gameplay, event};
+    CourseTerrainPlacement placement;
+    placement.distance = 70.0f;
+    placement.id = "placement_key";
+    course.terrainPlacements.push_back(placement);
+    CourseCameraKey camera;
+    camera.distance = 90.0f;
+    course.cameraKeys.push_back(camera);
+    CourseLightingPreset lighting;
+    lighting.distance = 110.0f;
+    lighting.id = "lighting_key";
+    course.lightingPresets.push_back(lighting);
+    CourseTerrainMaterialPreset material;
+    material.distance = 130.0f;
+    material.id = "material_key";
+    course.terrainMaterialPresets.push_back(material);
+
+    CourseSequencerTrackProvider provider;
+    provider.Bind(&course);
+    EditorTransactionStack transactions;
+    EditorSequencerService sequencer;
+    sequencer.BeginFrame();
+    runner.Expect(sequencer.RegisterProvider(provider), "Course Track Provider should register");
+    sequencer.SetTransactionStack(&transactions);
+    sequencer.SetSequenceRange(0.0, 300.0);
+    sequencer.SetSnapEnabled(true);
+    sequencer.SetSnapInterval(10.0);
+    double previewPosition = -1.0;
+    sequencer.SetPreviewPositionCallback([&](double position) { previewPosition = position; });
+    uint32_t mutationCount = 0;
+    sequencer.SetMutationCallback([&](std::string_view) { ++mutationCount; });
+
+    const std::vector<EditorSequencerTrack> tracks = sequencer.BuildTracks();
+    runner.Expect(tracks.size() == 7, "Course provider should expose all seven D-1 tracks");
+    const auto findTrack = [&tracks](std::string_view id) -> const EditorSequencerTrack* {
+        const auto found = std::find_if(tracks.begin(), tracks.end(),
+            [id](const EditorSequencerTrack& track) { return track.id == id; });
+        return found == tracks.end() ? nullptr : &*found;
+    };
+    const EditorSequencerTrack* vfxTrack = findTrack("course.vfx");
+    const EditorSequencerTrack* gameplayTrack = findTrack("course.gameplay");
+    runner.Expect(
+        findTrack("course.events") != nullptr && findTrack("course.placements") != nullptr &&
+            findTrack("course.camera") != nullptr && findTrack("course.lighting") != nullptr &&
+            findTrack("course.material") != nullptr && vfxTrack != nullptr && gameplayTrack != nullptr,
+        "Course provider should expose Event/Placement/Camera/Lighting/Material/VFX/Gameplay tracks");
+    runner.Expect(
+        vfxTrack->keys.size() == 1 && gameplayTrack->keys.size() == 1,
+        "event classification should place VFX and Gameplay keys in distinct tracks");
+
+    sequencer.Select(vfxTrack->keys.front().handle, false, false);
+    sequencer.Select(gameplayTrack->keys.front().handle, true, false);
+    runner.Expect(sequencer.Selection().size() == 2, "Sequencer should support multi-select");
+    std::string error;
+    runner.Expect(sequencer.BeginInteractiveEdit(error), "multi-key move should begin");
+    runner.Expect(sequencer.PreviewInteractiveMove(13.0, error), "multi-key move preview should apply");
+    runner.Expect(
+        std::abs(course.events[0].distance - 20.0f) < 0.001f &&
+            std::abs(course.events[1].distance - 40.0f) < 0.001f,
+        "multi-key move should snap each key to the configured interval");
+    runner.Expect(
+        sequencer.CommitInteractiveEdit("Move Sequencer Keys", error) &&
+            transactions.UndoDepth() == 1,
+        "interactive drag should commit one shared transaction");
+    runner.Expect(
+        transactions.LastTransaction() != nullptr &&
+            transactions.LastTransaction()->command->DomainId() == "sequencer",
+        "Sequencer edit should use a generic Sequencer command payload");
+
+    EditorExecutionContext execution;
+    EditorError executionError;
+    runner.Expect(execution.Register(sequencer, &executionError), "Sequencer execution service should register");
+    runner.Expect(transactions.Undo(execution, &executionError), "Sequencer multi-key undo should succeed");
+    runner.Expect(
+        std::abs(course.events[0].distance - 10.0f) < 0.001f &&
+            std::abs(course.events[1].distance - 30.0f) < 0.001f,
+        "Sequencer undo should restore all selected keys");
+    runner.Expect(transactions.Redo(execution, &executionError), "Sequencer multi-key redo should succeed");
+
+    runner.Expect(sequencer.CopySelection(error) && sequencer.ClipboardCount() == 2,
+        "Sequencer copy should preserve the multi-selection");
+    const std::size_t eventCountBeforePaste = course.events.size();
+    runner.Expect(sequencer.PasteAt(100.0, error), "Sequencer paste should duplicate selected keys");
+    runner.Expect(
+        course.events.size() == eventCountBeforePaste + 2 && sequencer.Selection().size() == 2,
+        "Sequencer paste should create and select duplicated keys");
+    runner.Expect(transactions.Undo(execution, &executionError), "pasted keys should be undoable");
+    runner.Expect(course.events.size() == eventCountBeforePaste,
+        "paste undo should remove duplicated keys atomically");
+    runner.Expect(transactions.Redo(execution, &executionError), "pasted keys should be redoable");
+    runner.Expect(course.events.size() == eventCountBeforePaste + 2,
+        "paste redo should restore duplicated keys");
+
+    sequencer.SetPreviewPosition(145.0, true);
+    runner.Expect(
+        std::abs(previewPosition - 145.0) < 0.001 &&
+            std::abs(sequencer.PreviewPosition() - 145.0) < 0.001,
+        "Sequencer scrub should synchronize the runtime preview callback");
+    runner.Expect(mutationCount >= 4, "Sequencer commit/undo/redo should publish mutation notifications");
+}
+
+void TestPrefabFoundation(RegressionRunner& runner) {
+    const auto makePrefab = [](std::string guid, std::string name, bool withChild) {
+        EditorPrefabAsset asset{};
+        asset.assetGuid = std::move(guid);
+        asset.name = std::move(name);
+        EditorSceneEntity* root = asset.templateScene.CreateEntity("Root");
+        asset.rootEntityGuid = root != nullptr ? root->guid : std::string{};
+        if (withChild && root != nullptr) {
+            asset.templateScene.CreateEntity("Child", root->guid);
+        }
+        return asset;
+    };
+    const auto findPropertyValue = [](
+        const EditorScene& scene,
+        std::string_view entityGuid,
+        std::string_view componentType,
+        std::string_view propertyName) {
+        const EditorSceneEntity* entity = scene.FindEntity(entityGuid);
+        const EditorSceneComponent* component = entity != nullptr
+            ? scene.FindComponent(*entity, componentType) : nullptr;
+        if (component == nullptr) return std::string{};
+        const auto property = std::find_if(component->properties.begin(), component->properties.end(),
+            [&](const EditorSceneProperty& value) { return value.name == propertyName; });
+        return property == component->properties.end() ? std::string{} : property->value;
+    };
+
+    EditorPrefabDocumentProvider documents;
+    EditorPrefabAsset mainAsset = makePrefab("prefab-main-guid", "Main Prefab", true);
+    const EditorDocumentId mainDocument{"prefab-main-document", std::string(EditorDocumentTypes::Prefab)};
+    runner.Expect(mainAsset.Validate().Succeeded(), "Prefab Asset model should validate");
+    runner.Expect(documents.Publish(mainDocument, mainAsset), "Prefab document provider should publish an Asset");
+
+    EditorDocumentContent encoded{};
+    std::string error;
+    runner.Expect(
+        EditorPrefabDocumentProvider::Encode(mainAsset, &encoded, &error),
+        "Prefab Asset should serialize");
+    EditorPrefabAsset decoded{};
+    runner.Expect(
+        EditorPrefabDocumentProvider::Decode(encoded, &decoded, &error) &&
+            decoded.assetGuid == mainAsset.assetGuid &&
+            decoded.templateScene.entities.size() == mainAsset.templateScene.entities.size(),
+        "Prefab Asset should round-trip stable template identity");
+    EditorDocumentContent legacyPrefab = encoded;
+    std::string legacyPrefabText(legacyPrefab.bytes.begin(), legacyPrefab.bytes.end());
+    legacyPrefabText.replace(0, std::string("PREFAB 2").size(), "PREFAB 1");
+    legacyPrefab.bytes.assign(legacyPrefabText.begin(), legacyPrefabText.end());
+    legacyPrefab.schemaVersion = 1;
+    EditorDocumentContent migratedPrefab{};
+    EditorDocumentMigrationReport prefabMigration{};
+    runner.Expect(
+        documents.Migrate(legacyPrefab, &migratedPrefab, &prefabMigration, &error) &&
+            prefabMigration.migrated &&
+            migratedPrefab.schemaVersion == kEditorPrefabSchemaVersion,
+        "Prefab schema v1 should migrate to the nested-policy schema");
+
+    EditorScene scene{};
+    const EditorDocumentId sceneDocument{"scene-prefab-regression", std::string(EditorDocumentTypes::Scene)};
+    SceneWorldObjectProvider sceneWorld;
+    sceneWorld.Bind(&scene, sceneDocument);
+    EditorTransactionStack transactions;
+    EditorPrefabService prefabs;
+    prefabs.Bind(&scene, sceneDocument, &documents, &transactions, &sceneWorld);
+    uint32_t mutationCount = 0;
+    prefabs.SetMutationCallback(
+        [&](std::string_view, std::string_view) { ++mutationCount; });
+
+    const EditorPrefabOperationResult instantiated = prefabs.Instantiate(mainAsset.assetGuid);
+    runner.Expect(
+        instantiated.succeeded && scene.entities.size() == 2 &&
+            scene.prefabInstances.size() == 1 && transactions.UndoDepth() == 1,
+        "Prefab instantiation should create a persistent Scene instance in one Transaction");
+    EditorScenePrefabInstance* instance = scene.prefabInstances.empty()
+        ? nullptr : &scene.prefabInstances.front();
+    runner.Expect(
+        instance != nullptr && instance->bindings.size() == 2 &&
+            instance->rootEntityGuid == instantiated.rootEntityGuid,
+        "Prefab instance should persist source-to-instance Entity bindings");
+
+    const std::string instanceGuid = instance != nullptr ? instance->instanceGuid : std::string{};
+    const std::string rootGuid = instance != nullptr ? instance->rootEntityGuid : std::string{};
+    runner.Expect(
+        prefabs.SetPropertyOverride(
+            instanceGuid, rootGuid, std::string(kEditorTransformComponentType),
+            "translation", "1 2 3", &error),
+        "Prefab property override should be recorded through the shared Transaction path");
+    instance = scene.prefabInstances.empty() ? nullptr : &scene.prefabInstances.front();
+    runner.Expect(
+        instance != nullptr && instance->overrides.size() == 1 &&
+            findPropertyValue(scene, rootGuid, kEditorTransformComponentType, "translation") == "1 2 3",
+        "Prefab property override should retain inherited and instance values");
+
+    EditorWorldProviderEnumeration worldObjects{};
+    runner.Expect(sceneWorld.Enumerate(&worldObjects, &error), "Scene World should enumerate Prefab instances");
+    const auto rootRecord = std::find_if(worldObjects.objects.begin(), worldObjects.objects.end(),
+        [&](const EditorWorldObjectRecord& record) { return record.objectGuid == rootGuid; });
+    EditorPropertyDescriptor translation{};
+    translation.domain = EditorDomainId::SceneEntity;
+    translation.name = "Transform.translation";
+    translation.prefabOverrideCapable = true;
+    runner.Expect(
+        rootRecord != worldObjects.objects.end() &&
+            prefabs.QueryOverride(rootRecord->handle, translation).state ==
+                EditorPrefabOverrideState::Overridden,
+        "Details Prefab provider should expose per-property override state");
+    runner.Expect(
+        rootRecord != worldObjects.objects.end() &&
+            prefabs.RevertOverride(rootRecord->handle, translation, &error) &&
+            findPropertyValue(scene, rootGuid, kEditorTransformComponentType, "translation") == "0 0 0",
+        "Details Revert should restore the inherited Prefab value");
+
+    runner.Expect(
+        prefabs.SetPropertyOverride(
+            instanceGuid, rootGuid, std::string(kEditorTransformComponentType),
+            "translation", "4 5 6", &error),
+        "Prefab property should be overrideable again after Revert");
+    const EditorPrefabOperationResult applied = prefabs.ApplyInstance(instanceGuid);
+    runner.Expect(
+        applied.succeeded &&
+            findPropertyValue(
+                documents.FindByAssetGuid(mainAsset.assetGuid)->templateScene,
+                mainAsset.rootEntityGuid, kEditorTransformComponentType, "translation") == "4 5 6" &&
+            scene.prefabInstances.front().overrides.empty(),
+        "Apply should publish instance property changes back to the Prefab Asset");
+
+    EditorExecutionContext execution;
+    EditorError executionError;
+    runner.Expect(execution.Register(prefabs, &executionError), "Prefab execution service should register");
+    runner.Expect(transactions.Undo(execution, &executionError), "Prefab Apply should be undoable");
+    runner.Expect(
+        findPropertyValue(
+            documents.FindByAssetGuid(mainAsset.assetGuid)->templateScene,
+            mainAsset.rootEntityGuid, kEditorTransformComponentType, "translation") == "0 0 0" &&
+            !scene.prefabInstances.front().overrides.empty(),
+        "Prefab Apply undo should atomically restore Asset and Instance state");
+    runner.Expect(transactions.Redo(execution, &executionError), "Prefab Apply should be redoable");
+
+    std::string addedEntityGuid;
+    runner.Expect(
+        prefabs.AddEntityOverride(
+            instanceGuid, rootGuid, "Instance Added", &addedEntityGuid, &error),
+        "Prefab should support structural Added Entity overrides");
+    instance = prefabs.BoundScene() != nullptr
+        ? &prefabs.BoundScene()->prefabInstances.front() : nullptr;
+    std::string addedOverrideId;
+    if (instance != nullptr) {
+        const auto addedOverride = std::find_if(instance->overrides.begin(), instance->overrides.end(),
+            [&](const auto& value) {
+                return value.kind == EditorScenePrefabOverrideKind::AddedEntity &&
+                    value.instanceEntityGuid == addedEntityGuid;
+            });
+        if (addedOverride != instance->overrides.end()) addedOverrideId = addedOverride->id;
+    }
+    runner.Expect(
+        !addedOverrideId.empty() &&
+            prefabs.RevertOverrideById(instanceGuid, addedOverrideId, &error) &&
+            scene.FindEntity(addedEntityGuid) == nullptr,
+        "Structural Added Entity override should revert cleanly");
+
+    instance = &scene.prefabInstances.front();
+    const auto childBinding = std::find_if(instance->bindings.begin(), instance->bindings.end(),
+        [&](const EditorScenePrefabEntityBinding& binding) {
+            return binding.instanceEntityGuid != instance->rootEntityGuid;
+        });
+    const std::string childGuid = childBinding != instance->bindings.end()
+        ? childBinding->instanceEntityGuid : std::string{};
+    runner.Expect(
+        prefabs.RemoveEntityOverride(instanceGuid, childGuid, &error) &&
+            scene.FindEntity(childGuid) == nullptr,
+        "Prefab should support structural Removed Entity overrides");
+    instance = &scene.prefabInstances.front();
+    const auto removedOverride = std::find_if(instance->overrides.begin(), instance->overrides.end(),
+        [&](const auto& value) {
+            return value.kind == EditorScenePrefabOverrideKind::RemovedEntity &&
+                value.instanceEntityGuid == childGuid;
+        });
+    runner.Expect(
+        removedOverride != instance->overrides.end() &&
+            prefabs.RevertOverrideById(instanceGuid, removedOverride->id, &error) &&
+            scene.FindEntity(childGuid) != nullptr,
+        "Structural Removed Entity override should restore the stable instance GUID");
+
+    const EditorPrefabOperationResult missing = prefabs.Instantiate("prefab-missing-guid");
+    runner.Expect(
+        missing.succeeded &&
+            prefabs.BoundScene()->prefabInstances.back().status ==
+                EditorScenePrefabInstanceStatus::MissingAsset,
+        "Missing Prefab should create an explicit recoverable placeholder");
+    EditorPrefabAsset recoveredAsset = makePrefab("prefab-missing-guid", "Recovered", false);
+    runner.Expect(
+        documents.Publish(
+            {"prefab-recovered-document", std::string(EditorDocumentTypes::Prefab)},
+            recoveredAsset),
+        "Recovered Prefab Asset should publish");
+    const EditorPrefabOperationResult recovered = prefabs.RecoverMissingInstance(missing.instanceGuid);
+    runner.Expect(
+        recovered.succeeded && scene.FindEntity(missing.rootEntityGuid) == nullptr &&
+            scene.FindEntity(recovered.rootEntityGuid) != nullptr,
+        "Missing Prefab recovery should replace the placeholder transactionally");
+
+    EditorPrefabAsset cycleA = makePrefab("prefab-cycle-a", "Cycle A", false);
+    EditorPrefabAsset cycleB = makePrefab("prefab-cycle-b", "Cycle B", false);
+    cycleA.nestedPrefabs.push_back({cycleA.rootEntityGuid, cycleB.assetGuid});
+    cycleB.nestedPrefabs.push_back({cycleB.rootEntityGuid, cycleA.assetGuid});
+    runner.Expect(
+        documents.Publish({"cycle-a", std::string(EditorDocumentTypes::Prefab)}, cycleA) &&
+            documents.Publish({"cycle-b", std::string(EditorDocumentTypes::Prefab)}, cycleB),
+        "Individually valid nested Prefabs should publish before graph validation");
+    const std::size_t entityCountBeforeCycle = scene.entities.size();
+    const EditorPrefabOperationResult cycleResult = prefabs.Instantiate(cycleA.assetGuid);
+    runner.Expect(
+        !cycleResult.succeeded && scene.entities.size() == entityCountBeforeCycle &&
+            cycleResult.message.find("cycle") != std::string::npos,
+        "Nested Prefab cycles should be rejected without partial Scene mutation");
+
+    EditorDocumentContent sceneEncoded{};
+    runner.Expect(
+        EditorSceneDocumentProvider::Encode(scene, &sceneEncoded, &error),
+        "Scene schema v2 should serialize Prefab instances and overrides");
+    EditorScene sceneDecoded{};
+    runner.Expect(
+        EditorSceneDocumentProvider::Decode(sceneEncoded, &sceneDecoded, &error) &&
+            sceneDecoded.prefabInstances.size() == scene.prefabInstances.size(),
+        "Scene Prefab instance state should round-trip");
+    EditorScene legacySceneModel{};
+    legacySceneModel.CreateEntity("Legacy Root");
+    EditorDocumentContent legacyScene{};
+    runner.Expect(
+        EditorSceneDocumentProvider::Encode(legacySceneModel, &legacyScene, &error),
+        "Legacy migration fixture should serialize");
+    std::string legacySceneText(legacyScene.bytes.begin(), legacyScene.bytes.end());
+    legacySceneText.replace(0, std::string("SCENE 2").size(), "SCENE 1");
+    legacyScene.bytes.assign(legacySceneText.begin(), legacySceneText.end());
+    legacyScene.schemaVersion = 1;
+    EditorSceneDocumentProvider sceneDocuments;
+    EditorDocumentContent migratedScene{};
+    EditorDocumentMigrationReport sceneMigration{};
+    runner.Expect(
+        sceneDocuments.Migrate(
+            legacyScene, &migratedScene, &sceneMigration, &error) &&
+            sceneMigration.migrated && migratedScene.schemaVersion == kEditorSceneSchemaVersion,
+        "Scene schema v1 should migrate to the persistent Prefab instance schema");
+    runner.Expect(
+        EditorAssetKindForImportPath("sample.prefab") == EditorAssetKind::Prefab &&
+            std::string(ToString(EditorAssetKind::Prefab)) == "Prefab",
+        "Content Browser should classify Prefab as a durable Asset kind");
+    runner.Expect(mutationCount >= 8, "Prefab operations and Undo/Redo should publish mutation notifications");
+}
+
+void TestMaterialGraphFoundation(RegressionRunner& runner) {
+    std::ifstream graphCoreSource("application/editor/graph/EditorGraph.cpp");
+    const std::string graphCoreText(
+        (std::istreambuf_iterator<char>(graphCoreSource)),
+        std::istreambuf_iterator<char>());
+    runner.Expect(
+        graphCoreSource.good() && graphCoreText.find("material/") == std::string::npos &&
+            graphCoreText.find("EditorMaterial") == std::string::npos,
+        "Generic Graph Core must not depend on Material Graph domain types");
+
+    const EditorGraphSchema schema = BuildEditorMaterialGraphSchema();
+    EditorMaterialGraphAsset asset =
+        MakeDefaultEditorMaterialGraph("material-guid-regression", "Regression Material");
+    const EditorMaterialCompileArtifact firstCompile = CompileEditorMaterialGraph(asset, schema);
+    const EditorMaterialCompileArtifact secondCompile = CompileEditorMaterialGraph(asset, schema);
+    runner.Expect(
+        firstCompile.succeeded && firstCompile.sourceFingerprint != 0 &&
+            firstCompile.sourceFingerprint == secondCompile.sourceFingerprint &&
+            firstCompile.hlslSource == secondCompile.hlslSource,
+        "Material Graph compiler should produce a deterministic HLSL artifact");
+
+    EditorMaterialGraphDocumentProvider provider;
+    const EditorDocumentId document{
+        "material-document-regression", std::string(EditorDocumentTypes::MaterialGraph)};
+    runner.Expect(provider.Publish(document, asset), "Material Graph provider should publish a live model");
+    EditorDocumentContent encoded;
+    std::string error;
+    runner.Expect(
+        EditorMaterialGraphDocumentProvider::Encode(asset, &encoded, &error),
+        "Material Graph should serialize through the generic Document contract");
+    EditorMaterialGraphAsset decoded;
+    runner.Expect(
+        EditorMaterialGraphDocumentProvider::Decode(encoded, &decoded, &error) &&
+            decoded.assetGuid == asset.assetGuid &&
+            decoded.graph.nodes.size() == asset.graph.nodes.size() &&
+            decoded.graph.links.size() == asset.graph.links.size(),
+        "Material Graph should round-trip node, link, and durable Asset identity");
+
+    EditorDocumentContent legacy = encoded;
+    std::string legacyText(legacy.bytes.begin(), legacy.bytes.end());
+    legacyText.replace(0, std::string("MATERIAL_GRAPH 2").size(), "MATERIAL_GRAPH 1");
+    legacy.bytes.assign(legacyText.begin(), legacyText.end());
+    legacy.schemaVersion = 1;
+    EditorDocumentContent migrated;
+    EditorDocumentMigrationReport migration;
+    runner.Expect(
+        provider.Migrate(legacy, &migrated, &migration, &error) && migration.migrated &&
+            migrated.schemaVersion == kEditorMaterialGraphSchemaVersion,
+        "Material Graph schema v1 should migrate through the shared Document migration path");
+
+    EditorTransactionStack transactions;
+    EditorMaterialGraphService service;
+    service.Bind(&provider, &transactions, nullptr);
+    service.SetActiveDocument(document);
+    uint32_t mutations = 0;
+    service.SetMutationCallback([&](const EditorDocumentId&, std::string_view) { ++mutations; });
+    std::string scalarNode;
+    runner.Expect(
+        service.AddNode("material.constant.scalar", 40.0f, 220.0f, &scalarNode, error),
+        "Material Graph should add nodes through a shared Transaction");
+    const EditorMaterialGraphAsset* live = service.ActiveAsset();
+    const auto output = live != nullptr
+        ? std::find_if(live->graph.nodes.begin(), live->graph.nodes.end(), [](const auto& node) {
+            return node.typeId == "material.output";
+        })
+        : std::vector<EditorGraphNode>::const_iterator{};
+    const std::string outputNodeId = live != nullptr && output != live->graph.nodes.end()
+        ? output->id
+        : std::string{};
+    runner.Expect(
+        !outputNodeId.empty() &&
+            service.Connect(scalarNode, "value", outputNodeId, "roughness", error),
+        "Typed Material Graph pins should connect compatible values");
+    runner.Expect(
+        !service.Connect(scalarNode, "value", outputNodeId, "baseColor", error),
+        "Material Graph should reject incompatible pin types before mutation");
+
+    std::string addA;
+    std::string addB;
+    runner.Expect(
+        service.AddNode("material.math.add", 160.0f, 280.0f, &addA, error) &&
+            service.AddNode("material.math.add", 360.0f, 280.0f, &addB, error) &&
+            service.Connect(addA, "result", addB, "a", error) &&
+            !service.Connect(addB, "result", addA, "a", error),
+        "Material Graph should reject dependency cycles without publishing a partial link");
+    runner.Expect(
+        !service.LastCompileArtifact().succeeded &&
+            service.LastSuccessfulArtifact().succeeded &&
+            !service.LastSuccessfulArtifact().hlslSource.empty(),
+        "Failed authoring compiles should retain the last successful Material artifact");
+
+    EditorExecutionContext execution;
+    EditorError executionError;
+    runner.Expect(execution.Register(service, &executionError),
+        "Material Graph execution service should register for generic Undo/Redo");
+    const std::size_t linksBeforeUndo = service.ActiveAsset()->graph.links.size();
+    runner.Expect(
+        transactions.Undo(execution, &executionError) &&
+            service.ActiveAsset()->graph.links.size() + 1 == linksBeforeUndo,
+        "Material Graph mutation should Undo through the shared Transaction stack");
+    runner.Expect(
+        transactions.Redo(execution, &executionError) &&
+            service.ActiveAsset()->graph.links.size() == linksBeforeUndo,
+        "Material Graph mutation should Redo through the shared Transaction stack");
+
+    const EditorMaterialCompileArtifact stableArtifact = firstCompile;
+    runner.Expect(
+        stableArtifact.succeeded && mutations >= 6,
+        "Material Graph edits and Undo/Redo should publish observable mutation notifications");
+    runner.Expect(
+        EditorAssetKindForImportPath("sample.material") == EditorAssetKind::MaterialGraph &&
+            std::string(ToString(EditorAssetKind::MaterialGraph)) == "MaterialGraph",
+        "Content Browser should classify Material Graph as a durable Asset kind");
+}
+
+void TestAdvancedVfxGraph(RegressionRunner& runner) {
+    const EditorGraphSchema schema = BuildEditorVfxGraphSchema();
+    EditorVfxGraphAsset asset =
+        MakeDefaultEditorVfxGraph("vfx-graph-guid-regression", "Regression VFX");
+    const EditorVfxCompileArtifact first = CompileEditorVfxGraph(asset, schema);
+    const EditorVfxCompileArtifact second = CompileEditorVfxGraph(asset, schema);
+    runner.Expect(
+        first.succeeded && first.emitters.size() == 1 && first.sourceFingerprint != 0 &&
+            first.sourceFingerprint == second.sourceFingerprint &&
+            first.generatedProgram == second.generatedProgram &&
+            !first.simulationHlsl.empty(),
+        "Advanced VFX Graph should compile deterministic staged runtime artifacts");
+
+    EditorVfxGraphDocumentProvider provider;
+    const EditorDocumentId document{
+        "vfx-graph-document-regression", std::string(EditorDocumentTypes::VfxGraph)};
+    runner.Expect(provider.Publish(document, asset),
+        "VFX Graph provider should publish a live model");
+    EditorDocumentContent encoded;
+    std::string error;
+    runner.Expect(EditorVfxGraphDocumentProvider::Encode(asset, &encoded, &error),
+        "VFX Graph should serialize through the generic Document contract");
+    EditorVfxGraphAsset decoded;
+    runner.Expect(
+        EditorVfxGraphDocumentProvider::Decode(encoded, &decoded, &error) &&
+            decoded.assetGuid == asset.assetGuid &&
+            decoded.graph.nodes.size() == asset.graph.nodes.size() &&
+            decoded.maxParticles == asset.maxParticles,
+        "VFX Graph should round-trip graph identity and simulation settings");
+
+    EditorDocumentContent legacy = encoded;
+    std::string legacyText(legacy.bytes.begin(), legacy.bytes.end());
+    legacyText.replace(0, std::string("VFX_GRAPH 2").size(), "VFX_GRAPH 1");
+    legacy.bytes.assign(legacyText.begin(), legacyText.end());
+    legacy.schemaVersion = 1;
+    EditorDocumentContent migrated;
+    EditorDocumentMigrationReport migration;
+    runner.Expect(
+        provider.Migrate(legacy, &migrated, &migration, &error) && migration.migrated &&
+            migrated.schemaVersion == kEditorVfxGraphSchemaVersion,
+        "VFX Graph schema v1 should migrate through the shared Document path");
+
+    EditorTransactionStack transactions;
+    EditorVfxGraphService service;
+    service.Bind(&provider, &transactions, nullptr, nullptr, nullptr);
+    service.SetActiveDocument(document);
+    uint32_t mutations = 0;
+    service.SetMutationCallback([&](const EditorDocumentId&, std::string_view) { ++mutations; });
+    runner.Expect(
+        service.SetSimulationSettings(EditorVfxSimulationTarget::CPU, 32768, 1.0f / 30.0f, error) &&
+            service.ActiveAsset()->simulationTarget == EditorVfxSimulationTarget::CPU &&
+            service.ActiveAsset()->maxParticles == 32768,
+        "VFX simulation settings should mutate through the shared Transaction path");
+    const EditorVfxGraphAsset* live = service.ActiveAsset();
+    const auto emitterIt = std::find_if(live->graph.nodes.begin(), live->graph.nodes.end(),
+        [](const auto& node) { return node.typeId == "vfx.emitter"; });
+    const std::string emitterId = emitterIt != live->graph.nodes.end() ? emitterIt->id : std::string{};
+    std::string burstNode;
+    runner.Expect(
+        service.AddNode("vfx.spawn.burst", 40.0f, 480.0f, &burstNode, error) &&
+            service.Connect(burstNode, "value", emitterId, "burst", error),
+        "VFX Graph should author typed Spawn modules through shared Transactions");
+    runner.Expect(
+        !service.Connect(burstNode, "value", emitterId, "renderer", error),
+        "VFX Graph should reject incompatible phase and value pin types");
+
+    EditorExecutionContext execution;
+    EditorError executionError;
+    runner.Expect(execution.Register(service, &executionError),
+        "VFX Graph execution service should register for generic Undo/Redo");
+    const std::size_t linksBeforeUndo = service.ActiveAsset()->graph.links.size();
+    runner.Expect(
+        transactions.Undo(execution, &executionError) &&
+            service.ActiveAsset()->graph.links.size() + 1 == linksBeforeUndo,
+        "VFX Graph mutation should Undo through the shared Transaction stack");
+    runner.Expect(
+        transactions.Redo(execution, &executionError) &&
+            service.ActiveAsset()->graph.links.size() == linksBeforeUndo,
+        "VFX Graph mutation should Redo through the shared Transaction stack");
+
+    const auto initializeIt = std::find_if(service.ActiveAsset()->graph.nodes.begin(),
+        service.ActiveAsset()->graph.nodes.end(),
+        [](const auto& node) { return node.typeId == "vfx.initialize.velocity"; });
+    runner.Expect(initializeIt != service.ActiveAsset()->graph.nodes.end() &&
+            service.RemoveNode(initializeIt->id, error) &&
+            !service.LastCompileArtifact().succeeded &&
+            service.LastSuccessfulArtifact().succeeded,
+        "Failed VFX authoring compiles should retain the last successful runtime artifact");
+    runner.Expect(
+        EditorAssetKindForImportPath("sample.vfxgraph") == EditorAssetKind::VfxGraph &&
+            std::string(ToString(EditorAssetKind::VfxGraph)) == "VfxGraph" && mutations >= 6,
+        "Content Browser and mutation notifications should integrate durable VFX Graph Assets");
+}
+
+void TestAnimationStateMachine(RegressionRunner& runner) {
+    const EditorGraphSchema schema = BuildEditorAnimationStateMachineSchema();
+    runner.Expect(schema.CyclesAllowed(),
+        "Animation State Machine schema should explicitly allow transition cycles");
+    EditorAnimationStateMachineAsset asset = MakeDefaultEditorAnimationStateMachine(
+        "animation-sm-guid-regression", "Regression Animation SM");
+    auto idle = std::find_if(asset.graph.nodes.begin(), asset.graph.nodes.end(),
+        [](const auto& node) { return node.typeId == "animation.state"; });
+    idle->properties["sourceAssetGuid"] = "mesh-animation-guid";
+    idle->properties["clipName"] = "Idle";
+
+    EditorGraphNode run;
+    run.id = MakeEditorGraphElementId("node");
+    run.typeId = "animation.state";
+    run.label = "Run";
+    run.positionX = 700.0f;
+    run.positionY = 100.0f;
+    run.properties = {{"name", "Run"}, {"sourceAssetGuid", "mesh-animation-guid"},
+        {"clipName", "Run"}, {"speed", "1"}, {"loop", "true"}};
+    EditorGraphNode toRun;
+    toRun.id = MakeEditorGraphElementId("node");
+    toRun.typeId = "animation.transition";
+    toRun.label = "Speed > 0.5";
+    toRun.positionX = 510.0f;
+    toRun.positionY = 40.0f;
+    toRun.properties = {{"blendDuration", "0.2"}, {"condition", "Greater"},
+        {"exitTime", "0"}, {"parameter", "Speed"}, {"priority", "10"}, {"threshold", "0.5"}};
+    EditorGraphNode toIdle = toRun;
+    toIdle.id = MakeEditorGraphElementId("node");
+    toIdle.label = "Speed < 0.5";
+    toIdle.positionY = 190.0f;
+    toIdle.properties["condition"] = "Less";
+    const std::string idleId = idle->id;
+    const std::string runId = run.id;
+    const std::string toRunId = toRun.id;
+    const std::string toIdleId = toIdle.id;
+    asset.graph.nodes.push_back(run);
+    asset.graph.nodes.push_back(toRun);
+    asset.graph.nodes.push_back(toIdle);
+    const auto link = [&](std::string from, std::string fromPin, std::string to, std::string toPin) {
+        asset.graph.links.push_back({MakeEditorGraphElementId("link"), std::move(from),
+            std::move(fromPin), std::move(to), std::move(toPin)});
+    };
+    link(idleId, "state", toRunId, "source");
+    link(toRunId, "target", runId, "enter");
+    link(runId, "state", toIdleId, "source");
+    link(toIdleId, "target", idleId, "enter");
+    ++asset.graph.revision;
+
+    const auto first = CompileEditorAnimationStateMachine(asset, schema);
+    const auto second = CompileEditorAnimationStateMachine(asset, schema);
+    runner.Expect(first.succeeded && first.program.states.size() == 2 &&
+            first.program.transitions.size() == 2 && first.sourceFingerprint != 0 &&
+            first.sourceFingerprint == second.sourceFingerprint &&
+            first.generatedProgram == second.generatedProgram,
+        "Animation State Machine should deterministically compile a cyclic transition program");
+
+    AnimationStateMachineInstance instance;
+    runner.Expect(instance.SetProgram(&first.program) && instance.SetFloat("Speed", 1.0f),
+        "Animation runtime should accept compiled programs and typed parameters");
+    const auto duration = [](std::string_view, std::string_view) { return 1.0f; };
+    instance.Update(0.01f, duration);
+    runner.Expect(instance.Sample().blending,
+        "Animation runtime should enter a cross-fade when a condition passes");
+    instance.Update(0.25f, duration);
+    runner.Expect(!instance.Sample().blending &&
+            first.program.states[instance.Sample().currentState].name == "Run",
+        "Animation runtime should complete a deterministic cross-fade to the target state");
+
+    Skeleton skeleton;
+    skeleton.joints.push_back({});
+    skeleton.joints[0].name = "Root";
+    skeleton.joints[0].bindTransform.scale = {1.0f, 1.0f, 1.0f};
+    skeleton.joints[0].bindTransform.rotate = {0.0f, 0.0f, 0.0f, 1.0f};
+    AnimationClip fromClip;
+    AnimationClip toClip;
+    fromClip.nodeAnimations["Root"].translate.keyframes.push_back({0.0f, {0.0f, 0.0f, 0.0f}});
+    toClip.nodeAnimations["Root"].translate.keyframes.push_back({0.0f, {10.0f, 0.0f, 0.0f}});
+    ApplyAnimationBlend(skeleton, fromClip, 0.0f, toClip, 0.0f, 0.5f);
+    runner.Expect(std::fabs(skeleton.joints[0].transform.translate.x - 5.0f) < 0.0001f,
+        "Skeleton pose blending should interpolate state-machine animation samples");
+
+    EditorAnimationStateMachineDocumentProvider provider;
+    const EditorDocumentId document{"animation-sm-document-regression",
+        std::string(EditorDocumentTypes::AnimationStateMachine)};
+    runner.Expect(provider.Publish(document, asset),
+        "Animation State Machine provider should publish a live model");
+    EditorDocumentContent encoded;
+    std::string error;
+    runner.Expect(EditorAnimationStateMachineDocumentProvider::Encode(asset, &encoded, &error),
+        "Animation State Machine should serialize through the Document contract");
+    EditorAnimationStateMachineAsset decoded;
+    runner.Expect(EditorAnimationStateMachineDocumentProvider::Decode(encoded, &decoded, &error) &&
+            decoded.graph.nodes.size() == asset.graph.nodes.size() &&
+            decoded.parameters.size() == asset.parameters.size(),
+        "Animation State Machine should round-trip nodes, transitions, and parameters");
+    EditorDocumentContent legacy = encoded;
+    std::string legacyText(legacy.bytes.begin(), legacy.bytes.end());
+    legacyText.replace(0, std::string("ANIMATION_STATE_MACHINE 2").size(), "ANIMATION_STATE_MACHINE 1");
+    legacy.bytes.assign(legacyText.begin(), legacyText.end());
+    legacy.schemaVersion = 1;
+    EditorDocumentContent migrated;
+    EditorDocumentMigrationReport migration;
+    runner.Expect(provider.Migrate(legacy, &migrated, &migration, &error) && migration.migrated,
+        "Animation State Machine v1 should migrate through the shared Document path");
+
+    EditorTransactionStack transactions;
+    EditorAnimationStateMachineService service;
+    service.Bind(&provider, &transactions, nullptr);
+    service.SetActiveDocument(document);
+    runner.Expect(service.AddParameter("Grounded", AnimationParameterType::Bool, 1.0f, error),
+        "Animation parameters should mutate through shared Transactions");
+    EditorExecutionContext execution;
+    EditorError executionError;
+    runner.Expect(execution.Register(service, &executionError) &&
+            transactions.Undo(execution, &executionError) &&
+            service.ActiveAsset()->parameters.size() == asset.parameters.size() &&
+            transactions.Redo(execution, &executionError) &&
+            service.ActiveAsset()->parameters.size() == asset.parameters.size() + 1,
+        "Animation State Machine should Undo/Redo through the global Transaction stack");
+    runner.Expect(service.SetNodeProperty(idleId, "sourceAssetGuid", "", error) &&
+            !service.LastCompileArtifact().succeeded &&
+            service.LastSuccessfulArtifact().succeeded,
+        "Invalid Animation edits should retain the last successful runtime program");
+    runner.Expect(EditorAssetKindForImportPath("sample.animsm") ==
+            EditorAssetKind::AnimationStateMachine &&
+            std::string(ToString(EditorAssetKind::AnimationStateMachine)) == "AnimationStateMachine",
+        "Content Browser should classify durable Animation State Machine Assets");
+}
+
+void TestGameplayVisualScripting(RegressionRunner& runner) {
+    const EditorGraphSchema schema = BuildEditorGameplayVisualScriptSchema();
+    runner.Expect(schema.CyclesAllowed(),
+        "Gameplay Visual Script schema should allow bounded execution-flow cycles");
+    EditorGameplayVisualScriptAsset asset = MakeDefaultEditorGameplayVisualScript(
+        "gameplay-script-guid-regression", "Regression Gameplay Script");
+    const auto first = CompileEditorGameplayVisualScript(asset, schema);
+    const auto second = CompileEditorGameplayVisualScript(asset, schema);
+    runner.Expect(first.succeeded && !first.program.instructions.empty() &&
+            !first.program.expressions.empty() && first.sourceFingerprint != 0 &&
+            first.sourceFingerprint == second.sourceFingerprint &&
+            first.generatedProgram == second.generatedProgram,
+        "Gameplay Visual Script should deterministically compile typed graph programs");
+
+    GameplayVisualScriptInstance instance;
+    std::vector<std::string> output;
+    GameplayVisualScriptContext context;
+    context.print = [&](std::string_view value) { output.push_back(std::string(value)); };
+    std::string runtimeError;
+    const bool bound = instance.SetProgram(&first.program, &runtimeError);
+    const GameplayExecutionResult beginPlay = instance.ExecuteEvent("BeginPlay", context);
+    runner.Expect(bound && beginPlay.status == GameplayExecutionStatus::Completed &&
+            beginPlay.instructionsExecuted == 2 && output.size() == 1 &&
+            output.front() == "Gameplay Visual Script started",
+        "Gameplay VM should execute BeginPlay and typed Print instructions");
+
+    EditorGameplayVisualScriptAsset branchAsset;
+    branchAsset.assetGuid = "gameplay-branch-guid";
+    branchAsset.name = "Gameplay Branch";
+    branchAsset.variables.push_back({"Enabled", GameplayValue::Bool(true)});
+    const auto node = [](std::string id, std::string type, std::string label) {
+        EditorGraphNode result; result.id = std::move(id); result.typeId = std::move(type);
+        result.label = std::move(label); return result;
+    };
+    auto event = node("event", "gameplay.event.begin-play", "Begin Play");
+    auto get = node("get", "gameplay.variable.get-bool", "Get Enabled");
+    get.properties["name"] = "Enabled";
+    auto branch = node("branch", "gameplay.flow.branch", "Branch");
+    auto message = node("message", "gameplay.literal.string", "Message");
+    message.properties["value"] = "Enabled";
+    auto print = node("print", "gameplay.debug.print", "Print");
+    auto finish = node("return", "gameplay.flow.return", "Return");
+    branchAsset.graph.nodes = {event, get, branch, message, print, finish};
+    const auto connect = [&](std::string from, std::string fromPin,
+        std::string to, std::string toPin) {
+        branchAsset.graph.links.push_back({MakeEditorGraphElementId("link"), std::move(from),
+            std::move(fromPin), std::move(to), std::move(toPin)});
+    };
+    connect("event", "exec", "branch", "exec");
+    connect("get", "value", "branch", "condition");
+    connect("branch", "true", "print", "exec");
+    connect("branch", "false", "return", "exec");
+    connect("message", "value", "print", "message");
+    connect("print", "then", "return", "exec");
+    const auto branchArtifact = CompileEditorGameplayVisualScript(branchAsset, schema);
+    GameplayVisualScriptInstance branchInstance;
+    std::vector<std::string> branchOutput;
+    GameplayVisualScriptContext branchContext;
+    branchContext.print = [&](std::string_view value) { branchOutput.push_back(std::string(value)); };
+    const bool branchBound = branchInstance.SetProgram(&branchArtifact.program);
+    const auto trueResult = branchInstance.ExecuteEvent("BeginPlay", branchContext);
+    const bool truePrinted = branchOutput.size() == 1 && branchOutput.front() == "Enabled";
+    branchInstance.SetVariable("Enabled", GameplayValue::Bool(false));
+    branchOutput.clear();
+    const auto falseResult = branchInstance.ExecuteEvent("BeginPlay", branchContext);
+    runner.Expect(branchArtifact.succeeded && branchBound &&
+            trueResult.status == GameplayExecutionStatus::Completed &&
+            falseResult.status == GameplayExecutionStatus::Completed && truePrinted &&
+            branchOutput.empty(),
+        "Gameplay compiler and VM should execute typed Bool Branch paths and flow merges");
+
+    GameplayVisualScriptProgram looping;
+    looping.maxInstructionsPerExecution = 3;
+    GameplayInstruction loop;
+    loop.opcode = GameplayInstructionOpcode::EmitEvent;
+    loop.eventName = "Loop";
+    loop.nodeId = "loop-node";
+    loop.next = 0;
+    looping.instructions.push_back(loop);
+    looping.events.push_back({"BeginPlay", 0});
+    GameplayVisualScriptInstance bounded;
+    runner.Expect(bounded.SetProgram(&looping) &&
+            bounded.ExecuteEvent("BeginPlay", {}).status == GameplayExecutionStatus::BudgetExceeded,
+        "Gameplay VM should stop unbounded execution cycles at the instruction budget");
+
+    EditorGameplayVisualScriptDocumentProvider provider;
+    const EditorDocumentId document{"gameplay-document-regression",
+        std::string(EditorDocumentTypes::GameplayVisualScript)};
+    runner.Expect(provider.Publish(document, asset),
+        "Gameplay Visual Script provider should publish a live model");
+    EditorDocumentContent encoded;
+    std::string error;
+    runner.Expect(EditorGameplayVisualScriptDocumentProvider::Encode(asset, &encoded, &error),
+        "Gameplay Visual Script should serialize through the Document contract");
+    EditorGameplayVisualScriptAsset decoded;
+    runner.Expect(EditorGameplayVisualScriptDocumentProvider::Decode(encoded, &decoded, &error) &&
+            decoded.graph.nodes.size() == asset.graph.nodes.size() &&
+            decoded.variables.size() == asset.variables.size() &&
+            decoded.instructionBudget == asset.instructionBudget,
+        "Gameplay Visual Script should round-trip graph, variables, and execution budget");
+    EditorDocumentContent legacy = encoded;
+    std::string legacyText(legacy.bytes.begin(), legacy.bytes.end());
+    legacyText.replace(0, std::string("GAMEPLAY_VISUAL_SCRIPT 2").size(),
+        "GAMEPLAY_VISUAL_SCRIPT 1");
+    legacy.bytes.assign(legacyText.begin(), legacyText.end());
+    legacy.schemaVersion = 1;
+    EditorDocumentContent migrated;
+    EditorDocumentMigrationReport migration;
+    runner.Expect(provider.Migrate(legacy, &migrated, &migration, &error) && migration.migrated,
+        "Gameplay Visual Script v1 should migrate through the shared Document path");
+
+    EditorTransactionStack transactions;
+    EditorGameplayVisualScriptService service;
+    service.Bind(&provider, &transactions, nullptr);
+    service.SetActiveDocument(document);
+    runner.Expect(service.AddVariable("Health", GameplayValue::Float(100.0f), error),
+        "Gameplay variables should mutate through shared Transactions");
+    EditorExecutionContext execution;
+    EditorError executionError;
+    runner.Expect(execution.Register(service, &executionError) &&
+            transactions.Undo(execution, &executionError) &&
+            service.ActiveAsset()->variables.size() == asset.variables.size() &&
+            transactions.Redo(execution, &executionError) &&
+            service.ActiveAsset()->variables.size() == asset.variables.size() + 1,
+        "Gameplay Visual Script should Undo/Redo through the global Transaction stack");
+    const auto literal = std::find_if(service.ActiveAsset()->graph.nodes.begin(),
+        service.ActiveAsset()->graph.nodes.end(), [](const auto& node) {
+            return node.typeId == "gameplay.literal.string";
+        });
+    runner.Expect(literal != service.ActiveAsset()->graph.nodes.end() &&
+            service.RemoveNode(literal->id, error) && !service.LastCompileArtifact().succeeded &&
+            service.LastSuccessfulArtifact().succeeded,
+        "Invalid Gameplay edits should retain the last successful runtime program");
+    runner.Expect(EditorAssetKindForImportPath("sample.gameplay") ==
+            EditorAssetKind::GameplayVisualScript &&
+            std::string(ToString(EditorAssetKind::GameplayVisualScript)) == "GameplayVisualScript",
+        "Content Browser should classify durable Gameplay Visual Script Assets");
+}
+
+void TestEditorFontService(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" / "font_service";
+    RemoveTreeIfPresent(root);
+    std::error_code filesystemError;
+    std::filesystem::create_directories(root / "fonts", filesystemError);
+    const std::filesystem::path bundledFont =
+        std::filesystem::path{"Resources"} / "Editor" / "Fonts" /
+        "MPLUSRounded1c-Medium.ttf";
+    const std::filesystem::path testFont = root / "fonts" /
+        "MPLUSRounded1c-Medium.ttf";
+    std::filesystem::copy_file(
+        bundledFont, testFont, std::filesystem::copy_options::overwrite_existing,
+        filesystemError);
+    runner.Expect(!filesystemError && std::filesystem::file_size(testFont) > 0,
+        "Bundled M PLUS Rounded 1c Medium font should be available to the Editor");
+    EditorFontService fonts;
+    fonts.SetPaths(root / "fonts", root / "EditorFontSettings.ini");
+    std::string error;
+    runner.Expect(fonts.Save(EditorFontService::Defaults(), &error),
+        "Editor font settings should save through an atomic File Transaction");
+
+    EditorFontService loaded;
+    loaded.SetPaths(root / "fonts", root / "EditorFontSettings.ini");
+    runner.Expect(loaded.Load(&error) && loaded.Loaded() &&
+            loaded.PendingSettings() == EditorFontService::Defaults(),
+        "Editor font settings should round-trip size, scale, glyph, and font choices");
+    EditorFontSettings unsafe = EditorFontService::Defaults();
+    unsafe.regularFont = "../outside.ttf";
+    runner.Expect(!loaded.ValidateSettings(unsafe, &error),
+        "Editor fonts outside the project font root should be rejected");
+    EditorFontSettings invalidScale = EditorFontService::Defaults();
+    invalidScale.uiScale = 8.0f;
+    runner.Expect(!loaded.ValidateSettings(invalidScale, &error),
+        "Editor font size and UI scale should enforce commercial safety limits");
+
+    ImFontAtlas atlas;
+    runner.Expect(loaded.BuildAtlas(atlas, &error) && loaded.RegularFont() != nullptr &&
+            loaded.MonospaceFont() == loaded.RegularFont() && !loaded.UsingFallback(),
+        "Editor font atlas should load the bundled M PLUS Rounded 1c Medium default");
+    loaded.OnContextDestroyed();
+    runner.Expect(loaded.RegularFont() == nullptr && loaded.MonospaceFont() == nullptr,
+        "Editor font pointers should be cleared before ImGui context destruction");
+
+    EditorFontService fallback;
+    fallback.SetPaths(root / "missing-fonts", root / "missing-settings.ini");
+    runner.Expect(fallback.Load(&error),
+        "Missing optional settings should still load safe Editor defaults");
+    ImFontAtlas fallbackAtlas;
+    runner.Expect(fallback.BuildAtlas(fallbackAtlas, &error) &&
+            fallback.RegularFont() != nullptr && fallback.UsingFallback(),
+        "A missing bundled font should retain the safe built-in fallback");
+    fallback.OnContextDestroyed();
+    RemoveTreeIfPresent(root);
+}
+
 void TestLayoutPersistence(RegressionRunner& runner) {
     const std::filesystem::path testPath =
         std::filesystem::path{"generated"} / "editor" / "tests" / "layout_regression.ini";
@@ -2994,6 +5266,8 @@ void TestLayoutPersistence(RegressionRunner& runner) {
     persistence.SetActivePanel(EditorPanelHostArea::BottomDock, "course.timeline");
     persistence.SetActivePanel(EditorPanelHostArea::Viewport, "editor.viewport");
     persistence.SetPanelVisible("vfx.inspector", false);
+    persistence.SetOverlayOption("object-labels.visible", false);
+    persistence.SetOverlayOption("object-labels.selected-only", true);
     runner.Expect(persistence.Save(), "layout persistence should save test layout");
 
     EditorLayoutPersistenceService loaded;
@@ -3009,6 +5283,10 @@ void TestLayoutPersistence(RegressionRunner& runner) {
         loaded.WorkspacePreset() == "VFX Debug",
         "workspace preset should round-trip");
     runner.Expect(!loaded.IsPanelVisible("vfx.inspector"), "panel visibility should round-trip");
+    runner.Expect(
+        !loaded.OverlayOption("object-labels.visible", true) &&
+            loaded.OverlayOption("object-labels.selected-only", false),
+        "viewport overlay layer preferences should round-trip atomically");
     loaded.SetActivePanel(EditorPanelHostArea::RightInspector, "missing.panel");
     runner.Expect(
         !loaded.ValidateActivePanels(panels),
@@ -3313,7 +5591,7 @@ void TestEditorToolRegistrationDescriptors(RegressionRunner& runner) {
         "default editor toolbar should be descriptor-driven");
     RegisterDefaultEditorMenu(defaultToolbarTools, commands);
     runner.Expect(
-        defaultToolbarTools.Menu().SectionCount() > 0 &&
+        defaultToolbarTools.Menu().SectionCount() == 7 &&
             defaultToolbarTools.Menu().ItemCount() >= commands.Count(),
         "default editor menu should be descriptor-driven");
 
@@ -3572,6 +5850,1142 @@ void TestEditorToolRegistrationDescriptors(RegressionRunner& runner) {
         "app provider tool modules should register without diagnostics errors");
 }
 
+void TestGenericDocumentModel(RegressionRunner& runner) {
+    const std::filesystem::path projectRoot =
+        std::filesystem::path("generated") / "editor" / "tests" / "document_model_project";
+    RemoveTreeIfPresent(projectRoot);
+    std::filesystem::create_directories(projectRoot / "Documents");
+
+    CourseAsset liveCourse{};
+    liveCourse.BuildFallbackCanyon(32.0f);
+    const std::filesystem::path coursePath = std::filesystem::path("Documents") / "main.course";
+    std::string error;
+    runner.Expect(
+        liveCourse.SaveToFile((projectRoot / coursePath).string(), &error),
+        "course fixture should save");
+    {
+        std::ofstream scene(projectRoot / "Documents" / "world.scene", std::ios::trunc);
+        scene << "# editor-schema:1\nscene=baseline\n";
+    }
+    {
+        std::ofstream effect(projectRoot / "Documents" / "spark.effect", std::ios::trunc);
+        effect << "effect=baseline\n";
+    }
+    {
+        std::ofstream preset(projectRoot / "Documents" / "cinematic.renderpreset", std::ios::trunc);
+        preset << "preset=baseline\n";
+    }
+    {
+        std::ofstream settings(projectRoot / "Documents" / "project.settings", std::ios::trunc);
+        settings << "settings=baseline\n";
+    }
+
+    EditorCourseDocumentProvider courseProvider;
+    courseProvider.Bind(&liveCourse);
+    EditorTextDocumentProvider sceneProvider(
+        std::string(EditorDocumentTypes::Scene), "Scene", {".scene"}, 2);
+    EditorTextDocumentProvider effectProvider(
+        std::string(EditorDocumentTypes::Effect), "Effect", {".effect"}, 1);
+    EditorTextDocumentProvider presetProvider(
+        std::string(EditorDocumentTypes::RenderPreset), "Render Preset", {".renderpreset"}, 1);
+    EditorTextDocumentProvider settingsProvider(
+        std::string(EditorDocumentTypes::ProjectSettings), "Project Settings", {".settings"}, 1);
+    EditorDocumentRegistry registry;
+    runner.Expect(registry.Register(courseProvider, &error), "course provider should register");
+    runner.Expect(registry.Register(sceneProvider, &error), "scene provider should register");
+    runner.Expect(registry.Register(effectProvider, &error), "effect provider should register");
+    runner.Expect(registry.Register(presetProvider, &error), "preset provider should register");
+    runner.Expect(registry.Register(settingsProvider, &error), "settings provider should register");
+    runner.Expect(registry.Count() == 5, "five initial document providers should be available");
+    runner.Expect(!registry.Register(sceneProvider, &error), "duplicate provider should be rejected");
+
+    EditorDocumentManager manager(registry, projectRoot);
+    runner.Expect(
+        !manager.Open(
+            EditorDocumentTypes::Scene,
+            std::filesystem::path("..") / "outside.scene").succeeded,
+        "document open should reject project path traversal");
+    const EditorDocumentOpenResult courseOpen = manager.Open(EditorDocumentTypes::Course, coursePath);
+    const EditorDocumentOpenResult sceneOpen = manager.Open(
+        EditorDocumentTypes::Scene, std::filesystem::path("Documents") / "world.scene");
+    const EditorDocumentOpenResult effectOpen = manager.Open(
+        EditorDocumentTypes::Effect, std::filesystem::path("Documents") / "spark.effect");
+    const EditorDocumentOpenResult presetOpen = manager.Open(
+        EditorDocumentTypes::RenderPreset,
+        std::filesystem::path("Documents") / "cinematic.renderpreset");
+    const EditorDocumentOpenResult settingsOpen = manager.Open(
+        EditorDocumentTypes::ProjectSettings,
+        std::filesystem::path("Documents") / "project.settings");
+    runner.Expect(
+        courseOpen.succeeded && sceneOpen.succeeded && effectOpen.succeeded &&
+            presetOpen.succeeded && settingsOpen.succeeded,
+        "all initial document types should open concurrently");
+    runner.Expect(manager.OpenCount() == 5, "manager should expose five simultaneous documents");
+    runner.Expect(sceneOpen.migration.migrated, "old scene schema should migrate on open");
+    runner.Expect(
+        std::filesystem::is_regular_file(projectRoot / sceneOpen.migration.backupPath) &&
+            std::filesystem::is_regular_file(projectRoot / sceneOpen.migration.reportPath),
+        "schema migration should create backup and report artifacts");
+
+    liveCourse.name = "A4 Saved Course";
+    runner.Expect(manager.MarkDirty(courseOpen.id, "course edit"), "course should become dirty");
+    runner.Expect(
+        sceneProvider.SetText(sceneOpen.id, "# editor-schema:2\nscene=edited\n") &&
+            manager.MarkDirty(sceneOpen.id, "scene edit"),
+        "scene should become dirty");
+    runner.Expect(
+        effectProvider.SetText(effectOpen.id, "effect=edited\n") &&
+            manager.MarkDirty(effectOpen.id, "effect edit"),
+        "effect should become dirty");
+
+    EditorExternalChangeMonitor externalChanges(projectRoot);
+    EditorDocumentSaveService saveService(manager, externalChanges, projectRoot);
+    const EditorDocumentSaveResult saveAll = saveService.SaveAll();
+    runner.Expect(saveAll.succeeded, "multi-type Save All should succeed");
+    runner.Expect(saveAll.items.size() == 3, "Save All should include every dirty document");
+    runner.Expect(!manager.Find(courseOpen.id)->dirty && !manager.Find(sceneOpen.id)->dirty,
+        "successful Save All should clear dirty state");
+    runner.Expect(!saveAll.transactionId.empty(), "Save All should expose its atomic transaction id");
+
+    {
+        std::ofstream external(projectRoot / "Documents" / "world.scene", std::ios::trunc);
+        external << "# editor-schema:2\nscene=external\n";
+    }
+    runner.Expect(
+        sceneProvider.SetText(sceneOpen.id, "# editor-schema:2\nscene=local-conflict\n") &&
+            manager.MarkDirty(sceneOpen.id, "conflicting edit"),
+        "local conflict fixture should become dirty");
+    const EditorDocumentSaveResult blockedSave = saveService.Save(sceneOpen.id);
+    runner.Expect(
+        !blockedSave.succeeded &&
+            blockedSave.failure == EditorDocumentSaveFailure::ExternalConflict &&
+            manager.Find(sceneOpen.id)->conflict == EditorDocumentConflictState::ExternalModified,
+        "external modification should block overwrite and mark conflict");
+    const EditorDocumentComparison comparison =
+        externalChanges.Compare(*manager.Find(sceneOpen.id));
+    runner.Expect(comparison.succeeded && !comparison.identical,
+        "external conflict should provide explicit editor-versus-disk comparison data");
+    runner.Expect(manager.Reload(sceneOpen.id, &error), "explicit reload should accept external version");
+
+    runner.Expect(
+        sceneProvider.SetText(sceneOpen.id, "# editor-schema:2\nscene=autosaved\n") &&
+            manager.MarkDirty(sceneOpen.id, "autosave edit"),
+        "autosave fixture should become dirty");
+    EditorAutosaveService autosave(manager, projectRoot);
+    EditorAutosaveRecord autosaveRecord{};
+    runner.Expect(
+        autosave.Autosave(sceneOpen.id, &autosaveRecord, &error),
+        "dirty scene should autosave without changing its source");
+    runner.Expect(
+        std::filesystem::is_regular_file(projectRoot / autosaveRecord.contentPath) &&
+            std::filesystem::is_regular_file(projectRoot / autosaveRecord.manifestPath),
+        "autosave content and manifest should both exist");
+    {
+        std::ifstream source(projectRoot / "Documents" / "world.scene");
+        std::stringstream text;
+        text << source.rdbuf();
+        runner.Expect(text.str().find("scene=external") != std::string::npos,
+            "autosave must not overwrite the formal source");
+    }
+
+    EditorTextDocumentProvider recoverySceneProvider(
+        std::string(EditorDocumentTypes::Scene), "Scene", {".scene"}, 2);
+    EditorDocumentRegistry recoveryRegistry;
+    runner.Expect(recoveryRegistry.Register(recoverySceneProvider, &error),
+        "recovery provider should register");
+    EditorDocumentManager recoveryManager(recoveryRegistry, projectRoot);
+    EditorDocumentRecoveryService recovery(recoveryRegistry, recoveryManager, projectRoot);
+    const EditorDocumentRecoveryScanResult scan = recovery.Scan();
+    const auto candidate = std::find_if(
+        scan.candidates.begin(), scan.candidates.end(),
+        [&](const EditorDocumentRecoveryCandidate& value) {
+            return value.autosave.id == sceneOpen.id;
+        });
+    runner.Expect(candidate != scan.candidates.end(), "crash recovery should discover newest autosave");
+    runner.Expect(recovery.Recover(*candidate, &error), "autosave recovery should publish live state");
+    const EditorDocumentRecord* recovered = recoveryManager.Find(sceneOpen.id);
+    runner.Expect(recovered != nullptr && recovered->dirty && recovered->recovered,
+        "recovered document should remain dirty until explicit save");
+    const EditorDocumentContent* recoveredContent = recoverySceneProvider.Content(sceneOpen.id);
+    runner.Expect(
+        recoveredContent != nullptr &&
+            std::string(recoveredContent->bytes.begin(), recoveredContent->bytes.end()).find(
+                "scene=autosaved") != std::string::npos,
+        "recovery should restore autosaved content");
+
+    runner.Expect(!manager.Close(sceneOpen.id, false, &error),
+        "dirty document close should require explicit save or discard");
+    runner.Expect(manager.Close(sceneOpen.id, true, &error) && manager.Reopen(sceneOpen.id, &error),
+        "explicit discard close and reopen should succeed");
+    EditorDocumentId duplicateId{};
+    runner.Expect(
+        manager.Duplicate(
+            effectOpen.id,
+            std::filesystem::path("Documents") / "spark_copy.effect",
+            &duplicateId,
+            &error),
+        "document duplicate should create an independent dirty document");
+    runner.Expect(saveService.Save(duplicateId).succeeded,
+        "new duplicate should save to its independent destination");
+
+    runner.Expect(
+        effectProvider.SetText(effectOpen.id, "effect=close-all-edit\n") &&
+            manager.MarkDirty(effectOpen.id, "close all edit"),
+        "close-all fixture should contain a dirty document");
+    EditorModalConfirmService closeConfirm;
+    EditorDocumentLifecycleService genericLifecycle;
+    genericLifecycle.SetServices(EditorDocumentLifecycleServices{
+        nullptr, nullptr, &closeConfirm, nullptr, nullptr, &manager, &saveService});
+    const EditorDocumentLifecycleResult closeAll = genericLifecycle.RequestSaveAllAndClose();
+    runner.Expect(closeAll.queuedConfirmation && closeConfirm.HasPending(),
+        "multiple-document close should use one safe confirmation flow");
+    closeConfirm.Confirm();
+    runner.Expect(manager.OpenCount() == 0 && manager.DirtyCount() == 0,
+        "confirmed Save All and Close should save and close every document");
+
+    RemoveTreeIfPresent(projectRoot);
+}
+
+void TestEditorWorldModel(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.BuildFallbackCanyon(32.0f);
+    course.name = "B1 World Course";
+    course.cameraKeys.clear();
+    course.terrainPlacements.push_back(CourseTerrainPlacement{});
+    course.terrainPlacements.back().id = "terrain_a";
+    course.terrainPlacements.push_back(CourseTerrainPlacement{});
+    course.terrainPlacements.back().id = "terrain_b";
+    course.rockClusters.push_back(CourseRockCluster{});
+    course.rockClusters.back().id = "rocks_a";
+    course.cameraKeys.push_back(CourseCameraKey{});
+    course.events.push_back(CourseEventMarker{});
+    course.events.back().id = "event_a";
+    course.events.back().type = "checkpoint";
+    const EditorDocumentId courseDocument{
+        "course-document-guid", std::string(EditorDocumentTypes::Course)};
+
+    CourseWorldObjectProvider courseProvider;
+    courseProvider.Bind(&course, courseDocument);
+    runner.Expect(
+        courseProvider.EnsurePersistentIdentities() == 5,
+        "Course provider should assign one persistent GUID per legacy world object");
+    runner.Expect(
+        courseProvider.EnsurePersistentIdentities() == 0 &&
+            ValidateCourseWorldObjectGuids(course),
+        "Course world GUID assignment should be idempotent and unique");
+    const std::string firstTerrainGuid = course.terrainPlacements[0].editorGuid;
+    const std::string secondTerrainGuid = course.terrainPlacements[1].editorGuid;
+
+    EffectSystem effectSystem;
+    EffectRuntime effectRuntime(&effectSystem);
+    EffectAsset effectAsset{};
+    effectAsset.name = "spark";
+    effectRuntime.MutableAssets()[effectAsset.name] = effectAsset;
+    EffectInstance effectInstance{};
+    effectInstance.id = 42;
+    effectInstance.assetName = effectAsset.name;
+    effectRuntime.MutableInstances().push_back(effectInstance);
+    VfxWorldObjectProvider vfxProvider;
+    const EditorDocumentId vfxDocument{
+        "vfx-runtime-document", std::string(EditorDocumentTypes::Effect)};
+    vfxProvider.Bind(&effectRuntime, vfxDocument);
+
+    EditorWorldObjectRegistry registry;
+    std::string error;
+    runner.Expect(registry.Register(courseProvider, &error),
+        "Course world provider should register");
+    runner.Expect(registry.Register(vfxProvider, &error),
+        "VFX world provider should register");
+    runner.Expect(!registry.Register(courseProvider, &error),
+        "duplicate world provider IDs should be rejected");
+    EditorWorldModel world(registry);
+    const EditorWorldModelRefreshResult initial = world.Refresh();
+    runner.Expect(
+        initial.succeeded && initial.missingCount == 0 && initial.objectCount == 15,
+        "world model should aggregate Course hierarchy and VFX read-only hierarchy");
+
+    const std::string firstTerrainStableId = BuildEditorWorldStableId(
+        courseDocument, courseProvider.ProviderId(), firstTerrainGuid);
+    const EditorWorldObjectRecord* firstTerrain = world.FindByStableId(firstTerrainStableId);
+    runner.Expect(
+        firstTerrain != nullptr &&
+            firstTerrain->handle.domain == EditorDomainId::CourseTerrainPlacement &&
+            firstTerrain->handle.localIndex == 0 &&
+            HasEditorWorldCapability(
+                firstTerrain->capabilities, EditorWorldObjectCapability::Transform),
+        "Course records should expose stable identity, compatibility index, and capabilities");
+    const EditorObjectHandle selectedTerrain = firstTerrain != nullptr
+        ? firstTerrain->handle
+        : EditorObjectHandle{};
+
+    std::swap(course.terrainPlacements[0], course.terrainPlacements[1]);
+    const EditorWorldModelRefreshResult reordered = world.Refresh();
+    const EditorWorldObjectRecord* resolvedAfterReorder = world.Resolve(selectedTerrain);
+    runner.Expect(
+        reordered.succeeded && resolvedAfterReorder != nullptr &&
+            resolvedAfterReorder->objectGuid == firstTerrainGuid &&
+            resolvedAfterReorder->handle.localIndex == 1,
+        "stable world handles should survive Course array reorder while updating local indices");
+    course.terrainPlacements[1].id = "terrain_renamed";
+    world.Refresh();
+    const EditorWorldObjectRecord* resolvedAfterRename = world.Resolve(selectedTerrain);
+    runner.Expect(
+        resolvedAfterRename != nullptr &&
+            resolvedAfterRename->displayName == "terrain_renamed",
+        "stable world handles should survive display-name changes");
+
+    const auto runtimeObject = std::find_if(
+        world.Objects().begin(), world.Objects().end(),
+        [](const EditorWorldObjectRecord& value) {
+            return value.handle.domain == EditorDomainId::VfxEffectInstance;
+        });
+    runner.Expect(
+        runtimeObject != world.Objects().end() && runtimeObject->runtimeOnly &&
+            runtimeObject->locked && runtimeObject->capabilities == 0,
+        "VFX runtime instances should be explicitly read-only runtime objects");
+
+    EditorCourseDocumentProvider documentProvider;
+    documentProvider.Bind(&course);
+    EditorDocumentContent serialized{};
+    runner.Expect(
+        documentProvider.Serialize(courseDocument, &serialized, &error) &&
+            serialized.schemaVersion == 3,
+        "Course schema v3 should serialize persistent world GUIDs and Outliner state");
+    CourseAsset reloaded{};
+    documentProvider.Bind(&reloaded);
+    const bool reloadedSuccessfully =
+        documentProvider.Deserialize(courseDocument, serialized, &error);
+    const auto reloadedTerrainA = std::find_if(
+        reloaded.terrainPlacements.begin(), reloaded.terrainPlacements.end(),
+        [](const CourseTerrainPlacement& value) { return value.id == "terrain_renamed"; });
+    const auto reloadedTerrainB = std::find_if(
+        reloaded.terrainPlacements.begin(), reloaded.terrainPlacements.end(),
+        [](const CourseTerrainPlacement& value) { return value.id == "terrain_b"; });
+    std::ostringstream reloadDiagnostic;
+    reloadDiagnostic << "Course world GUIDs should survive save and reload"
+        << " deserialize=" << reloadedSuccessfully
+        << " count=" << reloaded.terrainPlacements.size()
+        << " error=" << error;
+    for (const CourseTerrainPlacement& value : reloaded.terrainPlacements) {
+        reloadDiagnostic << " [" << value.id << '=' << value.editorGuid << ']';
+    }
+    reloadDiagnostic << " expectedA=" << firstTerrainGuid
+        << " expectedB=" << secondTerrainGuid;
+    runner.Expect(
+        reloadedSuccessfully && reloadedTerrainA != reloaded.terrainPlacements.end() &&
+            reloadedTerrainB != reloaded.terrainPlacements.end() &&
+            reloadedTerrainA->editorGuid == firstTerrainGuid &&
+            reloadedTerrainB->editorGuid == secondTerrainGuid,
+        reloadDiagnostic.str());
+
+    CourseAsset legacy{};
+    legacy.BuildFallbackCanyon(32.0f);
+    legacy.cameraKeys.clear();
+    legacy.terrainPlacements.push_back(CourseTerrainPlacement{});
+    std::string legacyText;
+    legacy.SaveToString(&legacyText, &error);
+    EditorDocumentContent legacyContent{};
+    legacyContent.schemaVersion = 1;
+    legacyContent.bytes.assign(legacyText.begin(), legacyText.end());
+    EditorDocumentContent migrated{};
+    EditorDocumentMigrationReport migration{};
+    documentProvider.Bind(&legacy);
+    runner.Expect(
+        documentProvider.Migrate(
+            legacyContent, &migrated, &migration, &error) &&
+            migration.migrated && migrated.schemaVersion == 3 &&
+            documentProvider.Validate(migrated).Succeeded(),
+        "Course schema v1 migration should assign GUIDs and Outliner state defaults");
+
+    course.rockClusters[0].editorGuid = firstTerrainGuid;
+    const EditorWorldModelRefreshResult duplicate = world.Refresh();
+    runner.Expect(
+        duplicate.succeeded && duplicate.missingCount > 0 &&
+            !duplicate.diagnostics.empty(),
+        "world model should diagnose duplicate persistent handles");
+
+    CourseAsset largeCourse{};
+    largeCourse.name = "B1 Ten Thousand Objects";
+    largeCourse.terrainPlacements.resize(10000);
+    for (std::size_t index = 0; index < largeCourse.terrainPlacements.size(); ++index) {
+        largeCourse.terrainPlacements[index].id = "terrain_" + std::to_string(index);
+    }
+    CourseWorldObjectProvider largeProvider;
+    largeProvider.Bind(&largeCourse, {
+        "large-course-document", std::string(EditorDocumentTypes::Course)});
+    largeProvider.EnsurePersistentIdentities();
+    EditorWorldObjectRegistry largeRegistry;
+    largeRegistry.Register(largeProvider, &error);
+    EditorWorldModel largeWorld(largeRegistry);
+    const auto refreshStart = std::chrono::steady_clock::now();
+    const EditorWorldModelRefreshResult largeRefresh = largeWorld.Refresh();
+    const auto refreshElapsed = std::chrono::steady_clock::now() - refreshStart;
+    runner.Expect(
+        largeRefresh.succeeded && largeRefresh.objectCount == 10005 &&
+            largeRefresh.missingCount == 0 && refreshElapsed < std::chrono::seconds(2),
+        "10k Course objects should refresh deterministically within the B-1 budget");
+}
+
+class RegressionHierarchyWorldProvider final
+    : public IEditorWorldObjectProvider,
+      public IEditorWorldMutationProvider {
+public:
+    class Payload final : public IEditorWorldMutationPayload {
+    public:
+        explicit Payload(std::string value) : parentGuid(std::move(value)) {}
+        std::size_t EstimatedBytes() const noexcept override {
+            return sizeof(Payload) + parentGuid.capacity();
+        }
+        std::string parentGuid;
+    };
+
+    std::string_view ProviderId() const noexcept override { return "regression.hierarchy"; }
+    int32_t Priority() const noexcept override { return 0; }
+
+    bool Enumerate(EditorWorldProviderEnumeration* output, std::string* error) const override {
+        if (output == nullptr) {
+            if (error != nullptr) *error = "Regression hierarchy output is null.";
+            return false;
+        }
+        output->objects.clear();
+        output->diagnostics.clear();
+        const EditorObjectHandle folderA = Handle("folder-a", EditorDomainId::Unknown, "A");
+        const EditorObjectHandle folderB = Handle("folder-b", EditorDomainId::Unknown, "B");
+        output->objects.push_back(Record(folderA, {}, "Folder", true, 0));
+        output->objects.push_back(Record(folderB, {}, "Folder", true, 1));
+        const EditorObjectHandle parent = parentGuid_ == "folder-b" ? folderB : folderA;
+        output->objects.push_back(Record(
+            Handle("child", EditorDomainId::CourseEventMarker, "Child"),
+            parent,
+            "Test Object",
+            false,
+            2,
+            static_cast<EditorWorldObjectCapabilities>(
+                EditorWorldObjectCapability::Reparent)));
+        return true;
+    }
+
+    bool Resolve(const EditorObjectHandle& handle, EditorWorldObjectRecord* record) const override {
+        EditorWorldProviderEnumeration output{};
+        Enumerate(&output, nullptr);
+        for (const EditorWorldObjectRecord& candidate : output.objects) {
+            if (!candidate.handle.SameObject(handle)) continue;
+            if (record != nullptr) *record = candidate;
+            return true;
+        }
+        return false;
+    }
+
+    bool BuildMutation(
+        const EditorWorldProviderMutationRequest& request,
+        EditorWorldMutationPlan* plan,
+        std::string* error) const override {
+        if (plan == nullptr || request.kind != EditorWorldMutationKind::Reparent ||
+            request.targets.size() != 1 || request.targets.front().objectGuid != "child" ||
+            (request.newParent.objectGuid != "folder-a" &&
+             request.newParent.objectGuid != "folder-b")) {
+            if (error != nullptr) *error = "Invalid regression hierarchy reparent request.";
+            return false;
+        }
+        plan->before = EditorWorldMutationState{
+            std::string(ProviderId()), document_, std::make_shared<Payload>(parentGuid_)};
+        plan->after = EditorWorldMutationState{
+            std::string(ProviderId()), document_,
+            std::make_shared<Payload>(request.newParent.objectGuid)};
+        plan->resultingSelection = {request.targets.front()};
+        plan->label = "Reparent Regression World Object";
+        return true;
+    }
+
+    bool ApplyMutationState(
+        const EditorWorldMutationState& state,
+        std::string* error) override {
+        const auto* payload = dynamic_cast<const Payload*>(state.payload.get());
+        if (state.providerId != ProviderId() || state.document != document_ || payload == nullptr) {
+            if (error != nullptr) *error = "Regression hierarchy payload mismatch.";
+            return false;
+        }
+        parentGuid_ = payload->parentGuid;
+        return true;
+    }
+
+    const EditorDocumentId& Document() const noexcept { return document_; }
+
+private:
+    EditorObjectHandle Handle(
+        std::string_view guid,
+        EditorDomainId domain,
+        std::string displayName) const {
+        EditorObjectHandle handle{};
+        handle.domain = domain;
+        handle.stableId = BuildEditorWorldStableId(document_, ProviderId(), guid);
+        handle.displayName = std::move(displayName);
+        return handle;
+    }
+
+    EditorWorldObjectRecord Record(
+        EditorObjectHandle handle,
+        EditorObjectHandle parent,
+        std::string type,
+        bool virtualNode,
+        uint64_t sort,
+        EditorWorldObjectCapabilities capabilities = 0) const {
+        EditorWorldObjectRecord record{};
+        record.handle = std::move(handle);
+        record.parent = std::move(parent);
+        record.document = document_;
+        record.providerId = std::string(ProviderId());
+        const std::size_t separator = record.handle.stableId.rfind(':');
+        record.objectGuid = separator == std::string::npos
+            ? record.handle.stableId
+            : record.handle.stableId.substr(separator + 1);
+        record.displayName = record.handle.displayName;
+        record.typeName = std::move(type);
+        record.sortKey = std::to_string(sort);
+        record.virtualNode = virtualNode;
+        record.capabilities = capabilities;
+        return record;
+    }
+
+    EditorDocumentId document_{"regression-hierarchy-document", "scene"};
+    std::string parentGuid_ = "folder-a";
+};
+
+void TestWorldOutlinerMutations(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.BuildFallbackCanyon(32.0f);
+    course.terrainPlacements.push_back(CourseTerrainPlacement{});
+    course.terrainPlacements.back().id = "outliner_terrain";
+    course.events.push_back(CourseEventMarker{});
+    course.events.back().id = "outliner_event";
+    const EditorDocumentId document{
+        "outliner-course-document", std::string(EditorDocumentTypes::Course)};
+    CourseWorldObjectProvider provider;
+    provider.Bind(&course, document);
+    provider.EnsurePersistentIdentities();
+    EditorWorldObjectRegistry registry;
+    std::string error;
+    runner.Expect(registry.Register(provider, &error),
+        "Outliner Course provider should register");
+    EditorWorldModel model(registry);
+    runner.Expect(model.Refresh().succeeded, "Outliner World Model should refresh");
+    EditorWorldMutationService mutations(registry, model);
+    EditorWorldMutationExecutionService execution(registry, &model);
+    EditorTransactionStack transactions;
+    EditorExecutionContext executionContext;
+    EditorError executionError;
+    runner.Expect(executionContext.Register(execution, &executionError),
+        "World mutation execution service should register");
+
+    const EditorWorldObjectRecord* terrain = model.FindByDomainIndex(
+        EditorDomainId::CourseTerrainPlacement, 0);
+    runner.Expect(terrain != nullptr, "Outliner terrain should resolve by compatibility index");
+    const EditorObjectHandle terrainHandle = terrain != nullptr
+        ? terrain->handle : EditorObjectHandle{};
+    const std::string terrainStableId = terrainHandle.stableId;
+
+    EditorWorldMutationRequest rename{};
+    rename.kind = EditorWorldMutationKind::Rename;
+    rename.targets = {terrainHandle};
+    rename.name = "outliner_renamed";
+    EditorWorldMutationResult mutation = mutations.Execute(rename, transactions, true);
+    runner.Expect(
+        mutation.succeeded && course.terrainPlacements[0].id == "outliner_renamed" &&
+            transactions.UndoDepth() == 1 &&
+            model.FindByStableId(terrainStableId) != nullptr,
+        "Outliner rename should preserve GUID and register one undo command");
+    runner.Expect(transactions.Undo(executionContext, &executionError) &&
+            course.terrainPlacements[0].id == "outliner_terrain",
+        "Outliner rename should undo through the generic World execution service");
+    runner.Expect(transactions.Redo(executionContext, &executionError) &&
+            course.terrainPlacements[0].id == "outliner_renamed",
+        "Outliner rename should redo through the generic World execution service");
+
+    course.terrainPlacements.push_back(CourseTerrainPlacement{});
+    course.terrainPlacements.back().id = "reserved_name";
+    course.terrainPlacements.back().editorGuid = GenerateEditorWorldGuid();
+    runner.Expect(model.Refresh().succeeded,
+        "Outliner World Model should refresh after an external fixture addition");
+    rename.targets = {model.FindByStableId(terrainStableId)->handle};
+    rename.name = "reserved_name";
+    const std::size_t depthBeforeNameCollision = transactions.UndoDepth();
+    runner.Expect(
+        !mutations.Execute(rename, transactions, true).succeeded &&
+            course.terrainPlacements[0].id == "outliner_renamed" &&
+            transactions.UndoDepth() == depthBeforeNameCollision,
+        "Outliner rename should reject duplicate names without changing data or history");
+    course.terrainPlacements.pop_back();
+    runner.Expect(model.Refresh().succeeded,
+        "Outliner World Model should refresh after fixture cleanup");
+    rename.name = "outliner_renamed";
+
+    EditorWorldMutationRequest visibility{};
+    visibility.kind = EditorWorldMutationKind::SetVisibility;
+    visibility.targets = {model.FindByStableId(terrainStableId)->handle};
+    visibility.value = false;
+    mutation = mutations.Execute(visibility, transactions, true);
+    runner.Expect(mutation.succeeded && !course.terrainPlacements[0].editorVisible &&
+            !model.FindByStableId(terrainStableId)->visible,
+        "Outliner visibility should update persisted Course state and World record");
+
+    EditorWorldMutationRequest lock{};
+    lock.kind = EditorWorldMutationKind::SetLocked;
+    lock.targets = {model.FindByStableId(terrainStableId)->handle};
+    lock.value = true;
+    mutation = mutations.Execute(lock, transactions, true);
+    runner.Expect(mutation.succeeded && course.terrainPlacements[0].editorLocked,
+        "Outliner lock should update persisted Course state");
+    rename.targets = {model.FindByStableId(terrainStableId)->handle};
+    runner.Expect(!mutations.Execute(rename, transactions, true).succeeded,
+        "locked World objects should reject authoring mutation");
+    lock.targets = {model.FindByStableId(terrainStableId)->handle};
+    lock.value = false;
+    runner.Expect(mutations.Execute(lock, transactions, true).succeeded,
+        "locked World objects should remain unlockable");
+
+    EditorWorldMutationRequest duplicate{};
+    duplicate.kind = EditorWorldMutationKind::Duplicate;
+    duplicate.targets = {model.FindByStableId(terrainStableId)->handle};
+    mutation = mutations.Execute(duplicate, transactions, true);
+    runner.Expect(
+        mutation.succeeded && course.terrainPlacements.size() == 2 &&
+            mutation.resultingSelection.size() == 1 &&
+            course.terrainPlacements[0].editorGuid != course.terrainPlacements[1].editorGuid,
+        "Outliner duplicate should allocate a new persistent GUID and select the copy");
+    const EditorObjectHandle duplicateHandle = mutation.resultingSelection.front();
+    EditorWorldMutationRequest remove{};
+    remove.kind = EditorWorldMutationKind::Delete;
+    remove.targets = {duplicateHandle};
+    mutation = mutations.Execute(remove, transactions, true);
+    runner.Expect(mutation.succeeded && course.terrainPlacements.size() == 1,
+        "Outliner delete should remove the selected GUID object");
+    runner.Expect(transactions.Undo(executionContext, &executionError) &&
+            course.terrainPlacements.size() == 2,
+        "Outliner delete should restore the object on undo");
+
+    const std::size_t undoDepthBeforePlayLock = transactions.UndoDepth();
+    rename.targets = {model.FindByStableId(terrainStableId)->handle};
+    runner.Expect(
+        !mutations.Execute(rename, transactions, false).succeeded &&
+            transactions.UndoDepth() == undoDepthBeforePlayLock,
+        "Play/Sim authoring lock should reject Outliner mutation without history changes");
+
+    EditorCourseDocumentProvider documentProvider;
+    documentProvider.Bind(&course);
+    EditorDocumentContent content{};
+    runner.Expect(documentProvider.Serialize(document, &content, &error) &&
+            content.schemaVersion == 3,
+        "Outliner visibility and lock state should serialize as Course schema v3");
+    CourseAsset loaded{};
+    documentProvider.Bind(&loaded);
+    runner.Expect(documentProvider.Deserialize(document, content, &error) &&
+            !loaded.terrainPlacements.empty() &&
+            !loaded.terrainPlacements.front().editorVisible,
+        "Outliner state should survive Course document reload");
+
+    RegressionHierarchyWorldProvider hierarchyProvider;
+    EditorWorldObjectRegistry hierarchyRegistry;
+    runner.Expect(hierarchyRegistry.Register(hierarchyProvider, &error),
+        "Mutable hierarchy provider should register");
+    EditorWorldModel hierarchyModel(hierarchyRegistry);
+    runner.Expect(hierarchyModel.Refresh().succeeded,
+        "Mutable hierarchy World Model should refresh");
+    EditorWorldMutationService hierarchyMutations(hierarchyRegistry, hierarchyModel);
+    EditorWorldMutationExecutionService hierarchyExecution(hierarchyRegistry, &hierarchyModel);
+    EditorExecutionContext hierarchyExecutionContext;
+    runner.Expect(hierarchyExecutionContext.Register(hierarchyExecution, &executionError),
+        "Mutable hierarchy execution service should register");
+    EditorTransactionStack hierarchyTransactions;
+    const EditorWorldObjectRecord* child =
+        hierarchyModel.FindByObjectGuid(hierarchyProvider.ProviderId(), "child");
+    const EditorWorldObjectRecord* folderB =
+        hierarchyModel.FindByObjectGuid(hierarchyProvider.ProviderId(), "folder-b");
+    runner.Expect(child != nullptr && folderB != nullptr,
+        "Mutable hierarchy test objects should resolve by persistent GUID");
+    EditorWorldMutationRequest reparent{};
+    reparent.kind = EditorWorldMutationKind::Reparent;
+    reparent.targets = {child != nullptr ? child->handle : EditorObjectHandle{}};
+    reparent.newParent = folderB != nullptr ? folderB->handle : EditorObjectHandle{};
+    mutation = hierarchyMutations.Execute(reparent, hierarchyTransactions, true);
+    child = hierarchyModel.FindByObjectGuid(hierarchyProvider.ProviderId(), "child");
+    runner.Expect(mutation.succeeded && child != nullptr &&
+            child->parent.SameObject(reparent.newParent),
+        "Outliner drag reparent should publish the provider hierarchy change");
+    runner.Expect(hierarchyTransactions.Undo(hierarchyExecutionContext, &executionError),
+        "Outliner reparent should undo through the generic World execution service");
+    child = hierarchyModel.FindByObjectGuid(hierarchyProvider.ProviderId(), "child");
+    runner.Expect(child != nullptr &&
+            child->parent.stableId.find("folder-a") != std::string::npos,
+        "Outliner reparent undo should restore the original parent");
+    runner.Expect(hierarchyTransactions.Redo(hierarchyExecutionContext, &executionError),
+        "Outliner reparent should redo through the generic World execution service");
+}
+
+void TestSceneEntityComponentFoundation(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" / "scene_foundation_regression";
+    const std::filesystem::path scenePath = "Scenes/foundation.scene";
+    std::error_code cleanupError;
+    std::filesystem::remove_all(root, cleanupError);
+
+    EditorSceneDocumentProvider documentProvider;
+    EditorDocumentRegistry documentRegistry;
+    std::string error;
+    runner.Expect(documentRegistry.Register(documentProvider, &error),
+        "Scene document provider should register");
+    EditorDocumentManager documentManager(documentRegistry, root);
+    const EditorDocumentOpenResult opened = documentManager.Open(EditorDocumentTypes::Scene, scenePath);
+    runner.Expect(opened.succeeded && opened.id.IsValid(),
+        "missing Scene source should open as a new versioned document");
+    EditorScene* scene = documentProvider.Scene(opened.id);
+    runner.Expect(scene != nullptr && scene->entities.empty() &&
+            scene->schemaVersion == kEditorSceneSchemaVersion,
+        "new Scene document should publish an empty schema-versioned live model");
+
+    SceneWorldObjectProvider worldProvider;
+    worldProvider.Bind(scene, opened.id);
+    EditorWorldObjectRegistry worldRegistry;
+    runner.Expect(worldRegistry.Register(worldProvider, &error),
+        "Scene World provider should register");
+    EditorWorldModel worldModel(worldRegistry);
+    runner.Expect(worldModel.Refresh().succeeded,
+        "Scene World model should enumerate its virtual root");
+    EditorWorldMutationService mutations(worldRegistry, worldModel);
+    EditorWorldMutationExecutionService execution(worldRegistry, &worldModel);
+    EditorExecutionContext executionContext;
+    EditorError executionError;
+    runner.Expect(executionContext.Register(execution, &executionError),
+        "Scene World transaction execution service should register");
+    EditorTransactionStack transactions;
+
+    EditorWorldMutationRequest createParent{};
+    createParent.kind = EditorWorldMutationKind::Create;
+    createParent.targets = {worldProvider.RootHandle()};
+    createParent.name = "Parent";
+    EditorWorldMutationResult result = mutations.Execute(createParent, transactions, true);
+    runner.Expect(result.succeeded && result.resultingSelection.size() == 1 &&
+            scene->entities.size() == 1,
+        "Outliner Create should create and select a Scene Entity transactionally");
+    const EditorObjectHandle parentHandle = result.resultingSelection.front();
+    const EditorSceneEntity* parent = worldProvider.ResolveEntity(parentHandle);
+    const std::string parentGuid = parent != nullptr ? parent->guid : std::string{};
+    runner.Expect(parent != nullptr && parentGuid.size() == 32 &&
+            scene->FindComponent(*parent, kEditorTransformComponentType) != nullptr,
+        "created Entity should have a stable GUID and required Transform Component Type ID");
+
+    EditorWorldMutationRequest createAssetEntity{};
+    createAssetEntity.kind = EditorWorldMutationKind::Create;
+    createAssetEntity.targets = {worldProvider.RootHandle()};
+    createAssetEntity.name = "Dropped Mesh";
+    createAssetEntity.assetGuid = "asset-guid-mesh-001";
+    createAssetEntity.assetType = "Mesh";
+    result = mutations.Execute(createAssetEntity, transactions, true);
+    runner.Expect(result.succeeded && result.resultingSelection.size() == 1,
+        "Viewport Asset Drop mutation should create a Scene Entity");
+    const EditorObjectHandle childHandle = result.resultingSelection.front();
+    const EditorSceneEntity* child = worldProvider.ResolveEntity(childHandle);
+    const std::string childGuid = child != nullptr ? child->guid : std::string{};
+    const EditorSceneComponent* mesh = child != nullptr
+        ? scene->FindComponent(*child, kEditorMeshRendererComponentType)
+        : nullptr;
+    runner.Expect(mesh != nullptr && mesh->references.size() == 1 &&
+            mesh->references.front().assetGuid == createAssetEntity.assetGuid,
+        "Asset Drop should preserve an Asset GUID object reference on the typed Component");
+
+    EditorWorldMutationRequest reparent{};
+    reparent.kind = EditorWorldMutationKind::Reparent;
+    reparent.targets = {childHandle};
+    reparent.newParent = parentHandle;
+    result = mutations.Execute(reparent, transactions, true);
+    child = scene->FindEntity(childGuid);
+    runner.Expect(result.succeeded && child != nullptr && child->parentGuid == parentGuid,
+        "Scene hierarchy reparent should persist the parent Entity GUID");
+
+    EditorWorldMutationRequest addComponent{};
+    addComponent.kind = EditorWorldMutationKind::AddComponent;
+    addComponent.targets = {worldModel.FindByStableId(childHandle.stableId)->handle};
+    addComponent.name = std::string(kEditorAudioSourceComponentType);
+    result = mutations.Execute(addComponent, transactions, true);
+    child = scene->FindEntity(childGuid);
+    runner.Expect(result.succeeded && child != nullptr &&
+            scene->FindComponent(*child, kEditorAudioSourceComponentType) != nullptr,
+        "Details Add Component should use a stable Component Type ID");
+    runner.Expect(transactions.Undo(executionContext, &executionError),
+        "Scene Component addition should undo through generic World transactions");
+    child = scene->FindEntity(childGuid);
+    runner.Expect(child != nullptr &&
+            scene->FindComponent(*child, kEditorAudioSourceComponentType) == nullptr,
+        "Component undo should restore the exact pre-edit Scene snapshot");
+    runner.Expect(transactions.Redo(executionContext, &executionError),
+        "Scene Component addition should redo through generic World transactions");
+
+    runner.Expect(documentManager.MarkDirty(opened.id, "Scene foundation regression"),
+        "Scene mutation should mark the Scene Document dirty");
+    EditorExternalChangeMonitor externalChanges;
+    EditorDocumentSaveService saveService(documentManager, externalChanges, root);
+    const EditorDocumentSaveResult saved = saveService.Save(opened.id);
+    runner.Expect(saved.succeeded && std::filesystem::is_regular_file(root / scenePath),
+        "Scene Save should commit through File Transaction");
+
+    runner.Expect(scene->DeleteEntity(parentGuid) && scene->entities.empty(),
+        "test should mutate live Scene away from its saved hierarchy");
+    runner.Expect(documentManager.Reload(opened.id, &error),
+        "Scene Reload should deserialize the saved Scene atomically");
+    scene = documentProvider.Scene(opened.id);
+    worldProvider.Bind(scene, opened.id);
+    runner.Expect(worldModel.Refresh().succeeded,
+        "World Model should refresh after Scene document reload");
+    const EditorSceneEntity* reloadedParent = scene != nullptr ? scene->FindEntity(parentGuid) : nullptr;
+    const EditorSceneEntity* reloadedChild = scene != nullptr ? scene->FindEntity(childGuid) : nullptr;
+    const EditorSceneComponent* reloadedMesh = reloadedChild != nullptr
+        ? scene->FindComponent(*reloadedChild, kEditorMeshRendererComponentType)
+        : nullptr;
+    runner.Expect(reloadedParent != nullptr && reloadedChild != nullptr &&
+            reloadedChild->parentGuid == parentGuid && reloadedMesh != nullptr &&
+            !reloadedMesh->references.empty() &&
+            reloadedMesh->references.front().assetGuid == createAssetEntity.assetGuid,
+        "Scene Save/Reload should preserve Entity GUIDs, hierarchy, Component types, and references");
+    runner.Expect(scene != nullptr && scene->Validate().Succeeded(),
+        "reloaded Scene should pass hierarchy, GUID, Component, and reference validation");
+
+    std::filesystem::remove_all(root, cleanupError);
+}
+
+void TestProductionTransformGizmo(RegressionRunner& runner) {
+    Vector3 intersection{};
+    float rayParameter = 0.0f;
+    runner.Expect(
+        IntersectEditorGizmoRayPlane(
+            {0.0f, 0.0f, -5.0f}, {0.0f, 0.0f, 1.0f},
+            {}, {0.0f, 0.0f, 1.0f}, &intersection, &rayParameter) &&
+            std::abs(intersection.z) < 0.0001f && std::abs(rayParameter - 5.0f) < 0.0001f,
+        "Production Gizmo ray-plane constraint should resolve deterministically");
+    float axisParameter = 0.0f;
+    runner.Expect(
+        ClosestEditorGizmoRayAxisParameter(
+            {2.0f, 3.0f, -5.0f}, {0.0f, 0.0f, 1.0f},
+            {}, {1.0f, 0.0f, 0.0f}, &axisParameter) &&
+            std::abs(axisParameter - 2.0f) < 0.0001f,
+        "Production Gizmo ray-axis constraint should preserve the selected axis parameter");
+    const Vector3 localDelta = ProjectEditorGizmoWorldDeltaToBasis(
+        {2.0f, 3.0f, 4.0f},
+        {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {-1.0f, 0.0f, 0.0f});
+    runner.Expect(
+        std::abs(localDelta.x - 4.0f) < 0.0001f &&
+            std::abs(localDelta.y - 3.0f) < 0.0001f &&
+            std::abs(localDelta.z + 2.0f) < 0.0001f,
+        "Production Gizmo World delta should project into the provider local basis");
+    runner.Expect(
+        std::abs(EditorGizmoSignedAngle(
+            {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}) -
+            1.57079632679f) < 0.0001f,
+        "Production Gizmo rotation constraint should return a signed angle");
+    runner.Expect(std::abs(SnapEditorGizmoValue(1.24f, 0.5f) - 1.0f) < 0.0001f,
+        "Production Gizmo snap should be deterministic");
+
+    EditorSelection selection;
+    EditorObjectHandle terrain{};
+    terrain.domain = EditorDomainId::CourseTerrainPlacement;
+    terrain.stableId = "world:test:terrain";
+    EditorObjectHandle rock{};
+    rock.domain = EditorDomainId::CourseRockCluster;
+    rock.stableId = "world:test:rock";
+    selection.Set({terrain, rock});
+    EditorViewportInteractionService interaction;
+    interaction.Update(EditorViewportInteractionInput{
+        {0.0f, 0.0f, 800.0f, 450.0f}, 800, 450, 400.0f, 225.0f,
+        true, false, true, false, true, true, false});
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        {0.0f, 0.0f, 800.0f, 450.0f}, 800, 450, MakeIdentity4x4()});
+    EditorTransactionStack transactions;
+    EditorTransformGizmoService gizmo;
+    gizmo.Update(EditorTransformGizmoInput{
+        &selection, &interaction, &coordinates, nullptr, &transactions,
+        EditorTransformGizmoMode::Scale, EditorTransformGizmoAxis::XY,
+        EditorTransformGizmoSpace::World, EditorTransformGizmoPivotMode::Median, true});
+    runner.Expect(
+        gizmo.State().canManipulate && gizmo.State().multiSelection &&
+            gizmo.State().targetCount == 2 &&
+            gizmo.State().activeAxis == EditorTransformGizmoAxis::XY &&
+            gizmo.State().space == EditorTransformGizmoSpace::World &&
+            gizmo.State().pivotMode == EditorTransformGizmoPivotMode::Median,
+        "Production Gizmo service should expose multi-selection, plane, space, and pivot state");
+    runner.Expect(
+        EditorTransformGizmoAxisFromIndex(6) == EditorTransformGizmoAxis::Uniform,
+        "Production Gizmo should map the uniform scale handle");
+
+    EditorObjectHandle sceneEntity{};
+    sceneEntity.domain = EditorDomainId::SceneEntity;
+    sceneEntity.stableId = "world:scene:entity:production-gizmo";
+    sceneEntity.displayName = "Scene Entity";
+    selection.SetPrimary(sceneEntity);
+    gizmo.Update(EditorTransformGizmoInput{
+        &selection, &interaction, &coordinates, nullptr, &transactions,
+        EditorTransformGizmoMode::Translate, EditorTransformGizmoAxis::X,
+        EditorTransformGizmoSpace::World, EditorTransformGizmoPivotMode::Active, false});
+    runner.Expect(
+        gizmo.State().canManipulate && gizmo.State().target.SameObject(sceneEntity),
+        "Production Gizmo should accept Scene Entity targets exposed by the World Model");
+
+    CourseAsset course{};
+    course.terrainPlacements.resize(2);
+    course.terrainPlacements[0].lateralOffset = 1.0f;
+    course.terrainPlacements[1].lateralOffset = 2.0f;
+    AppRuntimeState runtime{};
+    EditorPropertyRegistry propertyRegistry;
+    RegisterBuiltInCourseObjectProperties(propertyRegistry);
+    const EditorPropertyDescriptor* lateralDescriptor = propertyRegistry.Find(
+        EditorDomainId::CourseTerrainPlacement,
+        "CourseTerrainPlacement.lateralOffset");
+    runner.Expect(lateralDescriptor != nullptr,
+        "Production Gizmo numeric transform descriptor should exist");
+    EditorObjectHandle first{};
+    first.domain = EditorDomainId::CourseTerrainPlacement;
+    first.stableId = "gizmo-terrain-0";
+    first.localIndex = 0;
+    EditorObjectHandle second = first;
+    second.stableId = "gizmo-terrain-1";
+    second.localIndex = 1;
+    const auto beginSession = [&](EditorPropertyEditSession& session) {
+        CourseObjectPropertyAdapter previewAccessor(&course, &runtime, false);
+        return session.Begin(EditorPropertyEditSessionBeginRequest{
+            &previewAccessor,
+            {{first, *lateralDescriptor}, {second, *lateralDescriptor}},
+            "Production Gizmo Translate",
+            first,
+            true,
+            false,
+            "regression.productionGizmo"});
+    };
+    const auto previewSession = [&](EditorPropertyEditSession& session) {
+        CourseObjectPropertyAdapter previewAccessor(&course, &runtime, false);
+        EditorPropertyValue firstValue{};
+        firstValue.floatValue = 5.0f;
+        EditorPropertyValue secondValue{};
+        secondValue.floatValue = 6.0f;
+        return session.Preview(EditorPropertyEditSessionPreviewRequest{
+            &previewAccessor,
+            {{first, "CourseTerrainPlacement.lateralOffset", firstValue},
+             {second, "CourseTerrainPlacement.lateralOffset", secondValue}},
+            true,
+            false,
+            "regression.productionGizmo"});
+    };
+    EditorPropertyEditSession editSession;
+    runner.Expect(beginSession(editSession).applied && previewSession(editSession).changed,
+        "Production Gizmo should preview a multi-selection edit session");
+    CourseObjectPropertyAdapter cancelAccessor(&course, &runtime, false);
+    runner.Expect(editSession.Cancel(EditorPropertyEditSessionCancelRequest{
+            &cancelAccessor, false, "regression.productionGizmo"}).applied &&
+            course.terrainPlacements[0].lateralOffset == 1.0f &&
+            course.terrainPlacements[1].lateralOffset == 2.0f,
+        "Production Gizmo Escape cancel should restore every selected object");
+
+    runner.Expect(beginSession(editSession).applied && previewSession(editSession).changed,
+        "Production Gizmo should begin a second multi-selection drag");
+    EditorTransactionStack gizmoTransactions;
+    CourseObjectPropertyAdapter commitAccessor(&course, &runtime, true);
+    CourseObjectPropertyAdapter commitPreviewAccessor(&course, &runtime, false);
+    const EditorPropertyEditSessionResult commitResult =
+        editSession.Commit(EditorPropertyEditSessionCommitRequest{
+            &commitAccessor,
+            &commitPreviewAccessor,
+            &gizmoTransactions,
+            nullptr,
+            nullptr,
+            true,
+            false,
+            "regression.productionGizmo"});
+    std::vector<EditorPropertyChange> gizmoChanges =
+        gizmoTransactions.ConsumeStagedPropertyDeltas();
+    EditorError commandError;
+    const bool commandRegistered = !gizmoChanges.empty() &&
+        gizmoTransactions.PushCommand(
+            "Production Gizmo Translate",
+            first,
+            std::make_shared<CoursePropertyUndoCommand>(
+                MakeCoursePropertyUndoChanges(gizmoChanges)),
+            &commandError);
+    runner.Expect(commitResult.applied && commitResult.changed &&
+            commandRegistered && gizmoTransactions.UndoDepth() == 1,
+        "Production Gizmo one drag should publish exactly one Undo command");
+    CourseEditorExecutionService courseExecution(commitAccessor, propertyRegistry);
+    EditorExecutionContext executionContext;
+    EditorError executionError;
+    runner.Expect(executionContext.Register(courseExecution, &executionError) &&
+            gizmoTransactions.Undo(executionContext, &executionError) &&
+            course.terrainPlacements[0].lateralOffset == 1.0f &&
+            course.terrainPlacements[1].lateralOffset == 2.0f,
+        "Production Gizmo grouped Undo should restore the complete multi-selection");
+}
+
+void TestViewportOverlayLayerSystem(RegressionRunner& runner) {
+    std::vector<std::string> layerIds;
+    for (size_t index = 0; index < kEditorViewportOverlayLayerCount; ++index) {
+        const auto layer = static_cast<EditorViewportOverlayLayerId>(index);
+        const std::string id = EditorViewportOverlayLayerStableId(layer);
+        runner.Expect(!id.empty() && id != "unknown", "overlay layer should have a stable id");
+        runner.Expect(
+            std::find(layerIds.begin(), layerIds.end(), id) == layerIds.end(),
+            "overlay stable ids should be unique");
+        layerIds.push_back(id);
+    }
+    runner.Expect(layerIds.size() == 8, "B-4 should expose all eight overlay layers");
+
+    const EditorPanelRect viewportRect{20.0f, 30.0f, 640.0f, 360.0f};
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        viewportRect, 640, 360, MakeIdentity4x4()});
+    EditorViewportRenderTargetState renderState{};
+    renderState.enabled = true;
+    renderState.displayRect = viewportRect;
+    renderState.renderWidth = 640;
+    renderState.renderHeight = 360;
+    EditorViewportOverlayFrameContext frame{
+        renderState, 640, 360, &coordinates, Vector3{}, 1.0f};
+
+    class TestProvider final : public IEditorViewportOverlayProvider {
+    public:
+        explicit TestProvider(std::string id) : id_(std::move(id)) {}
+        std::string_view Id() const override { return id_; }
+        EditorViewportOverlayLayerId Layer() const override {
+            return EditorViewportOverlayLayerId::AuthoringHelpers;
+        }
+        void Build(
+            const EditorViewportOverlayFrameContext&,
+            EditorViewportOverlayCommandSink& sink) const override {
+            sink.Label(12.0f, 12.0f, "provider", 0xffffffffu);
+        }
+    private:
+        std::string id_;
+    };
+
+    EditorViewportOverlayService overlay;
+    TestProvider provider("test.overlay.provider");
+    TestProvider duplicate("test.overlay.provider");
+    runner.Expect(overlay.RegisterProvider(provider), "overlay provider should register");
+    runner.Expect(!overlay.RegisterProvider(duplicate), "duplicate overlay provider id should be rejected");
+    overlay.BeginFrame(frame);
+    runner.Expect(overlay.Stats().submitted == 1, "registered provider should submit during frame begin");
+    runner.Expect(overlay.UnregisterProvider(provider.Id()), "overlay provider should unregister by stable id");
+
+    auto gameplay = overlay.Sink(EditorViewportOverlayLayerId::GameplayHud);
+    gameplay.Label(300.0f, 20.0f, "HUD", 0xffffffffu);
+    overlay.SetEditorVisible(false);
+    overlay.Resolve();
+    runner.Expect(
+        overlay.ResolvedCommands().size() == 1 &&
+            overlay.ResolvedCommands().front().layer == EditorViewportOverlayLayerId::GameplayHud,
+        "gameplay HUD should remain independent when editor overlays are hidden");
+
+    overlay.SetEditorVisible(true);
+    overlay.SetScreenshotSuppression(true);
+    overlay.Resolve();
+    runner.Expect(
+        overlay.ResolvedCommands().size() == 1 &&
+            overlay.ResolvedCommands().front().layer == EditorViewportOverlayLayerId::GameplayHud,
+        "clean screenshot suppression should remove editor layers but preserve gameplay HUD");
+    {
+        overlay.SetScreenshotSuppression(false);
+        EditorViewportOverlayScreenshotScope captureScope(overlay);
+        runner.Expect(overlay.ScreenshotSuppression(), "screenshot scope should enable suppression");
+    }
+    runner.Expect(!overlay.ScreenshotSuppression(), "screenshot scope should restore previous state");
+
+    overlay.BeginFrame(frame);
+    EditorViewportOverlayLayerSettings labelSettings =
+        overlay.LayerSettings(EditorViewportOverlayLayerId::ObjectLabels);
+    labelSettings.selectedOnly = true;
+    labelSettings.maxDistance = 100.0f;
+    labelSettings.maxLabels = 4;
+    overlay.SetLayerSettings(EditorViewportOverlayLayerId::ObjectLabels, labelSettings);
+    auto labels = overlay.Sink(EditorViewportOverlayLayerId::ObjectLabels);
+    EditorViewportOverlayItemOptions nonSelected{};
+    nonSelected.distance = 20.0f;
+    labels.Label(100.0f, 100.0f, "not-selected", 0xffffffffu, nonSelected);
+    EditorViewportOverlayItemOptions selected = nonSelected;
+    selected.selected = true;
+    selected.priority = 100;
+    labels.Label(100.0f, 100.0f, "selected", 0xffffffffu, selected);
+    EditorViewportOverlayItemOptions tooFar = selected;
+    tooFar.distance = 120.0f;
+    labels.Label(220.0f, 100.0f, "too-far", 0xffffffffu, tooFar);
+    overlay.Resolve();
+    runner.Expect(overlay.Stats().filtered == 2, "selection and distance filters should reject ineligible labels");
+    runner.Expect(overlay.Stats().labelsDrawn == 1, "selected near label should survive filtering");
+
+    overlay.SetLayerVisible(EditorViewportOverlayLayerId::ObjectLabels, false);
+    overlay.Resolve();
+    runner.Expect(overlay.ResolvedCommands().empty(), "individual overlay layer visibility should be enforced");
+    overlay.SetLayerVisible(EditorViewportOverlayLayerId::ObjectLabels, true);
+
+    overlay.BeginFrame(frame);
+    labelSettings.selectedOnly = false;
+    labelSettings.maxDistance = 100.0f;
+    labelSettings.distanceFadeStart = 0.5f;
+    overlay.SetLayerSettings(EditorViewportOverlayLayerId::ObjectLabels, labelSettings);
+    EditorViewportOverlayItemOptions fading{};
+    fading.distance = 75.0f;
+    fading.iconFallback = false;
+    overlay.Sink(EditorViewportOverlayLayerId::ObjectLabels).Label(
+        120.0f, 120.0f, "fading", 0xffffffffu, fading);
+    overlay.Resolve();
+    const uint32_t fadedAlpha = overlay.ResolvedCommands().empty()
+        ? 0u
+        : (overlay.ResolvedCommands().front().color >> 24u) & 0xffu;
+    runner.Expect(fadedAlpha > 0u && fadedAlpha < 255u, "distance fade should attenuate overlay alpha");
+
+    overlay.BeginFrame(frame);
+    labelSettings.selectedOnly = false;
+    labelSettings.maxDistance = 0.0f;
+    labelSettings.maxLabels = 64;
+    overlay.SetLayerSettings(EditorViewportOverlayLayerId::ObjectLabels, labelSettings);
+    labels = overlay.Sink(EditorViewportOverlayLayerId::ObjectLabels);
+    for (int index = 0; index < 20; ++index) {
+        labels.Label(280.0f, 160.0f, "overlapping-label-" + std::to_string(index), 0xffffffffu);
+    }
+    overlay.Resolve();
+    runner.Expect(overlay.Stats().labelsRepositioned > 0, "label layout should reposition overlapping labels");
+    runner.Expect(overlay.Stats().labelsIconized > 0, "dense labels should fall back to icons");
+
+    frame.zoom = 0.5f;
+    overlay.BeginFrame(frame);
+    EditorViewportOverlayItemOptions zoomDetail{};
+    zoomDetail.minZoom = 1.0f;
+    overlay.Sink(EditorViewportOverlayLayerId::ObjectLabels).Label(
+        80.0f, 80.0f, "zoom-detail", 0xffffffffu, zoomDetail);
+    overlay.Resolve();
+    runner.Expect(
+        overlay.ResolvedCommands().size() == 1 &&
+            overlay.ResolvedCommands().front().type == EditorViewportOverlayCommandType::Icon,
+        "low zoom should iconize high-detail labels");
+
+    overlay.SetCommandBudget(2);
+    overlay.BeginFrame(frame);
+    auto budgetSink = overlay.Sink(EditorViewportOverlayLayerId::CourseNavigation);
+    runner.Expect(budgetSink.Line(0, 0, 10, 10, 0xffffffffu), "first overlay command should fit budget");
+    runner.Expect(budgetSink.Line(0, 1, 10, 11, 0xffffffffu), "second overlay command should fit budget");
+    runner.Expect(!budgetSink.Line(0, 2, 10, 12, 0xffffffffu), "overlay command budget should reject overflow");
+    runner.Expect(overlay.Stats().commandBudgetRejected == 1, "overlay budget rejection should be observable");
+
+    std::ifstream runLoopSource("application/AppRunLoop.cpp");
+    runner.Expect(runLoopSource.good(), "overlay dependency test should read AppRunLoop source");
+    const std::string source(
+        (std::istreambuf_iterator<char>(runLoopSource)),
+        std::istreambuf_iterator<char>());
+    const size_t begin = source.find("void AppRunLoop::BuildRailVisibilityDebugOverlay");
+    const size_t end = source.find("bool AppRunLoop::EnsureRailLockOnHudAtlas", begin);
+    runner.Expect(begin != std::string::npos && end != std::string::npos, "layered Rail overlay implementation should exist");
+    const std::string activeOverlaySource = source.substr(begin, end - begin);
+    runner.Expect(
+        activeOverlaySource.find("ImDrawList") == std::string::npos &&
+            activeOverlaySource.find("GetForegroundDrawList") == std::string::npos &&
+            activeOverlaySource.find("ToDisplay") == std::string::npos &&
+            activeOverlaySource.find("ProjectRailOverlayPoint") == std::string::npos,
+        "Rail overlay provider must use only layer command and coordinate contracts");
+}
+
 void TestPanelLayoutGeometry(RegressionRunner& runner) {
     EditorPanelLayoutService layout;
     EditorPanelLayoutConfig config{};
@@ -3617,6 +7031,8 @@ int RunEditorCoreRegressionTests() {
     RegressionRunner runner(log);
     const std::vector<RegressionCase> tests{
         {"transaction stack undo/redo", [&]() { TestTransactionStack(runner); }},
+        {"domain independent transaction commands", [&]() { TestDomainIndependentTransactionCommands(runner); }},
+        {"transaction core dependency boundary", [&]() { TestTransactionCoreDependencyBoundary(runner); }},
         {"selection and property registry", [&]() { TestSelectionAndPropertyRegistry(runner); }},
         {"property edit service", [&]() { TestPropertyEditService(runner); }},
         {"production property adapters", [&]() { TestProductionPropertyAdapters(runner); }},
@@ -3625,11 +7041,32 @@ int RunEditorCoreRegressionTests() {
         {"play session lifecycle service", [&]() { TestPlaySessionLifecycleService(runner); }},
         {"play session runtime control service", [&]() { TestPlaySessionRuntimeControlService(runner); }},
         {"runtime authoring apply service", [&]() { TestRuntimeAuthoringApplyService(runner); }},
+        {"play isolation provider architecture", [&]() { TestPlayIsolationProviderArchitecture(runner); }},
+        {"selective runtime keep changes", [&]() { TestSelectiveRuntimeKeepChanges(runner); }},
         {"asset registry and mutation safety", [&]() { TestAssetRegistryAndMutationSafety(runner); }},
+        {"file transaction atomicity and recovery", [&]() { TestFileTransactionCore(runner); }},
         {"asset migration pipeline", [&]() { TestAssetMigrationPipeline(runner); }},
         {"asset import reimport pipeline", [&]() { TestAssetImportReimportPipeline(runner); }},
+        {"durable asset identity", [&]() { TestDurableAssetIdentity(runner); }},
+        {"production content browser", [&]() { TestProductionContentBrowser(runner); }},
+        {"right inspector evolution", [&]() { TestRightInspectorEvolution(runner); }},
+        {"bottom dock evolution", [&]() { TestBottomDockEvolution(runner); }},
+        {"menu toolbar status evolution", [&]() { TestMenuToolbarStatusEvolution(runner); }},
+        {"course sequencer track provider", [&]() { TestCourseSequencerTrackProvider(runner); }},
+        {"prefab asset and instance foundation", [&]() { TestPrefabFoundation(runner); }},
+        {"material graph foundation", [&]() { TestMaterialGraphFoundation(runner); }},
+        {"advanced vfx graph", [&]() { TestAdvancedVfxGraph(runner); }},
+        {"animation state machine", [&]() { TestAnimationStateMachine(runner); }},
+        {"gameplay visual scripting", [&]() { TestGameplayVisualScripting(runner); }},
+        {"editor font service", [&]() { TestEditorFontService(runner); }},
         {"layout persistence", [&]() { TestLayoutPersistence(runner); }},
         {"editor tool registration descriptors", [&]() { TestEditorToolRegistrationDescriptors(runner); }},
+        {"generic document model", [&]() { TestGenericDocumentModel(runner); }},
+        {"editor world model", [&]() { TestEditorWorldModel(runner); }},
+        {"world outliner mutations", [&]() { TestWorldOutlinerMutations(runner); }},
+        {"scene entity component foundation", [&]() { TestSceneEntityComponentFoundation(runner); }},
+        {"production transform gizmo", [&]() { TestProductionTransformGizmo(runner); }},
+        {"viewport overlay layer system", [&]() { TestViewportOverlayLayerSystem(runner); }},
         {"panel layout geometry", [&]() { TestPanelLayoutGeometry(runner); }},
         {"feature guard tripwire", [&]() { TestFeatureGuardTripwire(runner); }},
     };

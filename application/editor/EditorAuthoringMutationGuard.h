@@ -1,6 +1,6 @@
 #pragma once
 
-#include "EditorPlaySessionState.h"
+#include "play/EditorPlayMutationGuard.h"
 
 namespace editor {
 
@@ -8,7 +8,7 @@ struct EditorAuthoringMutationGuard {
     const EditorPlaySessionState* playSession = nullptr;
 
     bool CanMutate() const {
-        return playSession == nullptr || playSession->IsStopped();
+        return EditorPlayMutationGuard(playSession).Allows(EditorPlayMutationIntent::Authoring);
     }
 
     bool LockedByPlaySession() const {

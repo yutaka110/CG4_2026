@@ -6,6 +6,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include "world/EditorWorldMutationService.h"
+#include "world/SceneWorldObjectProvider.h"
+#include "scene/EditorScene.h"
 
 namespace editor {
 namespace {
@@ -244,6 +247,101 @@ public:
     }
 };
 
+class SceneEntityDetailsSection final : public EditorDetailsSectionProvider {
+public:
+    EditorDomainId Domain() const override { return EditorDomainId::SceneEntity; }
+    const char* SectionId() const override { return "details.sceneEntity.components"; }
+    const char* DisplayName() const override { return "Scene Components"; }
+
+    void Draw(const EditorDetailsSectionContext& context) override {
+        const EditorObjectHandle* target = PrimarySelection(context);
+        if (target == nullptr || context.sceneWorldProvider == nullptr) return;
+        const EditorSceneEntity* entity = context.sceneWorldProvider->ResolveEntity(*target);
+        if (entity == nullptr) {
+            ImGui::TextDisabled("Scene Entity no longer resolves.");
+            return;
+        }
+        ImGui::Text("Entity GUID: %s", entity->guid.c_str());
+        ImGui::Text("Parent GUID: %s", entity->parentGuid.empty() ? "<Scene Root>" : entity->parentGuid.c_str());
+        ImGui::Separator();
+
+        for (const EditorSceneComponent& component : entity->components) {
+            ImGui::PushID(component.typeId.c_str());
+            const bool required = component.typeId == kEditorTransformComponentType;
+            ImGui::Text("%s", DisplayNameForEditorSceneComponent(component.typeId));
+            ImGui::SameLine();
+            ImGui::TextDisabled("[%s]", component.typeId.c_str());
+            if (!required) {
+                ImGui::SameLine();
+                ImGui::BeginDisabled(!context.canMutateAuthoring);
+                if (ImGui::SmallButton("Remove")) {
+                    ExecuteMutation(context, *target, EditorWorldMutationKind::RemoveComponent,
+                        component.typeId);
+                    ImGui::EndDisabled();
+                    ImGui::PopID();
+                    return;
+                }
+                ImGui::EndDisabled();
+            }
+            for (const EditorSceneProperty& property : component.properties) {
+                ImGui::BulletText("%s: %s", property.name.c_str(), property.value.c_str());
+            }
+            for (const EditorSceneObjectReference& reference : component.references) {
+                ImGui::BulletText("%s -> %s", reference.property.c_str(),
+                    !reference.assetGuid.empty() ? reference.assetGuid.c_str() :
+                    (!reference.entityGuid.empty() ? reference.entityGuid.c_str() : "None"));
+            }
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+
+        ImGui::BeginDisabled(!context.canMutateAuthoring || context.worldMutations == nullptr);
+        if (ImGui::Button("Add Component")) ImGui::OpenPopup("AddSceneComponent");
+        if (ImGui::BeginPopup("AddSceneComponent")) {
+            DrawAddItem(context, *target, *entity, kEditorMeshRendererComponentType);
+            DrawAddItem(context, *target, *entity, kEditorVfxComponentType);
+            DrawAddItem(context, *target, *entity, kEditorAudioSourceComponentType);
+            ImGui::EndPopup();
+        }
+        ImGui::EndDisabled();
+    }
+
+private:
+    static bool ExecuteMutation(
+        const EditorDetailsSectionContext& context,
+        const EditorObjectHandle& target,
+        EditorWorldMutationKind kind,
+        std::string typeId) {
+        if (context.worldMutations == nullptr || context.transactions == nullptr) return false;
+        EditorWorldMutationRequest request{};
+        request.kind = kind;
+        request.targets = {target};
+        request.name = std::move(typeId);
+        const EditorWorldMutationResult result = context.worldMutations->Execute(
+            request, *context.transactions, context.canMutateAuthoring);
+        if (result.succeeded && context.onWorldMutated) context.onWorldMutated(result);
+        if (context.notifications != nullptr) {
+            context.notifications->Push(
+                result.succeeded ? EditorNotificationSeverity::Info : EditorNotificationSeverity::Error,
+                "Scene Components", result.message);
+        }
+        return result.succeeded;
+    }
+
+    static void DrawAddItem(
+        const EditorDetailsSectionContext& context,
+        const EditorObjectHandle& target,
+        const EditorSceneEntity& entity,
+        std::string_view typeId) {
+        const bool exists = context.sceneWorldProvider->BoundScene()->FindComponent(entity, typeId) != nullptr;
+        ImGui::BeginDisabled(exists);
+        if (ImGui::MenuItem(DisplayNameForEditorSceneComponent(typeId))) {
+            ExecuteMutation(context, target, EditorWorldMutationKind::AddComponent, std::string(typeId));
+        }
+        ImGui::EndDisabled();
+    }
+};
+
 } // namespace
 
 void RegisterBuiltInEditorDetailsSectionProviders(
@@ -252,6 +350,7 @@ void RegisterBuiltInEditorDetailsSectionProviders(
     registry.Add(std::make_unique<PostProcessPassDetailsSection>());
     registry.Add(std::make_unique<CourseEventDetailsSection>());
     registry.Add(std::make_unique<RenderPresetDetailsSection>());
+    registry.Add(std::make_unique<SceneEntityDetailsSection>());
 }
 
 } // namespace editor

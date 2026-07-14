@@ -27,6 +27,8 @@ EditorAssetFolderIndexResult IndexEditorAssetsFromFolder(
     importOptions.includeMeshes = options.includeMeshes;
     importOptions.includeEffects = options.includeEffects;
     importOptions.includeCourseAssets = options.includeCourseAssets;
+    importOptions.includePrefabs = options.includePrefabs;
+    importOptions.includeMaterialGraphs = options.includeMaterialGraphs;
     importOptions.includeTextures = options.includeTextures;
     importOptions.includeAudio = options.includeAudio;
 
@@ -48,9 +50,30 @@ EditorAssetFolderIndexResult IndexEditorAssetsFromFolder(
         }
 
         ++result.scannedFiles;
-        if (EditorAssetKindForImportPath(it->path(), importOptions) == EditorAssetKind::Unknown) {
+        const EditorAssetKind kind =
+            EditorAssetKindForImportPath(it->path(), importOptions);
+        if (kind == EditorAssetKind::Unknown) {
             ++result.skippedFiles;
             continue;
+        }
+
+        const std::filesystem::path relativePath =
+            std::filesystem::relative(it->path(), rootPath, error);
+        if (error) {
+            error.clear();
+            ++result.skippedFiles;
+            continue;
+        }
+        const std::string id = BuildEditorAssetIdForImportPath(kind, relativePath);
+        if (const EditorAssetRecord* existing = registry.Find(kind, id)) {
+            const std::filesystem::path existingPath = existing->sourcePath;
+            if (existingPath.lexically_normal() != it->path().lexically_normal() &&
+                existingPath.lexically_normal() !=
+                    (rootPath / relativePath).lexically_normal()) {
+                ++result.identityCollisions;
+                ++result.skippedFiles;
+                continue;
+            }
         }
 
         const EditorAssetImportResult importResult =

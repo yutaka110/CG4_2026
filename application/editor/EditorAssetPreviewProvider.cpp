@@ -699,6 +699,16 @@ EditorAssetPreviewInfo EditorAssetPreviewProvider::BuildPreview(const EditorAsse
         return BuildMeshPreview(record, extension);
     case EditorAssetKind::Course:
         return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "CRS");
+    case EditorAssetKind::Prefab:
+        return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "PFB");
+    case EditorAssetKind::MaterialGraph:
+        return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "MAT");
+    case EditorAssetKind::VfxGraph:
+        return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "VFXG");
+    case EditorAssetKind::AnimationStateMachine:
+        return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "ASM");
+    case EditorAssetKind::GameplayVisualScript:
+        return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "GVS");
     case EditorAssetKind::Effect:
         return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "FX");
     case EditorAssetKind::Audio:

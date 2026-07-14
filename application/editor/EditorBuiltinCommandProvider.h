@@ -3,6 +3,7 @@
 #include "EditorCommandProvider.h"
 #include "EditorCommandRegistry.h"
 #include "EditorPlaySessionState.h"
+#include "EditorTransformGizmoService.h"
 
 #include <functional>
 
@@ -18,6 +19,9 @@ struct EditorBuiltinCommandProviderInput {
     std::function<EditorCommandResult()> stepRuntime;
     std::function<EditorCommandResult()> resetRuntime;
     std::function<EditorCommandResult()> applyRuntimeChanges;
+    std::function<EditorCommandResult(EditorTransformGizmoMode)> setTransformMode;
+    std::function<EditorCommandResult()> toggleTransformSpace;
+    std::function<EditorCommandResult()> toggleTransformSnap;
 };
 
 class EditorBuiltinCommandProvider final : public EditorCommandProvider {

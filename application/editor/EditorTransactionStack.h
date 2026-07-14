@@ -6,10 +6,10 @@
 #include <string>
 #include <vector>
 
-#include "EditorAssetMutationSafety.h"
+#include "core/EditorExecutionContext.h"
+#include "core/EditorTransactionMemoryBudget.h"
+#include "core/EditorUndoCommand.h"
 #include "EditorSelection.h"
-#include "../AppRuntimeState.h"
-#include "../course/CourseAsset.h"
 
 namespace editor {
 
@@ -17,13 +17,7 @@ enum class EditorTransactionPayloadKind {
     Snapshot,
     PropertyDelta,
     MultiPropertyDelta,
-    AssetMutation,
-    RuntimeAuthoringApply,
-};
-
-enum class EditorTransactionApplyMode {
-    Undo,
-    Redo,
+    Command,
 };
 
 struct EditorPropertyChange {
@@ -36,30 +30,6 @@ struct EditorPropertyChange {
     uint32_t sourceRevision = 0;
 };
 
-struct EditorAssetDependencyRewrite {
-    EditorAssetRecord beforeRecord;
-    EditorAssetRecord afterRecord;
-};
-
-struct EditorAssetMutationChange {
-    EditorAssetMutationKind kind = EditorAssetMutationKind::Rename;
-    EditorAssetRecord beforeRecord;
-    EditorAssetRecord afterRecord;
-    std::vector<EditorAssetDependencyRewrite> dependencyRewrites;
-    bool sourceSnapshotValid = false;
-    bool metadataSnapshotValid = false;
-    std::vector<uint8_t> sourceBytes;
-    std::vector<uint8_t> metadataBytes;
-};
-
-struct EditorRuntimeAuthoringApplyChange {
-    uint64_t sessionSerial = 0;
-    CourseAsset beforeCourse;
-    CourseAsset afterCourse;
-    TerrainAuthoringState beforeTerrain;
-    TerrainAuthoringState afterTerrain;
-};
-
 struct EditorTransactionPayload {
     EditorTransactionPayloadKind kind = EditorTransactionPayloadKind::Snapshot;
     std::string propertyPath;
@@ -67,8 +37,6 @@ struct EditorTransactionPayload {
     std::string beforeSummary;
     std::string afterSummary;
     std::vector<EditorPropertyChange> propertyChanges;
-    EditorAssetMutationChange assetMutation;
-    EditorRuntimeAuthoringApplyChange runtimeAuthoringApply;
 };
 
 struct EditorTransactionRecord {
@@ -76,6 +44,8 @@ struct EditorTransactionRecord {
     std::string label;
     EditorObjectHandle target;
     EditorTransactionPayload payload;
+    EditorUndoCommandPtr command;
+    std::size_t estimatedBytes = 0;
 };
 
 struct EditorTransactionLegacyMirror {
@@ -88,11 +58,28 @@ struct EditorTransactionLegacyMirror {
 
 class EditorTransactionStack {
 public:
+    ~EditorTransactionStack();
+
     using ApplyCallback = std::function<bool(const EditorTransactionRecord&, EditorTransactionApplyMode)>;
 
     void Clear();
     void SetMaxHistory(std::size_t maxHistory);
     std::size_t MaxHistory() const { return maxHistory_; }
+    bool SetMemoryBudgetBytes(std::size_t bytes, EditorError* error = nullptr);
+    std::size_t MemoryBudgetBytes() const noexcept { return memoryBudget_.LimitBytes(); }
+    std::size_t HistoryBytes() const noexcept { return historyBytes_; }
+    bool Busy() const noexcept { return busy_; }
+
+    bool PushCommand(
+        std::string label,
+        EditorObjectHandle target,
+        EditorUndoCommandPtr command,
+        EditorError* error = nullptr);
+    bool CanPushCommand(
+        const std::string& label,
+        const EditorObjectHandle& target,
+        const EditorUndoCommandPtr& command,
+        EditorError* error = nullptr) const;
 
     void PushSnapshot(
         std::string label,
@@ -110,14 +97,6 @@ public:
         std::string label,
         EditorObjectHandle target,
         std::vector<EditorPropertyChange> changes);
-    void PushAssetMutation(
-        std::string label,
-        EditorObjectHandle target,
-        EditorAssetMutationChange change);
-    void PushRuntimeAuthoringApply(
-        std::string label,
-        EditorObjectHandle target,
-        EditorRuntimeAuthoringApplyChange change);
 
     void StagePropertyDelta(EditorPropertyChange change);
     void StagePropertyDeltas(std::vector<EditorPropertyChange> changes);
@@ -134,6 +113,8 @@ public:
     const EditorTransactionRecord* NextRedoTransaction() const;
     bool Undo(const ApplyCallback& apply);
     bool Redo(const ApplyCallback& apply);
+    bool Undo(EditorExecutionContext& context, EditorError* error = nullptr);
+    bool Redo(EditorExecutionContext& context, EditorError* error = nullptr);
 
     std::size_t UndoDepth() const { return undoStack_.size(); }
     std::size_t RedoDepth() const { return redoStack_.size(); }
@@ -148,14 +129,27 @@ public:
     const EditorTransactionLegacyMirror& LegacyMirror() const { return legacyMirror_; }
 
 private:
+    bool PushRecord(
+        EditorTransactionRecord record,
+        bool enforceSingleRecordBudget,
+        EditorError* error = nullptr);
+    bool ApplyCommand(
+        bool undo,
+        EditorExecutionContext& context,
+        EditorError* error);
+    void ClearRedoHistory();
+    std::size_t EstimateRecordBytes(const EditorTransactionRecord& record) const;
     void Touch();
     void TrimUndoHistory();
 
     std::vector<EditorTransactionRecord> undoStack_;
     std::vector<EditorTransactionRecord> redoStack_;
     std::size_t maxHistory_ = 128;
+    EditorTransactionMemoryBudget memoryBudget_{};
+    std::size_t historyBytes_ = 0;
     uint64_t nextId_ = 1;
     uint32_t revision_ = 0;
+    bool busy_ = false;
     EditorTransactionLegacyMirror legacyMirror_{};
     std::vector<EditorPropertyChange> stagedPropertyChanges_;
 };

@@ -23,6 +23,11 @@ public:
         EditorLayoutPersistenceService* persistence = nullptr);
 
 private:
+    void DrawBottomDock(
+        const EditorPanelRegistry& registry,
+        EditorLayoutPersistenceService& persistence,
+        const char* windowId);
+
     std::unordered_map<EditorPanelHostArea, std::string> appliedActivePanels_;
 };
 

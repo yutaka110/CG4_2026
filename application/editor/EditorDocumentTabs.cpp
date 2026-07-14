@@ -4,6 +4,8 @@
 #include "EditorCommandRegistry.h"
 #include "EditorContext.h"
 #include "EditorLayoutService.h"
+#include "EditorNotificationCenter.h"
+#include "documents/EditorDocumentManager.h"
 
 #include "../../externals/imgui/imgui.h"
 
@@ -49,6 +51,18 @@ void DrawDocumentTooltip(const CourseDocumentState& state) {
     ImGui::EndTooltip();
 }
 
+void DrawDocumentTooltip(const EditorDocumentRecord& record) {
+    if (!ImGui::IsItemHovered()) return;
+    ImGui::BeginTooltip();
+    ImGui::Text("Type: %s", record.id.type.c_str());
+    ImGui::Text("State: %s%s", record.open ? "open" : "closed", record.dirty ? ", dirty" : "");
+    ImGui::Text("Schema: %u", record.schemaVersion);
+    ImGui::Text("Conflict: %s", ToString(record.conflict));
+    ImGui::Text("Path: %s", record.path.generic_string().c_str());
+    if (record.recovered) ImGui::TextUnformatted("Recovered autosave; explicit save required.");
+    ImGui::EndTooltip();
+}
+
 } // namespace
 
 float EditorDocumentTabsHeight() {
@@ -83,6 +97,43 @@ void DrawEditorDocumentTabs(EditorContext& context) {
         ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(workSize.x, tabsHeight), ImGuiCond_Always);
     if (!ImGui::Begin("Editor Document Tabs", nullptr, flags)) {
+        ImGui::End();
+        return;
+    }
+
+    if (context.documentManager != nullptr &&
+        !context.documentManager->Documents().empty()) {
+        EditorDocumentManager& documents = *context.documentManager;
+        if (ImGui::BeginTabBar(
+                "EditorDocumentTabsBar",
+                ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_AutoSelectNewTabs)) {
+            for (const EditorDocumentRecord& record : documents.Documents()) {
+                if (!record.open) continue;
+                std::string tabLabel = record.displayName;
+                if (record.dirty) tabLabel += "*";
+                if (record.conflict != EditorDocumentConflictState::None) tabLabel += "!";
+                tabLabel += "##" + record.id.Key();
+                bool keepOpen = true;
+                const ImGuiTabItemFlags tabFlags =
+                    documents.Active() != nullptr && documents.Active()->id == record.id
+                    ? ImGuiTabItemFlags_SetSelected
+                    : ImGuiTabItemFlags_None;
+                if (ImGui::BeginTabItem(tabLabel.c_str(), &keepOpen, tabFlags)) {
+                    documents.SetActive(record.id);
+                    ImGui::TextDisabled("%s", record.id.type.c_str());
+                    DrawDocumentTooltip(record);
+                    ImGui::EndTabItem();
+                }
+                if (!keepOpen) {
+                    std::string error;
+                    if (!documents.Close(record.id, false, &error) && context.notifications != nullptr) {
+                        context.notifications->Push(
+                            EditorNotificationSeverity::Warning, "Document", error);
+                    }
+                }
+            }
+            ImGui::EndTabBar();
+        }
         ImGui::End();
         return;
     }

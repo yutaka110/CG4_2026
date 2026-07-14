@@ -5,6 +5,8 @@
 #include "EditorModalConfirmService.h"
 #include "EditorNotificationCenter.h"
 #include "EditorSaveApplyPolicy.h"
+#include "documents/EditorDocumentManager.h"
+#include "documents/EditorDocumentSaveService.h"
 
 #include <utility>
 
@@ -118,6 +120,55 @@ EditorDocumentLifecycleResult EditorDocumentLifecycleService::RequestReopenCours
     Record(EditorDocumentLifecycleAction::ReopenCourse, message);
     PushNotification(false, message);
     return EditorDocumentLifecycleResult{true, false, false, message};
+}
+
+EditorDocumentLifecycleResult EditorDocumentLifecycleService::RequestSaveAllAndClose() {
+    if (services_.documentManager == nullptr || services_.documentSaveService == nullptr) {
+        return EditorDocumentLifecycleResult{
+            false, false, false, "Generic document services are unavailable."};
+    }
+    const auto closeAll = [this]() {
+        const EditorDocumentSaveResult saveResult = services_.documentSaveService->SaveAll();
+        if (!saveResult.succeeded) {
+            Record(EditorDocumentLifecycleAction::SaveAllAndClose, saveResult.message);
+            PushNotification(true, saveResult.message);
+            return;
+        }
+        const std::vector<const EditorDocumentRecord*> open =
+            services_.documentManager->OpenDocuments();
+        for (const EditorDocumentRecord* record : open) {
+            services_.documentManager->Close(record->id, false, nullptr);
+        }
+        const std::string message = "Saved and closed all documents.";
+        Record(EditorDocumentLifecycleAction::SaveAllAndClose, message);
+        PushNotification(false, message);
+    };
+
+    if (services_.documentManager->DirtyCount() == 0) {
+        closeAll();
+        return EditorDocumentLifecycleResult{
+            true, false, false, "Closed all documents."};
+    }
+    if (services_.confirmService == nullptr) {
+        return EditorDocumentLifecycleResult{
+            false, false, true,
+            "Confirmation service is unavailable; dirty documents were not closed."};
+    }
+    EditorModalConfirmRequest request{};
+    request.severity = EditorModalConfirmSeverity::Warning;
+    request.source = "Document";
+    request.title = "Save All and Close";
+    request.message =
+        "Save every dirty document atomically, then close all open documents?";
+    request.confirmLabel = "Save All and Close";
+    request.cancelLabel = "Cancel";
+    request.onConfirm = closeAll;
+    const bool queued = services_.confirmService->Request(std::move(request));
+    const std::string message = queued
+        ? "Save All and Close confirmation requested."
+        : "Document confirmation is already pending.";
+    Record(EditorDocumentLifecycleAction::SaveAllAndClose, message);
+    return EditorDocumentLifecycleResult{queued, queued, true, message};
 }
 
 bool EditorDocumentLifecycleService::HasDirtyCourse() const {
@@ -277,6 +328,8 @@ const char* ToString(EditorDocumentLifecycleAction action) {
         return "CloseCourse";
     case EditorDocumentLifecycleAction::ReopenCourse:
         return "ReopenCourse";
+    case EditorDocumentLifecycleAction::SaveAllAndClose:
+        return "SaveAllAndClose";
     }
     return "Unknown";
 }

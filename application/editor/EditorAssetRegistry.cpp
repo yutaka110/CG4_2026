@@ -1,11 +1,17 @@
 #include "EditorAssetRegistry.h"
 
+#include "io/EditorFileTransaction.h"
+
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <set>
 #include <sstream>
+#include <unordered_map>
 #include <utility>
 
 namespace editor {
@@ -22,7 +28,10 @@ std::string StableKeyForRecord(const EditorAssetRecord& record) {
 }
 
 bool IsTextScannableAssetKind(EditorAssetKind kind) {
-    return kind == EditorAssetKind::Course || kind == EditorAssetKind::Effect;
+    return kind == EditorAssetKind::Course || kind == EditorAssetKind::Effect ||
+        kind == EditorAssetKind::Prefab || kind == EditorAssetKind::MaterialGraph ||
+        kind == EditorAssetKind::VfxGraph || kind == EditorAssetKind::AnimationStateMachine ||
+        kind == EditorAssetKind::GameplayVisualScript;
 }
 
 bool AppendUnique(std::vector<std::string>& values, const std::string& value) {
@@ -77,6 +86,100 @@ std::string FormatProvisionalGuid(uint64_t a, uint64_t b) {
            << '-'
            << std::setw(12) << (b & 0x0000ffffffffffffull);
     return stream.str();
+}
+
+EditorAssetKind AssetKindFromText(std::string_view text) {
+    for (EditorAssetKind kind : {EditorAssetKind::Mesh, EditorAssetKind::Effect,
+             EditorAssetKind::Course, EditorAssetKind::Prefab, EditorAssetKind::MaterialGraph,
+             EditorAssetKind::VfxGraph,
+             EditorAssetKind::AnimationStateMachine,
+             EditorAssetKind::GameplayVisualScript,
+             EditorAssetKind::Texture, EditorAssetKind::Audio}) {
+        if (text == ToString(kind)) return kind;
+    }
+    return EditorAssetKind::Unknown;
+}
+
+std::string SerializeRedirects(const std::vector<EditorAssetRedirect>& redirects) {
+    std::ostringstream output;
+    output << "ASSET_REDIRECTS 1\n";
+    for (const EditorAssetRedirect& redirect : redirects) {
+        output << "REDIRECT " << std::quoted(std::string(ToString(redirect.kind))) << ' '
+               << std::quoted(redirect.guid) << ' ' << std::quoted(redirect.oldId) << ' '
+               << std::quoted(redirect.oldLogicalPath) << ' ' << std::quoted(redirect.oldSourcePath) << ' '
+               << std::quoted(redirect.currentId) << ' ' << std::quoted(redirect.currentLogicalPath) << ' '
+               << std::quoted(redirect.currentSourcePath) << '\n';
+    }
+    output << "END\n";
+    return output.str();
+}
+
+bool ParseRedirects(
+    const std::filesystem::path& path,
+    std::vector<EditorAssetRedirect>* redirects,
+    std::string* errorMessage) {
+    if (redirects == nullptr) return false;
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        if (errorMessage != nullptr) *errorMessage = "Could not open Asset redirect table.";
+        return false;
+    }
+    std::string marker;
+    uint32_t version = 0;
+    if (!(input >> marker >> version) || marker != "ASSET_REDIRECTS" || version != 1) {
+        if (errorMessage != nullptr) *errorMessage = "Asset redirect table header is invalid.";
+        return false;
+    }
+    std::vector<EditorAssetRedirect> parsed;
+    while (input >> marker) {
+        if (marker == "END") {
+            *redirects = std::move(parsed);
+            return true;
+        }
+        EditorAssetRedirect redirect{};
+        std::string kind;
+        if (marker != "REDIRECT" || !(input >> std::quoted(kind) >> std::quoted(redirect.guid) >>
+                std::quoted(redirect.oldId) >> std::quoted(redirect.oldLogicalPath) >>
+                std::quoted(redirect.oldSourcePath) >> std::quoted(redirect.currentId) >>
+                std::quoted(redirect.currentLogicalPath) >> std::quoted(redirect.currentSourcePath))) {
+            if (errorMessage != nullptr) *errorMessage = "Asset redirect table record is invalid.";
+            return false;
+        }
+        redirect.kind = AssetKindFromText(kind);
+        if (redirect.kind == EditorAssetKind::Unknown || !IsDurableEditorAssetGuid(redirect.guid)) {
+            if (errorMessage != nullptr) *errorMessage = "Asset redirect identity is invalid.";
+            return false;
+        }
+        parsed.push_back(std::move(redirect));
+    }
+    if (errorMessage != nullptr) *errorMessage = "Asset redirect table is missing END.";
+    return false;
+}
+
+bool PersistRedirects(
+    const std::vector<EditorAssetRedirect>& redirects,
+    const std::filesystem::path& redirectPath,
+    const std::filesystem::path& projectRoot,
+    std::string* errorMessage) {
+    if (redirectPath.empty()) return true;
+    EditorFileTransaction transaction(projectRoot);
+    if (!transaction.StageTextWrite(
+            redirectPath,
+            SerializeRedirects(redirects),
+            [](const std::filesystem::path& staged, std::string* validationError) {
+                std::vector<EditorAssetRedirect> validated;
+                return ParseRedirects(staged, &validated, validationError);
+            },
+            errorMessage)) {
+        return false;
+    }
+    return transaction.Execute(nullptr, errorMessage);
+}
+
+bool SameRedirectAlias(const EditorAssetRedirect& redirect, const EditorAssetRecord& record) {
+    return redirect.kind == record.kind && redirect.guid == record.guid &&
+        redirect.oldId == record.id && redirect.oldLogicalPath == record.logicalPath &&
+        redirect.oldSourcePath == record.sourcePath;
 }
 
 } // namespace
@@ -192,6 +295,111 @@ const EditorAssetRecord* EditorAssetRegistry::FindByGuid(std::string_view guid) 
             return record.guid == guid;
         });
     return it != records_.end() ? &*it : nullptr;
+}
+
+std::vector<const EditorAssetRecord*> EditorAssetRegistry::FindAllByGuid(
+    std::string_view guid) const {
+    std::vector<const EditorAssetRecord*> results;
+    if (guid.empty()) return results;
+    for (const EditorAssetRecord& record : records_) {
+        if (record.guid == guid) results.push_back(&record);
+    }
+    return results;
+}
+
+EditorAssetReferenceResolution EditorAssetRegistry::ResolveReference(
+    EditorAssetKind expectedKind,
+    std::string_view reference) const {
+    EditorAssetReferenceResolution result{};
+    if (reference.empty()) return result;
+    const auto kindMatches = [&](const EditorAssetRecord& record) {
+        return expectedKind == EditorAssetKind::Unknown || record.kind == expectedKind;
+    };
+    const auto publish = [&](const EditorAssetRecord& record,
+                             EditorAssetReferenceResolutionSource source,
+                             bool repair) {
+        result.record = &record;
+        result.source = source;
+        result.canonicalReference = BuildEditorAssetGuidReference(record.guid);
+        result.resolved = true;
+        result.requiresRepair = repair;
+    };
+    if (expectedKind != EditorAssetKind::Unknown) {
+        if (const EditorAssetRecord* record = Find(expectedKind, reference)) {
+            publish(*record, EditorAssetReferenceResolutionSource::Id, true);
+            return result;
+        }
+    } else {
+        for (const EditorAssetRecord& record : records_) {
+            if (record.id == reference) {
+                publish(record, EditorAssetReferenceResolutionSource::Id, true);
+                return result;
+            }
+        }
+    }
+    std::string_view guid = reference;
+    constexpr std::string_view kGuidPrefix = "asset-guid:";
+    if (guid.rfind(kGuidPrefix, 0) == 0) guid.remove_prefix(kGuidPrefix.size());
+    for (const EditorAssetRecord* record : FindAllByGuid(guid)) {
+        if (record != nullptr && kindMatches(*record)) {
+            publish(*record, EditorAssetReferenceResolutionSource::Guid, false);
+            return result;
+        }
+    }
+    for (const EditorAssetRecord& record : records_) {
+        if (!kindMatches(record)) continue;
+        if (!record.logicalPath.empty() && record.logicalPath == reference) {
+            publish(record, EditorAssetReferenceResolutionSource::LogicalPath, true);
+            return result;
+        }
+        if (!record.sourcePath.empty() && record.sourcePath == reference) {
+            publish(record, EditorAssetReferenceResolutionSource::SourcePath, true);
+            return result;
+        }
+    }
+    for (const EditorAssetRedirect& redirect : redirects_) {
+        if (expectedKind != EditorAssetKind::Unknown && redirect.kind != expectedKind) continue;
+        if (reference != redirect.oldId && reference != redirect.oldLogicalPath &&
+            reference != redirect.oldSourcePath && reference != redirect.guid) {
+            continue;
+        }
+        for (const EditorAssetRecord* record : FindAllByGuid(redirect.guid)) {
+            if (record != nullptr && kindMatches(*record)) {
+                publish(*record, EditorAssetReferenceResolutionSource::Redirect, true);
+                return result;
+            }
+        }
+    }
+    return result;
+}
+
+bool EditorAssetRegistry::RepairPathOnlyReferences(
+    EditorAssetKind ownerKind,
+    std::string_view ownerId) {
+    EditorAssetRecord* owner = nullptr;
+    for (EditorAssetRecord& record : records_) {
+        if (record.kind == ownerKind && record.id == ownerId) {
+            owner = &record;
+            break;
+        }
+    }
+    if (owner == nullptr || owner->pathOnlyReferences.empty()) return false;
+    std::vector<std::string> unresolved;
+    bool changed = false;
+    for (const std::string& reference : owner->pathOnlyReferences) {
+        const EditorAssetReferenceResolution resolution = ResolveReference(
+            EditorAssetKind::Unknown, reference);
+        if (!resolution.resolved || resolution.record == nullptr ||
+            !IsDurableEditorAssetGuid(resolution.record->guid)) {
+            unresolved.push_back(reference);
+            continue;
+        }
+        changed = AppendUnique(owner->guidDependencies, resolution.record->guid) || changed;
+    }
+    if (!changed) return false;
+    owner->pathOnlyReferences = std::move(unresolved);
+    Touch();
+    return true;
 }
 
 std::vector<const EditorAssetRecord*> EditorAssetRegistry::List(EditorAssetKind kind) const {
@@ -311,6 +519,41 @@ std::size_t EditorAssetRegistry::CountWithDependencies() const {
         }));
 }
 
+std::size_t EditorAssetRegistry::CountMetadataEligibleAssets() const {
+    return static_cast<std::size_t>(std::count_if(records_.begin(), records_.end(),
+        [](const EditorAssetRecord& record) {
+            return !record.runtimeOnly && !record.missing && record.kind != EditorAssetKind::Unknown;
+        }));
+}
+
+std::size_t EditorAssetRegistry::CountDurableAssets() const {
+    return static_cast<std::size_t>(std::count_if(records_.begin(), records_.end(),
+        [](const EditorAssetRecord& record) {
+            return !record.runtimeOnly && !record.missing && record.kind != EditorAssetKind::Unknown &&
+                record.hasMetadata && !record.provisionalGuid &&
+                IsDurableEditorAssetGuid(record.guid);
+        }));
+}
+
+double EditorAssetRegistry::MetadataCoveragePercent() const {
+    const std::size_t eligible = CountMetadataEligibleAssets();
+    return eligible == 0 ? 100.0 :
+        static_cast<double>(CountDurableAssets()) * 100.0 / static_cast<double>(eligible);
+}
+
+std::vector<std::string> EditorAssetRegistry::DuplicateGuids() const {
+    std::unordered_map<std::string, std::size_t> counts;
+    for (const EditorAssetRecord& record : records_) {
+        if (!record.guid.empty()) ++counts[record.guid];
+    }
+    std::vector<std::string> duplicates;
+    for (const auto& [guid, count] : counts) {
+        if (count > 1) duplicates.push_back(guid);
+    }
+    std::sort(duplicates.begin(), duplicates.end());
+    return duplicates;
+}
+
 void EditorAssetRegistry::ScanDependencies() {
     bool changed = false;
     for (EditorAssetRecord& record : records_) {
@@ -332,14 +575,101 @@ void EditorAssetRegistry::ScanDependencies() {
                 !candidate.sourcePath.empty() && text.find(candidate.sourcePath) != std::string::npos;
             const bool referencesLogical =
                 !candidate.logicalPath.empty() && text.find(candidate.logicalPath) != std::string::npos;
+            const bool referencesGuid = IsDurableEditorAssetGuid(candidate.guid) &&
+                (text.find(candidate.guid) != std::string::npos ||
+                    text.find(BuildEditorAssetGuidReference(candidate.guid)) != std::string::npos);
             if (referencesId || referencesPath || referencesLogical) {
                 changed = AppendUnique(record.dependencies, BuildEditorAssetDependencyToken(candidate)) || changed;
+            }
+            if (referencesGuid) {
+                changed = AppendUnique(record.guidDependencies, candidate.guid) || changed;
+            }
+            const bool hasDurableMapping = std::find(
+                record.guidDependencies.begin(), record.guidDependencies.end(), candidate.guid) !=
+                record.guidDependencies.end();
+            if (!referencesGuid && !hasDurableMapping && (referencesPath || referencesLogical)) {
+                const std::string legacy = referencesLogical
+                    ? candidate.logicalPath
+                    : candidate.sourcePath;
+                changed = AppendUnique(record.pathOnlyReferences, legacy) || changed;
             }
         }
     }
     if (changed) {
         Touch();
     }
+}
+
+void EditorAssetRegistry::ConfigureRedirectStore(
+    std::filesystem::path redirectPath,
+    std::filesystem::path projectRoot) {
+    redirectPath_ = std::move(redirectPath);
+    projectRoot_ = std::move(projectRoot);
+}
+
+bool EditorAssetRegistry::LoadRedirects(std::string* errorMessage) {
+    if (redirectPath_.empty()) return true;
+    const std::filesystem::path absolute = redirectPath_.is_absolute()
+        ? redirectPath_
+        : projectRoot_ / redirectPath_;
+    std::error_code error;
+    if (!std::filesystem::exists(absolute, error)) {
+        redirects_.clear();
+        return true;
+    }
+    std::vector<EditorAssetRedirect> loaded;
+    if (!ParseRedirects(absolute, &loaded, errorMessage)) return false;
+    redirects_ = std::move(loaded);
+    Touch();
+    return true;
+}
+
+bool EditorAssetRegistry::RecordRedirect(
+    const EditorAssetRecord& from,
+    const EditorAssetRecord& to,
+    std::string* errorMessage) {
+    if (from.kind != to.kind || from.guid != to.guid || !IsDurableEditorAssetGuid(to.guid)) {
+        if (errorMessage != nullptr) *errorMessage = "Asset redirect requires one durable GUID.";
+        return false;
+    }
+    std::vector<EditorAssetRedirect> next = redirects_;
+    for (EditorAssetRedirect& redirect : next) {
+        if (redirect.guid == to.guid && redirect.kind == to.kind) {
+            redirect.currentId = to.id;
+            redirect.currentLogicalPath = to.logicalPath;
+            redirect.currentSourcePath = to.sourcePath;
+        }
+    }
+    const auto duplicate = std::find_if(next.begin(), next.end(),
+        [&](const EditorAssetRedirect& redirect) { return SameRedirectAlias(redirect, from); });
+    if (duplicate == next.end()) {
+        next.push_back({from.kind, from.guid, from.id, from.logicalPath, from.sourcePath,
+            to.id, to.logicalPath, to.sourcePath});
+    }
+    if (!PersistRedirects(next, redirectPath_, projectRoot_, errorMessage)) return false;
+    redirects_ = std::move(next);
+    Touch();
+    return true;
+}
+
+bool EditorAssetRegistry::RemoveRedirect(
+    const EditorAssetRecord& from,
+    const EditorAssetRecord& restored,
+    std::string* errorMessage) {
+    std::vector<EditorAssetRedirect> next = redirects_;
+    next.erase(std::remove_if(next.begin(), next.end(),
+        [&](const EditorAssetRedirect& redirect) { return SameRedirectAlias(redirect, from); }), next.end());
+    for (EditorAssetRedirect& redirect : next) {
+        if (redirect.guid == restored.guid && redirect.kind == restored.kind) {
+            redirect.currentId = restored.id;
+            redirect.currentLogicalPath = restored.logicalPath;
+            redirect.currentSourcePath = restored.sourcePath;
+        }
+    }
+    if (!PersistRedirects(next, redirectPath_, projectRoot_, errorMessage)) return false;
+    redirects_ = std::move(next);
+    Touch();
+    return true;
 }
 
 void EditorAssetRegistry::Touch() {
@@ -356,6 +686,16 @@ const char* ToString(EditorAssetKind kind) {
         return "Effect";
     case EditorAssetKind::Course:
         return "Course";
+    case EditorAssetKind::Prefab:
+        return "Prefab";
+    case EditorAssetKind::MaterialGraph:
+        return "MaterialGraph";
+    case EditorAssetKind::VfxGraph:
+        return "VfxGraph";
+    case EditorAssetKind::AnimationStateMachine:
+        return "AnimationStateMachine";
+    case EditorAssetKind::GameplayVisualScript:
+        return "GameplayVisualScript";
     case EditorAssetKind::Texture:
         return "Texture";
     case EditorAssetKind::Audio:
@@ -390,6 +730,16 @@ bool ParseEditorAssetDependencyToken(
         outToken.kind = EditorAssetKind::Effect;
     } else if (kindText == ToString(EditorAssetKind::Course)) {
         outToken.kind = EditorAssetKind::Course;
+    } else if (kindText == ToString(EditorAssetKind::Prefab)) {
+        outToken.kind = EditorAssetKind::Prefab;
+    } else if (kindText == ToString(EditorAssetKind::MaterialGraph)) {
+        outToken.kind = EditorAssetKind::MaterialGraph;
+    } else if (kindText == ToString(EditorAssetKind::VfxGraph)) {
+        outToken.kind = EditorAssetKind::VfxGraph;
+    } else if (kindText == ToString(EditorAssetKind::AnimationStateMachine)) {
+        outToken.kind = EditorAssetKind::AnimationStateMachine;
+    } else if (kindText == ToString(EditorAssetKind::GameplayVisualScript)) {
+        outToken.kind = EditorAssetKind::GameplayVisualScript;
     } else if (kindText == ToString(EditorAssetKind::Texture)) {
         outToken.kind = EditorAssetKind::Texture;
     } else if (kindText == ToString(EditorAssetKind::Audio)) {
@@ -410,6 +760,27 @@ std::string BuildEditorAssetProvisionalGuid(EditorAssetKind kind, std::string_vi
     const uint64_t a = Hash64(seedText, 14695981039346656037ull);
     const uint64_t b = Hash64(seedText, 1099511628211ull);
     return FormatProvisionalGuid(a, b);
+}
+
+std::string GenerateEditorAssetGuid() {
+    static std::atomic<uint64_t> sequence{1};
+    const uint64_t counter = sequence.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t ticks = static_cast<uint64_t>(
+        std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    const std::string seed = std::to_string(ticks) + ":" + std::to_string(counter);
+    std::ostringstream stream;
+    stream << std::hex << std::setfill('0') << std::setw(16)
+           << Hash64(seed, 1469598103934665603ull) << std::setw(16)
+           << Hash64(seed, 1099511628211ull);
+    return stream.str();
+}
+
+bool IsDurableEditorAssetGuid(std::string_view guid) noexcept {
+    return !guid.empty() && guid.rfind("auto-", 0) != 0;
+}
+
+std::string BuildEditorAssetGuidReference(std::string_view guid) {
+    return guid.empty() ? std::string{} : "asset-guid:" + std::string(guid);
 }
 
 void EnsureEditorAssetIdentity(EditorAssetRecord& record) {
@@ -433,6 +804,18 @@ void EnsureEditorAssetIdentity(EditorAssetRecord& record) {
             record.thumbnailKey += StableKeyForRecord(record);
         }
     }
+}
+
+const char* ToString(EditorAssetReferenceResolutionSource source) {
+    switch (source) {
+    case EditorAssetReferenceResolutionSource::None: return "None";
+    case EditorAssetReferenceResolutionSource::Id: return "Id";
+    case EditorAssetReferenceResolutionSource::Guid: return "Guid";
+    case EditorAssetReferenceResolutionSource::LogicalPath: return "LogicalPath";
+    case EditorAssetReferenceResolutionSource::SourcePath: return "SourcePath";
+    case EditorAssetReferenceResolutionSource::Redirect: return "Redirect";
+    }
+    return "None";
 }
 
 } // namespace editor
