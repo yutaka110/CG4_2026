@@ -58,6 +58,7 @@
 #include "shader/EditorProductionShaderPipeline.h"
 #include "lighting/EditorProductionLightingPipeline.h"
 #include "visibility/EditorProductionGpuDrivenPipeline.h"
+#include "streaming/EditorWorldPartitionPipeline.h"
 #include "play/EditorRuntimeApplyExecutionService.h"
 #include "scene/EditorScene.h"
 #include "scene/EditorProductionScenePipeline.h"
@@ -3731,6 +3732,225 @@ EditorAutomationGateResult RunProductionGpuDrivenVisibilityGate() {
     return result;
 }
 
+EditorAutomationGateResult RunProductionWorldPartitionGate() {
+    AutomationScenario scenario("logs/editor_production_world_partition_report.log");
+    const std::filesystem::path root = std::filesystem::path{"generated"} /
+        "editor" / "tests" / "commercial_world_partition";
+    std::error_code filesystemError;
+    std::filesystem::remove_all(root, filesystemError);
+    std::string error;
+
+    const EditorWorldPartitionCellKey negative =
+        EditorWorldPartitionPipeline::CellForPosition({-0.1f, 0.0f, -100.1f}, 100.0f);
+    scenario.Expect(
+        negative.x == -1 && negative.z == -2 &&
+            EditorWorldPartitionPipeline::ChebyshevDistance(
+                negative, {2, 1, "Default"}) == 3,
+        "signed floor cell identity and Chebyshev distance remain deterministic across the world origin");
+
+    const EditorDocumentId document{
+        "commercial-world-partition", std::string(EditorDocumentTypes::Scene)};
+    EditorScene scene;
+    scene.CreateEntity(
+        "Near Source", {}, "commercial-e12-near");
+    scene.CreateEntity(
+        "Hard Reference Target", {}, "commercial-e12-target");
+    scene.CreateEntity(
+        "Far HLOD Source", {}, "commercial-e12-far");
+    EditorSceneEntity* nearEntity = scene.FindEntity("commercial-e12-near");
+    EditorSceneEntity* targetEntity = scene.FindEntity("commercial-e12-target");
+    EditorSceneEntity* farEntity = scene.FindEntity("commercial-e12-far");
+    const auto setTranslation = [&](EditorSceneEntity* entity, const char* value) {
+        if (entity == nullptr) return false;
+        EditorSceneComponent* transform = scene.FindComponent(
+            *entity, kEditorTransformComponentType);
+        if (transform == nullptr) return false;
+        const auto property = std::find_if(
+            transform->properties.begin(), transform->properties.end(),
+            [](const EditorSceneProperty& candidate) {
+                return candidate.name == "translation";
+            });
+        if (property == transform->properties.end()) return false;
+        property->value = value;
+        return true;
+    };
+    const bool transformsReady = setTranslation(nearEntity, "0 0 0") &&
+        setTranslation(targetEntity, "150 0 0") &&
+        setTranslation(farEntity, "350 0 0");
+    const bool nearRendererAdded = nearEntity != nullptr && scene.AddComponent(
+        nearEntity->guid, std::string(kEditorMeshRendererComponentType));
+    EditorSceneComponent* nearRenderer = nearRendererAdded
+        ? scene.FindComponent(*nearEntity, kEditorMeshRendererComponentType) : nullptr;
+    EditorGeometryMesh geometry = EditorGeometryMesh::MakeBox({1.0f, 1.0f, 1.0f});
+    std::string geometryText;
+    geometry.Serialize(geometryText, &error);
+    if (nearRenderer != nullptr) nearRenderer->properties.push_back(
+        {std::string(kEditorEditableGeometryProperty), geometryText});
+
+    EditorAssetRegistry registry;
+    EditorMeshBakePipeline bakePipeline;
+    bakePipeline.Bind(document, &scene, &registry, root);
+    EditorMeshBuildSettings settings{};
+    settings.lodCount = 2;
+    settings.collisionMode = EditorMeshCollisionBuildMode::Box;
+    EditorMeshBakePrepared prepared{};
+    const EditorGeneratedCollision collision = GenerateEditorGeometryBoxCollision(geometry);
+    const bool preparedOk = nearRenderer != nullptr && bakePipeline.Prepare(
+        nearEntity->guid, geometry, &collision, "world_partition_mesh",
+        settings, prepared, &error);
+    EditorProductionMeshRuntimeCache runtimeCache;
+    EditorMeshBakeExecutionService bakeExecution;
+    bakeExecution.Bind(document, &scene, &registry, &runtimeCache, root, {});
+    EditorExecutionContext execution;
+    EditorError executionError{};
+    execution.Register(bakeExecution, &executionError);
+    EditorUndoResult applied = EditorUndoResult::Failure(
+        EditorErrorCode::ApplyFailed, "E-12 fixture bake failed.");
+    if (preparedOk) {
+        EditorMeshBakeUndoCommand command(prepared.change);
+        applied = command.Apply(EditorTransactionApplyMode::Redo, execution);
+    }
+    const EditorAssetRecord* record = registry.Find(
+        EditorAssetKind::Mesh, "world_partition_mesh");
+    const std::string meshGuid = record != nullptr ? record->guid : std::string{};
+    EditorSceneObjectReference assetReference{"asset", {}, meshGuid};
+    const bool remainingRenderers = targetEntity != nullptr && farEntity != nullptr &&
+        scene.AddComponent(targetEntity->guid,
+            std::string(kEditorMeshRendererComponentType), &assetReference) &&
+        scene.AddComponent(farEntity->guid,
+            std::string(kEditorMeshRendererComponentType), &assetReference);
+    nearRenderer = nearEntity != nullptr
+        ? scene.FindComponent(*nearEntity, kEditorMeshRendererComponentType) : nullptr;
+    if (nearRenderer != nullptr && targetEntity != nullptr) nearRenderer->references.push_back(
+        {"hardTarget", targetEntity->guid, {}});
+    scenario.Expect(
+        transformsReady && applied.succeeded && record != nullptr &&
+            remainingRenderers && runtimeCache.ResolveForRenderer(meshGuid, 1).Valid(),
+        "durable E-5 Mesh LOD data supplies three spatially separated partition sources");
+
+    Microsoft::WRL::ComPtr<IDXGIFactory6> factory;
+    Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+    Microsoft::WRL::ComPtr<ID3D12Device> device;
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList;
+    Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+    D3D12_COMMAND_QUEUE_DESC queueDescription{};
+    queueDescription.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    const bool warpReady =
+        SUCCEEDED(CreateDXGIFactory2(0, IID_PPV_ARGS(factory.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(adapter.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
+            IID_PPV_ARGS(device.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(device->CreateCommandQueue(&queueDescription,
+            IID_PPV_ARGS(queue.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+            IID_PPV_ARGS(allocator.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+            allocator.Get(), nullptr, IID_PPV_ARGS(commandList.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+            IID_PPV_ARGS(fence.ReleaseAndGetAddressOf())));
+    EditorWorldPartitionPolicy policy{};
+    policy.cellSize = 100.0f;
+    policy.sourceLoadRadiusCells = 0;
+    policy.sourceUnloadRadiusCells = 0;
+    policy.hlodRadiusCells = 5;
+    policy.maximumSourceCells = 4;
+    policy.maximumSourceEntities = 4;
+    policy.maximumHlodProxies = 4;
+    policy.maximumConcurrentBuilds = 2;
+    policy.inactiveHlodRetentionFrames = 0;
+    EditorWorldPartitionPipeline pipeline;
+    const bool initialized = warpReady && pipeline.Initialize(device.Get(), policy, &error);
+    scenario.Expect(initialized,
+        "WARP initializes bounded Cell Streaming and asynchronous HLOD GPU residency resources");
+
+    bool hlodReady = false;
+    if (initialized) {
+        for (uint32_t attempt = 0; attempt < 100 && !hlodReady; ++attempt) {
+            pipeline.Sync(scene, registry, runtimeCache, {}, MakeIdentity4x4(),
+                commandList.Get(), 0, 1, &error);
+            hlodReady = !pipeline.HlodPackets().empty() &&
+                pipeline.Stats().completedHlodBuilds > 0;
+            if (!hlodReady) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    }
+    scenario.Expect(
+        pipeline.Cells().size() == 3 && pipeline.CrossCellReferences().size() == 1 &&
+            pipeline.Stats().hardReferencePulls == 1 &&
+            pipeline.IsEntitySourceResident("commercial-e12-near") &&
+            pipeline.IsEntitySourceResident("commercial-e12-target"),
+        "camera cell stays source-resident and pulls one hard cross-cell Entity reference atomically");
+    const EditorProductionSceneRenderPacket* hlodPacket =
+        pipeline.HlodPackets().empty() ? nullptr : &pipeline.HlodPackets().front();
+    scenario.Expect(
+        hlodReady && hlodPacket != nullptr && hlodPacket->indexCount >= 3 &&
+            hlodPacket->vertexBuffer.BufferLocation != 0 &&
+            hlodPacket->indexBuffer.BufferLocation != 0 &&
+            hlodPacket->transformAddress != 0 &&
+            !pipeline.IsEntitySourceResident("commercial-e12-far"),
+        "far Cell switches from retained source data to an actual merged far-LOD GPU proxy only after upload is ready");
+
+    bool submitted = false;
+    HANDLE fenceEvent = nullptr;
+    if (hlodReady && SUCCEEDED(commandList->Close())) {
+        ID3D12CommandList* lists[]{commandList.Get()};
+        queue->ExecuteCommandLists(1, lists);
+        fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        submitted = fenceEvent != nullptr && SUCCEEDED(queue->Signal(fence.Get(), 1)) &&
+            SUCCEEDED(fence->SetEventOnCompletion(1, fenceEvent)) &&
+            WaitForSingleObject(fenceEvent, 30000) == WAIT_OBJECT_0 &&
+            device->GetDeviceRemovedReason() == S_OK;
+    }
+    if (fenceEvent != nullptr) CloseHandle(fenceEvent);
+    scenario.Expect(
+        submitted && pipeline.Stats().uploadedHlodGpuBytes > 0 &&
+            pipeline.Stats().residentHlodGpuBytes > 0,
+        "WARP executes HLOD default-buffer uploads and exposes fence-safe GPU byte telemetry");
+
+    const bool transitionListReady = submitted &&
+        SUCCEEDED(allocator->Reset()) &&
+        SUCCEEDED(commandList->Reset(allocator.Get(), nullptr));
+    for (uint32_t attempt = 0; transitionListReady && attempt < 100; ++attempt) {
+        pipeline.Sync(scene, registry, runtimeCache, {350.0f, 0.0f, 0.0f},
+            MakeIdentity4x4(), commandList.Get(), 1, 2, &error);
+        if (pipeline.IsEntitySourceResident("commercial-e12-far") &&
+            !pipeline.IsEntitySourceResident("commercial-e12-near") &&
+            !pipeline.IsEntitySourceResident("commercial-e12-target")) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    scenario.Expect(
+        pipeline.IsEntitySourceResident("commercial-e12-far") &&
+            !pipeline.IsEntitySourceResident("commercial-e12-near") &&
+            !pipeline.IsEntitySourceResident("commercial-e12-target"),
+        "camera relocation promotes the destination Cell and unloads the previous source set without leaking cross-cell pulls");
+
+    EditorWorldPartitionPolicy constrainedPolicy = policy;
+    constrainedPolicy.maximumSourceCells = 1;
+    constrainedPolicy.maximumSourceEntities = 1;
+    constrainedPolicy.hlodRadiusCells = 0;
+    EditorWorldPartitionPipeline constrained;
+    const bool constrainedReady = warpReady && constrained.Initialize(
+        device.Get(), constrainedPolicy, &error) && constrained.Sync(
+            scene, registry, runtimeCache, {}, MakeIdentity4x4(),
+            commandList.Get(), 1, 2, &error);
+    scenario.Expect(
+        constrainedReady && constrained.Stats().rejectedByCellBudget > 0 &&
+            constrained.Stats().hardReferencePulls == 0 &&
+            !constrained.Diagnostics().empty(),
+        "bounded source capacity rejects an over-budget hard-reference pull with actionable diagnostics");
+
+    constrained.Shutdown();
+    pipeline.Shutdown();
+    std::filesystem::remove_all(root, filesystemError);
+    EditorAutomationGateResult result = scenario.Finish(
+        "Production World Partition / Cell Streaming / HLOD Pipeline",
+        "Repair deterministic cell ownership, hard-reference pulls, async HLOD build/upload, source-to-proxy switching, budgets, or fence lifetime.");
+    result.sampleCount = 3;
+    result.budgetKind = "worldPartitionCells";
+    return result;
+}
+
 EditorAutomationGateResult RunNorthStarWorkflowGate() {
     const std::filesystem::path artifact = "logs/editor_north_star_workflow_report.log";
     AutomationScenario scenario(artifact);
@@ -4015,7 +4235,7 @@ bool WriteJsonReport(
     output << "{\n";
     const bool completionReady =
         failedCount == 0 && blockedChecks == 0 && attentionChecks == 0;
-    output << "  \"schema\": \"editor.commercialCompletion.v14\",\n";
+    output << "  \"schema\": \"editor.commercialCompletion.v15\",\n";
     output << "  \"generatedAtUtc\": \"" << JsonEscape(timestamp) << "\",\n";
     output << "  \"result\": \"" << (completionReady ? "ready" : "not-ready") << "\",\n";
     output << "  \"commercialCompletionReady\": "
@@ -4296,6 +4516,14 @@ int RunEditorCommercialAutomationGates(EditorSmokeExternalStep effectAuthoringSm
             "editor_production_gpu_visibility_report.log",
             3000.0,
             RunProductionGpuDrivenVisibilityGate));
+    records.push_back(
+        RunGate(
+            "editor.productionWorldPartition",
+            "Production World Partition / Cell Streaming / HLOD",
+            "world-streaming",
+            "editor_production_world_partition_report.log",
+            3000.0,
+            RunProductionWorldPartitionGate));
     records.push_back(
         RunGate(
             "editor.northStarWorkflow",

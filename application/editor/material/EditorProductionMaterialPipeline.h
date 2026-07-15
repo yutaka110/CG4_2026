@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "utils/math/MathUtils.h"
@@ -109,7 +110,8 @@ public:
         const EditorAssetRegistry& registry,
         uint64_t completedFenceValue,
         uint64_t scheduledFenceValue,
-        std::string* errorMessage = nullptr);
+        std::string* errorMessage = nullptr,
+        const std::unordered_set<std::string>* sourceResidentEntities = nullptr);
 
     const EditorProductionMaterialBinding* Resolve(
         std::string_view entityGuid,

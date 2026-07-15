@@ -426,7 +426,8 @@ bool EditorProductionMaterialPipeline::Sync(
     const EditorAssetRegistry& registry,
     uint64_t completedFenceValue,
     uint64_t scheduledFenceValue,
-    std::string* errorMessage) {
+    std::string* errorMessage,
+    const std::unordered_set<std::string>* sourceResidentEntities) {
     CollectRetired(completedFenceValue);
     bindings_.clear();
     diagnostics_.clear();
@@ -437,6 +438,8 @@ bool EditorProductionMaterialPipeline::Sync(
 
     std::unordered_set<std::string> activeMaterials;
     for (const EditorSceneEntity& entity : scene.entities) {
+        if (sourceResidentEntities != nullptr &&
+            !sourceResidentEntities->contains(entity.guid)) continue;
         const EditorSceneComponent* renderer = scene.FindComponent(entity, kEditorMeshRendererComponentType);
         if (renderer == nullptr || !renderer->enabled) continue;
         bool hasSlot = false;
@@ -515,6 +518,8 @@ bool EditorProductionMaterialPipeline::Sync(
     std::vector<LightCandidate> point;
     std::vector<LightCandidate> spot;
     for (const EditorSceneEntity& entity : scene.entities) {
+        if (sourceResidentEntities != nullptr &&
+            !sourceResidentEntities->contains(entity.guid)) continue;
         if (!entity.visible) continue;
         const auto append = [&](std::string_view type, std::vector<LightCandidate>& output) {
             const EditorSceneComponent* component = scene.FindComponent(entity, type);

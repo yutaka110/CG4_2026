@@ -81,6 +81,7 @@
 #include "shader/EditorProductionShaderPipeline.h"
 #include "lighting/EditorProductionLightingPipeline.h"
 #include "visibility/EditorProductionGpuDrivenPipeline.h"
+#include "streaming/EditorWorldPartitionPipeline.h"
 #include "vfx/EditorVfxGraph.h"
 #include "animation/EditorAnimationStateMachine.h"
 #include "gameplay/EditorGameplayVisualScript.h"
@@ -5086,6 +5087,26 @@ void TestProductionGpuDrivenVisibilityPipeline(RegressionRunner& runner) {
         "E-11 should preserve zero-capacity batches without overlapping command ranges");
 }
 
+void TestWorldPartitionCellPolicy(RegressionRunner& runner) {
+    const EditorWorldPartitionCellKey positive =
+        EditorWorldPartitionPipeline::CellForPosition({255.0f, 0.0f, 128.0f}, 128.0f);
+    const EditorWorldPartitionCellKey negative =
+        EditorWorldPartitionPipeline::CellForPosition({-0.01f, 0.0f, -128.01f}, 128.0f);
+    runner.Expect(
+        positive.x == 1 && positive.z == 1 &&
+            negative.x == -1 && negative.z == -2,
+        "E-12 should use floor-based stable cell coordinates across the world origin");
+    runner.Expect(
+        EditorWorldPartitionPipeline::ChebyshevDistance(positive, negative) == 3 &&
+            positive.StableName() == "Default:1:1",
+        "E-12 should use deterministic cell identity and square streaming distance");
+    const EditorWorldPartitionCellKey layer =
+        EditorWorldPartitionPipeline::CellForPosition({}, 128.0f, "Gameplay");
+    runner.Expect(
+        layer.dataLayer == "Gameplay" && layer.StableName() == "Gameplay:0:0",
+        "E-12 should preserve durable data-layer identity independently of spatial coordinates");
+}
+
 void TestProductionTextureResidencyPipeline(RegressionRunner& runner) {
     const std::filesystem::path root = std::filesystem::path{"generated"} /
         "editor" / "tests" / "production_texture_regression";
@@ -8320,6 +8341,7 @@ int RunEditorCoreRegressionTests() {
         {"production shader variant pso cache pipeline", [&]() { TestProductionShaderVariantPipeline(runner); }},
         {"production multi-light cluster shadow pipeline", [&]() { TestProductionMultiLightClusterPipeline(runner); }},
         {"production gpu-driven visibility indirect pipeline", [&]() { TestProductionGpuDrivenVisibilityPipeline(runner); }},
+        {"production world partition cell streaming hlod", [&]() { TestWorldPartitionCellPolicy(runner); }},
         {"advanced vfx graph", [&]() { TestAdvancedVfxGraph(runner); }},
         {"animation state machine", [&]() { TestAnimationStateMachine(runner); }},
         {"gameplay visual scripting", [&]() { TestGameplayVisualScripting(runner); }},

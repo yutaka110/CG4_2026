@@ -83,6 +83,7 @@ class AppPipelines;
 #include "editor/shader/EditorProductionShaderPipeline.h"
 #include "editor/lighting/EditorProductionLightingPipeline.h"
 #include "editor/visibility/EditorProductionGpuDrivenPipeline.h"
+#include "editor/streaming/EditorWorldPartitionPipeline.h"
 #include "editor/core/EditorExecutionContext.h"
 #include "editor/documents/EditorAutosaveService.h"
 #include "editor/documents/EditorCourseDocumentProvider.h"
@@ -195,6 +196,8 @@ public:
     const editor::EditorProductionLightingPipeline& ProductionLightingPipeline() const;
     editor::EditorProductionGpuDrivenPipeline& ProductionGpuDrivenPipeline();
     const editor::EditorProductionGpuDrivenPipeline& ProductionGpuDrivenPipeline() const;
+    editor::EditorWorldPartitionPipeline& WorldPartitionPipeline();
+    const editor::EditorWorldPartitionPipeline& WorldPartitionPipeline() const;
 
     void Shutdown();
 
@@ -302,6 +305,7 @@ private:
     editor::EditorProductionShaderPipeline editorProductionShaderPipeline_{};
     editor::EditorProductionLightingPipeline editorProductionLightingPipeline_{};
     editor::EditorProductionGpuDrivenPipeline editorProductionGpuDrivenPipeline_{};
+    editor::EditorWorldPartitionPipeline editorWorldPartitionPipeline_{};
     editor::EditorViewportOverlayService editorViewportOverlay_{};
     editor::EditorViewportSelectionBridge editorViewportSelectionBridge_{};
     editor::EditorViewportRenderTarget editorViewportRenderTarget_{};

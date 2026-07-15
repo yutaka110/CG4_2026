@@ -393,7 +393,8 @@ bool EditorProductionLightingPipeline::Sync(
     uint32_t viewportHeight,
     float nearPlane,
     float farPlane,
-    std::string* errorMessage) {
+    std::string* errorMessage,
+    const std::unordered_set<std::string>* sourceResidentEntities) {
     policy_.maximumVisibleLights = (std::max)(1u, policy_.maximumVisibleLights);
     policy_.tileSizePixels = (std::max)(8u, policy_.tileSizePixels);
     policy_.depthSliceCount = (std::max)(1u, policy_.depthSliceCount);
@@ -447,6 +448,8 @@ bool EditorProductionLightingPipeline::Sync(
 
     std::vector<LightCandidate> candidates;
     for (const EditorSceneEntity& entity : scene.entities) {
+        if (sourceResidentEntities != nullptr &&
+            !sourceResidentEntities->contains(entity.guid)) continue;
         if (!resolveVisible(resolveVisible, entity)) continue;
         const auto append = [&](std::string_view typeId, EditorProductionLightType type, bool defaultShadow) {
             const EditorSceneComponent* component = scene.FindComponent(entity, typeId);

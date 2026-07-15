@@ -500,6 +500,7 @@
     <ClCompile Include="application\editor\shader\EditorProductionShaderPipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\lighting\EditorProductionLightingPipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\visibility\EditorProductionGpuDrivenPipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\streaming\EditorWorldPartitionPipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\vfx\EditorVfxGraph.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\vfx\EditorVfxGraphPanel.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\vfx\EditorVfxGraphDiagnosticsAdapter.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
@@ -1665,6 +1666,7 @@
     <ClInclude Include="application\editor\shader\EditorProductionShaderPipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\lighting\EditorProductionLightingPipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\visibility\EditorProductionGpuDrivenPipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\streaming\EditorWorldPartitionPipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\vfx\EditorVfxGraph.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\vfx\EditorVfxGraphPanel.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\vfx\EditorVfxGraphDiagnosticsAdapter.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>

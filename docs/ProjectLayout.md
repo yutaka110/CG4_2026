@@ -399,6 +399,11 @@ This repository is organized around the following top-level areas:
 - `Resources/ProductionVisibility.CS.hlsl`: E-11 batch-count reset, GPU sphere
   frustum and conservative Terrain Hi-Z occlusion tests, visible-command
   compaction, and the 32-byte Transform-CBV + DrawIndexed command contract.
+- `application/editor/streaming/EditorWorldPartitionPipeline.*`: E-12 stable
+  signed Cell ownership, Data Layer/Always Loaded overrides, camera-driven
+  Source residency with hysteresis and hard cross-cell reference pulls,
+  asynchronous bounded HLOD merge, frame-thread D3D12 upload, fence-safe proxy
+  retirement, E-6/E-7/E-10/E-11 handoff, and Runtime Watch telemetry.
 - `application/AppEditorToolModules.*`: App-level built-in editor module
   pipeline that registers startup descriptors, Details sections, provider
   adapters, Runtime Watch providers, command providers, menus, and toolbar
