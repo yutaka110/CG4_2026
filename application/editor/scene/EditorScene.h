@@ -12,6 +12,9 @@ inline constexpr std::string_view kEditorTransformComponentType = "engine.transf
 inline constexpr std::string_view kEditorMeshRendererComponentType = "engine.mesh-renderer";
 inline constexpr std::string_view kEditorVfxComponentType = "engine.vfx";
 inline constexpr std::string_view kEditorAudioSourceComponentType = "engine.audio-source";
+inline constexpr std::string_view kEditorDirectionalLightComponentType = "engine.directional-light";
+inline constexpr std::string_view kEditorPointLightComponentType = "engine.point-light";
+inline constexpr std::string_view kEditorSpotLightComponentType = "engine.spot-light";
 
 struct EditorSceneObjectReference {
     std::string property;

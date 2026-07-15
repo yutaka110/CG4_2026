@@ -13,6 +13,7 @@ class EditorViewportInteractionService;
 
 enum class EditorViewportPickSource {
     Unknown,
+    SceneViewport,
     CourseViewport,
     VfxRuntime,
 };

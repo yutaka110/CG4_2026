@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "utils/math/Vector.h"
+#include "TerrainEditLayer.h"
 
 enum class TerrainDisplayMode : uint32_t {
     Lit = 0,
@@ -57,6 +58,8 @@ struct TerrainGenerationSettings {
 };
 
 struct TerrainAuthoringState {
+    TerrainEditLayer previewEditLayer{};
+    TerrainEditDirtyRegion lastEditDirtyRegion{};
     bool enabled = true;
     bool autoAdvancePreview = false;
     bool showDebugDraw = false;

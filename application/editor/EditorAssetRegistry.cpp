@@ -30,6 +30,7 @@ std::string StableKeyForRecord(const EditorAssetRecord& record) {
 bool IsTextScannableAssetKind(EditorAssetKind kind) {
     return kind == EditorAssetKind::Course || kind == EditorAssetKind::Effect ||
         kind == EditorAssetKind::Prefab || kind == EditorAssetKind::MaterialGraph ||
+        kind == EditorAssetKind::MaterialInstance ||
         kind == EditorAssetKind::VfxGraph || kind == EditorAssetKind::AnimationStateMachine ||
         kind == EditorAssetKind::GameplayVisualScript;
 }
@@ -91,6 +92,7 @@ std::string FormatProvisionalGuid(uint64_t a, uint64_t b) {
 EditorAssetKind AssetKindFromText(std::string_view text) {
     for (EditorAssetKind kind : {EditorAssetKind::Mesh, EditorAssetKind::Effect,
              EditorAssetKind::Course, EditorAssetKind::Prefab, EditorAssetKind::MaterialGraph,
+             EditorAssetKind::MaterialInstance,
              EditorAssetKind::VfxGraph,
              EditorAssetKind::AnimationStateMachine,
              EditorAssetKind::GameplayVisualScript,
@@ -690,6 +692,8 @@ const char* ToString(EditorAssetKind kind) {
         return "Prefab";
     case EditorAssetKind::MaterialGraph:
         return "MaterialGraph";
+    case EditorAssetKind::MaterialInstance:
+        return "MaterialInstance";
     case EditorAssetKind::VfxGraph:
         return "VfxGraph";
     case EditorAssetKind::AnimationStateMachine:
@@ -734,6 +738,8 @@ bool ParseEditorAssetDependencyToken(
         outToken.kind = EditorAssetKind::Prefab;
     } else if (kindText == ToString(EditorAssetKind::MaterialGraph)) {
         outToken.kind = EditorAssetKind::MaterialGraph;
+    } else if (kindText == ToString(EditorAssetKind::MaterialInstance)) {
+        outToken.kind = EditorAssetKind::MaterialInstance;
     } else if (kindText == ToString(EditorAssetKind::VfxGraph)) {
         outToken.kind = EditorAssetKind::VfxGraph;
     } else if (kindText == ToString(EditorAssetKind::AnimationStateMachine)) {

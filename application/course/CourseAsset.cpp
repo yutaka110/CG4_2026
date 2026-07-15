@@ -549,6 +549,7 @@ bool CourseAsset::LoadFromString(const std::string& text, std::string* errorMess
     std::istringstream file(text);
 
     CourseAsset loaded{};
+    std::vector<TerrainBrushStamp> loadedTerrainStamps;
     std::string line;
     uint32_t lineNumber = 0;
     while (std::getline(file, line)) {
@@ -661,6 +662,30 @@ bool CourseAsset::LoadFromString(const std::string& text, std::string* errorMess
             placement.editorVisible = parts.size() < 20 || parts[19] != "0";
             placement.editorLocked = parts.size() >= 21 && parts[20] == "1";
             loaded.terrainPlacements.push_back(placement);
+        } else if (kind == "terrain_brush") {
+            if (parts.size() < 11) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid terrain_brush row at line " + std::to_string(lineNumber);
+                }
+                return false;
+            }
+            TerrainBrushStamp stamp{};
+            stamp.strokeGuid = parts[1];
+            stamp.stampGuid = parts[2];
+            if (!ParseTerrainEditOperation(parts[3], stamp.operation)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Unknown terrain brush operation at line " + std::to_string(lineNumber);
+                }
+                return false;
+            }
+            stamp.distance = ParseFloatOr(parts, 4, 0.0f);
+            stamp.angle = ParseFloatOr(parts, 5, 0.0f);
+            stamp.radius = ParseFloatOr(parts, 6, stamp.radius);
+            stamp.surfaceRadius = ParseFloatOr(parts, 7, stamp.surfaceRadius);
+            stamp.strength = ParseFloatOr(parts, 8, stamp.strength);
+            stamp.hardness = ParseFloatOr(parts, 9, stamp.hardness);
+            stamp.materialLayer = static_cast<uint32_t>((std::max)(0.0f, ParseFloatOr(parts, 10, 0.0f)));
+            loadedTerrainStamps.push_back(std::move(stamp));
         } else if (kind == "rock_cluster") {
             if (parts.size() < 15) {
                 if (errorMessage != nullptr) {
@@ -841,6 +866,19 @@ bool CourseAsset::LoadFromString(const std::string& text, std::string* errorMess
         }
     }
 
+    for (std::size_t begin = 0; begin < loadedTerrainStamps.size();) {
+        std::size_t end = begin + 1;
+        while (end < loadedTerrainStamps.size() &&
+            loadedTerrainStamps[end].strokeGuid == loadedTerrainStamps[begin].strokeGuid) {
+            ++end;
+        }
+        const std::vector<TerrainBrushStamp> stroke(
+            loadedTerrainStamps.begin() + static_cast<std::ptrdiff_t>(begin),
+            loadedTerrainStamps.begin() + static_cast<std::ptrdiff_t>(end));
+        if (!loaded.terrainEditLayer.ApplyStroke(stroke, errorMessage)) return false;
+        begin = end;
+    }
+
     if (loaded.railPoints.size() < 2) {
         if (errorMessage != nullptr) {
             *errorMessage = "Course has fewer than 2 rail points.";
@@ -884,6 +922,7 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
     }
     CourseAsset saved = *this;
     saved.SortForRuntime();
+    if (!saved.terrainEditLayer.Validate(errorMessage)) return false;
 
     const bool hasPersistentEditorWorldIdentity =
         std::all_of(saved.cameraKeys.begin(), saved.cameraKeys.end(),
@@ -905,6 +944,7 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
     file << "# camera|distance|backDistance|verticalOffset|lateralOffset|lookAheadDistance|lookUpOffset|lookForwardOffset|fovDeg|rollDeg|editorGuid|editorVisible|editorLocked\n";
     file << "# section|start|end|name|category\n";
     file << "# terrain|distance|layer|id|meshId|lateralOffset|verticalOffset|forwardOffset|scaleX|scaleY|scaleZ|pitchDeg|yawDeg|rollDeg|collisionMode|renderPriority|cullBehind|cullAhead|editorGuid|editorVisible|editorLocked\n";
+    file << "# terrain_brush|strokeGuid|stampGuid|operation|distance|angleRad|radius|surfaceRadius|strength|hardness|materialLayer\n";
     file << "# rock_cluster|distance|id|meshId|anchor|type|count|minScale|maxScale|spreadX|spreadY|spreadZ|clearLaneRadius|cullBehind|cullAhead|rotX|rotY|rotZ|instanceOverrides|editorGuid|editorVisible|editorLocked\n";
     file << "# lighting|distance|id|blendDistance|sunR|sunG|sunB|sunIntensity|sunDirX|sunDirY|sunDirZ|clearR|clearG|clearB|fogR|fogG|fogB|fogIntensity|fogStart|fogEnd|fogDensity|backlitFogLift|openingGlow|silhouette|lowFog|coolHaze\n";
     file << "# camera_shot_preset|id|mode|backOffset|upOffset|sideOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake\n";
@@ -1134,6 +1174,21 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
              << (event.editorLocked ? 1 : 0) << "\n";
     }
 
+    file << "\n# Non-destructive procedural Terrain sculpt and paint strokes.\n";
+    file << std::setprecision(6);
+    for (const TerrainBrushStamp& stamp : saved.terrainEditLayer.Stamps()) {
+        file << "terrain_brush|"
+             << stamp.strokeGuid << '|'
+             << stamp.stampGuid << '|'
+             << ToString(stamp.operation) << '|'
+             << stamp.distance << '|'
+             << stamp.angle << '|'
+             << stamp.radius << '|'
+             << stamp.surfaceRadius << '|'
+             << stamp.strength << '|'
+             << stamp.hardness << '|'
+             << stamp.materialLayer << "\n";
+    }
     if (!file.good()) {
         if (errorMessage != nullptr) {
             *errorMessage = "Failed while serializing course data.";

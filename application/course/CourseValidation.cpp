@@ -242,6 +242,26 @@ CourseValidationReport ValidateCourseAsset(
         }
     }
 
+    std::string terrainEditError;
+    if (!course.terrainEditLayer.Validate(&terrainEditError)) {
+        AddIssue(
+            report,
+            CourseValidationSeverity::Error,
+            "terrain_edit_layer",
+            "Terrain Edit Layer is invalid: " + terrainEditError);
+    }
+    for (size_t index = 0; index < course.terrainEditLayer.Stamps().size(); ++index) {
+        const TerrainBrushStamp& stamp = course.terrainEditLayer.Stamps()[index];
+        if (railLength > 0.0f && stamp.distance > railLength + stamp.radius) {
+            AddIssue(
+                report,
+                CourseValidationSeverity::Warning,
+                "terrain_brush[" + std::to_string(index) + "]",
+                "Terrain brush stamp is outside rail length.",
+                stamp.distance);
+        }
+    }
+
     for (size_t index = 0; index < course.rockClusters.size(); ++index) {
         const CourseRockCluster& cluster = course.rockClusters[index];
         const std::string subject = "rock_cluster[" + std::to_string(index) + "]";

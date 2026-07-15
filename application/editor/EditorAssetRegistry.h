@@ -21,6 +21,7 @@ enum class EditorAssetKind {
     VfxGraph,
     AnimationStateMachine,
     GameplayVisualScript,
+    MaterialInstance,
 };
 
 struct EditorAssetRecord {

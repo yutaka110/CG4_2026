@@ -8,6 +8,7 @@
 #include <d3d12.h>
 
 struct ImDrawList;
+class AppPipelines;
 
 #include "graphics/RenderGraph.h"
 #include "editor/EditorAssetSelection.h"
@@ -67,6 +68,22 @@ struct ImDrawList;
 #include "editor/EditorViewportOverlay.h"
 #include "editor/EditorViewportSelectionBridge.h"
 #include "editor/EditorViewportRenderTarget.h"
+#include "editor/tools/EditorModeRegistry.h"
+#include "editor/tools/EditorToolManager.h"
+#include "editor/terrain/EditorTerrainBrushTools.h"
+#include "editor/terrain/EditorTerrainEditCommand.h"
+#include "editor/terrain/EditorTerrainSurfaceQuery.h"
+#include "editor/geometry/EditorGeometryTools.h"
+#include "editor/geometry/EditorGeometryEditCommand.h"
+#include "editor/geometry/EditorGeometryWorkspace.h"
+#include "editor/mesh/EditorMeshBakeTools.h"
+#include "editor/scene/EditorProductionScenePipeline.h"
+#include "editor/material/EditorProductionMaterialPipeline.h"
+#include "editor/texture/EditorProductionTexturePipeline.h"
+#include "editor/shader/EditorProductionShaderPipeline.h"
+#include "editor/lighting/EditorProductionLightingPipeline.h"
+#include "editor/visibility/EditorProductionGpuDrivenPipeline.h"
+#include "editor/core/EditorExecutionContext.h"
 #include "editor/documents/EditorAutosaveService.h"
 #include "editor/documents/EditorCourseDocumentProvider.h"
 #include "editor/documents/EditorSceneDocumentProvider.h"
@@ -154,7 +171,8 @@ struct AppImGuiFrameContext {
 class AppImGuiLayer {
 public:
     bool Initialize(HWND hwnd, ID3D12Device* device, int bufferCount,
-        DXGI_FORMAT rtvFormat, ID3D12DescriptorHeap* srvHeap);
+        DXGI_FORMAT rtvFormat, ID3D12DescriptorHeap* srvHeap,
+        AppPipelines* appPipelines);
 
     void BeginFrame();
     void BuildUi(const AppImGuiFrameContext& context);
@@ -169,6 +187,14 @@ public:
     void CompleteEditorRuntimeFrameAdvance(bool advanced);
     const editor::EditorViewportRenderTargetState& EditorViewportRenderTargetState() const;
     const editor::EditorViewportOverlayService& EditorViewportOverlay() const;
+    const editor::EditorProductionScenePipeline& ProductionScenePipeline() const;
+    const editor::EditorProductionMaterialPipeline& ProductionMaterialPipeline() const;
+    const editor::EditorProductionTexturePipeline& ProductionTexturePipeline() const;
+    const editor::EditorProductionShaderPipeline& ProductionShaderPipeline() const;
+    editor::EditorProductionLightingPipeline& ProductionLightingPipeline();
+    const editor::EditorProductionLightingPipeline& ProductionLightingPipeline() const;
+    editor::EditorProductionGpuDrivenPipeline& ProductionGpuDrivenPipeline();
+    const editor::EditorProductionGpuDrivenPipeline& ProductionGpuDrivenPipeline() const;
 
     void Shutdown();
 
@@ -257,6 +283,25 @@ private:
     editor::EditorDetailsSectionProviderRegistry editorDetailsSectionProviders_{};
     editor::EditorViewportCoordinateService editorViewportCoordinates_{};
     editor::EditorViewportInteractionService editorViewportInteraction_{};
+    editor::EditorModeRegistry editorModeRegistry_{};
+    editor::EditorToolManager editorInteractiveTools_{editorModeRegistry_};
+    editor::EditorExecutionContext editorInteractiveExecution_{};
+    editor::EditorTerrainToolBinding editorTerrainToolBinding_{};
+    editor::EditorTerrainEditExecutionService editorTerrainEditExecution_{};
+    editor::EditorTerrainSurfaceQueryService editorTerrainSurfaceQuery_{};
+    editor::EditorGeometryWorkspace editorGeometryWorkspace_{};
+    editor::EditorGeometryToolBinding editorGeometryToolBinding_{};
+    editor::EditorGeometryExecutionService editorGeometryExecution_{};
+    editor::EditorMeshBakePipeline editorMeshBakePipeline_{};
+    editor::EditorMeshBakeToolBinding editorMeshBakeToolBinding_{};
+    editor::EditorMeshBakeExecutionService editorMeshBakeExecution_{};
+    editor::EditorProductionMeshRuntimeCache editorProductionMeshRuntimeCache_{};
+    editor::EditorProductionScenePipeline editorProductionScenePipeline_{};
+    editor::EditorProductionMaterialPipeline editorProductionMaterialPipeline_{};
+    editor::EditorProductionTexturePipeline editorProductionTexturePipeline_{};
+    editor::EditorProductionShaderPipeline editorProductionShaderPipeline_{};
+    editor::EditorProductionLightingPipeline editorProductionLightingPipeline_{};
+    editor::EditorProductionGpuDrivenPipeline editorProductionGpuDrivenPipeline_{};
     editor::EditorViewportOverlayService editorViewportOverlay_{};
     editor::EditorViewportSelectionBridge editorViewportSelectionBridge_{};
     editor::EditorViewportRenderTarget editorViewportRenderTarget_{};

@@ -35,7 +35,30 @@ public:
         D3D12_GPU_VIRTUAL_ADDRESS cameraBufferAddress,
         D3D12_GPU_VIRTUAL_ADDRESS pointLightBufferAddress,
         D3D12_GPU_VIRTUAL_ADDRESS spotLightBufferAddress,
-        uint32_t indexCount) const;
+        uint32_t indexCount,
+        D3D12_GPU_VIRTUAL_ADDRESS productionLightBufferAddress = 0,
+        D3D12_GPU_VIRTUAL_ADDRESS productionClusterRangeAddress = 0,
+        D3D12_GPU_VIRTUAL_ADDRESS productionClusterIndexAddress = 0,
+        D3D12_GPU_VIRTUAL_ADDRESS productionLightingConstantsAddress = 0,
+        D3D12_GPU_DESCRIPTOR_HANDLE productionShadowAtlasHandle = {}) const;
+    bool PrepareIndirectMainBatch(
+        ID3D12GraphicsCommandList* commandList,
+        const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
+        const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
+        D3D12_GPU_VIRTUAL_ADDRESS materialBufferAddress,
+        D3D12_GPU_DESCRIPTOR_HANDLE textureHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE normalTextureHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE motionMaskTextureHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE environmentTextureHandle,
+        D3D12_GPU_VIRTUAL_ADDRESS directionalLightBufferAddress,
+        D3D12_GPU_VIRTUAL_ADDRESS cameraBufferAddress,
+        D3D12_GPU_VIRTUAL_ADDRESS pointLightBufferAddress,
+        D3D12_GPU_VIRTUAL_ADDRESS spotLightBufferAddress,
+        D3D12_GPU_VIRTUAL_ADDRESS productionLightBufferAddress = 0,
+        D3D12_GPU_VIRTUAL_ADDRESS productionClusterRangeAddress = 0,
+        D3D12_GPU_VIRTUAL_ADDRESS productionClusterIndexAddress = 0,
+        D3D12_GPU_VIRTUAL_ADDRESS productionLightingConstantsAddress = 0,
+        D3D12_GPU_DESCRIPTOR_HANDLE productionShadowAtlasHandle = {}) const;
 
     void DrawSkinnedModel(
         ID3D12GraphicsCommandList* commandList,

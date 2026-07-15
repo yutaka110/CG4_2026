@@ -38,11 +38,14 @@ class EditorToolRegistry;
 class EditorTransformGizmoService;
 class EditorTransactionStack;
 class EditorViewportInteractionService;
+class EditorViewportCoordinateService;
 class EditorViewportOverlayService;
 class EditorViewportSelectionBridge;
 class EditorWorldModel;
 class EditorWorldMutationService;
 class SceneWorldObjectProvider;
+class EditorToolManager;
+class EditorExecutionContext;
 class IEditorWorldMutationExecutionService;
 struct EditorWorldMutationResult;
 struct EditorCommandContext;
@@ -69,6 +72,7 @@ struct EditorContext {
     EditorLayoutService* layout = nullptr;
     EditorPanelLayoutService* panelLayout = nullptr;
     EditorViewportInteractionService* viewportInteraction = nullptr;
+    EditorViewportCoordinateService* viewportCoordinates = nullptr;
     EditorViewportSelectionBridge* viewportSelectionBridge = nullptr;
     EditorTransformGizmoService* transformGizmo = nullptr;
     EditorNotificationCenter* notifications = nullptr;
@@ -97,6 +101,8 @@ struct EditorContext {
     EditorVfxGraphService* vfxGraphs = nullptr;
     EditorAnimationStateMachineService* animationStateMachines = nullptr;
     EditorGameplayVisualScriptService* gameplayVisualScripts = nullptr;
+    EditorToolManager* interactiveTools = nullptr;
+    EditorExecutionContext* interactiveExecution = nullptr;
 
     bool HasCommandServices() const {
         return commands != nullptr && commandContext != nullptr;

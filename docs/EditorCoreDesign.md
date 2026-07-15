@@ -1445,6 +1445,247 @@ Current staged implementation:
   milestone; the engine-wide Commercial Release Gate still requires shipping
   packaging, runtime/editor target separation, soak/GPU coverage, crash
   reporting, and licensing checks.
+- Phase 13-R implements E-1 Editor Mode / Interactive Tool Framework as an
+  independent editor service. `EditorModeRegistry` owns stable mode/tool
+  descriptors and builders; `EditorToolManager` is the only lifecycle owner for
+  `Activate -> Preview -> Accept/Cancel`. Tools receive read-only Selection,
+  Document, Viewport, and coordinate context and cannot push Transactions
+  directly. An authoring tool must return one `IEditorUndoCommand` from Accept,
+  which the manager records as exactly one shared Transaction.
+- Preview state is invalidated deterministically when Selection or active
+  Document revisions change, Play/Sim starts, the required viewport disappears,
+  Authoring becomes locked, another Transaction is recorded, the mode changes,
+  or the editor shuts down. Cancel never records authoring history. This closes
+  the stale-preview and partial-commit failure modes before production brush,
+  placement, modeling, terrain, and mesh tools are added.
+- The editor exposes a toolbar mode selector, persistent Tool Palette and Tool
+  Properties panels, Accept/Cancel controls, viewport hints, Shift+1/Shift+2
+  mode shortcuts, Enter/Escape lifecycle shortcuts, and status telemetry. The
+  built-in read-only Selection Inspector provides a usable vertical slice while
+  Select mode continues to host the existing selection and transform workflows.
+- E-1 regression coverage verifies registration diagnostics, reactivation,
+  preview-without-history, exactly-one-command Accept, explicit Cancel, and
+  automatic Selection/Play boundary cancellation. Debug/Development validation
+  passes 40/40 Editor Core regression cases with zero build warnings/errors.
+  The full Development Commercial Completion runner remains ready at 11/11
+  gates and 155/155 checks with zero blocked, attention, or performance-warning
+  results; a normal D3D12/ImGui editor launch remained stable for eight seconds.
+- Phase 13-S implements E-2 Production Placement / Brush Tool Pack on the E-1
+  lifecycle. The Place mode exposes empty Entity, selected durable Asset, and
+  bounded placement-brush tools. Viewport display coordinates are converted to
+  world rays, XZ/XY/YZ fallback planes, and configurable grid snap without
+  mutating the Scene during preview.
+- `EditorWorldMutationService::Prepare` separates immutable Scene mutation
+  planning from application. The Tool Manager preflights transaction memory,
+  applies one generic command, registers exactly one history entry, and rolls
+  back if registration fails. A single brush stroke therefore creates one
+  atomic snapshot command containing stable Entity GUIDs, initial Transforms,
+  and durable Asset GUID references.
+- Content Browser Viewport drops now enter selected-Asset placement preview;
+  Tool Properties exposes name, plane, snap, height, yaw, scale, and spacing;
+  the viewport overlay shows cursor/stroke markers. Cancel and every E-1 stale
+  preview boundary remain mutation-free, while Play/Sim rejects activation.
+- E-2 validation passes 41/41 Editor Core regression cases. Commercial
+  Completion schema v5 adds the 14-check Production Placement scenario and
+  passes 12/12 gates and 169/169 checks with zero blocked, attention, or
+  performance-warning results.
+- Phase 13-T implements E-3 Production Terrain Sculpt / Paint Tool Pack on the
+  shared E-1 lifecycle and E-2 brush sampler. A persistent `TerrainEditLayer`
+  stores bounded Sculpt, Smooth, Flatten, and four-layer Paint stamps with
+  stable stroke/stamp GUIDs; transient drag preview lives in runtime authoring
+  state and never mutates the Course before Accept.
+- `EditorTerrainSurfaceQueryService` raymarches the procedural SDF from the
+  shared viewport ray contract. Accept creates one compact
+  `EditorTerrainEditUndoCommand` per stroke, while Cancel and Play/Sim locks are
+  mutation-free. Course serialization, validation, Document dirty state, and
+  global Undo/Redo consume the same durable layer.
+- `TerrainChunkManager` hashes only stamps overlapping each rail-distance chunk
+  and passes filtered layer copies to asynchronous mesh jobs. Sculpt modifies
+  procedural surface radius; Paint drives the existing four-layer procedural
+  material variation. Texture splatmaps, physical materials, and foliage masks
+  remain separate future asset systems.
+- E-3 validation passes 42/42 Editor Core regression cases. Commercial
+  Completion schema v6 adds a 14-check Production Terrain scenario and passes
+  13/13 gates and 183/183 checks with zero blocked, attention, or performance
+  warnings. Debug and Development x64 builds complete with zero warnings and
+  errors, and the normal Development editor remains stable for an eight-second
+  D3D12/ImGui startup probe.
+- Phase 13-U implements E-4 Production Modeling / Geometry Tool Framework on
+  the shared E-1 lifecycle. `EditorGeometryMesh` owns bounded editable vertex
+  and triangle data with stable element GUIDs, deterministic compact
+  serialization, content hashing, normal rebuilding, face deletion, and
+  region extrusion. Validation rejects invalid indices, duplicate identity,
+  non-finite or degenerate data, and reports boundary/non-manifold topology.
+- `EditorGeometryWorkspace` binds only an active Scene Document's selected Mesh
+  Entity. It ray-picks real triangles in viewport space, keeps stable face
+  selection, and isolates authoritative Geometry from transient Geometry and
+  collision previews. The Modeling mode exposes Face Select, Make Editable
+  Box, Extrude Faces, Delete Faces, Recalculate Normals, and Generate Box
+  Collision tools; every authoring Accept returns one generic command and
+  Cancel never mutates Scene state or history.
+- `EditorGeometryEditUndoCommand` atomically restores the editable Geometry and
+  generated collision property pair through an execution service registered in
+  the shared context. Topology changes invalidate old collision. Box collision
+  records the source Geometry content hash, and Scene validation reports
+  malformed or stale payloads. External Mesh Assets remain untouched: GPU mesh
+  baking/upload, LOD generation, UV tools, remeshing, and advanced collision
+  decomposition are intentionally assigned to the following asset-pipeline
+  milestone.
+- E-4 validation passes 43/43 Editor Core regression cases. Commercial
+  Completion schema v7 adds a 15-check Production Geometry scenario and passes
+  14/14 gates and 198/198 checks with zero blocked, attention, or performance
+  warnings. Debug and Development x64 builds complete with zero warnings and
+  errors, and the normal Development editor remains stable for an eight-second
+  D3D12/ImGui startup probe.
+- Phase 13-V implements E-5 Production Mesh Bake / LOD / Collision Asset
+  Pipeline. The Modeling mode adds a viewport-independent Bake Mesh Asset tool
+  with bounded LOD and collision settings. Preview builds all artifacts in
+  memory; Accept returns one command and Cancel remains side-effect free.
+- `EditorProductionMeshAsset` defines versioned `CGMESH` source, checksummed
+  `CGMB` Renderer data, and checksummed `CGCB` Physics data. Source Geometry,
+  build settings, every cooked LOD, and collision share immutable content
+  hashes. Bounds, finite values, counts, indices, schema, and 128 MiB limits are
+  validated before file publication or runtime use.
+- `EditorMeshBakePipeline` publishes source, cooked mesh, collision, and durable
+  metadata through one prepared File Transaction. Asset Registry identity and
+  the Scene Mesh Renderer reference are applied between file prepare and commit;
+  any failure rolls all three domains back. Rebake preserves GUID, ID, and path.
+  Global Undo/Redo restores the complete disk/registry/Scene/cache snapshot.
+- `EditorProductionMeshRuntimeCache` revalidates source/build hashes and exposes
+  selected LOD vertex/index/material views to Renderer consumers and the same
+  collision artifact to Physics consumers. Content Browser metadata and D3D12
+  thumbnail generation directly understand generated Production Mesh sources.
+- E-5 validation passes 44/44 Editor Core regression cases. Commercial
+  Completion schema v8 adds a 16-check Production Mesh Bake scenario and passes
+  15/15 gates and 214/214 checks with zero blocked, attention, or performance
+  warnings. Debug and Development x64 builds complete with zero warnings and
+  errors, and the normal Development editor remains stable for an eight-second
+  D3D12/ImGui startup probe.
+- Phase 13-W implements E-6 Production Scene Render / Physics Instance
+  Pipeline. `EditorProductionScenePipeline` derives transient instances from
+  Scene Mesh Renderer components and durable E-5 Asset GUIDs without expanding
+  the Scene persistence schema. Parent transforms are evaluated in row-vector
+  hierarchy order; non-invertible transforms and unresolved/corrupt Assets are
+  rejected with diagnostics.
+- Visible instances use world AABB frustum rejection and distance LOD with
+  transition hysteresis. Validated cooked vertices/indices are converted once
+  into D3D12 default-heap LOD buffers, transform constants remain persistently
+  mapped, and staging/replaced/removed resources are retained until the
+  scheduled frame fence completes. Geometry.MainModel consumes the resulting
+  draw packets through the existing main material/light contract.
+- The same transformed Entity set exposes Physics broadphase AABBs and Box or
+  Triangle Mesh narrowphase raycasts, plus AABB overlap queries. Viewport Scene
+  picking uses those queries and Authoring Helpers/Object Labels show projected
+  bounds and selected LOD.
+- E-6 validation retains 44/44 Editor Core regression cases. Commercial
+  Completion schema v9 adds a 10-check Production Scene Instance scenario,
+  including headless WARP D3D12 upload and completed-fence retirement, and
+  passes 16/16 gates and 224/224 checks with zero blocked, attention, or
+  performance warnings. Debug and Development x64 builds complete with zero
+  warnings and errors, and the normal Development editor remains stable for an
+  eight-second D3D12/ImGui startup probe.
+- Phase 13-X implements E-7 Production Material Instance / Scene Lighting
+  Binding. A versioned `MaterialInstance` Asset inherits one durable Material
+  Graph, validates bounded surface overrides and texture GUIDs, and resolves a
+  deterministic compiled-graph variant identity without persisting runtime GPU
+  state in the Scene.
+- E-6 LOD resources are split into stable material-slot submeshes. Each draw
+  packet resolves its Entity/slot through `EditorProductionMaterialPipeline`;
+  valid instances bind mapped Material CBVs while missing, corrupt, or failed
+  parent graphs keep the draw alive through the engine fallback. Hot-reloaded,
+  replaced, and unreferenced CBVs retire only after the scheduled frame fence.
+- Directional, Point, and Spot Light Scene components are collected with
+  hierarchy transforms and bounded authoring values. The existing single-light
+  shader contract chooses the highest priority candidate deterministically and
+  binds zero-intensity safe defaults for missing types; capacity overflow is a
+  diagnostic rather than an implicit order-dependent result.
+- E-7 validation passes 45/45 Editor Core regression cases. Commercial
+  Completion schema v10 adds an 8-check Material/Lighting scenario with WARP
+  D3D12 CBVs and fence retirement, and passes 17/17 gates and 232/232 checks
+  with zero blocked, attention, or performance warnings. Debug and Development
+  builds have zero warnings/errors and the normal Development editor remains
+  alive through the eight-second startup probe.
+- Phase 13-Y implements E-8 Production Texture Streaming / Descriptor
+  Residency. `EditorProductionTexturePipeline` consumes E-7 durable albedo and
+  normal Texture GUIDs, decodes bounded 2D DDS/TGA/WIC sources, generates mip
+  chains where needed, and allocates a physical reduced-resolution mip-tail
+  resource under a configurable GPU budget instead of keeping invisible high
+  mips allocated.
+- E-8 owns shared shader-visible SRV indices 3712-4031, after the Thumbnail
+  range 3200-3711. Color and normal usages receive distinct sRGB/linear SRVs;
+  descriptors are never overwritten while in flight. Timestamp hot reload
+  swaps to a new resource/descriptor, inactive entries retire by deterministic
+  LRU, and resources, upload buffers, and descriptor slots return only after
+  their scheduled frame fence completes. Missing, corrupt, over-budget, and
+  descriptor-exhausted requests preserve the engine fallback draw.
+- `Geometry.MainModel` consumes the resident albedo SRV at `t0` and carries the
+  resident normal SRV through the existing reserved `t4` binding. Runtime Watch
+  publishes resident/full/partial counts, bytes versus budget, pending
+  retirements, fallback count, and cache hits/misses. Normal-map shader
+  specialization remains the next E-9 PSO/variant responsibility.
+- E-8 validation passes 46/46 Editor Core regression cases. Commercial
+  Completion schema v11 adds a 9-check WARP Texture residency scenario and
+  passes 18/18 gates and 241/241 checks with zero blocked, attention, or
+  performance warnings. Debug and Development builds complete with zero
+  warnings/errors, and the normal Development editor remains alive through the
+  eight-second startup probe.
+- Phase 13-Z implements E-9 Production Shader Variant / PSO Cache. E-7 now
+  publishes one immutable Material Graph artifact per resident Material
+  Instance, and E-9 combines its fingerprint and domain/blend/shading state
+  with the E-8 normal residency bit and the shared shader contract hash to
+  produce deterministic variant identities.
+- Generated Graph HLSL is normalized onto the Main `t0`/`t4` resource contract,
+  written atomically, and compiled by DXC workers. The frame thread alone
+  creates or loads D3D12 PSOs, promotes ready variants, serializes the Pipeline
+  Library, and retires inactive PSOs after the scheduled fence. Initial work
+  uses the engine fallback; recompiles retain a per-material last-known-good
+  PSO. Opaque, Masked, and Translucent depth/blend state, Lit/Unlit code, and
+  derivative-TBN normal mapping are active for Production Scene packets.
+- Runtime Watch exposes resident/queued/ready/fallback/LKG/normal counts,
+  memory and Pipeline Library cache activity, compile failures, and pending
+  retirements. E-9 validation passes 47/47 core cases and its 8-check WARP
+  gate, while commercial completion v12 passes 19/19 gates and 249/249 checks
+  with zero failed, blocked, attention, or performance-warning results.
+- Phase 13-AA implements E-10 Production Multi-Light Cluster / Shadow. The E-7
+  single-light CBVs remain only as a compatibility fallback; Production Scene
+  packets bind a renderer-owned list of up to 256 priority-ordered Directional,
+  Point, and Spot Lights through root SRVs. Each Scene View builds a bounded
+  64-pixel tile grid with 24 logarithmic depth slices and at most 64 Light
+  indices per cluster. Capacity overflow and low-priority rejection are
+  explicit Runtime Watch counters rather than undefined GPU writes.
+- Directional and Spot shadow requests are ordered independently by shadow
+  priority into a configurable eight-slice D32 texture-array atlas. The shadow
+  pass uses the same E-6 render packets, a depth-only E-10 PSO, comparison
+  sampling in generated E-9 Material shaders, and deterministic unshadowed
+  fallback when the Light/shadow budget is exhausted. Point cube shadows remain
+  an explicit unsupported-policy diagnostic instead of silently consuming six
+  atlas slices.
+- E-10 validation passes 48/48 core cases. Commercial completion v13 adds a
+  9-check WARP gate covering the extended Main root signature, shadow DXC/PSO,
+  structured buffers, atlas residency, bounded clusters, budget fallback, and
+  command submission; the full result is 20/20 gates and 258/258 checks with
+  zero failed, blocked, attention, or performance-warning results. Debug and
+  Development builds have zero warnings/errors, and the normal Development
+  editor remains responsive through an eight-second integrated startup probe.
+- Phase 13-AB implements E-11 Production GPU-Driven Visibility / Indirect Draw.
+  E-6 now publishes all hierarchy-visible, GPU-resident submesh candidates with
+  world bounds while retaining its CPU-visible packet list as a safety path.
+  Candidates are deterministically grouped by mesh/LOD/submesh, Material CBV,
+  Texture descriptors, and E-9 PSO into bounded non-overlapping command ranges.
+- A forced `Visibility.ProductionGpuDriven` RenderGraph pass resets batch
+  counters, performs 64-thread sphere-frustum culling and conservative previous-
+  frame Terrain Hi-Z occlusion, compacts visible instances, and emits a 32-byte
+  Transform-CBV + DrawIndexed command consumed by `ExecuteIndirect`. Missing
+  Hi-Z uses a valid descriptor and frustum-only policy; gameplay rendering and
+  capacity overflow continue through the existing direct-draw path.
+- Upload, UAV argument/count, and readback resources use a completed/scheduled-
+  fence protected three-frame ring. Runtime Watch reports submitted/resident/
+  visible counts, batches, budget fallback, dispatch/readback, Hi-Z state, and
+  generated-command layout validation. E-11 validation passes 49/49 core cases;
+  commercial completion v14 passes 21/21 gates and 266/266 checks with zero
+  failed, blocked, attention, or performance-warning results. Debug and
+  Development builds have zero warnings/errors, and the integrated Development
+  editor remains responsive through an eight-second startup probe.
 
 ## Commercial Completion Scorecard
 

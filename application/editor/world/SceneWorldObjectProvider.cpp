@@ -1,4 +1,5 @@
 #include "SceneWorldObjectProvider.h"
+#include "../EditorAssetRegistry.h"
 
 #include <algorithm>
 #include <memory>
@@ -215,17 +216,63 @@ bool SceneWorldObjectProvider::BuildMutation(
             if (errorMessage != nullptr) *errorMessage = "Scene Entity parent does not exist.";
             return false;
         }
-        EditorSceneEntity* created = working.CreateEntity(
-            request.name.empty() ? "Entity" : request.name, parentGuid);
-        if (created == nullptr) return false;
-        const std::string createdGuid = created->guid;
-        const std::string componentType = EditorSceneComponentTypeForAssetKind(request.assetType);
-        if (!request.assetGuid.empty() && !componentType.empty()) {
-            const EditorSceneObjectReference reference{"asset", {}, request.assetGuid};
-            working.AddComponent(createdGuid, componentType, &reference);
+        std::vector<EditorWorldMutationRequest::Placement> placements = request.placements;
+        if (placements.empty()) {
+            placements.push_back(EditorWorldMutationRequest::Placement{
+                {}, request.name.empty() ? "Entity" : request.name, {}});
         }
-        selection.push_back(MakeId(document_, ProviderId(), createdGuid));
-        changed = true;
+        constexpr std::size_t kMaxPlacementCount = 1024;
+        if (placements.size() > kMaxPlacementCount) {
+            if (errorMessage != nullptr) *errorMessage = "Scene placement exceeds the 1024 entity transaction limit.";
+            return false;
+        }
+        const std::string componentType = EditorSceneComponentTypeForAssetKind(request.assetType);
+        for (const EditorWorldMutationRequest::Placement& placement : placements) {
+            EditorSceneEntity* created = working.CreateEntity(
+                placement.name.empty()
+                    ? (request.name.empty() ? "Entity" : request.name)
+                    : placement.name,
+                parentGuid,
+                placement.stableGuid);
+            if (created == nullptr) {
+                if (errorMessage != nullptr) *errorMessage = "Scene placement could not create a stable Entity.";
+                return false;
+            }
+            const std::string createdGuid = created->guid;
+            if (!request.assetGuid.empty() && !componentType.empty()) {
+                const EditorSceneObjectReference reference{"asset", {}, request.assetGuid};
+                if (!working.AddComponent(createdGuid, componentType, &reference)) {
+                    if (errorMessage != nullptr) *errorMessage = "Scene placement could not attach the selected Asset component.";
+                    return false;
+                }
+            }
+            for (const EditorWorldMutationRequest::InitialProperty& initializer :
+                 placement.initialProperties) {
+                EditorSceneEntity* entity = working.FindEntity(createdGuid);
+                EditorSceneComponent* component = entity != nullptr
+                    ? working.FindComponent(*entity, initializer.componentType)
+                    : nullptr;
+                if (component == nullptr) {
+                    if (errorMessage != nullptr) *errorMessage =
+                        "Scene placement initial component is unavailable: " + initializer.componentType;
+                    return false;
+                }
+                const auto property = std::find_if(
+                    component->properties.begin(), component->properties.end(),
+                    [&](const EditorSceneProperty& value) {
+                        return value.name == initializer.property;
+                    });
+                if (property == component->properties.end()) {
+                    if (errorMessage != nullptr) *errorMessage =
+                        "Scene placement initial property is unavailable: " + initializer.property;
+                    return false;
+                }
+                property->value = initializer.value;
+                working.Touch();
+            }
+            selection.push_back(MakeId(document_, ProviderId(), createdGuid));
+            changed = true;
+        }
         break;
     }
     case EditorWorldMutationKind::Rename: {
@@ -323,6 +370,36 @@ bool SceneWorldObjectProvider::BuildMutation(
         changed = true;
         break;
     }
+    case EditorWorldMutationKind::SetComponentAssetReference: {
+        const auto& target = request.targets.front();
+        EditorSceneEntity* entity = targetEntity(target);
+        EditorSceneComponent* component = entity != nullptr
+            ? working.FindComponent(*entity, request.componentType)
+            : nullptr;
+        if (component == nullptr || request.property.empty() ||
+            !IsDurableEditorAssetGuid(request.assetGuid)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = "Scene component Asset reference target or GUID is invalid.";
+            }
+            return false;
+        }
+        const auto reference = std::find_if(
+            component->references.begin(), component->references.end(),
+            [&](const EditorSceneObjectReference& value) {
+                return value.property == request.property;
+            });
+        if (reference != component->references.end()) {
+            if (reference->assetGuid == request.assetGuid && reference->entityGuid.empty()) return false;
+            reference->entityGuid.clear();
+            reference->assetGuid = request.assetGuid;
+        } else {
+            component->references.push_back({request.property, {}, request.assetGuid});
+        }
+        working.Touch();
+        selection.push_back(target);
+        changed = true;
+        break;
+    }
     }
     if (!changed) {
         if (errorMessage != nullptr) *errorMessage = "Scene mutation did not change the document.";
@@ -336,7 +413,13 @@ bool SceneWorldObjectProvider::BuildMutation(
     plan->before = {std::string(ProviderId()), document_, Snapshot(*scene_)};
     plan->after = {std::string(ProviderId()), document_, Snapshot(working)};
     plan->resultingSelection = std::move(selection);
-    plan->label = std::string(ToString(request.kind)) + " Scene Entity";
+    if (request.kind == EditorWorldMutationKind::Create && request.placements.size() > 1) {
+        plan->label = "Place " + std::to_string(request.placements.size()) + " Scene Entities";
+    } else if (request.kind == EditorWorldMutationKind::Create) {
+        plan->label = "Place Scene Entity";
+    } else {
+        plan->label = std::string(ToString(request.kind)) + " Scene Entity";
+    }
     return true;
 }
 

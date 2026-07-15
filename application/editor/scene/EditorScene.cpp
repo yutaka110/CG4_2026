@@ -1,5 +1,7 @@
 #include "EditorScene.h"
 
+#include "../geometry/EditorGeometryMesh.h"
+#include "../mesh/EditorProductionMeshAsset.h"
 #include "../world/EditorWorldObjectRecord.h"
 
 #include <algorithm>
@@ -8,6 +10,16 @@
 
 namespace editor {
 namespace {
+
+bool ParseNonZeroHash(std::string_view text, uint64_t& output) {
+    try {
+        std::size_t consumed = 0;
+        output = std::stoull(std::string(text), &consumed);
+        return consumed == text.size() && output != 0;
+    } catch (...) {
+        return false;
+    }
+}
 
 std::string UniqueEntityName(const EditorScene& scene, std::string base) {
     if (base.empty()) base = "Entity";
@@ -152,6 +164,20 @@ bool EditorScene::AddComponent(
     if (entity == nullptr || typeId.empty() || FindComponent(*entity, typeId) != nullptr) return false;
     EditorSceneComponent component{};
     component.typeId = std::move(typeId);
+    if (component.typeId == kEditorDirectionalLightComponentType) {
+        component.properties = {{"color", "1 1 1 1"}, {"direction", "0 -1 0"},
+            {"intensity", "1"}, {"priority", "0"}, {"castsShadow", "true"},
+            {"shadowPriority", "0"}};
+    } else if (component.typeId == kEditorPointLightComponentType) {
+        component.properties = {{"color", "1 1 1 1"}, {"intensity", "1"},
+            {"radius", "10"}, {"decay", "2"}, {"priority", "0"},
+            {"castsShadow", "false"}, {"shadowPriority", "0"}};
+    } else if (component.typeId == kEditorSpotLightComponentType) {
+        component.properties = {{"color", "1 1 1 1"}, {"direction", "0 -1 0"},
+            {"intensity", "1"}, {"distance", "10"}, {"decay", "2"},
+            {"angle", "30"}, {"priority", "0"}, {"castsShadow", "true"},
+            {"shadowPriority", "0"}};
+    }
     if (initialReference != nullptr) component.references.push_back(*initialReference);
     entity->components.push_back(std::move(component));
     Touch();
@@ -201,6 +227,87 @@ EditorSceneValidationReport EditorScene::Validate() const {
                 }
                 if (reference.entityGuid.empty() && reference.assetGuid.empty()) {
                     report.warnings.push_back("Object reference is unresolved on: " + entity.guid);
+                }
+            }
+            if (component.typeId == kEditorMeshRendererComponentType) {
+                std::unordered_set<std::string> materialSlots;
+                for (const EditorSceneObjectReference& reference : component.references) {
+                    if (reference.property != "material" &&
+                        reference.property.rfind("material:", 0) != 0) continue;
+                    if (!materialSlots.insert(reference.property).second ||
+                        !IsDurableEditorAssetGuid(reference.assetGuid)) {
+                        report.errors.push_back(
+                            "Mesh Renderer Material slot is duplicated or invalid on: " + entity.guid);
+                    }
+                }
+                const auto geometryProperty = std::find_if(
+                    component.properties.begin(), component.properties.end(),
+                    [](const EditorSceneProperty& value) {
+                        return value.name == kEditorEditableGeometryProperty;
+                    });
+                const auto collisionProperty = std::find_if(
+                    component.properties.begin(), component.properties.end(),
+                    [](const EditorSceneProperty& value) {
+                        return value.name == kEditorGeneratedCollisionProperty;
+                    });
+                EditorGeometryMesh geometry;
+                bool geometryValid = false;
+                if (geometryProperty != component.properties.end()) {
+                    std::string geometryError;
+                    geometryValid = EditorGeometryMesh::Deserialize(
+                        geometryProperty->value, geometry, &geometryError);
+                    if (!geometryValid) {
+                        report.errors.push_back(
+                            "Editable Geometry is invalid on " + entity.guid + ": " + geometryError);
+                    }
+                }
+                if (collisionProperty != component.properties.end()) {
+                    EditorGeneratedCollision collision{};
+                    if (!DeserializeEditorGeneratedCollision(
+                            collisionProperty->value, collision)) {
+                        report.errors.push_back(
+                            "Generated collision is invalid on: " + entity.guid);
+                    } else if (geometryValid && collision.sourceHash != geometry.ContentHash()) {
+                        report.warnings.push_back(
+                            "Generated collision is stale on: " + entity.guid);
+                    }
+                }
+                const auto bakedGuidProperty = std::find_if(
+                    component.properties.begin(), component.properties.end(),
+                    [](const EditorSceneProperty& value) {
+                        return value.name == kEditorBakedMeshGuidProperty;
+                    });
+                if (bakedGuidProperty != component.properties.end()) {
+                    const auto sourceHashProperty = std::find_if(
+                        component.properties.begin(), component.properties.end(),
+                        [](const EditorSceneProperty& value) {
+                            return value.name == kEditorBakedMeshSourceHashProperty;
+                        });
+                    const auto buildHashProperty = std::find_if(
+                        component.properties.begin(), component.properties.end(),
+                        [](const EditorSceneProperty& value) {
+                            return value.name == kEditorBakedMeshBuildHashProperty;
+                        });
+                    const auto assetReference = std::find_if(
+                        component.references.begin(), component.references.end(),
+                        [](const EditorSceneObjectReference& value) {
+                            return value.property == "asset";
+                        });
+                    uint64_t bakedSourceHash = 0;
+                    uint64_t bakedBuildHash = 0;
+                    if (!IsDurableEditorAssetGuid(bakedGuidProperty->value) ||
+                        assetReference == component.references.end() ||
+                        assetReference->assetGuid != bakedGuidProperty->value ||
+                        sourceHashProperty == component.properties.end() ||
+                        buildHashProperty == component.properties.end() ||
+                        !ParseNonZeroHash(sourceHashProperty->value, bakedSourceHash) ||
+                        !ParseNonZeroHash(buildHashProperty->value, bakedBuildHash)) {
+                        report.errors.push_back(
+                            "Production Mesh bake identity is invalid on: " + entity.guid);
+                    } else if (geometryValid && bakedSourceHash != geometry.ContentHash()) {
+                        report.warnings.push_back(
+                            "Production Mesh bake is stale on: " + entity.guid);
+                    }
                 }
             }
         }
@@ -256,6 +363,9 @@ const char* DisplayNameForEditorSceneComponent(std::string_view typeId) noexcept
     if (typeId == kEditorMeshRendererComponentType) return "Mesh Renderer";
     if (typeId == kEditorVfxComponentType) return "VFX";
     if (typeId == kEditorAudioSourceComponentType) return "Audio Source";
+    if (typeId == kEditorDirectionalLightComponentType) return "Directional Light";
+    if (typeId == kEditorPointLightComponentType) return "Point Light";
+    if (typeId == kEditorSpotLightComponentType) return "Spot Light";
     return "Component";
 }
 

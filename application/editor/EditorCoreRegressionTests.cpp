@@ -76,6 +76,11 @@
 #include "documents/EditorTextDocumentProvider.h"
 #include "prefab/EditorPrefabService.h"
 #include "material/EditorMaterialGraph.h"
+#include "material/EditorProductionMaterialPipeline.h"
+#include "texture/EditorProductionTexturePipeline.h"
+#include "shader/EditorProductionShaderPipeline.h"
+#include "lighting/EditorProductionLightingPipeline.h"
+#include "visibility/EditorProductionGpuDrivenPipeline.h"
 #include "vfx/EditorVfxGraph.h"
 #include "animation/EditorAnimationStateMachine.h"
 #include "gameplay/EditorGameplayVisualScript.h"
@@ -93,6 +98,21 @@
 #include "world/SceneWorldObjectProvider.h"
 #include "world/IEditorWorldMutationProvider.h"
 #include "world/VfxWorldObjectProvider.h"
+#include "tools/EditorModeRegistry.h"
+#include "tools/EditorToolManager.h"
+#include "tools/EditorPlacementQueryService.h"
+#include "tools/EditorPlacementTools.h"
+#include "terrain/EditorTerrainBrushTools.h"
+#include "terrain/EditorTerrainEditCommand.h"
+#include "terrain/EditorTerrainSurfaceQuery.h"
+#include "geometry/EditorGeometryMesh.h"
+#include "geometry/EditorGeometryEditCommand.h"
+#include "geometry/EditorGeometryWorkspace.h"
+#include "geometry/EditorGeometryTools.h"
+#include "mesh/EditorProductionMeshAsset.h"
+#include "mesh/EditorMeshBakePipeline.h"
+#include "mesh/EditorMeshBakeTools.h"
+#include "scene/EditorProductionScenePipeline.h"
 
 #include "../AppEditorToolModules.h"
 #include "../AppRuntimeState.h"
@@ -106,6 +126,7 @@
 #include "../course/CourseSpawnRuntime.h"
 #include "../course/PlayerCombatFeelSystem.h"
 #include "../course/SectionCheckpointSystem.h"
+#include "../terrain/TerrainVolumeField.h"
 
 #include <chrono>
 #include <cmath>
@@ -225,6 +246,56 @@ public:
 
 private:
     std::size_t estimatedBytes_ = 64;
+};
+
+struct InteractiveToolRegressionState {
+    uint32_t activateCount = 0;
+    uint32_t tickCount = 0;
+    uint32_t acceptCount = 0;
+    uint32_t cancelCount = 0;
+    EditorInteractiveToolEndReason cancelReason =
+        EditorInteractiveToolEndReason::CancelledByUser;
+};
+
+class RegressionInteractiveTool final : public IEditorInteractiveTool {
+public:
+    explicit RegressionInteractiveTool(
+        std::shared_ptr<InteractiveToolRegressionState> state)
+        : state_(std::move(state)) {}
+
+    bool Activate(
+        const EditorInteractiveToolEnvironment&,
+        std::string&) override {
+        ++state_->activateCount;
+        return true;
+    }
+
+    void Tick(
+        const EditorInteractiveToolEnvironment&,
+        const EditorInteractiveToolFrameInput&) override {
+        ++state_->tickCount;
+    }
+
+    EditorInteractiveToolAcceptResult BuildAccept(
+        const EditorInteractiveToolEnvironment&) override {
+        ++state_->acceptCount;
+        return EditorInteractiveToolAcceptResult::Commit(
+            EditorInteractiveToolCommit{
+                "Commit Regression Tool",
+                EditorObjectHandle{EditorDomainId::Unknown, "tool-target"},
+                std::make_shared<RegressionUndoCommand>()},
+            "Regression interactive tool accepted.");
+    }
+
+    void Cancel(EditorInteractiveToolEndReason reason) override {
+        ++state_->cancelCount;
+        state_->cancelReason = reason;
+    }
+
+    std::string ViewportHint() const override { return "Regression preview"; }
+
+private:
+    std::shared_ptr<InteractiveToolRegressionState> state_;
 };
 
 class FakeThumbnailGpuBackend final : public EditorAssetGpuThumbnailBackend {
@@ -4804,6 +4875,362 @@ void TestMaterialGraphFoundation(RegressionRunner& runner) {
         "Content Browser should classify Material Graph as a durable Asset kind");
 }
 
+void TestProductionMaterialLightingPipeline(RegressionRunner& runner) {
+    const std::filesystem::path root = std::filesystem::path{"generated"} /
+        "editor" / "tests" / "production_material_regression";
+    RemoveTreeIfPresent(root);
+    const std::filesystem::path graphPath = root / "surface.material";
+    const std::filesystem::path instancePath = root / "surface.matinst";
+    std::string error;
+
+    EditorMaterialGraphAsset graph = MakeDefaultEditorMaterialGraph(
+        "material-graph-e7-regression", "E7 Surface");
+    EditorDocumentContent graphContent{};
+    runner.Expect(
+        EditorMaterialGraphDocumentProvider::Encode(graph, &graphContent, &error),
+        "E-7 parent Material Graph should serialize for runtime resolution");
+    WriteBinaryFile(graphPath, graphContent.bytes);
+
+    EditorMaterialInstanceAsset instance{};
+    instance.assetGuid = "material-instance-e7-regression";
+    instance.parentMaterialGuid = graph.assetGuid;
+    instance.name = "E7 Instance";
+    instance.baseColor = {0.2f, 0.4f, 0.8f, 1.0f};
+    instance.roughness = 0.25f;
+    instance.metallic = 0.75f;
+    instance.environmentCoefficient = 0.5f;
+    std::string encoded;
+    EditorMaterialInstanceAsset decoded{};
+    runner.Expect(
+        EncodeEditorMaterialInstance(instance, encoded, &error) &&
+            DecodeEditorMaterialInstance(encoded, decoded, &error) &&
+            decoded.assetGuid == instance.assetGuid &&
+            decoded.parentMaterialGuid == instance.parentMaterialGuid &&
+            std::abs(decoded.roughness - 0.25f) < 0.0001f,
+        "Material Instance should round-trip durable identity and bounded overrides");
+    WriteTextFile(instancePath, encoded);
+
+    EditorAssetRegistry registry;
+    EditorAssetRecord graphRecord{};
+    graphRecord.kind = EditorAssetKind::MaterialGraph;
+    graphRecord.id = "surface_graph";
+    graphRecord.guid = graph.assetGuid;
+    graphRecord.logicalPath = graphPath.generic_string();
+    graphRecord.sourcePath = graphPath.string();
+    graphRecord.referenceable = true;
+    graphRecord.sourceTimestamp = 1;
+    EditorAssetRecord instanceRecord{};
+    instanceRecord.kind = EditorAssetKind::MaterialInstance;
+    instanceRecord.id = "surface_instance";
+    instanceRecord.guid = instance.assetGuid;
+    instanceRecord.logicalPath = instancePath.generic_string();
+    instanceRecord.sourcePath = instancePath.string();
+    instanceRecord.referenceable = true;
+    instanceRecord.sourceTimestamp = 1;
+    runner.Expect(
+        registry.Register(graphRecord) && registry.Register(instanceRecord) &&
+            EditorAssetKindForImportPath("Surface.matinst") == EditorAssetKind::MaterialInstance &&
+            std::string(ToString(EditorAssetKind::MaterialInstance)) == "MaterialInstance",
+        "Content Browser should classify Material Instance as a durable Asset kind");
+
+    EditorScene scene;
+    EditorSceneEntity* mesh = scene.CreateEntity("Material Mesh", {}, "material-mesh-e7");
+    const std::string meshGuid = mesh != nullptr ? mesh->guid : std::string{};
+    runner.Expect(mesh != nullptr && scene.AddComponent(
+        mesh->guid, std::string(kEditorMeshRendererComponentType)),
+        "E-7 regression Scene should create a Mesh Renderer");
+    EditorSceneComponent* renderer = mesh != nullptr
+        ? scene.FindComponent(*mesh, kEditorMeshRendererComponentType) : nullptr;
+    if (renderer != nullptr) renderer->references.push_back(
+        {"material:0", {}, instance.assetGuid});
+    EditorSceneEntity* sun = scene.CreateEntity("Sun", {}, "sun-e7");
+    EditorSceneEntity* bulb = scene.CreateEntity("Bulb", {}, "bulb-e7");
+    EditorSceneEntity* cone = scene.CreateEntity("Cone", {}, "cone-e7");
+    sun = scene.FindEntity("sun-e7");
+    bulb = scene.FindEntity("bulb-e7");
+    cone = scene.FindEntity("cone-e7");
+    if (sun != nullptr) {
+        scene.AddComponent(sun->guid, std::string(kEditorDirectionalLightComponentType));
+        EditorSceneComponent* light = scene.FindComponent(*sun, kEditorDirectionalLightComponentType);
+        if (light != nullptr) light->properties = {
+            {"color", "1 0.9 0.8 1"}, {"direction", "0 -2 0"},
+            {"intensity", "3"}, {"priority", "10"}};
+    }
+    if (bulb != nullptr) {
+        scene.AddComponent(bulb->guid, std::string(kEditorPointLightComponentType));
+        EditorSceneComponent* light = scene.FindComponent(*bulb, kEditorPointLightComponentType);
+        if (light != nullptr) light->properties = {
+            {"color", "0.5 0.7 1 1"}, {"intensity", "8"},
+            {"radius", "25"}, {"decay", "2"}};
+    }
+    if (cone != nullptr) {
+        scene.AddComponent(cone->guid, std::string(kEditorSpotLightComponentType));
+        EditorSceneComponent* light = scene.FindComponent(*cone, kEditorSpotLightComponentType);
+        if (light != nullptr) light->properties = {
+            {"direction", "0 -1 0"}, {"intensity", "4"},
+            {"distance", "40"}, {"angle", "35"}};
+    }
+
+    EditorProductionMaterialPipeline pipeline;
+    runner.Expect(
+        pipeline.Sync(scene, registry, 0, 1, &error),
+        "E-7 CPU collection should remain deterministic without a D3D12 device");
+    const EditorProductionMaterialBinding* binding = pipeline.Resolve(meshGuid, 0);
+    runner.Expect(
+        binding != nullptr && !binding->fallback &&
+            binding->parentMaterialGuid == graph.assetGuid &&
+            binding->shaderVariantHash != 0 &&
+            pipeline.Stats().resolvedBindings == 1 &&
+            pipeline.Stats().residentShaderVariants == 1,
+        "Material slot should resolve Instance inheritance and compiled shader variant identity");
+    const EditorProductionMaterialShaderSource* shaderSource =
+        pipeline.ResolveShaderSource(instance.assetGuid);
+    runner.Expect(
+        shaderSource != nullptr && shaderSource->materialAssetGuid == instance.assetGuid &&
+            shaderSource->graphSourceFingerprint != 0 &&
+            !shaderSource->graphHlslSource.empty() &&
+            shaderSource->domain == graph.domain &&
+            shaderSource->blendMode == graph.blendMode &&
+            shaderSource->shadingModel == graph.shadingModel,
+        "E-7 should publish one immutable Material Graph artifact for E-9 without per-Entity HLSL copies");
+    runner.Expect(
+        pipeline.Lighting().directionalCount == 1 &&
+            pipeline.Lighting().pointCount == 1 && pipeline.Lighting().spotCount == 1 &&
+            std::abs(pipeline.Lighting().directional.intensity - 3.0f) < 0.0001f &&
+            std::abs(pipeline.Lighting().point.radius - 25.0f) < 0.0001f &&
+            pipeline.Lighting().spot.cosAngle > 0.0f,
+        "Scene Lighting should collect validated Directional, Point, and Spot components");
+
+    EditorSceneEntity* currentMesh = scene.FindEntity(meshGuid);
+    renderer = currentMesh != nullptr
+        ? scene.FindComponent(*currentMesh, kEditorMeshRendererComponentType) : nullptr;
+    if (renderer != nullptr) renderer->references[0].assetGuid = "missing-material-instance";
+    pipeline.Sync(scene, registry, 0, 2, &error);
+    binding = pipeline.Resolve(meshGuid, 0);
+    runner.Expect(
+        binding != nullptr && binding->fallback &&
+            pipeline.Stats().fallbackBindings == 1 &&
+            !pipeline.Diagnostics().empty(),
+        "Missing Material Instance should produce a visible deterministic fallback diagnostic");
+    RemoveTreeIfPresent(root);
+}
+
+void TestProductionMultiLightClusterPipeline(RegressionRunner& runner) {
+    EditorScene scene;
+    const auto addLight = [&](std::string guid, std::string_view type,
+                              std::vector<EditorSceneProperty> properties,
+                              Vector3 translation = {}) {
+        EditorSceneEntity* entity = scene.CreateEntity(guid, {}, guid);
+        if (entity == nullptr || !scene.AddComponent(guid, std::string(type))) return;
+        entity = scene.FindEntity(guid);
+        EditorSceneComponent* transform = entity != nullptr
+            ? scene.FindComponent(*entity, kEditorTransformComponentType) : nullptr;
+        if (transform != nullptr && translation.x + translation.y + translation.z != 0.0f) {
+            transform->properties[0].value = std::to_string(translation.x) + " " +
+                std::to_string(translation.y) + " " + std::to_string(translation.z);
+        }
+        EditorSceneComponent* light = entity != nullptr ? scene.FindComponent(*entity, type) : nullptr;
+        if (light != nullptr) light->properties = std::move(properties);
+    };
+    addLight("e10-key", kEditorDirectionalLightComponentType,
+        {{"direction", "0 -1 0"}, {"intensity", "5"}, {"priority", "30"},
+         {"castsShadow", "true"}, {"shadowPriority", "30"}});
+    addLight("e10-fill", kEditorDirectionalLightComponentType,
+        {{"direction", "1 -1 0"}, {"intensity", "2"}, {"priority", "20"},
+         {"castsShadow", "true"}, {"shadowPriority", "10"}});
+    addLight("e10-point", kEditorPointLightComponentType,
+        {{"intensity", "8"}, {"radius", "12"}, {"decay", "2"}, {"priority", "10"}},
+        {0.0f, 0.0f, 8.0f});
+    addLight("e10-rejected", kEditorSpotLightComponentType,
+        {{"intensity", "4"}, {"distance", "20"}, {"angle", "35"}, {"priority", "1"}},
+        {2.0f, 0.0f, 10.0f});
+
+    EditorProductionLightingPolicy policy{};
+    policy.maximumVisibleLights = 3;
+    policy.maximumShadowMaps = 1;
+    policy.maximumLightsPerCluster = 4;
+    EditorProductionLightingPipeline pipeline(policy);
+    const Matrix4x4 identity = MakeIdentity4x4();
+    std::string error;
+    runner.Expect(
+        pipeline.Sync(scene, {}, identity, identity, identity,
+            640, 360, 0.1f, 1000.0f, &error) &&
+            pipeline.Lights().size() == 3 &&
+            pipeline.Lights()[0].colorIntensity.w == 5.0f &&
+            pipeline.Stats().rejectedByLightBudget == 1 &&
+            pipeline.Constants().tileCountX == 10 &&
+            pipeline.Constants().tileCountY == 6 &&
+            pipeline.Constants().sliceCount == 24 &&
+            pipeline.ClusterRanges().size() == 10u * 6u * 24u &&
+            !pipeline.ClusterLightIndices().empty() &&
+            pipeline.ShadowAllocations().size() == 1 &&
+            pipeline.ShadowAllocations()[0].entityGuid == "e10-key" &&
+            EditorProductionLightingPipeline::DepthSlice(0.1f, 0.1f, 1000.0f, 24) == 0 &&
+            EditorProductionLightingPipeline::DepthSlice(1000.0f, 0.1f, 1000.0f, 24) == 23,
+        "E-10 should deterministically bound lights, build logarithmic Scene-View clusters, and allocate shadows by priority");
+}
+
+void TestProductionGpuDrivenVisibilityPipeline(RegressionRunner& runner) {
+    const std::vector<uint32_t> indices{1, 0, 1, 2, 1, 0};
+    const auto ranges = EditorProductionGpuDrivenPipeline::BuildBatchRanges(indices, 3);
+    runner.Expect(
+        ranges.size() == 3 &&
+            ranges[0].commandOffset == 0 && ranges[0].commandCapacity == 2 &&
+            ranges[1].commandOffset == 2 && ranges[1].commandCapacity == 3 &&
+            ranges[2].commandOffset == 5 && ranges[2].commandCapacity == 1,
+        "E-11 should deterministically partition compact indirect command ranges by batch");
+    const auto empty = EditorProductionGpuDrivenPipeline::BuildBatchRanges({}, 2);
+    runner.Expect(
+        empty.size() == 2 && empty[0].commandOffset == 0 &&
+            empty[0].commandCapacity == 0 && empty[1].commandCapacity == 0,
+        "E-11 should preserve zero-capacity batches without overlapping command ranges");
+}
+
+void TestProductionTextureResidencyPipeline(RegressionRunner& runner) {
+    const std::filesystem::path root = std::filesystem::path{"generated"} /
+        "editor" / "tests" / "production_texture_regression";
+    RemoveTreeIfPresent(root);
+    const std::filesystem::path graphPath = root / "surface.material";
+    const std::filesystem::path instancePath = root / "surface.matinst";
+    const std::filesystem::path albedoPath = root / "albedo.tga";
+    const std::filesystem::path normalPath = root / "normal.tga";
+    std::string error;
+
+    EditorMaterialGraphAsset graph = MakeDefaultEditorMaterialGraph(
+        "texture-graph-e8-regression", "E8 Surface");
+    EditorDocumentContent graphContent{};
+    runner.Expect(
+        EditorMaterialGraphDocumentProvider::Encode(graph, &graphContent, &error),
+        "E-8 parent Material Graph should serialize for Texture binding resolution");
+    WriteBinaryFile(graphPath, graphContent.bytes);
+    WriteBinaryFile(albedoPath, MakeTgaPreviewImage(16, 16));
+    WriteBinaryFile(normalPath, MakeTgaPreviewImage(16, 16));
+
+    EditorMaterialInstanceAsset instance{};
+    instance.assetGuid = "texture-instance-e8-regression";
+    instance.parentMaterialGuid = graph.assetGuid;
+    instance.name = "E8 Instance";
+    instance.albedoTextureGuid = "texture-albedo-e8-regression";
+    instance.normalTextureGuid = "texture-normal-e8-regression";
+    std::string encoded;
+    runner.Expect(
+        EncodeEditorMaterialInstance(instance, encoded, &error),
+        "Material Instance should persist durable albedo and normal Texture GUIDs");
+    WriteTextFile(instancePath, encoded);
+
+    EditorAssetRegistry registry;
+    const auto registerAsset = [&](EditorAssetKind kind, std::string id,
+                                   std::string guid, const std::filesystem::path& path) {
+        EditorAssetRecord record{};
+        record.kind = kind;
+        record.id = std::move(id);
+        record.guid = std::move(guid);
+        record.sourcePath = path.string();
+        record.logicalPath = path.generic_string();
+        record.referenceable = true;
+        record.sourceTimestamp = 1;
+        return registry.Register(std::move(record));
+    };
+    runner.Expect(
+        registerAsset(EditorAssetKind::MaterialGraph, "e8_graph", graph.assetGuid, graphPath) &&
+        registerAsset(EditorAssetKind::MaterialInstance, "e8_instance", instance.assetGuid, instancePath) &&
+        registerAsset(EditorAssetKind::Texture, "e8_albedo", instance.albedoTextureGuid, albedoPath) &&
+        registerAsset(EditorAssetKind::Texture, "e8_normal", instance.normalTextureGuid, normalPath),
+        "E-8 regression should register Material and Texture assets with durable identity");
+
+    EditorScene scene;
+    EditorSceneEntity* mesh = scene.CreateEntity("Texture Mesh", {}, "texture-mesh-e8");
+    const std::string meshGuid = mesh != nullptr ? mesh->guid : std::string{};
+    runner.Expect(mesh != nullptr && scene.AddComponent(
+        mesh->guid, std::string(kEditorMeshRendererComponentType)),
+        "E-8 regression Scene should create a Mesh Renderer");
+    EditorSceneComponent* renderer = mesh != nullptr
+        ? scene.FindComponent(*mesh, kEditorMeshRendererComponentType) : nullptr;
+    if (renderer != nullptr) renderer->references.push_back(
+        {"material:0", {}, instance.assetGuid});
+    EditorProductionMaterialPipeline materials;
+    runner.Expect(
+        materials.Sync(scene, registry, 0, 1, &error),
+        "E-7 should publish the Material binding consumed by E-8");
+
+    EditorProductionTexturePipeline textures;
+    runner.Expect(
+        textures.Sync(materials, registry, nullptr, 0, 1, &error),
+        "E-8 CPU collection should remain deterministic without a D3D12 upload context");
+    const EditorProductionTextureBinding* binding = textures.Resolve(meshGuid, 0);
+    runner.Expect(
+        binding != nullptr &&
+            binding->albedoTextureGuid == instance.albedoTextureGuid &&
+            binding->normalTextureGuid == instance.normalTextureGuid &&
+            binding->albedoFallback && binding->normalFallback &&
+            textures.Stats().requestedTextures == 2 &&
+            textures.Stats().fallbackTextures == 2 &&
+            !textures.Diagnostics().empty(),
+        "CPU collection should preserve durable requests and publish explicit GPU fallback state");
+    runner.Expect(
+        EditorProductionTexturePipeline::ChooseFirstResidentMip(
+            {4096, 1024, 256, 64, 16}, 400, 2) == 2 &&
+        EditorProductionTexturePipeline::ChooseFirstResidentMip(
+            {4096, 1024, 256, 64, 16}, 16, 2) == 3,
+        "mip selection should honor budget and minimum tail residency deterministically");
+    RemoveTreeIfPresent(root);
+}
+
+void TestProductionShaderVariantPipeline(RegressionRunner& runner) {
+    EditorProductionMaterialShaderSource source{};
+    source.materialAssetGuid = "material-e9-regression";
+    source.shaderVariantHash = 0x1234;
+    source.graphSourceFingerprint = 0x5678;
+    source.domain = EditorMaterialDomain::Surface;
+    source.blendMode = EditorMaterialBlendMode::Opaque;
+    source.shadingModel = EditorMaterialShadingModel::Lit;
+    source.graphHlslSource =
+        "Texture2D MG_Texture_albedo;\n"
+        "SamplerState MG_LinearSampler;\n"
+        "struct MaterialGraphInput { float2 uv; };\n"
+        "struct MaterialGraphResult { float3 baseColor; float roughness; float metallic; "
+        "float3 normal; float3 emissive; float opacity; };\n"
+        "MaterialGraphResult EvaluateMaterialGraph(MaterialGraphInput IN) { "
+        "MaterialGraphResult OUT; OUT.baseColor = MG_Texture_albedo.Sample("
+        "MG_LinearSampler, IN.uv).rgb; OUT.roughness = 0.5; OUT.metallic = 0.0; "
+        "OUT.normal = float3(0,0,1); OUT.emissive = 0; OUT.opacity = 1; return OUT; }\n";
+    source.textureAssetGuids = {"texture-e9-regression"};
+
+    const EditorProductionShaderVariantKey opaque =
+        EditorProductionShaderPipeline::MakeVariantKey(source, false, 0x9abc);
+    const EditorProductionShaderVariantKey normal =
+        EditorProductionShaderPipeline::MakeVariantKey(source, true, 0x9abc);
+    source.blendMode = EditorMaterialBlendMode::Translucent;
+    const EditorProductionShaderVariantKey translucent =
+        EditorProductionShaderPipeline::MakeVariantKey(source, true, 0x9abc);
+    runner.Expect(
+        opaque.Hash() != normal.Hash() && normal.Hash() != translucent.Hash() &&
+            opaque.StableName() == opaque.StableName(),
+        "E-9 variant identity should deterministically include normal-map and blend PSO state");
+
+    std::string generated;
+    std::string error;
+    const std::string shaderTemplate =
+        "Texture2D gTexture : register(t0);\nSamplerState gSampler : register(s0);\n"
+        "//__GE3_MATERIAL_GRAPH__\nfloat4 main() : SV_TARGET { return 1; }\n";
+    runner.Expect(
+        EditorProductionShaderPipeline::BuildGeneratedPixelShaderSource(
+            source, translucent, shaderTemplate, generated, &error) &&
+            generated.find("#define GE3_VARIANT_NORMAL_MAP 1") != std::string::npos &&
+            generated.find("#define GE3_VARIANT_TRANSLUCENT 1") != std::string::npos &&
+            generated.find("#define MG_Texture_albedo gTexture") != std::string::npos &&
+            generated.find("#define MG_LinearSampler gSampler") != std::string::npos &&
+            generated.find("Texture2D MG_Texture_albedo;") == std::string::npos,
+        "E-9 should inject permutation defines and normalize graph resources to the Main root contract");
+
+    source.textureAssetGuids.push_back("unsupported-second-texture");
+    runner.Expect(
+        !EditorProductionShaderPipeline::BuildGeneratedPixelShaderSource(
+            source, translucent, shaderTemplate, generated, &error) &&
+            error.find("one sampled") != std::string::npos,
+        "E-9 should reject unsupported multi-texture bindings with an explicit fallback diagnostic");
+}
+
 void TestAdvancedVfxGraph(RegressionRunner& runner) {
     const EditorGraphSchema schema = BuildEditorVfxGraphSchema();
     EditorVfxGraphAsset asset =
@@ -6986,6 +7413,839 @@ void TestViewportOverlayLayerSystem(RegressionRunner& runner) {
         "Rail overlay provider must use only layer command and coordinate contracts");
 }
 
+void TestEditorModeInteractiveToolFramework(RegressionRunner& runner) {
+    EditorModeRegistry registry;
+    RegisterDefaultEditorModes(registry);
+    runner.Expect(registry.ModeCount() == 2, "default Editor Mode registry should expose Select and Inspect modes");
+    runner.Expect(registry.ToolCount() == 1, "default framework should expose the read-only Selection Inspector tool");
+    runner.Expect(
+        !registry.RegisterMode(EditorModeDescriptor{"editor.mode.select", "Duplicate"}),
+        "duplicate mode ids must be rejected deterministically");
+    runner.Expect(!registry.Diagnostics().empty(), "mode registration failures should be diagnosable");
+
+    const auto state = std::make_shared<InteractiveToolRegressionState>();
+    runner.Expect(
+        registry.RegisterMode(EditorModeDescriptor{
+            "test.mode.authoring", "Authoring Test", "Regression authoring mode", {}, 900}),
+        "authoring regression mode should register");
+    runner.Expect(
+        registry.RegisterTool(EditorInteractiveToolDescriptor{
+            "test.tool.singleCommit",
+            "test.mode.authoring",
+            "Single Commit Tool",
+            "Regression",
+            "Validates Preview -> Accept single transaction semantics.",
+            {},
+            100,
+            false,
+            false,
+            true,
+            true,
+            EditorInteractiveToolTransactionPolicy::SingleCommandOnAccept,
+            [state]() { return std::make_unique<RegressionInteractiveTool>(state); }}),
+        "authoring regression tool should register");
+
+    EditorToolManager manager(registry);
+    std::string error;
+    runner.Expect(manager.Initialize("editor.mode.select", &error), "tool manager should initialize with Select mode");
+    runner.Expect(manager.ActiveMode() != nullptr && manager.ActiveMode()->id == "editor.mode.select",
+        "Select mode should be active after initialization");
+    runner.Expect(manager.ActivateMode("test.mode.authoring", &error), "authoring mode should activate");
+
+    EditorSelection selection;
+    selection.SetPrimary(EditorObjectHandle{EditorDomainId::Unknown, "selection-1", 0, 0, "Selection"});
+    EditorInteractiveToolEnvironment environment{};
+    environment.selection = &selection;
+    environment.activeDocumentKey = "scene:test-document";
+    environment.documentRevision = 10;
+    environment.selectionRevision = selection.Revision();
+    environment.canMutateAuthoring = true;
+    environment.viewportAvailable = true;
+    EditorTransactionStack transactions;
+    RegressionTransactionService interactiveExecutionService;
+    EditorExecutionContext interactiveExecution;
+    EditorError interactiveExecutionError{};
+    runner.Expect(
+        interactiveExecution.Register(interactiveExecutionService, &interactiveExecutionError),
+        "interactive tool execution service should register");
+    environment.execution = &interactiveExecution;
+
+    runner.Expect(
+        manager.StartTool("test.tool.singleCommit", environment, transactions, &error),
+        "registered authoring tool should enter Previewing state");
+    runner.Expect(manager.HasActiveTool(), "active tool should exist during preview");
+    runner.Expect(transactions.UndoDepth() == 0, "preview must not create a transaction");
+    manager.Tick(environment, {}, transactions);
+    runner.Expect(state->tickCount == 1, "active tool should receive frame updates");
+    manager.RequestAccept();
+    manager.Tick(environment, {}, transactions);
+    runner.Expect(!manager.HasActiveTool(), "accepted tool should leave preview state");
+    runner.Expect(transactions.UndoDepth() == 1, "Accept must create exactly one undo transaction");
+    runner.Expect(interactiveExecutionService.value == 1,
+        "Accept must apply the authoring command before registering history");
+    runner.Expect(state->acceptCount == 1, "Accept should build one commit command");
+    runner.Expect(manager.LastEndReason() == EditorInteractiveToolEndReason::Accepted,
+        "accepted lifecycle should expose its terminal reason");
+
+    runner.Expect(
+        manager.StartTool("test.tool.singleCommit", environment, transactions, &error),
+        "tool should be reusable after Accept");
+    EditorInteractiveToolEnvironment changedSelection = environment;
+    changedSelection.selectionRevision += 1;
+    manager.Tick(changedSelection, {}, transactions);
+    runner.Expect(!manager.HasActiveTool(), "selection boundary change should cancel preview");
+    runner.Expect(state->cancelReason == EditorInteractiveToolEndReason::SelectionChanged,
+        "selection cancellation reason should be explicit");
+    runner.Expect(transactions.UndoDepth() == 1,
+        "automatic Cancel must not add or remove committed transactions");
+
+    runner.Expect(
+        manager.StartTool("test.tool.singleCommit", environment, transactions, &error),
+        "tool should start for play boundary test");
+    EditorInteractiveToolEnvironment playEnvironment = environment;
+    playEnvironment.playSessionActive = true;
+    manager.Tick(playEnvironment, {}, transactions);
+    runner.Expect(state->cancelReason == EditorInteractiveToolEndReason::PlaySessionStarted,
+        "Play transition should cancel interactive authoring safely");
+
+    runner.Expect(
+        manager.StartTool("test.tool.singleCommit", environment, transactions, &error),
+        "tool should start for registry hot-change boundary test");
+    runner.Expect(
+        registry.RegisterMode(EditorModeDescriptor{
+            "test.mode.hotAdded", "Hot Added", "Registry revision probe", {}, 950}),
+        "registry should accept a mode contributed after tool activation");
+    manager.Tick(environment, {}, transactions);
+    runner.Expect(state->cancelReason == EditorInteractiveToolEndReason::RegistryChanged,
+        "registry revision changes should safely cancel active tool instances");
+
+    runner.Expect(manager.ActivateMode("editor.mode.inspect", &error), "Inspect mode should activate");
+    runner.Expect(
+        manager.StartTool("editor.tool.selectionInspector", environment, transactions, &error),
+        "read-only Selection Inspector should activate with a selection");
+    runner.Expect(
+        manager.ActiveTool() != nullptr && !manager.ActiveTool()->Properties().empty(),
+        "active tool properties should be available to Tool Properties UI");
+    manager.RequestCancel();
+    manager.Tick(environment, {}, transactions);
+    runner.Expect(manager.LastEndReason() == EditorInteractiveToolEndReason::CancelledByUser,
+        "explicit Cancel should terminate the read-only preview");
+}
+
+void TestProductionPlacementBrushToolPack(RegressionRunner& runner) {
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        EditorPanelRect{0.0f, 0.0f, 100.0f, 100.0f},
+        100,
+        100,
+        MakeIdentity4x4()});
+    EditorPlacementQueryService placementQuery;
+    EditorPlacementQuerySettings querySettings{};
+    querySettings.plane = EditorPlacementPlane::XY;
+    querySettings.planeOffset = 0.5f;
+    querySettings.gridSize = 0.25f;
+    const EditorPlacementQueryResult query = placementQuery.QueryDisplay(
+        coordinates, 50.0f, 50.0f, querySettings);
+    runner.Expect(query.valid && std::abs(query.position.x) < 1.0e-4f &&
+            std::abs(query.position.y) < 1.0e-4f &&
+            std::abs(query.position.z - 0.5f) < 1.0e-4f,
+        "placement query should map viewport display coordinates to a snapped fallback plane");
+
+    EditorBrushStrokeSampler sampler;
+    EditorBrushStrokeSettings strokeSettings{};
+    strokeSettings.spacing = 1.0f;
+    strokeSettings.maxSamples = 3;
+    sampler.Begin({0.0f, 0.0f, 0.0f}, strokeSettings);
+    runner.Expect(!sampler.Append({0.25f, 0.0f, 0.0f}, strokeSettings),
+        "brush sampler should reject points inside spacing");
+    runner.Expect(sampler.Append({1.0f, 0.0f, 0.0f}, strokeSettings) &&
+            sampler.Append({2.0f, 0.0f, 0.0f}, strokeSettings),
+        "brush sampler should accept deterministic spaced points");
+    runner.Expect(!sampler.Append({3.0f, 0.0f, 0.0f}, strokeSettings) &&
+            sampler.Samples().size() == 3,
+        "brush sampler should enforce its bounded stroke sample budget");
+    sampler.End();
+
+    EditorScene scene;
+    const EditorDocumentId document{"placement-scene-guid", std::string(EditorDocumentTypes::Scene)};
+    SceneWorldObjectProvider provider;
+    provider.Bind(&scene, document);
+    EditorWorldObjectRegistry registry;
+    std::string error;
+    runner.Expect(registry.Register(provider, &error),
+        "placement Scene World provider should register");
+    EditorWorldModel model(registry);
+    runner.Expect(model.Refresh().succeeded,
+        "placement World Model should publish the Scene root");
+    EditorWorldMutationService mutations(registry, model);
+    EditorWorldMutationExecutionService execution(registry, &model);
+    EditorExecutionContext executionContext;
+    EditorError executionError{};
+    runner.Expect(executionContext.Register(execution, &executionError),
+        "placement World execution service should register");
+
+    EditorWorldMutationRequest request{};
+    request.kind = EditorWorldMutationKind::Create;
+    request.targets = {provider.RootHandle()};
+    request.name = "Painted Mesh";
+    request.assetGuid = "durable-placement-mesh-guid";
+    request.assetType = "Mesh";
+    for (std::size_t index = 0; index < sampler.Samples().size(); ++index) {
+        const Vector3 point = sampler.Samples()[index];
+        request.placements.push_back(EditorWorldMutationRequest::Placement{
+            "placement-entity-" + std::to_string(index),
+            "Painted Mesh " + std::to_string(index + 1),
+            {
+                {std::string(kEditorTransformComponentType), "translation",
+                    std::to_string(point.x) + " 0.000000 0.000000"},
+                {std::string(kEditorTransformComponentType), "rotation", "0 0 0"},
+                {std::string(kEditorTransformComponentType), "scale", "1 1 1"},
+            }});
+    }
+    EditorPreparedWorldMutation prepared{};
+    runner.Expect(mutations.Prepare(request, true, prepared, &error) && prepared.Valid(),
+        "placement brush should prepare one immutable World mutation command");
+    runner.Expect(scene.entities.empty(),
+        "prepared placement preview must not mutate the Authoring Scene");
+
+    EditorTransactionStack transactions;
+    runner.Expect(transactions.CanPushCommand(
+            prepared.label, prepared.transactionTarget, prepared.command, &executionError),
+        "placement brush transaction should pass memory preflight");
+    const EditorUndoResult applied = prepared.command->Apply(
+        EditorTransactionApplyMode::Redo, executionContext);
+    runner.Expect(applied.succeeded && scene.entities.size() == 3,
+        "placement brush Accept should atomically publish all stroke Entities");
+    runner.Expect(transactions.PushCommand(
+            prepared.label, prepared.transactionTarget, prepared.command, &executionError) &&
+            transactions.UndoDepth() == 1,
+        "one placement brush stroke must create exactly one Transaction");
+    const EditorWorldMutationResult committed = mutations.ResolveCommitted(prepared);
+    runner.Expect(committed.succeeded && committed.resultingSelection.size() == 3,
+        "committed placement should resolve every stable Entity into shared Selection handles");
+    const EditorSceneEntity* first = scene.FindEntity("placement-entity-0");
+    const EditorSceneComponent* transform = first != nullptr
+        ? scene.FindComponent(*first, kEditorTransformComponentType) : nullptr;
+    const EditorSceneComponent* mesh = first != nullptr
+        ? scene.FindComponent(*first, kEditorMeshRendererComponentType) : nullptr;
+    runner.Expect(transform != nullptr && mesh != nullptr &&
+            !mesh->references.empty() &&
+            mesh->references.front().assetGuid == request.assetGuid,
+        "placement should persist initial Transform and durable Asset reference in one snapshot");
+    runner.Expect(transactions.Undo(executionContext, &executionError) && scene.entities.empty(),
+        "placement stroke Undo should remove the complete stroke atomically");
+    runner.Expect(transactions.Redo(executionContext, &executionError) && scene.entities.size() == 3,
+        "placement stroke Redo should restore stable Entity GUIDs and initial properties");
+
+    EditorSelection selection;
+    EditorAssetRegistry assets;
+    EditorAssetSelection assetSelection;
+    EditorModeRegistry toolRegistry;
+    RegisterDefaultEditorModes(toolRegistry);
+    uint32_t commitNotifications = 0;
+    RegisterProductionPlacementTools(
+        toolRegistry,
+        EditorPlacementToolServices{
+            &mutations, &model, &provider, &selection, &assets, &assetSelection,
+            [&](const EditorWorldMutationResult&) { ++commitNotifications; }});
+    runner.Expect(toolRegistry.FindMode("editor.mode.place") != nullptr &&
+            toolRegistry.ToolsForMode("editor.mode.place").size() == 3,
+        "production Place mode should expose empty, selected Asset, and brush tools");
+    EditorToolManager manager(toolRegistry);
+    runner.Expect(manager.Initialize("editor.mode.place", &error),
+        "production Place mode should initialize through the E-1 manager");
+    EditorInteractiveToolEnvironment environment{};
+    environment.selection = &selection;
+    environment.coordinates = &coordinates;
+    environment.execution = &executionContext;
+    environment.activeDocumentKey = document.Key();
+    environment.documentRevision = 1;
+    environment.selectionRevision = selection.Revision();
+    environment.canMutateAuthoring = true;
+    environment.viewportAvailable = true;
+    runner.Expect(manager.StartTool(
+            "editor.tool.placeEmptyEntity", environment, transactions, &error),
+        "Place Empty Entity should activate without an Asset selection");
+    runner.Expect(manager.ActiveTool() != nullptr &&
+            manager.ActiveTool()->SetProperty("Grid Size", "2.0", error),
+        "Tool Properties should edit placement snapping through the common interface");
+    manager.RequestCancel();
+    manager.Tick(environment, {}, transactions);
+    runner.Expect(manager.LastEndReason() == EditorInteractiveToolEndReason::CancelledByUser &&
+            transactions.UndoDepth() == 1 && commitNotifications == 0,
+        "placement Cancel should preserve Authoring data and Transaction history");
+}
+
+void TestProductionTerrainSculptPaintToolPack(RegressionRunner& runner) {
+    const auto makeStamp = [](std::string stroke, std::string stamp,
+                               TerrainEditOperation operation, float distance,
+                               float strength, uint32_t materialLayer = 0u) {
+        TerrainBrushStamp value{};
+        value.strokeGuid = std::move(stroke);
+        value.stampGuid = std::move(stamp);
+        value.operation = operation;
+        value.distance = distance;
+        value.angle = 0.0f;
+        value.radius = 6.0f;
+        value.surfaceRadius = 18.0f;
+        value.strength = strength;
+        value.hardness = 0.5f;
+        value.materialLayer = materialLayer;
+        return value;
+    };
+
+    TerrainEditLayer edits;
+    const std::vector<TerrainBrushStamp> sculpt{
+        makeStamp("terrain-stroke-sculpt", "terrain-stamp-sculpt-0",
+            TerrainEditOperation::Sculpt, 24.0f, 2.0f)};
+    std::string error;
+    runner.Expect(edits.ApplyStroke(sculpt, &error) && edits.Validate(&error),
+        "terrain edit layer should accept a bounded stable Sculpt stroke");
+    const TerrainEditEvaluation sculptCenter = edits.Evaluate(24.0f, 0.0f);
+    const TerrainEditDirtyRegion sculptDirty = edits.DirtyRegionFor(sculpt);
+    runner.Expect(sculptCenter.radialOffset > 1.9f &&
+            std::abs(edits.Evaluate(40.0f, 0.0f).radialOffset) < 1.0e-5f &&
+            sculptDirty.Overlaps(20.0f, 30.0f) && !sculptDirty.Overlaps(40.0f, 50.0f),
+        "Sculpt evaluation and dirty range should remain spatially bounded");
+    const uint64_t affectedHash = edits.ContentHashForRange(20.0f, 30.0f);
+    const uint64_t unaffectedHash = edits.ContentHashForRange(80.0f, 90.0f);
+    runner.Expect(affectedHash != unaffectedHash,
+        "terrain chunk identity should change only for ranges touched by a stroke");
+
+    const std::vector<TerrainBrushStamp> paint{
+        makeStamp("terrain-stroke-paint", "terrain-stamp-paint-0",
+            TerrainEditOperation::Paint, 24.0f, 0.8f, 3u)};
+    runner.Expect(edits.ApplyStroke(paint, &error) &&
+            edits.Evaluate(24.0f, 0.0f).paintWeights[3] > 0.79f &&
+            edits.Evaluate(24.0f, 0.0f).MaterialVariation() > 0.99f,
+        "Paint should persist one of four procedural material variation layers");
+    runner.Expect(!edits.ApplyStroke(sculpt, &error),
+        "terrain edit layer should reject duplicate stroke identity");
+
+    CourseAsset course;
+    course.BuildFallbackCanyon(18.0f);
+    const EditorDocumentId document{
+        "commercial-terrain-course", std::string(EditorDocumentTypes::Course)};
+    EditorTerrainEditExecutionService terrainExecution;
+    TerrainEditDirtyRegion committedDirty{};
+    terrainExecution.Bind(document.Key(), &course.terrainEditLayer,
+        [&](const TerrainEditDirtyRegion& dirty) { committedDirty = dirty; });
+    EditorExecutionContext execution;
+    EditorError executionError{};
+    runner.Expect(execution.Register(terrainExecution, &executionError),
+        "Terrain command execution should register through the domain-neutral context");
+    auto command = std::make_shared<EditorTerrainEditUndoCommand>(document.Key(), sculpt);
+    EditorTransactionStack transactions;
+    const EditorObjectHandle terrainTarget{
+        EditorDomainId::TerrainGeneration,
+        BuildEditorWorldStableId(document, "course", "root"), 0, 1, "Terrain"};
+    const EditorUndoResult applied = command->Apply(EditorTransactionApplyMode::Redo, execution);
+    runner.Expect(applied.succeeded && committedDirty.valid &&
+            transactions.PushCommand("Sculpt Terrain Stroke", terrainTarget, command, &executionError) &&
+            transactions.UndoDepth() == 1 && course.terrainEditLayer.Stamps().size() == 1,
+        "one compact Terrain command should publish one stroke as one Transaction");
+    runner.Expect(transactions.Undo(execution, &executionError) &&
+            course.terrainEditLayer.Stamps().empty() &&
+            transactions.Redo(execution, &executionError) &&
+            course.terrainEditLayer.Stamps().size() == 1,
+        "Terrain stroke Undo/Redo should atomically remove and restore stable stamps");
+
+    runner.Expect(course.terrainEditLayer.ApplyStroke(paint, &error),
+        "Course should accept a second durable Paint stroke");
+    std::string serialized;
+    CourseAsset reloaded;
+    runner.Expect(course.SaveToString(&serialized, &error) &&
+            reloaded.LoadFromString(serialized, &error) &&
+            reloaded.terrainEditLayer.Stamps().size() == 2 &&
+            reloaded.terrainEditLayer.Evaluate(24.0f, 0.0f).radialOffset > 1.9f &&
+            reloaded.terrainEditLayer.Evaluate(24.0f, 0.0f).paintWeights[3] > 0.79f,
+        "Course serialization should round-trip stable Sculpt and Paint strokes");
+    RailPath rail;
+    reloaded.ApplyToRailPath(rail);
+    TerrainVolumeField baseField(rail, TerrainGenerationSettings{});
+    TerrainVolumeField editedField(
+        rail, TerrainGenerationSettings{}, &reloaded.terrainEditLayer, nullptr);
+    const Vector3 basePoint = baseField.SurfacePoint(24.0f, 0.0f);
+    const Vector3 editedPoint = editedField.SurfacePoint(24.0f, 0.0f);
+    runner.Expect(std::abs(basePoint.x - editedPoint.x) +
+            std::abs(basePoint.y - editedPoint.y) +
+            std::abs(basePoint.z - editedPoint.z) > 1.0f &&
+            editedField.PaintVariation(24.0f, 0.0f) > 0.99f,
+        "procedural Terrain runtime should consume durable geometry and material edits");
+
+    class DeterministicTerrainQuery final : public IEditorTerrainSurfaceQuery {
+    public:
+        EditorTerrainSurfaceHit Query(
+            const EditorViewportCoordinateService&, float displayX, float,
+            const RailPath&, const TerrainGenerationSettings&,
+            const TerrainEditLayer*, const TerrainEditLayer*) const override {
+            return EditorTerrainSurfaceHit{
+                {displayX, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+                displayX, 0.0f, 18.0f, 1.0f, true};
+        }
+    } query;
+
+    CourseAsset toolCourse;
+    toolCourse.BuildFallbackCanyon(18.0f);
+    TerrainAuthoringState runtimeTerrain{};
+    uint32_t commitNotifications = 0;
+    EditorTerrainToolBinding binding{
+        &toolCourse, &runtimeTerrain, document, terrainTarget, &query,
+        [&](const TerrainEditDirtyRegion&, std::string_view) { ++commitNotifications; }};
+    EditorTerrainEditExecutionService toolExecution;
+    toolExecution.Bind(document.Key(), &toolCourse.terrainEditLayer);
+    EditorExecutionContext toolExecutionContext;
+    runner.Expect(toolExecutionContext.Register(toolExecution, &executionError),
+        "Terrain tool execution service should register for interactive Accept");
+    EditorModeRegistry modes;
+    RegisterDefaultEditorModes(modes);
+    RegisterProductionTerrainBrushTools(modes, &binding);
+    runner.Expect(modes.FindMode("editor.mode.terrain") != nullptr &&
+            modes.ToolsForMode("editor.mode.terrain").size() == 4,
+        "Terrain mode should expose Sculpt, Smooth, Flatten, and Paint tools");
+
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        {0.0f, 0.0f, 100.0f, 100.0f}, 100, 100, MakeIdentity4x4()});
+    EditorInteractiveToolEnvironment environment{};
+    environment.coordinates = &coordinates;
+    environment.execution = &toolExecutionContext;
+    environment.activeDocumentKey = document.Key();
+    environment.documentRevision = 1;
+    environment.selectionRevision = 1;
+    environment.canMutateAuthoring = true;
+    environment.viewportAvailable = true;
+    EditorTransactionStack toolTransactions;
+    EditorToolManager manager(modes);
+    runner.Expect(manager.Initialize("editor.mode.terrain", &error) &&
+            manager.StartTool("editor.tool.terrainSculpt", environment, toolTransactions, &error),
+        "production Terrain mode should activate on an authorable Course viewport");
+    manager.Tick(environment, {10.0f, 50.0f, true, true, false}, toolTransactions);
+    manager.Tick(environment, {20.0f, 50.0f, false, true, false}, toolTransactions);
+    runner.Expect(toolCourse.terrainEditLayer.Stamps().empty() &&
+            !runtimeTerrain.previewEditLayer.Stamps().empty() &&
+            toolTransactions.UndoDepth() == 0,
+        "Terrain drag preview should remain transient and never dirty Authoring data");
+    manager.Tick(environment, {20.0f, 50.0f, false, false, true}, toolTransactions);
+    runner.Expect(!manager.HasActiveTool() &&
+            runtimeTerrain.previewEditLayer.Stamps().empty() &&
+            toolCourse.terrainEditLayer.Stamps().size() == 2 &&
+            toolTransactions.UndoDepth() == 1 && commitNotifications == 1,
+        "Terrain release should atomically Accept one bounded stroke as one Transaction");
+
+    const std::size_t committedStampCount = toolCourse.terrainEditLayer.Stamps().size();
+    runner.Expect(manager.StartTool("editor.tool.terrainPaint", environment, toolTransactions, &error),
+        "Paint tool should activate through the same Terrain framework");
+    manager.Tick(environment, {32.0f, 50.0f, true, true, false}, toolTransactions);
+    manager.RequestCancel();
+    manager.Tick(environment, {}, toolTransactions);
+    runner.Expect(runtimeTerrain.previewEditLayer.Stamps().empty() &&
+            toolCourse.terrainEditLayer.Stamps().size() == committedStampCount &&
+            toolTransactions.UndoDepth() == 1 && commitNotifications == 1,
+        "Terrain Cancel should discard preview without changing Authoring data or history");
+}
+
+void TestProductionModelingGeometryFramework(RegressionRunner& runner) {
+    EditorGeometryMesh box = EditorGeometryMesh::MakeBox({1.0f, 2.0f, 3.0f});
+    const EditorGeometryValidationReport boxValidation = box.Validate();
+    runner.Expect(box.vertices.size() == 8 && box.triangles.size() == 12 &&
+            boxValidation.Succeeded() && boxValidation.boundaryEdges == 0 &&
+            boxValidation.nonManifoldEdges == 0,
+        "editable box should start as a bounded closed manifold mesh");
+    std::string serializedBox;
+    EditorGeometryMesh roundTripBox;
+    std::string error;
+    runner.Expect(box.Serialize(serializedBox, &error) &&
+            EditorGeometryMesh::Deserialize(serializedBox, roundTripBox, &error) &&
+            roundTripBox.ContentHash() == box.ContentHash(),
+        "editable Geometry should round-trip stable vertex and face GUIDs losslessly");
+
+    const std::vector<std::string> selectedFacePair{
+        box.triangles[0].guid, box.triangles[1].guid};
+    EditorGeometryMesh extruded = box;
+    runner.Expect(extruded.ExtrudeFaces(selectedFacePair, 0.5f, &error) &&
+            extruded.vertices.size() == 12 && extruded.triangles.size() == 20,
+        "face extrusion should replace the source surface and generate bounded side topology");
+    const EditorGeometryValidationReport extrudedValidation = extruded.Validate();
+    runner.Expect(extrudedValidation.Succeeded() &&
+            extrudedValidation.boundaryEdges == 0 &&
+            extrudedValidation.nonManifoldEdges == 0,
+        "extrusion should preserve a closed manifold result for a closed input region");
+    const EditorGeneratedCollision collision =
+        GenerateEditorGeometryBoxCollision(extruded);
+    std::string serializedCollision;
+    EditorGeneratedCollision roundTripCollision{};
+    runner.Expect(collision.Valid() &&
+            collision.sourceHash == extruded.ContentHash() &&
+            SerializeEditorGeneratedCollision(collision, serializedCollision) &&
+            DeserializeEditorGeneratedCollision(serializedCollision, roundTripCollision) &&
+            roundTripCollision.sourceHash == collision.sourceHash,
+        "generated collision should retain source Geometry hash for stale-proxy detection");
+
+    const EditorDocumentId document{
+        "commercial-modeling-scene", std::string(EditorDocumentTypes::Scene)};
+    EditorScene scene;
+    EditorSceneEntity* entity = scene.CreateEntity("Editable Mesh", {}, "editable-mesh-entity");
+    runner.Expect(entity != nullptr && scene.AddComponent(
+            entity->guid, std::string(kEditorMeshRendererComponentType)),
+        "modeling target should expose a Mesh Renderer through the Scene component model");
+    SceneWorldObjectProvider provider;
+    provider.Bind(&scene, document);
+    EditorObjectHandle target{
+        EditorDomainId::SceneEntity,
+        BuildEditorWorldStableId(document, provider.ProviderId(), entity->guid),
+        0, 1, "Editable Mesh"};
+    EditorSelection selection;
+    selection.SetPrimary(target);
+    EditorGeometryWorkspace workspace;
+    workspace.Bind(&provider, &selection, document);
+    runner.Expect(workspace.CanEdit() && !workspace.HasGeometry(),
+        "Geometry workspace should bind only the selected Scene Mesh Entity");
+
+    EditorGeometryExecutionService geometryExecution;
+    uint32_t mutationNotifications = 0;
+    geometryExecution.Bind(document, &scene,
+        [&](std::string_view) { ++mutationNotifications; });
+    EditorExecutionContext execution;
+    EditorError executionError{};
+    runner.Expect(execution.Register(geometryExecution, &executionError),
+        "Geometry execution service should register through the common command context");
+
+    const EditorGeometryPropertyState before{};
+    const EditorGeometryPropertyState after{serializedBox, std::nullopt};
+    auto geometryCommand = std::make_shared<EditorGeometryEditUndoCommand>(
+        document.Key(), entity->guid, before, after);
+    EditorTransactionStack transactions;
+    const EditorUndoResult applied = geometryCommand->Apply(
+        EditorTransactionApplyMode::Redo, execution);
+    runner.Expect(applied.succeeded && transactions.PushCommand(
+            "Make Editable Box", target, geometryCommand, &executionError) &&
+            transactions.UndoDepth() == 1 && mutationNotifications == 1,
+        "one Geometry operation should publish exactly one compact Transaction");
+    runner.Expect(transactions.Undo(execution, &executionError) &&
+            scene.FindComponent(*scene.FindEntity(entity->guid),
+                kEditorMeshRendererComponentType)->properties.empty() &&
+            transactions.Redo(execution, &executionError),
+        "Geometry Undo/Redo should atomically remove and restore editable data");
+    workspace.RefreshFromScene();
+    runner.Expect(workspace.HasGeometry() &&
+            workspace.AuthoredMesh()->ContentHash() == box.ContentHash(),
+        "workspace should refresh from the authoritative Scene after command execution");
+
+    EditorScene toolScene;
+    EditorSceneEntity* toolEntity = toolScene.CreateEntity(
+        "Tool Mesh", {}, "tool-mesh-entity");
+    toolScene.AddComponent(toolEntity->guid, std::string(kEditorMeshRendererComponentType));
+    SceneWorldObjectProvider toolProvider;
+    toolProvider.Bind(&toolScene, document);
+    const EditorObjectHandle toolTarget{
+        EditorDomainId::SceneEntity,
+        BuildEditorWorldStableId(document, toolProvider.ProviderId(), toolEntity->guid),
+        0, 1, "Tool Mesh"};
+    EditorSelection toolSelection;
+    toolSelection.SetPrimary(toolTarget);
+    EditorGeometryWorkspace toolWorkspace;
+    toolWorkspace.Bind(&toolProvider, &toolSelection, document);
+    EditorGeometryExecutionService toolExecution;
+    toolExecution.Bind(document, &toolScene);
+    EditorExecutionContext toolExecutionContext;
+    runner.Expect(toolExecutionContext.Register(toolExecution, &executionError),
+        "interactive Geometry execution should bind the active Scene");
+    EditorGeometryToolBinding binding{&toolWorkspace, {}};
+    EditorModeRegistry modes;
+    RegisterDefaultEditorModes(modes);
+    RegisterProductionGeometryTools(modes, &binding);
+    runner.Expect(modes.FindMode("editor.mode.modeling") != nullptr &&
+            modes.ToolsForMode("editor.mode.modeling").size() == 6,
+        "Modeling mode should expose selection, creation, topology, normals, and collision tools");
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        {0.0f, 0.0f, 100.0f, 100.0f}, 100, 100, MakeIdentity4x4()});
+    EditorInteractiveToolEnvironment environment{};
+    environment.selection = &toolSelection;
+    environment.coordinates = &coordinates;
+    environment.execution = &toolExecutionContext;
+    environment.activeDocumentKey = document.Key();
+    environment.documentRevision = 1;
+    environment.selectionRevision = toolSelection.Revision();
+    environment.canMutateAuthoring = true;
+    environment.viewportAvailable = true;
+    EditorTransactionStack toolTransactions;
+    EditorToolManager manager(modes);
+    runner.Expect(manager.Initialize("editor.mode.modeling", &error) &&
+            manager.StartTool("editor.tool.geometryMakeBox", environment, toolTransactions, &error) &&
+            toolWorkspace.HasPreview() &&
+            toolScene.FindComponent(*toolEntity, kEditorMeshRendererComponentType)->properties.empty(),
+        "Make Editable Box should preview without mutating the Authoring Scene");
+    manager.RequestAccept();
+    manager.Tick(environment, {}, toolTransactions);
+    toolWorkspace.RefreshFromScene();
+    runner.Expect(!manager.HasActiveTool() && toolWorkspace.HasGeometry() &&
+            toolTransactions.UndoDepth() == 1,
+        "accepting primitive creation should create one Transaction and durable Geometry");
+
+    toolWorkspace.SelectFace(toolWorkspace.AuthoredMesh()->triangles[0].guid, false);
+    const uint64_t authoredHash = toolWorkspace.AuthoredMesh()->ContentHash();
+    runner.Expect(manager.StartTool(
+            "editor.tool.geometryExtrudeFaces", environment, toolTransactions, &error) &&
+            manager.ActiveTool()->SetProperty("Distance", "0.75", error) &&
+            toolWorkspace.HasPreview(),
+        "Extrude should build a property-driven topology preview from stable face selection");
+    manager.RequestCancel();
+    manager.Tick(environment, {}, toolTransactions);
+    runner.Expect(!toolWorkspace.HasPreview() &&
+            toolWorkspace.AuthoredMesh()->ContentHash() == authoredHash &&
+            toolTransactions.UndoDepth() == 1,
+        "Geometry Cancel should preserve Authoring data and history");
+    runner.Expect(manager.StartTool(
+            "editor.tool.geometryExtrudeFaces", environment, toolTransactions, &error),
+        "Extrude should restart after Cancel");
+    manager.RequestAccept();
+    manager.Tick(environment, {}, toolTransactions);
+    toolWorkspace.RefreshFromScene();
+    runner.Expect(toolTransactions.UndoDepth() == 2 &&
+            toolWorkspace.AuthoredMesh()->ContentHash() != authoredHash,
+        "Extrude Accept should publish one changed topology Transaction");
+
+    runner.Expect(manager.StartTool(
+            "editor.tool.geometryGenerateBoxCollision", environment, toolTransactions, &error),
+        "collision generation should start from authoritative editable Geometry");
+    manager.RequestAccept();
+    manager.Tick(environment, {}, toolTransactions);
+    const EditorSceneComponent* meshComponent = toolScene.FindComponent(
+        *toolScene.FindEntity(toolEntity->guid), kEditorMeshRendererComponentType);
+    const auto collisionProperty = std::find_if(
+        meshComponent->properties.begin(), meshComponent->properties.end(),
+        [](const EditorSceneProperty& property) {
+            return property.name == kEditorGeneratedCollisionProperty;
+        });
+    runner.Expect(toolTransactions.UndoDepth() == 3 &&
+            collisionProperty != meshComponent->properties.end(),
+        "generated collision should commit beside Geometry as one undoable state change");
+
+    EditorInteractiveToolEnvironment locked = environment;
+    locked.playSessionActive = true;
+    locked.canMutateAuthoring = false;
+    runner.Expect(!manager.StartTool(
+            "editor.tool.geometryDeleteFaces", locked, toolTransactions, &error),
+        "Play/Sim authoring lock should reject topology mutation tools");
+}
+
+void TestProductionMeshBakeAssetPipeline(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" / "mesh_bake";
+    RemoveTreeIfPresent(root);
+    std::string error;
+
+    EditorGeometryMesh geometry = EditorGeometryMesh::MakeBox({1.0f, 2.0f, 3.0f});
+    const EditorGeneratedCollision authoredCollision =
+        GenerateEditorGeometryBoxCollision(geometry);
+    EditorMeshBuildSettings settings{};
+    settings.lodCount = 3;
+    settings.lodRatios = {1.0f, 0.5f, 0.25f, 0.125f};
+    settings.collisionMode = EditorMeshCollisionBuildMode::TriangleMesh;
+    EditorCookedMeshArtifact cooked{};
+    EditorCookedCollisionArtifact collision{};
+    runner.Expect(BuildEditorCookedMeshArtifacts(
+            geometry, &authoredCollision, settings, cooked, collision, &error) &&
+            cooked.lods.size() == 3 && cooked.lods[0].indices.size() / 3 == 12 &&
+            cooked.lods[1].indices.size() / 3 == 6 &&
+            cooked.lods[2].indices.size() / 3 == 3 &&
+            collision.mode == EditorMeshCollisionBuildMode::TriangleMesh &&
+            collision.indices.size() / 3 == 12,
+        "Mesh cooker should generate deterministic Renderer LODs and Physics triangle data");
+
+    std::vector<uint8_t> cookedBytes;
+    std::vector<uint8_t> collisionBytes;
+    EditorCookedMeshArtifact cookedRoundTrip{};
+    EditorCookedCollisionArtifact collisionRoundTrip{};
+    runner.Expect(cooked.Serialize(cookedBytes, &error) &&
+            collision.Serialize(collisionBytes, &error) &&
+            EditorCookedMeshArtifact::Deserialize(cookedBytes, cookedRoundTrip, &error) &&
+            EditorCookedCollisionArtifact::Deserialize(
+                collisionBytes, collisionRoundTrip, &error) &&
+            cookedRoundTrip.sourceGeometryHash == geometry.ContentHash() &&
+            collisionRoundTrip.sourceGeometryHash == geometry.ContentHash(),
+        "versioned cooked Mesh and Collision artifacts should round-trip with source hashes");
+    std::vector<uint8_t> corrupted = cookedBytes;
+    if (corrupted.size() > 20) corrupted[20] ^= 0x5au;
+    runner.Expect(!EditorCookedMeshArtifact::Deserialize(
+            corrupted, cookedRoundTrip, nullptr),
+        "cooked Mesh checksum should reject corrupted artifacts before Renderer upload");
+
+    const EditorDocumentId document{
+        "commercial-mesh-bake-scene", std::string(EditorDocumentTypes::Scene)};
+    EditorScene scene;
+    EditorSceneEntity* entity = scene.CreateEntity(
+        "Bake Mesh", {}, "mesh-bake-entity");
+    runner.Expect(entity != nullptr && scene.AddComponent(
+            entity->guid, std::string(kEditorMeshRendererComponentType)),
+        "Mesh Bake target should use the Scene Mesh Renderer component");
+    std::string geometryText;
+    geometry.Serialize(geometryText, &error);
+    EditorSceneComponent* component = scene.FindComponent(
+        *entity, kEditorMeshRendererComponentType);
+    component->properties.push_back({
+        std::string(kEditorEditableGeometryProperty), geometryText});
+    scene.Touch();
+
+    EditorAssetRegistry registry;
+    EditorMeshBakePipeline pipeline;
+    pipeline.Bind(document, &scene, &registry, root);
+    EditorMeshBakePrepared prepared{};
+    runner.Expect(pipeline.Prepare(
+            entity->guid, geometry, &authoredCollision, "commercial_box",
+            settings, prepared, &error) && !prepared.rebake &&
+            prepared.lodTriangleCounts == std::vector<uint32_t>({12, 6, 3}) &&
+            prepared.artifactBytes > 0,
+        "Mesh Bake prepare should be side-effect free and report bounded artifact statistics");
+    runner.Expect(registry.Count(EditorAssetKind::Mesh) == 0 &&
+            !std::filesystem::exists(root / prepared.change.paths.source),
+        "Mesh Bake preview should not mutate files or the Asset Registry");
+
+    EditorProductionMeshRuntimeCache runtimeCache;
+    uint32_t changedNotifications = 0;
+    EditorMeshBakeExecutionService executionService;
+    executionService.Bind(document, &scene, &registry, &runtimeCache, root,
+        [&](std::string_view, std::string_view) { ++changedNotifications; });
+    EditorExecutionContext execution;
+    EditorError executionError{};
+    runner.Expect(execution.Register(executionService, &executionError),
+        "Mesh Bake execution service should register through the generic command context");
+    auto command = std::make_shared<EditorMeshBakeUndoCommand>(prepared.change);
+    EditorTransactionStack transactions;
+    const EditorUndoResult applied = command->Apply(
+        EditorTransactionApplyMode::Redo, execution);
+    runner.Expect(applied.succeeded && transactions.PushCommand(
+            "Bake Production Mesh", {}, command, &executionError) &&
+            transactions.UndoDepth() == 1 && changedNotifications == 1,
+        "Mesh source, cooked artifacts, registry, and Scene reference should commit as one Transaction");
+    const EditorAssetRecord* bakedRecord = registry.Find(
+        EditorAssetKind::Mesh, "commercial_box");
+    const std::string bakedGuid = bakedRecord != nullptr ? bakedRecord->guid : std::string{};
+    runner.Expect(bakedRecord != nullptr && IsDurableEditorAssetGuid(bakedGuid) &&
+            std::filesystem::exists(root / prepared.change.paths.source) &&
+            std::filesystem::exists(root / prepared.change.paths.cooked) &&
+            std::filesystem::exists(root / prepared.change.paths.collision) &&
+            std::filesystem::exists(root / prepared.change.paths.metadata),
+        "atomic Mesh Bake should publish all four durable files and one durable Asset GUID");
+
+    component = scene.FindComponent(*scene.FindEntity(entity->guid),
+        kEditorMeshRendererComponentType);
+    const auto bakedReference = std::find_if(
+        component->references.begin(), component->references.end(),
+        [](const EditorSceneObjectReference& reference) {
+            return reference.property == "asset";
+        });
+    runner.Expect(bakedReference != component->references.end() &&
+            bakedReference->assetGuid == bakedGuid && scene.Validate().Succeeded(),
+        "Scene Mesh Renderer should reference the baked Asset GUID with valid source/build hashes");
+    runner.Expect(runtimeCache.Find(bakedGuid) != nullptr &&
+            runtimeCache.ResolveForRenderer(bakedGuid, 0).Valid() &&
+            runtimeCache.ResolveForRenderer(bakedGuid, 99).lodIndex == 2 &&
+            runtimeCache.ResolveForPhysics(bakedGuid).Valid(),
+        "Renderer and Physics should consume validated views from the same runtime Mesh cache");
+
+    EditorProductionScenePipeline scenePipeline;
+    const Matrix4x4 identity = MakeIdentity4x4();
+    runner.Expect(scenePipeline.Sync(
+            scene, registry, runtimeCache, {0.0f, 0.0f, -10.0f}, identity,
+            nullptr, 0, 0, &error) &&
+            scenePipeline.Instances().size() == 1 &&
+            scenePipeline.PhysicsInstances().size() == 1 &&
+            scenePipeline.RenderPackets().empty() &&
+            scenePipeline.Stats().visibleInstances == 1,
+        "E-6 should derive CPU render/physics instances without requiring a GPU device");
+    const EditorProductionSceneRayHit sceneHit = scenePipeline.Raycast(
+        {0.0f, 0.0f, -10.0f}, {0.0f, 0.0f, 1.0f}, 100.0f);
+    runner.Expect(sceneHit.valid && sceneHit.entityGuid == entity->guid &&
+            sceneHit.distance > 0.0f &&
+            scenePipeline.OverlapAabb({-2.0f, -3.0f, -4.0f}, {2.0f, 3.0f, 4.0f}).size() == 1,
+        "E-6 Physics should perform broadphase AABB and triangle narrowphase queries");
+    runner.Expect(
+        EditorProductionScenePipeline::SelectLod(1.0f, 1.0f, 3, 0) == 0 &&
+            EditorProductionScenePipeline::SelectLod(100.0f, 1.0f, 3, 0) == 2 &&
+            EditorProductionScenePipeline::SelectLod(12.5f, 1.0f, 3, 0) == 0,
+        "E-6 LOD selection should be bounded and use hysteresis around transitions");
+    EditorSceneComponent* transform = scene.FindComponent(
+        *scene.FindEntity(entity->guid), kEditorTransformComponentType);
+    const auto translation = std::find_if(transform->properties.begin(), transform->properties.end(),
+        [](const EditorSceneProperty& property) { return property.name == "translation"; });
+    translation->value = "100 0 0";
+    scenePipeline.Sync(scene, registry, runtimeCache, {}, identity, nullptr, 0, 0, &error);
+    runner.Expect(scenePipeline.Stats().frustumCulledInstances == 1 &&
+            scenePipeline.Stats().visibleInstances == 0,
+        "E-6 should reject an Instance whose world bounds are outside the camera frustum");
+    translation->value = "0 0 0";
+
+    runner.Expect(transactions.Undo(execution, &executionError) &&
+            registry.FindByGuid(bakedGuid) == nullptr &&
+            !std::filesystem::exists(root / prepared.change.paths.source) &&
+            runtimeCache.Find(bakedGuid) == nullptr,
+        "Mesh Bake Undo should atomically remove files, registry identity, Scene reference, and cache");
+    runner.Expect(transactions.Redo(execution, &executionError) &&
+            registry.FindByGuid(bakedGuid) != nullptr &&
+            std::filesystem::exists(root / prepared.change.paths.cooked) &&
+            runtimeCache.ResolveForRenderer(bakedGuid, 1).Valid(),
+        "Mesh Bake Redo should restore durable identity and validated runtime artifacts");
+
+    EditorGeometryMesh changedGeometry = geometry;
+    changedGeometry.ExtrudeFaces(
+        {changedGeometry.triangles[0].guid, changedGeometry.triangles[1].guid},
+        0.25f, &error);
+    const EditorGeneratedCollision changedCollision =
+        GenerateEditorGeometryBoxCollision(changedGeometry);
+    EditorMeshBakePrepared rebake{};
+    runner.Expect(pipeline.Prepare(
+            entity->guid, changedGeometry, &changedCollision, "ignored_new_name",
+            settings, rebake, &error) && rebake.rebake &&
+            rebake.change.after.record->guid == bakedGuid &&
+            rebake.change.after.record->id == "commercial_box" &&
+            rebake.change.after.sourceHash != prepared.change.after.sourceHash,
+        "Rebake should preserve durable Asset identity while replacing source-hashed artifacts");
+
+    SceneWorldObjectProvider provider;
+    provider.Bind(&scene, document);
+    EditorSelection selection;
+    selection.SetPrimary({EditorDomainId::SceneEntity,
+        BuildEditorWorldStableId(document, provider.ProviderId(), entity->guid),
+        0, 1, "Bake Mesh"});
+    EditorGeometryWorkspace workspace;
+    workspace.Bind(&provider, &selection, document);
+    EditorMeshBakeToolBinding binding{&workspace, &pipeline, {}};
+    EditorModeRegistry modes;
+    RegisterDefaultEditorModes(modes);
+    EditorGeometryToolBinding geometryBinding{&workspace, {}};
+    RegisterProductionGeometryTools(modes, &geometryBinding);
+    RegisterProductionMeshBakeTools(modes, &binding);
+    runner.Expect(modes.FindTool("editor.tool.meshBake") != nullptr &&
+            modes.ToolsForMode("editor.mode.modeling").size() == 7,
+        "Modeling mode should expose Production Mesh Bake beside six Geometry tools");
+    EditorInteractiveToolEnvironment environment{};
+    environment.selection = &selection;
+    environment.execution = &execution;
+    environment.activeDocumentKey = document.Key();
+    environment.documentRevision = scene.revision;
+    environment.selectionRevision = selection.Revision();
+    environment.canMutateAuthoring = true;
+    environment.viewportAvailable = false;
+    EditorToolManager manager(modes);
+    EditorTransactionStack toolTransactions;
+    runner.Expect(manager.Initialize("editor.mode.modeling", &error) &&
+            manager.StartTool("editor.tool.meshBake", environment, toolTransactions, &error),
+        "Production Mesh Bake tool should prepare without requiring a viewport");
+    manager.RequestCancel();
+    manager.Tick(environment, {}, toolTransactions);
+    EditorInteractiveToolEnvironment locked = environment;
+    locked.playSessionActive = true;
+    locked.canMutateAuthoring = false;
+    runner.Expect(!manager.StartTool(
+            "editor.tool.meshBake", locked, toolTransactions, &error),
+        "Play/Sim authoring lock should reject Production Mesh Bake");
+
+    RemoveTreeIfPresent(root);
+}
+
 void TestPanelLayoutGeometry(RegressionRunner& runner) {
     EditorPanelLayoutService layout;
     EditorPanelLayoutConfig config{};
@@ -7055,6 +8315,11 @@ int RunEditorCoreRegressionTests() {
         {"course sequencer track provider", [&]() { TestCourseSequencerTrackProvider(runner); }},
         {"prefab asset and instance foundation", [&]() { TestPrefabFoundation(runner); }},
         {"material graph foundation", [&]() { TestMaterialGraphFoundation(runner); }},
+        {"production material scene lighting pipeline", [&]() { TestProductionMaterialLightingPipeline(runner); }},
+        {"production texture descriptor residency pipeline", [&]() { TestProductionTextureResidencyPipeline(runner); }},
+        {"production shader variant pso cache pipeline", [&]() { TestProductionShaderVariantPipeline(runner); }},
+        {"production multi-light cluster shadow pipeline", [&]() { TestProductionMultiLightClusterPipeline(runner); }},
+        {"production gpu-driven visibility indirect pipeline", [&]() { TestProductionGpuDrivenVisibilityPipeline(runner); }},
         {"advanced vfx graph", [&]() { TestAdvancedVfxGraph(runner); }},
         {"animation state machine", [&]() { TestAnimationStateMachine(runner); }},
         {"gameplay visual scripting", [&]() { TestGameplayVisualScripting(runner); }},
@@ -7067,6 +8332,11 @@ int RunEditorCoreRegressionTests() {
         {"scene entity component foundation", [&]() { TestSceneEntityComponentFoundation(runner); }},
         {"production transform gizmo", [&]() { TestProductionTransformGizmo(runner); }},
         {"viewport overlay layer system", [&]() { TestViewportOverlayLayerSystem(runner); }},
+        {"editor mode interactive tool framework", [&]() { TestEditorModeInteractiveToolFramework(runner); }},
+        {"production placement brush tool pack", [&]() { TestProductionPlacementBrushToolPack(runner); }},
+        {"production terrain sculpt paint tool pack", [&]() { TestProductionTerrainSculptPaintToolPack(runner); }},
+        {"production modeling geometry framework", [&]() { TestProductionModelingGeometryFramework(runner); }},
+        {"production mesh bake asset pipeline", [&]() { TestProductionMeshBakeAssetPipeline(runner); }},
         {"panel layout geometry", [&]() { TestPanelLayoutGeometry(runner); }},
         {"feature guard tripwire", [&]() { TestFeatureGuardTripwire(runner); }},
     };

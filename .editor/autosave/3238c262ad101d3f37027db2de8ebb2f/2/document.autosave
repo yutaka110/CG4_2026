@@ -6,6 +6,7 @@
 # camera|distance|backDistance|verticalOffset|lateralOffset|lookAheadDistance|lookUpOffset|lookForwardOffset|fovDeg|rollDeg|editorGuid|editorVisible|editorLocked
 # section|start|end|name|category
 # terrain|distance|layer|id|meshId|lateralOffset|verticalOffset|forwardOffset|scaleX|scaleY|scaleZ|pitchDeg|yawDeg|rollDeg|collisionMode|renderPriority|cullBehind|cullAhead|editorGuid|editorVisible|editorLocked
+# terrain_brush|strokeGuid|stampGuid|operation|distance|angleRad|radius|surfaceRadius|strength|hardness|materialLayer
 # rock_cluster|distance|id|meshId|anchor|type|count|minScale|maxScale|spreadX|spreadY|spreadZ|clearLaneRadius|cullBehind|cullAhead|rotX|rotY|rotZ|instanceOverrides|editorGuid|editorVisible|editorLocked
 # lighting|distance|id|blendDistance|sunR|sunG|sunB|sunIntensity|sunDirX|sunDirY|sunDirZ|clearR|clearG|clearB|fogR|fogG|fogB|fogIntensity|fogStart|fogEnd|fogDensity|backlitFogLift|openingGlow|silhouette|lowFog|coolHaze
 # camera_shot_preset|id|mode|backOffset|upOffset|sideOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake
@@ -182,3 +183,5 @@ event|1690.000|setpiece|escape_alarm|speed ramp and rear explosions|c7dbea0a2885
 event|1870.000|enemy_wave|pursuit_swarm|fast weak enemies from behind|d69579ac7230cacdea241b8cb57e387d|1|0
 event|2110.000|setpiece|final_gate_open|large gate reveal|9f32f86777b146964ac100a9d2754966|1|0
 event|2320.000|checkpoint|stage_clear|score tally and next route preload|0ae54da591050c37557f393356b400a7|1|0
+
+# Non-destructive procedural Terrain sculpt and paint strokes.

@@ -71,9 +71,13 @@ float SmoothStep(float edge0, float edge1, float value) {
 
 TerrainVolumeField::TerrainVolumeField(
     const RailPath& railPath,
-    const TerrainGenerationSettings& settings)
+    const TerrainGenerationSettings& settings,
+    const TerrainEditLayer* edits,
+    const TerrainEditLayer* preview)
     : railPath_(railPath),
-      settings_(settings) {
+      settings_(settings),
+      edits_(edits),
+      preview_(preview) {
 }
 
 float TerrainVolumeField::Noise3(float distance, float lateral, float vertical, float scale) const {
@@ -375,8 +379,14 @@ TerrainVolumeLocalSample TerrainVolumeField::SampleLocal(
                 std::lerp(1.0f, 1.08f, openCanyonBlend);
     const float angle = std::atan2(vertical / verticalRadius, lateral / lateralRadius);
     const float radiusScale = RadiusScale(distance, angle);
-    const float nx = lateral / (lateralRadius * radiusScale);
-    const float ny = vertical / (verticalRadius * radiusScale);
+    float radialOffset = 0.0f;
+    if (edits_ != nullptr) radialOffset += edits_->Evaluate(distance, angle).radialOffset;
+    if (preview_ != nullptr) radialOffset += preview_->Evaluate(distance, angle).radialOffset;
+    const float meanRadius = std::sqrt(
+        lateralRadius * lateralRadius + verticalRadius * verticalRadius) * 0.70710678f;
+    const float editedRadiusScale = (std::max)(0.20f, radiusScale + radialOffset / meanRadius);
+    const float nx = lateral / (lateralRadius * editedRadiusScale);
+    const float ny = vertical / (verticalRadius * editedRadiusScale);
     TerrainVolumeLocalSample sample{};
     sample.noise = Noise3(distance, lateral, vertical, 0.025f);
     sample.archMask = ArchMask(distance, angle);
@@ -403,14 +413,40 @@ Vector3 TerrainVolumeField::SurfacePoint(
         : (std::max)(settings_.corridorRadius * 0.92f, 4.0f) *
             std::lerp(1.0f, 1.08f, openCanyonBlend);
     const float radiusScale = RadiusScale(distance, angle);
+    float radialOffset = 0.0f;
+    if (edits_ != nullptr) radialOffset += edits_->Evaluate(distance, angle).radialOffset;
+    if (preview_ != nullptr) radialOffset += preview_->Evaluate(distance, angle).radialOffset;
     const float lateral = std::cos(angle) * lateralRadius * radiusScale;
     const float vertical = std::sin(angle) * verticalBase * radiusScale;
     if (outNormal != nullptr) {
         *outNormal = EstimateNormal(distance, lateral, vertical);
     }
+    const Vector3 radialDirection = NormalizeOr(
+        Add(Scale(pathSample.right, std::cos(angle)),
+            Scale(pathSample.up, std::sin(angle))),
+        pathSample.up);
     return Add(
         pathSample.position,
-        Add(Scale(pathSample.right, lateral), Scale(pathSample.up, vertical)));
+        Add(
+            Add(Scale(pathSample.right, lateral), Scale(pathSample.up, vertical)),
+            Scale(radialDirection, radialOffset)));
+}
+
+float TerrainVolumeField::PaintVariation(float distance, float angle) const {
+    TerrainEditEvaluation evaluation{};
+    if (edits_ != nullptr) {
+        const TerrainEditEvaluation authored = edits_->Evaluate(distance, angle);
+        for (uint32_t index = 0; index < 4u; ++index) {
+            evaluation.paintWeights[index] += authored.paintWeights[index];
+        }
+    }
+    if (preview_ != nullptr) {
+        const TerrainEditEvaluation transient = preview_->Evaluate(distance, angle);
+        for (uint32_t index = 0; index < 4u; ++index) {
+            evaluation.paintWeights[index] += transient.paintWeights[index];
+        }
+    }
+    return evaluation.MaterialVariation();
 }
 
 Vector3 TerrainVolumeField::EstimateNormal(float distance, float lateral, float vertical) const {

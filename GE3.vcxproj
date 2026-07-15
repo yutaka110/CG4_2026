@@ -214,7 +214,9 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\editor\EditorDirtyStateService.cpp" />
     <ClCompile Include="application\editor\EditorDocumentLifecycleService.cpp" />
     <ClCompile Include="application\editor\EditorDocumentTabs.cpp" />
-    <ClCompile Include="application\editor\EditorCoreRegressionTests.cpp" />
+    <ClCompile Include="application\editor\EditorCoreRegressionTests.cpp">
+      <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="application\editor\EditorSmokeRun.cpp" />
     <ClCompile Include="application\editor\EditorLayoutService.cpp" />
     <ClCompile Include="application\editor\EditorLayoutPersistenceService.cpp" />
@@ -226,6 +228,22 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\editor\EditorRuntimeAuthoringApplyService.cpp" />
     <ClCompile Include="application\editor\EditorRuntimeWatchBuilder.cpp" />
     <ClCompile Include="application\editor\EditorToolRegistration.cpp" />
+    <ClCompile Include="application\editor\tools\EditorModeRegistry.cpp" />
+    <ClCompile Include="application\editor\tools\EditorToolManager.cpp" />
+    <ClCompile Include="application\editor\tools\EditorModePanels.cpp" />
+    <ClCompile Include="application\editor\tools\EditorPlacementQueryService.cpp" />
+    <ClCompile Include="application\editor\tools\EditorPlacementTools.cpp" />
+    <ClCompile Include="application\editor\terrain\EditorTerrainBrushTools.cpp" />
+    <ClCompile Include="application\editor\terrain\EditorTerrainEditCommand.cpp" />
+    <ClCompile Include="application\editor\terrain\EditorTerrainSurfaceQuery.cpp" />
+    <ClCompile Include="application\editor\geometry\EditorGeometryMesh.cpp" />
+    <ClCompile Include="application\editor\geometry\EditorGeometryEditCommand.cpp" />
+    <ClCompile Include="application\editor\geometry\EditorGeometryWorkspace.cpp" />
+    <ClCompile Include="application\editor\geometry\EditorGeometryTools.cpp" />
+    <ClCompile Include="application\editor\mesh\EditorProductionMeshAsset.cpp" />
+    <ClCompile Include="application\editor\scene\EditorProductionScenePipeline.cpp" />
+    <ClCompile Include="application\editor\mesh\EditorMeshBakePipeline.cpp" />
+    <ClCompile Include="application\editor\mesh\EditorMeshBakeTools.cpp" />
       <ClCompile Include="application\editor\EditorTransformGizmoService.cpp" />
       <ClCompile Include="application\editor\EditorTransformGizmoMath.cpp" />
       <ClCompile Include="application\editor\EditorViewportInteractionService.cpp" />
@@ -279,6 +297,11 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\editor\material\EditorMaterialGraph.cpp" />
     <ClCompile Include="application\editor\material\EditorMaterialGraphPanel.cpp" />
     <ClCompile Include="application\editor\material\EditorMaterialGraphDiagnosticsAdapter.cpp" />
+    <ClCompile Include="application\editor\material\EditorProductionMaterialPipeline.cpp" />
+    <ClCompile Include="application\editor\texture\EditorProductionTexturePipeline.cpp" />
+    <ClCompile Include="application\editor\shader\EditorProductionShaderPipeline.cpp" />
+    <ClCompile Include="application\editor\lighting\EditorProductionLightingPipeline.cpp" />
+    <ClCompile Include="application\editor\visibility\EditorProductionGpuDrivenPipeline.cpp" />
     <ClCompile Include="application\editor\vfx\EditorVfxGraph.cpp" />
     <ClCompile Include="application\editor\vfx\EditorVfxGraphPanel.cpp" />
     <ClCompile Include="application\editor\vfx\EditorVfxGraphDiagnosticsAdapter.cpp" />
@@ -361,6 +384,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\terrain\TerrainChunkManager.cpp" />
     <ClCompile Include="application\terrain\TerrainPresetStore.cpp" />
     <ClCompile Include="application\terrain\TerrainVolumeField.cpp" />
+    <ClCompile Include="application\terrain\TerrainEditLayer.cpp" />
     <ClCompile Include="application\EffectRuntime.cpp" />
     <ClCompile Include="application\EffectSystem.cpp" />
     <ClCompile Include="application\AppDebugViewsPanel.cpp">
@@ -902,6 +926,23 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\editor\EditorRuntimeAuthoringApplyService.h" />
     <ClInclude Include="application\editor\EditorRuntimeWatchBuilder.h" />
     <ClInclude Include="application\editor\EditorToolRegistration.h" />
+    <ClInclude Include="application\editor\tools\EditorInteractiveTool.h" />
+    <ClInclude Include="application\editor\tools\EditorModeRegistry.h" />
+    <ClInclude Include="application\editor\tools\EditorToolManager.h" />
+    <ClInclude Include="application\editor\tools\EditorModePanels.h" />
+    <ClInclude Include="application\editor\tools\EditorPlacementQueryService.h" />
+    <ClInclude Include="application\editor\tools\EditorPlacementTools.h" />
+    <ClInclude Include="application\editor\terrain\EditorTerrainBrushTools.h" />
+    <ClInclude Include="application\editor\terrain\EditorTerrainEditCommand.h" />
+    <ClInclude Include="application\editor\terrain\EditorTerrainSurfaceQuery.h" />
+    <ClInclude Include="application\editor\geometry\EditorGeometryMesh.h" />
+    <ClInclude Include="application\editor\geometry\EditorGeometryEditCommand.h" />
+    <ClInclude Include="application\editor\geometry\EditorGeometryWorkspace.h" />
+    <ClInclude Include="application\editor\geometry\EditorGeometryTools.h" />
+    <ClInclude Include="application\editor\mesh\EditorProductionMeshAsset.h" />
+    <ClInclude Include="application\editor\scene\EditorProductionScenePipeline.h" />
+    <ClInclude Include="application\editor\mesh\EditorMeshBakePipeline.h" />
+    <ClInclude Include="application\editor\mesh\EditorMeshBakeTools.h" />
       <ClInclude Include="application\editor\EditorTransformGizmoService.h" />
       <ClInclude Include="application\editor\EditorTransformGizmoMath.h" />
       <ClInclude Include="application\editor\EditorViewportInteractionService.h" />
@@ -964,6 +1005,11 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\editor\material\EditorMaterialGraph.h" />
     <ClInclude Include="application\editor\material\EditorMaterialGraphPanel.h" />
     <ClInclude Include="application\editor\material\EditorMaterialGraphDiagnosticsAdapter.h" />
+    <ClInclude Include="application\editor\material\EditorProductionMaterialPipeline.h" />
+    <ClInclude Include="application\editor\texture\EditorProductionTexturePipeline.h" />
+    <ClInclude Include="application\editor\shader\EditorProductionShaderPipeline.h" />
+    <ClInclude Include="application\editor\lighting\EditorProductionLightingPipeline.h" />
+    <ClInclude Include="application\editor\visibility\EditorProductionGpuDrivenPipeline.h" />
     <ClInclude Include="application\editor\vfx\EditorVfxGraph.h" />
     <ClInclude Include="application\editor\vfx\EditorVfxGraphPanel.h" />
     <ClInclude Include="application\editor\vfx\EditorVfxGraphDiagnosticsAdapter.h" />
@@ -1058,6 +1104,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\terrain\TerrainGenerationSettings.h" />
     <ClInclude Include="application\terrain\TerrainPresetStore.h" />
     <ClInclude Include="application\terrain\TerrainVolumeField.h" />
+    <ClInclude Include="application\terrain\TerrainEditLayer.h" />
     <ClInclude Include="application\EffectComponentViews.h" />
     <ClInclude Include="application\EffectRuntime.h" />
     <ClInclude Include="application\EffectSystem.h" />
@@ -1194,6 +1241,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <None Include="Resources\TerrainDebrisShadow.VS.hlsl" />
     <None Include="Resources\Terrain.PS.hlsl" />
     <None Include="Resources\TerrainShadow.VS.hlsl" />
+    <None Include="Resources\ProductionVisibility.CS.hlsl" />
     <None Include="Resources\postprocess\default.postpreset" />
     <None Include="Resources\terrain\default.terrainpreset" />
   </ItemGroup>

@@ -69,6 +69,7 @@ struct TerrainChunkCpuBuild {
     float endDistance = 0.0f;
     uint32_t seed = 0;
     uint32_t lodTier = 0;
+    uint64_t editHash = 0;
     std::vector<VertexData> vertices;
     std::vector<uint32_t> indices;
     std::vector<TerrainDebrisInstanceGpu> debrisInstances;
@@ -93,6 +94,7 @@ struct TerrainChunkBuildJob {
     float endDistance = 0.0f;
     uint32_t seed = 0;
     uint32_t lodTier = 0;
+    uint64_t editHash = 0;
     std::future<TerrainChunkCpuBuild> future;
 };
 
@@ -101,6 +103,7 @@ struct TerrainChunkDebugInfo {
     float endDistance = 0.0f;
     uint32_t seed = 0;
     uint32_t lodTier = 0;
+    uint64_t editHash = 0;
     std::vector<TerrainSpawnCandidate> spawnCandidates;
     std::vector<TerrainRockScatterDebug> rockScatter;
     std::vector<TerrainDebrisInstance> debrisInstances;
@@ -114,6 +117,7 @@ struct TerrainRenderChunk {
     float endDistance = 0.0f;
     uint32_t seed = 0;
     uint32_t lodTier = 0;
+    uint64_t editHash = 0;
     Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> indexResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> transformResource;
@@ -166,6 +170,8 @@ public:
         ge3::core::DescriptorHeap* srvHeap,
         const RailPath& railPath,
         const TerrainGenerationSettings& settings,
+        const TerrainEditLayer* editLayer,
+        const TerrainEditLayer* previewLayer,
         float focusDistance,
         const Matrix4x4& viewProjection);
 
@@ -204,7 +210,9 @@ private:
         ID3D12Device* device,
         ge3::core::DescriptorHeap* srvHeap,
         const RailPath& railPath,
-        const TerrainGenerationSettings& settings);
+        const TerrainGenerationSettings& settings,
+        const TerrainEditLayer* editLayer,
+        const TerrainEditLayer* previewLayer);
     void RetireRenderChunks(std::vector<TerrainRenderChunk>&& chunks);
     void TrimRetiredRenderChunks();
     void UpdateChunkTransforms(const Matrix4x4& viewProjection);
@@ -224,6 +232,7 @@ private:
     uint64_t frameSerial_ = 0;
     uint32_t renderSettingsHash_ = 0;
     uint32_t chunkCacheSettingsHash_ = 0;
+    uint64_t cachedEditRevision_ = 0;
     int32_t cachedFirstChunkIndex_ = -1;
     int32_t cachedLastChunkIndex_ = -1;
     int32_t cachedFocusBucket_ = -1;

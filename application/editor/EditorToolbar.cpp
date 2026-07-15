@@ -7,6 +7,7 @@
 #include "EditorTransformGizmoService.h"
 #include "documents/EditorDocumentManager.h"
 #include "documents/EditorDocumentId.h"
+#include "tools/EditorToolManager.h"
 
 #include "../../externals/imgui/imgui.h"
 
@@ -194,6 +195,42 @@ void DrawEditorToolbar(EditorContext& context) {
     }
 
     EditorCommandRegistry& registry = *context.commands;
+    bool drewModeControls = false;
+    if (context.interactiveTools != nullptr) {
+        EditorToolManager& toolManager = *context.interactiveTools;
+        const EditorModeDescriptor* activeMode = toolManager.ActiveMode();
+        const char* preview = activeMode != nullptr ? activeMode->label.c_str() : "Mode";
+        ImGui::SetNextItemWidth(112.0f);
+        if (ImGui::BeginCombo("##EditorMode", preview)) {
+            for (const EditorModeDescriptor* mode : toolManager.Registry().Modes()) {
+                if (mode == nullptr) continue;
+                const bool selected = activeMode != nullptr && activeMode->id == mode->id;
+                if (ImGui::Selectable(mode->label.c_str(), selected)) {
+                    toolManager.ActivateMode(mode->id);
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered() && activeMode != nullptr) {
+            ImGui::SetTooltip("%s%s%s", activeMode->description.c_str(),
+                activeMode->shortcut.empty() ? "" : "\nShortcut: ",
+                activeMode->shortcut.empty() ? "" : activeMode->shortcut.c_str());
+        }
+        drewModeControls = true;
+        if (toolManager.HasActiveTool()) {
+            ImGui::SameLine();
+            const EditorInteractiveToolDescriptor* activeTool =
+                toolManager.ActiveToolDescriptor();
+            ImGui::TextDisabled("%s", activeTool != nullptr ? activeTool->label.c_str() : "Tool Reloading");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Accept")) toolManager.RequestAccept();
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Cancel")) toolManager.RequestCancel();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+    }
     std::vector<const EditorToolbarItemDescriptor*> toolbarItems;
     for (const EditorToolbarItemDescriptor* item : context.tools->Toolbar().VisibleItems()) {
         if (item != nullptr && ContextAllowsItem(context, *item)) toolbarItems.push_back(item);
@@ -201,7 +238,7 @@ void DrawEditorToolbar(EditorContext& context) {
 
     std::vector<const EditorToolbarItemDescriptor*> overflowItems;
     bool overflowStarted = false;
-    bool drewItem = false;
+    bool drewItem = drewModeControls;
     float remainingWidth = ImGui::GetContentRegionAvail().x;
     for (std::size_t i = 0; i < toolbarItems.size(); ++i) {
         const EditorToolbarItemDescriptor& toolbarItem = *toolbarItems[i];

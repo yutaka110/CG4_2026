@@ -4796,6 +4796,8 @@ void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
         &heaps_.srv,
         railPath_,
         terrain.settings,
+        &railShooterCourse_.terrainEditLayer,
+        &terrain.previewEditLayer,
         terrain.previewDistance,
         frameState_.viewProjectionMatrix);
 
@@ -7177,6 +7179,12 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     graphContext.dsv = dsvHandle;
     graphContext.depthTextureHandle = engineContext_.GetDepthSrvGpuHandle();
     graphContext.terrainChunkManager = &terrainChunkManager_;
+    graphContext.productionScenePipeline = &imguiLayer_.ProductionScenePipeline();
+    graphContext.productionMaterialPipeline = &imguiLayer_.ProductionMaterialPipeline();
+    graphContext.productionTexturePipeline = &imguiLayer_.ProductionTexturePipeline();
+    graphContext.productionShaderPipeline = &imguiLayer_.ProductionShaderPipeline();
+    graphContext.productionLightingPipeline = &imguiLayer_.ProductionLightingPipeline();
+    graphContext.productionGpuDrivenPipeline = &imguiLayer_.ProductionGpuDrivenPipeline();
     const auto registerPassesStart = RailPerfClock::now();
     const std::string railHudTargetResource =
         imguiLayer_.WantsDeveloperDiagnostics()

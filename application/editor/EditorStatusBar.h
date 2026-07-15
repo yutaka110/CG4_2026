@@ -24,6 +24,7 @@ struct EditorStatusBarSnapshot {
     std::string gpu = "Unavailable";
     std::string memory = "Unbound";
     std::string command = "Idle";
+    std::string interactiveTool = "Mode Unavailable";
 };
 
 EditorStatusBarSnapshot BuildEditorStatusBarSnapshot(const EditorContext& context);

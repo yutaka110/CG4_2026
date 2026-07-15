@@ -16,9 +16,12 @@
 #include "prefab/EditorPrefabService.h"
 #include "world/EditorWorldMutationService.h"
 #include "world/SceneWorldObjectProvider.h"
+#include "tools/EditorToolManager.h"
+#include "documents/EditorDocumentManager.h"
 
 #include "../../externals/imgui/imgui.h"
 
+#include <algorithm>
 #include <sstream>
 
 namespace editor {
@@ -117,6 +120,11 @@ void SubmitViewportDiagnostics(EditorContext& context, const EditorPanelRect& re
         text << "\nGizmo     " << context.transformGizmo->ManipulationLabel()
              << "\nMode      " << context.transformGizmo->ModeLabel()
              << "\nAxis      " << context.transformGizmo->AxisLabel();
+    }
+    if (context.interactiveTools != nullptr) {
+        const EditorToolManagerSnapshot tool = context.interactiveTools->Snapshot();
+        text << "\nTool      " << tool.modeLabel;
+        if (!tool.toolLabel.empty()) text << " / " << tool.toolLabel;
     }
 
     EditorViewportOverlayItemOptions options{};
@@ -218,6 +226,62 @@ void AcceptSceneAssetDrop(EditorContext& context) {
                 ImGui::EndDragDropTarget();
                 return;
             }
+            if (context.interactiveTools != nullptr &&
+                context.assets != nullptr && context.assetSelection != nullptr) {
+                const EditorAssetRecord* asset = context.assets->FindByGuid(payload.guid.data());
+                if (asset == nullptr) {
+                    if (context.notifications != nullptr) {
+                        context.notifications->Push(
+                            EditorNotificationSeverity::Error,
+                            "Viewport Asset Drop",
+                            "Dropped Asset GUID is no longer registered.");
+                    }
+                    ImGui::EndDragDropTarget();
+                    return;
+                }
+                context.assetSelection->SetPrimary(
+                    MakeEditorAssetHandle(*asset, context.assets->Revision()));
+                EditorInteractiveToolEnvironment environment{};
+                environment.selection = context.selection;
+                environment.viewport = context.viewportInteraction;
+                environment.coordinates = context.viewportCoordinates;
+                environment.execution = context.interactiveExecution;
+                environment.selectionRevision = context.selection != nullptr
+                    ? context.selection->Revision() : 0;
+                environment.documentRevision = context.documentManager != nullptr
+                    ? context.documentManager->Revision() : 0;
+                if (context.documentManager != nullptr) {
+                    if (const EditorDocumentRecord* document = context.documentManager->Active()) {
+                        environment.activeDocumentKey = document->id.Key();
+                    }
+                }
+                environment.playSessionActive = context.playSession != nullptr &&
+                    context.playSession->IsActive();
+                environment.canMutateAuthoring = context.viewportInteraction != nullptr &&
+                    context.viewportInteraction->CanMutateAuthoring();
+                environment.viewportAvailable = context.viewportInteraction != nullptr &&
+                    context.viewportInteraction->ViewportAvailable();
+                std::string error;
+                const bool started =
+                    context.interactiveTools->ActivateMode("editor.mode.place", &error) &&
+                    context.interactiveTools->StartTool(
+                        "editor.tool.placeSelectedAsset",
+                        environment,
+                        *context.transactions,
+                        &error);
+                if (context.notifications != nullptr) {
+                    context.notifications->Push(
+                        started
+                            ? EditorNotificationSeverity::Info
+                            : EditorNotificationSeverity::Warning,
+                        "Viewport Asset Drop",
+                        started
+                            ? "Placement preview started. Click to place; Escape cancels."
+                            : (error.empty() ? "Placement Tool could not start." : error));
+                }
+                ImGui::EndDragDropTarget();
+                return;
+            }
             if (context.worldMutations == nullptr) {
                 ImGui::EndDragDropTarget();
                 return;
@@ -296,6 +360,25 @@ void DrawEditorViewportPanelContent(
             renderInput.buildOverlay(*context.viewportOverlay);
         }
         SubmitViewportDiagnostics(context, rect);
+        if (context.interactiveTools != nullptr &&
+            context.interactiveTools->HasActiveTool()) {
+            const IEditorInteractiveTool* tool = context.interactiveTools->ActiveTool();
+            if (tool != nullptr) tool->BuildViewportOverlay(*context.viewportOverlay);
+            const std::string hint = tool != nullptr ? tool->ViewportHint() : std::string{};
+            if (!hint.empty()) {
+                EditorViewportOverlayItemOptions options{};
+                options.background = true;
+                options.iconFallback = false;
+                options.priority = 250;
+                context.viewportOverlay->Sink(
+                    EditorViewportOverlayLayerId::AuthoringHelpers).Label(
+                        10.0f,
+                        (std::max)(36.0f, rect.height - 34.0f),
+                        hint,
+                        IM_COL32(235, 245, 255, 245),
+                        options);
+            }
+        }
         context.viewportOverlay->Render(drawList);
         DrawViewportOverlayControls(*context.viewportOverlay, context.layoutPersistence, rect);
     }

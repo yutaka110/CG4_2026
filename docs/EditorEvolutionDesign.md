@@ -157,7 +157,7 @@ EV-A1 Transaction CoreのDomain非依存化は、既存のAsset MutationとRunti
 | A1-Foundation | 汎用Command API、失敗安全なUndo/Redo、履歴メモリ上限、Course/Detailsの移行 | A-2 File Transaction |
 | A1-Final | Asset MutationとRuntime Applyの移行、旧Domain payload/APIの削除 | A-2およびA-3完了後 |
 
-**A1-FoundationからD-3 Gameplay Visual Scripting、独立追加のEditor Font Foundation、Phase D Integration／Commercial Completion Gateまでは2026-07-14までに実装・検証済み**である。Transaction、File Safety、Play Isolation、Generic Document Lifecycle、統合World Authoring、versioned Scene/Prefab/Material/VFX/Animation/Gameplay authoring、永続Asset GUID、安全なContent Browser、責務分割されたInspector/Details/Bottom Dock、context-aware command chrome、Domain非依存Sequencer/Graph Coreとbounded Runtime VMの商用Editor基盤が揃った。Development構成の完了判定は11/11 gate、155/155 check、blocked 0、attention 0、performance warning 0で`ready`となった。次のActive Milestoneは、エンジン全体の商用化ロードマップに戻り、Stage 7 Runtime／Editor Build分離とSource-free Shipping Package検証とする。
+**A1-FoundationからE-11 Production GPU-Driven Visibility／Indirect Draw Pipelineまでは2026-07-14までに実装・検証済み**である。Transaction／File Safety／Play Isolation／Document／World／Asset／Graph／Interactive Tool基盤に加え、Mesh／Material／Texture／Shader／Multi-Light／ShadowからGPU visibility／ExecuteIndirectまでのProduction Scene経路が接続された。E-11完了判定は21/21 gate、266/266 check、blocked 0、attention 0、performance warning 0で`ready`である。次のActive MilestoneはE-12 Production World Partition／Cell Streaming／HLOD Pipelineとする。
 
 #### A1-Foundation実装結果
 
@@ -1230,6 +1230,119 @@ IEditorSequencerTrackProvider
 - 2026-07-14のDevelopment x64実測は11/11 gate、155/155 check、performance sample 6/6、blocked 0、attention 0、warning 0、`ready`である。レポートは`logs/editor_automation_report.json`と`logs/editor_automation_report.md`、個別証跡は`logs/editor_phase_d_integration_report.log`と`logs/editor_north_star_workflow_report.log`へ出力する。
 
 このGateはEditor Evolution Phase Dの完了条件であり、エンジン全体のCommercial Release Gate G13そのものではない。G13では引き続きClean Release/Shipping、Runtime／Editor分離、Cook/Package、Soak、GPU matrix、Crash Reporter、Third-party attributionを完了する必要がある。
+
+## 12.2 Phase E：高度なEditor操作基盤
+
+### E-1 Editor Mode／Interactive Tool Framework 実装結果
+
+- `EditorModeRegistry`にstable ID、表示名、説明、shortcut、sort orderを持つMode/Tool descriptorとbuilderを追加した。CoreはScene、Terrain、VFXなどのDomain payloadを保持しない。
+- `EditorToolManager`を唯一のlifecycle ownerとし、`Activate -> Preview -> Accept/Cancel`を実装した。Authoring ToolはPreview中にTransactionを作成できず、Accept時に返した1個の`IEditorUndoCommand`だけが共有`EditorTransactionStack`へ1 Transactionとして登録される。
+- Selection revision、active Document key/revision、Play/Sim開始、Viewport消失、Authoring lock、外部Transaction、Mode変更、Shutdownを監視し、stale previewを理由付きで自動Cancelする。CancelはUndo履歴とAuthoring dataを変更しない。
+- ToolbarにMode selectorとAccept/Cancel、Left SidebarにTool Palette、Right InspectorにTool Properties、Viewportにtool hint、Status BarにMode/Tool stateを追加した。`Shift+1`/`Shift+2`でMode切替、`Enter`でAccept、`Escape`でCancelできる。
+- Built-in `Select` Modeは既存のSelection/Gizmo workflowを維持し、`Inspect` Modeにはread-onlyのSelection Inspectorを登録した。次のplacement/brush/modeling toolは同じdescriptor、lifecycle、安全境界を再利用する。
+- Debug/Development v143 buildは警告0/エラー0、Editor Core Regressionは40/40である。Regressionは重複登録拒否、Preview中Transaction 0、Accept 1 Transaction、明示Cancel、Selection/Play境界Cancel、Tool Properties公開を検証する。Development Commercial Completionは11/11 gate、155/155 check、blocked 0、attention 0、performance warning 0で`ready`を維持し、通常Editor起動も8秒間安定した。
+
+### E-2 Production Placement／Brush Tool Pack 実装結果
+
+- `Place` Modeへ`Place Empty Entity`、`Place Selected Asset`、`Placement Brush`を登録した。Content BrowserからScene配置可能なMesh／Effect／Audio AssetをViewportへdropすると、即時生成せず選択Asset配置Previewへ遷移する。不明GUIDと非対応Asset typeは空Entityを作らず拒否する。
+- `EditorPlacementQueryService`がDisplay座標をWorld rayへ変換し、XZ／XY／YZ fallback plane、plane offset、grid snapを共通処理する。Preview cursorとstroke sampleは`AuthoringHelpers` overlay layerへ描画し、Authoring SceneはAcceptまで変更しない。
+- 単体配置は1 clickを1 Transaction、Placement Brushは間隔制御された最大256 sampleの1 stroke全体を1 Transactionとしてcommitする。初期Transform、stable Entity GUID、durable Asset GUID referenceを同じScene snapshotへ含め、Undo/Redoで全配置を原子的に除去／復元する。
+- `EditorWorldMutationService::Prepare`を追加し、mutation plan生成と実適用を分離した。E-1 Tool ManagerはTransaction memory preflight後に汎用Commandを適用し、履歴登録失敗時はUndo適用でrollbackする。これにより「Authoringだけ変更され履歴がない」部分commitを防止する。
+- Tool PropertiesからEntity名、placement plane、grid snap／size、plane height、yaw、uniform scale、brush spacingを編集できる。Selection/Document/Play/Viewport/外部Transaction境界の自動Cancel、Escape Cancel、Play/Sim authoring lockをE-1契約のまま継承する。
+- Editor Core Regressionは41/41で、E-2 Commercial Gateは実際のTool Manager経路による単体配置、3点brush、durable reference、Undo/Redo、Cancel、非対応Asset拒否、Play lockの14項目を検証する。Commercial Completion schemaは`editor.commercialCompletion.v5`、全体は12/12 gate、169/169 check、blocked 0、attention 0、warning 0で`ready`である。
+
+次のActive MilestoneはE-3 Production Terrain Sculpt／Paint Tool Packとする。E-2のbrush samplerとE-1 lifecycleを再利用しつつ、Terrain専用のtile/chunk差分、筆圧／falloff、bounded dirty region、非破壊layer、GPU previewとCPU authoritative commitを追加する。Mesh/Geometry ToolはTerrainの差分Commandと性能予算を確立した後に進める。
+
+### E-3 Production Terrain Sculpt／Paint Tool Pack 実装結果
+
+- `TerrainEditLayer`をCourseの永続・非破壊authoring layerとして追加した。Sculpt／Smooth／Flatten／Paint stampはstroke GUIDとstamp GUID、rail距離、周方向角度、半径、強度、hardness、material layerを保持し、1 stroke 256 stamp、全体8192 stampの上限と厳格なvalidationを持つ。
+- Terrain mode（`Shift+4`）にSculpt、Smooth、Flatten、Paintの4 toolを登録した。E-2の距離based brush samplerを再利用し、Tool Propertiesでradius、strength、hardness、spacing、invert、4層material layerを編集する。drag中は`TerrainAuthoringState::previewEditLayer`だけを更新し、release時に限り1本の`EditorTerrainEditUndoCommand`を1 Transactionとしてcommitする。Cancel、Selection/Document境界、Play/Sim lockではAuthoring dataを変更しない。
+- `EditorTerrainSurfaceQueryService`はViewport display座標からworld rayを生成し、procedural SDFをraymarchしてrail距離・周方向角度・surface normalを返す。Viewport Overlayはbrush cursorと採取stampをAuthoring Helpers layerへ表示する。
+- `TerrainVolumeField`と`TerrainChunkManager`はAuthoring layerとpreview layerを合成する。各chunkは範囲内stampだけからcontent hashを生成し、dirty regionと重なるchunkだけを非同期再生成するため、strokeごとの全Terrain rebuildを避ける。Paintは現行procedural material pipelineの4層variationとして反映する。
+- Courseの`terrain_brush`行へ6桁精度で永続化し、Save/Load、Validation、Dirty State、Document dirty、Undo/Redoへ接続した。これはtexture Assetを用いるsplatmap／weightmapではなく、現行procedural terrain material variationに対する非破壊4層paintである。texture layer Asset、physical material、foliage maskはE-4以降の独立拡張対象とする。
+- Debug／Development v143 buildは警告0／エラー0、Editor Core Regressionは42/42である。E-3 Commercial Gateは実際のTool Manager経路によるpreview isolation、2点Sculpt、1 stroke＝1 Transaction、局所dirty range、Undo/Redo、4層Paint、Cancel、Play lock、Course round-trip、runtime反映の14項目を検証する。Commercial Completion schemaは`editor.commercialCompletion.v6`、全体は13/13 gate、183/183 check、blocked 0、attention 0、warning 0で`ready`であり、通常Development editor起動も8秒間安定した。
+
+次のActive MilestoneはE-4 Production Modeling／Geometry Tool Frameworkとする。E-3で確立したpreview isolation、bounded diff command、局所再生成、性能budgetを共通Geometry selection、mesh topology operation、collision generationへ拡張する。
+
+### E-4 Production Modeling／Geometry Tool Framework 実装結果
+
+- `EditorGeometryMesh`をScene Mesh Entityに対する編集可能Geometryのauthoritative modelとして追加した。Vertex／Triangleはstable GUIDを持ち、position、normal、UV、material slotを保持する。上限は65,535 vertex／131,072 triangleで、有限値、index範囲、degenerate face、duplicate GUID、boundary／non-manifold edgeを検証し、決定的なcompact `GM1` serializationとcontent hashを提供する。
+- Modeling mode（`Shift+5`）へFace Select、Make Editable Box、Extrude Faces、Delete Faces、Recalculate Normals、Generate Box Collisionの6 toolを登録した。Face Selectは実Viewport world rayによるtriangle hitを行い、stable face GUIDを選択する。topology toolはSceneを直接変更せずtransient previewだけを生成し、`Enter` Acceptで1本の汎用Command、`Escape` Cancelで変更なしというE-1 lifecycleを継承する。
+- `EditorGeometryWorkspace`がactive Scene Document、Selection、Mesh Renderer componentを結び、authoritative Geometryとpreview Geometry／Collisionを分離する。Viewport Overlayはwireframe、選択face、preview結果を別色で描画し、Selection／Document／Play／外部Transaction境界でstale previewを破棄する。
+- `EditorGeometryEditUndoCommand`と`EditorGeometryExecutionService`はGeometryとgenerated collisionのbefore／after property stateを1 Transactionとして原子的に適用する。Accept前にvalidationとTransaction memory preflightを行い、Undo／Redoは同じScene Entityをstable GUIDで復元する。topology変更時は旧collisionを自動破棄し、stale collisionを残さない。
+- Box collisionは編集可能Geometryのboundsとsource content hashから`GC1` propertyを生成する。Scene validationは不正Geometry／Collisionをerror、Geometry更新後のhash不一致をstale warningとして報告する。これは安全なauthoring frameworkであり、既存外部Mesh Assetを破壊しない。GPU Mesh Assetへのbake、runtime renderer upload、LOD生成、UV unwrap、bevel／remesh、convex decompositionはE-5以降の対象である。
+- Debug／Development v143 buildは警告0／エラー0、Editor Core Regressionは43/43である。E-4 Commercial Gateはclosed-manifold box、stable serialization、複数face extrusion、collision source hash、Scene binding、6 tool登録、preview isolation、1 Accept＝1 Transaction、Cancel、Undo/Redo、Play lockを15項目で検証する。Commercial Completion schemaは`editor.commercialCompletion.v7`、Development実行を含む全体は14/14 gate、198/198 check、blocked 0、attention 0、warning 0で`ready`であり、通常Development editor起動も8秒間安定した。
+
+次のActive MilestoneはE-5 Production Mesh Bake／LOD／Collision Asset Pipelineとする。E-4のinline editable Geometryをdurable Mesh Assetへatomic bakeし、renderer／physicsが共通に消費するcooked vertex/index buffer、LOD chain、collision artifact、dependency／reimport metadataを構築する。
+
+### E-5 Production Mesh Bake／LOD／Collision Asset Pipeline 実装結果
+
+- Modeling modeへ`Bake Mesh Asset` toolを追加した。Asset Name、LOD Count（最大4）、各LOD ratio、Collision Mode（None／Box／TriangleMesh）をTool Propertiesから設定し、Viewportを必要とせずprepareできる。prepare中はファイル、Asset Registry、Scene、Transaction履歴を変更せず、`Enter` Accept時だけ1本のCommandを適用する。
+- versioned text source `CGMESH|1`はdurable Asset GUID／ID、source Geometry hash、build settings、stable element GUID付きGeometryを保持する。Renderer向け`CGMB` cooked artifactはposition／normal／UV、index、triangle material slot、最大4 LOD、bounds、source/build hashを持つ。Physics向け`CGCB` artifactはBoxまたはTriangleMeshを保持し、両binary形式はschema、128 MiB上限、厳格なcount/index/finite validation、payload checksumを持つ。
+- LOD0はauthoritative topologyを保持し、後続LODは設定ratioに従う決定的triangle budgetと参照vertex compactionで生成する。Box collisionはE-4 generated collisionが同じsource hashなら再利用し、staleならGeometry boundsから再生成する。TriangleMesh collisionはauthoritative Geometryから生成する。
+- `EditorMeshBakePipeline::Prepare`はsource、cooked mesh、collision、`.meta`をmemory上で生成・再parseし、new bakeとrebakeを分離する。初回bakeは`Resources/Generated/Meshes`へdurable GUIDを発行し、rebakeはrequested nameに関係なく既存GUID／ID／pathを保持する。
+- Acceptは4ファイルを`EditorFileTransaction`でprepareし、Asset Registry登録、Scene Mesh Rendererの`asset` reference、source/build hash更新を同じ`EditorMeshBakeUndoCommand`で適用する。file validation、registry conflict、Scene mutation、commitのいずれかが失敗した場合はdisk／registry／Sceneをrollbackする。global Undo／Redoも4ファイル、Asset identity、Scene reference、runtime cacheを原子的に除去／復元する。
+- `EditorProductionMeshRuntimeCache`はsource／cooked／collisionのGUID、source hash、build hashを再照合してから読み込み、Rendererへ選択LODのvertex/index/material view、Physicsへcollision viewを提供する。Content Browser metadata previewとD3D12 thumbnail backendも`CGMESH`を直接解釈する。
+- Debug／Development v143 buildは警告0／エラー0、Editor Core Regressionは44/44である。E-5 Commercial GateはLOD生成、binary round-trip、checksum破損拒否、preview isolation、atomic 4-file publish、durable GUID、Scene validation、Renderer／Physics handoff、Undo/Redo、GUID維持rebake、Cancel、Play lockの16項目を検証する。Commercial Completion schemaは`editor.commercialCompletion.v8`、Development実行を含む全体は15/15 gate、214/214 check、blocked 0、attention 0、warning 0で`ready`であり、通常Development editor起動も8秒間安定した。
+
+次のActive MilestoneはE-6 Production Scene Render／Physics Instance Pipelineとする。E-5の検証済みCPU resource viewをD3D12 upload／fence管理／Scene Entity draw packet／LOD selectionへ接続し、同じcollision artifactからPhysics broadphase／narrowphase instanceを生成する。QEM等の高品質mesh simplification、convex decomposition、Derived Data Cache／background build farmはその後の独立拡張とする。
+
+### E-6 Production Scene Render／Physics Instance Pipeline 実装結果
+
+- `EditorProductionScenePipeline`はSceneのenabled Mesh Rendererとdurable Mesh GUIDからtransient instanceを収集し、親子Transformをworldへ合成する。永続Scene schemaへruntime状態を混入させず、未解決Asset、壊れたCooked artifact、非可逆scaleをdiagnosticとして拒否する。
+- Cooked boundsをworld AABBへ変換し、D3D clip spaceの6面でfrustum rejectionを行う。LODはbounds radiusとcamera distanceから選択し、10%のhysteresisで境界付近のframe間振動を防ぐ。Entityごとの前回LODはSceneから独立したtransient stateである。
+- 各LODは検証済みCPU vertex/index viewからD3D12 default heapへ一度だけuploadする。source geometry/build hash更新時は再生成し、upload staging、旧LOD buffer、削除Entityのtransform CBVはscheduled frame fenceまで保持してcompleted fence後に解放する。`Geometry.MainModel`はE-6 draw packetを既存light/material contractで実描画する。
+- Physicsは同一world transformとcollision artifactからinstanceを生成し、world AABB broadphase、Box slab test、Triangle Mesh Moller-Trumbore narrowphase、AABB overlapを提供する。Viewport click selectionはこのRaycastからstable Scene Entity handleへ接続し、Authoring Helpers／Object Labels layerへboundsと選択LODを表示する。
+- Editor Core Regressionは44/44である。E-6 Commercial Gateはdurable E-5 handoff、CPU-only決定性、WARP D3D12 upload、draw packet、Fence退役、LOD hysteresis、frustum、Box narrowphase、AABB overlap、disabled component isolationの10項目を検証する。Commercial Completion schemaは`editor.commercialCompletion.v9`、全体は16/16 gate、224/224 check、blocked 0、attention 0、warning 0で`ready`である。Debug／Development v143 buildは警告0／エラー0、通常Development editor起動も8秒間安定した。
+
+次のActive MilestoneはE-7 Production Material Instance／Scene Lighting Binding Pipelineとする。D-3 Material Graphのcompiled outputとMaterial Instance overrideをE-6 draw packetへ結び、Scene Mesh Rendererごとのdurable material slot、fallback、hot reload、shader variant lifetimeを商用品質で確立する。QEM、convex decomposition、Derived Data Cache／background build farmは引き続き独立拡張とする。
+
+### E-7 Production Material Instance／Scene Lighting Binding Pipeline 実装結果
+
+- `MaterialInstance`をContent Browser／Asset Registryのfirst-class durable Asset Kindへ追加した。`MATERIAL_INSTANCE 1`は自身のGUID、親Material Graph GUID、base color、roughness、metallic、environment coefficient、albedo／normal texture GUID、revisionを4 MiB上限付きで検証・round-tripする。
+- `EditorProductionMaterialPipeline`はMesh Rendererの`material`／`material:<slot>`参照を解決し、親Material Graphを再decode・compileしてsource fingerprint、domain、blend mode、shading modelからshader variant identityを決定する。Material Instance overrideはpersistently mapped D3D12 Material CBVへ変換され、未解決・破損・compile失敗はScene drawを落とさずengine fallbackへ退避する。
+- E-6 cooked LODはtriangle material slotごとのsubmesh index bufferとdraw packetへ分割された。`Geometry.MainModel`はEntity GUIDとmaterial slotからE-7 bindingを選び、Material CBVとScene Lighting CBVを実際のroot bindingへ渡す。Material／親Graph timestamp更新はhot reloadとなり、置換・未参照CBVはscheduled frame fenceまで保持してcompleted fence後に解放する。
+- Directional／Point／Spot LightをScene Componentとして追加した。E-7は階層Transform、enabled／visible、color、direction、intensity、radius、distance、decay、angle、priorityを検証し、現行single-light shader capacityではpriority降順・GUID順で決定的に代表Lightを選択する。capacity超過はdiagnosticとして可視化し、Lightがない種類はzero-intensity安全値をbindする。
+- Editor Core Regressionは45/45である。E-7 Commercial Gateはversioned instance、durable Asset分類、CPU決定性、priority selection、WARP D3D12 Material／Light CBV、hot reload、Fence退役、missing fallbackの8項目を検証する。Commercial Completion schemaは`editor.commercialCompletion.v10`、全体は17/17 gate、232/232 check、blocked 0、attention 0、warning 0で`ready`である。Debug／Development v143 buildは警告0／エラー0、通常Development editor起動も8秒間安定した。
+
+次のActive MilestoneはE-8 Production Texture Streaming／Descriptor Residency Pipelineとする。E-7が保持するalbedo／normal durable texture GUIDを実SRV descriptor、mip residency、budget eviction、fallback texture、hot reloadへ接続し、Material bindingのtexture側を完成させる。複数同時Light cluster、graph固有PSO specialization、Derived Data Cache／background build farmは独立拡張として追跡する。
+
+### E-8 Production Texture Streaming／Descriptor Residency Pipeline 実装結果
+
+- `EditorProductionTexturePipeline`を追加し、E-7のEntity／material slot／albedo・normal durable Texture GUIDをauthoring dataから分離されたtransient GPU residencyへ解決する。DDS／TGA／WIC 2D Textureを安全にdecodeし、非圧縮single-mip sourceにはmip chainを生成する。cubemap、array、unsupported format、dimension上限超過、欠損Assetは描画を落とさず明示的fallbackとdiagnosticへ退避する。
+- Source mipのbyte列、per-texture share、minimum mip-tail、D3D12 allocation sizeから`firstResidentMip`を決定し、高解像度mipを単にSRVで隠すのではなく、選択したmip-tailだけを持つ実GPU resourceを生成する。既定GPU予算128 MiB、1 Texture上限64 MiB、最大dimension 16384、inactive retention 120 frameをpolicyとして公開し、active setを保護した決定的LRU evictionを実装した。
+- 4096-entry共有shader-visible heapのうち3200～3711はThumbnail、3712～4095の384 slotをE-8専用範囲として所有する。albedo／normalは用途別のsRGB／linear SRVを得る。descriptor exhaustion時はin-flight descriptorを再利用せずfallbackし、resource／upload buffer／descriptor slotはscheduled fenceまでpending保持してcompleted fence後にのみ解放する。
+- Texture source timestamp変更は別descriptorと別resourceへのhot reload swapとなる。旧descriptorを上書きしないためin-flight drawとの競合がない。未変更Textureはresident cache hit、未参照Textureはretentionまたは予算圧力でLRU退役する。Runtime Watchはresident Texture／descriptor数、full・partial mip数、GPU使用量／予算、pending、fallback、cache hit／missを表示する。
+- `Geometry.MainModel`はE-8 albedo SRVを既存`t0`へ実bindし、normal SRVを予約済み`t4` bindingへ渡す。albedo欠損時は既存engine fallback Textureを維持する。normal-map shadingの有効化はMaterial Graph permutationとroot contractを同時に確定するE-9で行い、E-8のresidency責務にはshader specializationを混在させない。
+- Editor Core Regressionは46/46である。E-8 Commercial Gateはdurable albedo／normal handoff、mip-tail決定性、WARP descriptor heap、実albedo／normal SRV、GPU budget縮退、hot reload swap、cache hit、missing fallback＋LRU、Fence退役の9項目を検証する。Commercial Completion schemaは`editor.commercialCompletion.v11`、全体は18/18 gate、241/241 check、blocked 0、attention 0、warning 0で`ready`である。Debug／Development v143 buildは警告0／エラー0、通常Development editor起動も8秒間安定した。
+
+### E-9 Production Shader Variant／PSO Cache Pipeline 実装結果
+
+- `EditorProductionMaterialPipeline`はresident Material Instanceごとに1個のimmutable `EditorProductionMaterialShaderSource`を公開し、Entity bindingごとのHLSL複製を避ける。variant keyはMaterial Graph fingerprint、E-7 material variant、shader template／shared VS contract、domain、blend、shading model、E-8 normal-map residencyを含み、同じ入力から安定した64-bit identityを得る。
+- `EditorProductionShaderPipeline`はMaterial Graph生成HLSLをMain root contractへ正規化し、generated sourceをatomic publishしてDXC workerで非同期compileする。PSO作成、D3D12 Pipeline Library load/store、variant promotionはframe threadに限定する。初回compile中はengine fallback、hot reload中または新permutation compile中はmaterial単位のlast-known-good PSOを維持するため、authoring変更で描画を停止しない。
+- Surface Opaque／Masked／TranslucentとLit／UnlitをPSO／shader permutationへ反映する。Translucentはalpha blend＋depth write off、Maskedはshader clip、normal resident時は`t4` linear normal SRVからderivative TBNを生成する。Post Process domainと複数Graph textureは未定義bindを行わず、明示diagnosticとfallbackへ退避する。
+- Production Scene render packetだけがE-9 PSOを選択し、既存gameplay drawは従来Main PSOを維持する。inactive variantはdeterministic retention／capacity eviction後もscheduled frame fenceまで`ComPtr`をpending保持する。Runtime Watchはresident／queued／ready／fallback／last-known-good／normal、Pipeline Library hit／miss、compile成功／失敗、pending retirementを表示する。
+- Editor Core Regressionは47/47である。E-9 Commercial GateはWARP Main contract、E-7／E-8 handoff、初回non-blocking fallback、実generated HLSL＋normal PSO、hot reload last-known-good、atomic promotion、Fence退役、Pipeline Library再起動hitの8項目を検証する。Commercial Completion schemaは`editor.commercialCompletion.v12`、全体は19/19 gate、249/249 check、blocked 0、attention 0、warning 0で`ready`である。
+- Debug／Development v143 buildは警告0／エラー0であり、通常Development editorもE-9初期化を含め8秒間安定稼働した。
+
+### E-10 Production Multi-Light Cluster／Shadow Pipeline 実装結果
+
+- `EditorProductionLightingPipeline`を追加し、Scene hierarchy visibility／world transformを反映したDirectional／Point／Spotをpriority、GUID順で決定的に収集する。Production Scene Viewは最大256 Light、64px tile、24 logarithmic depth slice、cluster当たり最大64 indexのbounded listを生成し、root SRV `t20`／`t21`／`t22`とCBV `b6`としてE-9 shaderへ渡す。E-7のsingle-light CBVは既存drawのcompatibility fallbackとしてのみ維持する。
+- shadow priorityとLight priorityを分離し、最大8 sliceのD32 texture-array atlas、slice DSV、shared SRV index 4032、comparison sampler `s1`、depth-only `ProductionShadow.VS.hlsl`／PSOを実装した。Directional／SpotはE-6 render packetをcasterとして描画し、generated Material shaderはworld positionを各light matrixへ投影してatlasをsampleする。Point cube shadowは未実装を明示診断し、shadow budget超過Lightは決定的にunshadowed fallbackへ落とす。
+- Main root signatureはProduction Light／cluster／shadow bindingを末尾追加し、既存Object3D、Terrain Cascade Shadow、Skinned drawのregisterを保持した。E-8 descriptor ownershipは3712-4031へ縮小し、E-10 shadow atlasを4032へ分離した。Runtime Watchはsubmitted／resident／rejected Light、cluster／index／overflow、shadow request／resident／rejected、shadow draw、atlas MiBを表示する。
+- Editor Core Regressionは48/48である。E-10 Commercial Gateはpriority bounded collection、Scene View cluster、overflow safety、shadow budget、logarithmic slice、WARP root contract、DXC shadow PSO、GPU buffer／atlas residency、command submissionの9項目を検証する。Commercial Completion schemaは`editor.commercialCompletion.v13`、全体は20/20 gate、258/258 check、blocked 0、attention 0、warning 0で`ready`である。
+- Debug／Development v143 buildは警告0／エラー0であり、通常Development editorはE-10初期化とRenderGraph shadow passを含め8秒間応答状態を維持した。
+
+### E-11 Production GPU-Driven Visibility／Indirect Draw Pipeline 実装結果
+
+- E-6はhierarchy-visibleな全GPU resident submeshを`GpuDrivenCandidates`として公開し、従来のCPU frustum可視packetをfallbackとして分離した。candidateはworld bounds sphere、Transform CBV GPU address、Mesh／LOD／material slotを保持し、Scene DocumentへGPU transient stateを保存しない。
+- `EditorProductionGpuDrivenPipeline`はMesh／LOD／submesh、Material CBV、Texture descriptor、E-9 PSOで決定的にbatch化し、既定最大4,096 instance／512 batchの非重複command rangeを構築する。上限超過したCPU可視packet、初期化失敗、3-frame ring枯渇時は従来direct drawへ退避し、objectを消失させない。
+- `Visibility.ProductionGpuDriven` RenderGraph passは64-thread computeでbatch countをresetし、GPU sphere-frustum rejectionと前frame Terrain Hi-Z 3x3 conservative occlusionを行う。Hi-Z未生成時はvalid 1x1 fallback descriptorをbindしたfrustum-only経路とし、未bind descriptorをshaderへ渡さない。
+- visible instanceはbatch別UAVへcompactし、Transform CBV indirect argumentと`D3D12_DRAW_INDEXED_ARGUMENTS`を32-byte commandとして生成する。Main root parameter 1とCBV command signatureを共有し、batch単位でPSO／Material／Texture／Light／Shadowをbindして`ExecuteIndirect`する。既存Gameplay drawはdirect pathのまま維持する。
+- instance／batch upload、argument／count UAV、readbackは3-frame ringで所有し、scheduled／completed fenceで再利用する。countと先頭command bytesはGPU完了後だけmapし、visible count、dispatch／readback、budget rejection、CPU fallback、Hi-Z状態、command layout validationをRuntime Watchへ公開する。
+- Editor Core Regressionは49/49である。E-11 Commercial Gateはdeterministic range、CBV＋DrawIndexed byte packing、WARP Main root contract、DXC compute／triple buffer生成、batch handoff、GPU dispatch、fence readback、command byte validation、budget fallbackを8項目で検証する。Commercial Completion schemaは`editor.commercialCompletion.v14`、全体は21/21 gate、266/266 check、blocked 0、attention 0、warning 0で`ready`である。Debug／Development v143 buildは警告0／エラー0であり、通常Development editorはE-11初期化とRenderGraph visibility passを含め8秒間応答状態を維持した。
+
+次のActive MilestoneはE-12 Production World Partition／Cell Streaming／HLOD Pipelineとする。E-11のbounded GPU visibilityへ、editor cell ownership、camera streaming source、async cell load／unload、cross-cell durable reference、HLOD proxy生成、streaming budget／telemetryを接続する。Nanite相当virtualized geometry、汎用Derived Data Cache／background build farm、Point cube shadow、Post Process Material domainは独立拡張として追跡する。
 
 ## 13. 実装を後回しにする機能
 

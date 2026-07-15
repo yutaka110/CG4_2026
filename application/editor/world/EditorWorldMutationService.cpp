@@ -39,17 +39,74 @@ EditorWorldMutationResult EditorWorldMutationService::Execute(
     EditorTransactionStack& transactions,
     bool canMutateAuthoring) {
     EditorWorldMutationResult result{};
-    if (!canMutateAuthoring) {
-        result.message = "Authoring World is locked during Play/Sim.";
+    EditorPreparedWorldMutation prepared{};
+    if (!Prepare(request, canMutateAuthoring, prepared, &result.message)) {
         return result;
+    }
+    auto* mutationProvider = dynamic_cast<IEditorWorldMutationProvider*>(
+        registry_.Find(prepared.after.providerId));
+    if (mutationProvider == nullptr) {
+        result.message = "World mutation provider is unavailable.";
+        return result;
+    }
+    EditorError transactionError;
+    if (!transactions.CanPushCommand(
+            prepared.label,
+            prepared.transactionTarget,
+            prepared.command,
+            &transactionError)) {
+        result.message = transactionError.message;
+        return result;
+    }
+    std::string errorMessage;
+    if (!mutationProvider->ApplyMutationState(prepared.after, &errorMessage)) {
+        result.message = errorMessage.empty() ? "World mutation apply failed." : errorMessage;
+        return result;
+    }
+    const EditorWorldModelRefreshResult refresh = model_.Refresh();
+    if (!refresh.succeeded) {
+        std::string rollbackError;
+        mutationProvider->ApplyMutationState(prepared.before, &rollbackError);
+        model_.Refresh();
+        result.message = refresh.message.empty()
+            ? "World mutation model refresh failed. The change was rolled back."
+            : refresh.message + " The change was rolled back.";
+        return result;
+    }
+    if (!transactions.PushCommand(
+            prepared.label,
+            prepared.transactionTarget,
+            prepared.command,
+            &transactionError)) {
+        std::string rollbackError;
+        mutationProvider->ApplyMutationState(prepared.before, &rollbackError);
+        model_.Refresh();
+        result.message = transactionError.message.empty()
+            ? "World mutation transaction could not be registered."
+            : transactionError.message;
+        return result;
+    }
+    return ResolveCommitted(prepared);
+}
+
+bool EditorWorldMutationService::Prepare(
+    const EditorWorldMutationRequest& request,
+    bool canMutateAuthoring,
+    EditorPreparedWorldMutation& outPrepared,
+    std::string* errorMessage) const {
+    outPrepared = {};
+    const auto fail = [&](std::string message) {
+        if (errorMessage != nullptr) *errorMessage = std::move(message);
+        return false;
+    };
+    if (!canMutateAuthoring) {
+        return fail("Authoring World is locked during Play/Sim.");
     }
     if (request.targets.empty()) {
-        result.message = "World mutation requires at least one target.";
-        return result;
+        return fail("World mutation requires at least one target.");
     }
     if (request.kind == EditorWorldMutationKind::Rename && request.targets.size() != 1) {
-        result.message = "Rename requires exactly one target.";
-        return result;
+        return fail("Rename requires exactly one target.");
     }
 
     EditorWorldProviderMutationRequest providerRequest{};
@@ -60,6 +117,7 @@ EditorWorldMutationResult EditorWorldMutationService::Execute(
     providerRequest.componentType = request.componentType;
     providerRequest.property = request.property;
     providerRequest.propertyValue = request.propertyValue;
+    providerRequest.placements = request.placements;
     providerRequest.value = request.value;
     std::string providerId;
     EditorDocumentId document;
@@ -68,37 +126,31 @@ EditorWorldMutationResult EditorWorldMutationService::Execute(
     for (const EditorObjectHandle& target : request.targets) {
         const EditorWorldObjectRecord* record = model_.Resolve(target);
         if (record == nullptr) {
-            result.message = "Selected World object no longer resolves.";
-            return result;
+            return fail("Selected World object no longer resolves.");
         }
         const bool createTarget = request.kind == EditorWorldMutationKind::Create;
         if ((!createTarget && record->virtualNode) || record->runtimeOnly || record->missing) {
-            result.message = "Selected World object is read-only or missing.";
-            return result;
+            return fail("Selected World object is read-only or missing.");
         }
         if (record->locked && request.kind != EditorWorldMutationKind::SetLocked) {
-            result.message = "Selected World object is locked.";
-            return result;
+            return fail("Selected World object is locked.");
         }
         if (!HasEditorWorldCapability(record->capabilities, capability)) {
-            result.message = std::string(ToString(request.kind)) +
-                " is not supported for " + record->displayName + ".";
-            return result;
+            return fail(std::string(ToString(request.kind)) +
+                " is not supported for " + record->displayName + ".");
         }
         if (providerId.empty()) {
             providerId = record->providerId;
             document = record->document;
         } else if (providerId != record->providerId || document != record->document) {
-            result.message = "A World mutation cannot span providers or documents.";
-            return result;
+            return fail("A World mutation cannot span providers or documents.");
         }
         providerRequest.targets.push_back(ToId(*record));
     }
     if (request.kind == EditorWorldMutationKind::Reparent) {
         const EditorWorldObjectRecord* parent = model_.Resolve(request.newParent);
         if (parent == nullptr || parent->providerId != providerId || parent->document != document) {
-            result.message = "Reparent target must belong to the same provider and document.";
-            return result;
+            return fail("Reparent target must belong to the same provider and document.");
         }
         providerRequest.newParent = ToId(*parent);
     }
@@ -106,62 +158,49 @@ EditorWorldMutationResult EditorWorldMutationService::Execute(
     IEditorWorldObjectProvider* provider = registry_.Find(providerId);
     auto* mutationProvider = dynamic_cast<IEditorWorldMutationProvider*>(provider);
     if (mutationProvider == nullptr) {
-        result.message = "World mutation provider is unavailable.";
-        return result;
+        return fail("World mutation provider is unavailable.");
     }
     EditorWorldMutationPlan plan{};
-    std::string errorMessage;
-    if (!mutationProvider->BuildMutation(providerRequest, &plan, &errorMessage)) {
-        result.message = errorMessage.empty() ? "World mutation planning failed." : errorMessage;
-        return result;
+    std::string providerError;
+    if (!mutationProvider->BuildMutation(providerRequest, &plan, &providerError)) {
+        return fail(providerError.empty() ? "World mutation planning failed." : providerError);
     }
     if (!plan.before.IsValid() || !plan.after.IsValid()) {
-        result.message = "World mutation provider returned an invalid state plan.";
-        return result;
+        return fail("World mutation provider returned an invalid state plan.");
     }
     auto command = std::make_shared<EditorWorldMutationUndoCommand>(
         request.kind, plan.before, plan.after);
-    EditorError transactionError;
     const EditorObjectHandle transactionTarget = request.targets.front();
     const std::string label = plan.label.empty()
         ? std::string(ToString(request.kind)) + " World Object"
         : plan.label;
-    if (!transactions.CanPushCommand(label, transactionTarget, command, &transactionError)) {
-        result.message = transactionError.message;
+    outPrepared.before = std::move(plan.before);
+    outPrepared.after = std::move(plan.after);
+    outPrepared.resultingSelectionIds = std::move(plan.resultingSelection);
+    outPrepared.document = document;
+    outPrepared.transactionTarget = transactionTarget;
+    outPrepared.label = label;
+    outPrepared.command = std::move(command);
+    outPrepared.message = label + " prepared.";
+    return true;
+}
+
+EditorWorldMutationResult EditorWorldMutationService::ResolveCommitted(
+    const EditorPreparedWorldMutation& prepared) const {
+    EditorWorldMutationResult result{};
+    if (!prepared.Valid()) {
+        result.message = "Prepared World mutation is invalid.";
         return result;
     }
-    if (!mutationProvider->ApplyMutationState(plan.after, &errorMessage)) {
-        result.message = errorMessage.empty() ? "World mutation apply failed." : errorMessage;
-        return result;
-    }
-    const EditorWorldModelRefreshResult refresh = model_.Refresh();
-    if (!refresh.succeeded) {
-        std::string rollbackError;
-        mutationProvider->ApplyMutationState(plan.before, &rollbackError);
-        model_.Refresh();
-        result.message = refresh.message.empty()
-            ? "World mutation model refresh failed. The change was rolled back."
-            : refresh.message + " The change was rolled back.";
-        return result;
-    }
-    if (!transactions.PushCommand(label, transactionTarget, command, &transactionError)) {
-        std::string rollbackError;
-        mutationProvider->ApplyMutationState(plan.before, &rollbackError);
-        model_.Refresh();
-        result.message = transactionError.message.empty()
-            ? "World mutation transaction could not be registered."
-            : transactionError.message;
-        return result;
-    }
-    for (const EditorWorldObjectId& id : plan.resultingSelection) {
+    for (const EditorWorldObjectId& id : prepared.resultingSelectionIds) {
         if (const EditorWorldObjectRecord* record = model_.FindByStableId(id.StableId())) {
             result.resultingSelection.push_back(record->handle);
         }
     }
     result.succeeded = true;
     result.changed = true;
-    result.document = document;
-    result.message = label + " completed.";
+    result.document = prepared.document;
+    result.message = prepared.label + " completed.";
     return result;
 }
 

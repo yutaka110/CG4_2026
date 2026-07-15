@@ -29,6 +29,7 @@ struct TerrainCpuMesh {
 
 bool SameChunkIdentity(const TerrainRenderChunk& renderChunk, const TerrainChunkDebugInfo& debugChunk) {
     return renderChunk.seed == debugChunk.seed &&
+        renderChunk.editHash == debugChunk.editHash &&
         std::abs(renderChunk.startDistance - debugChunk.startDistance) <= 0.001f &&
         std::abs(renderChunk.endDistance - debugChunk.endDistance) <= 0.001f;
 }
@@ -36,6 +37,7 @@ bool SameChunkIdentity(const TerrainRenderChunk& renderChunk, const TerrainChunk
 bool SameJobIdentity(const TerrainChunkBuildJob& job, const TerrainChunkDebugInfo& debugChunk) {
     return job.seed == debugChunk.seed &&
         job.lodTier == debugChunk.lodTier &&
+        job.editHash == debugChunk.editHash &&
         std::abs(job.startDistance - debugChunk.startDistance) <= 0.001f &&
         std::abs(job.endDistance - debugChunk.endDistance) <= 0.001f;
 }
@@ -43,6 +45,7 @@ bool SameJobIdentity(const TerrainChunkBuildJob& job, const TerrainChunkDebugInf
 bool SameBuildIdentity(const TerrainChunkCpuBuild& build, const TerrainChunkDebugInfo& debugChunk) {
     return build.seed == debugChunk.seed &&
         build.lodTier == debugChunk.lodTier &&
+        build.editHash == debugChunk.editHash &&
         std::abs(build.startDistance - debugChunk.startDistance) <= 0.001f &&
         std::abs(build.endDistance - debugChunk.endDistance) <= 0.001f;
 }
@@ -3774,7 +3777,9 @@ std::vector<TerrainDebrisInstance> BuildFloorDebrisInstances(
 TerrainCpuMesh BuildChunkMesh(
     const TerrainChunkDebugInfo& chunk,
     const RailPath& railPath,
-    const TerrainGenerationSettings& settings) {
+    const TerrainGenerationSettings& settings,
+    const TerrainEditLayer* editLayer,
+    const TerrainEditLayer* previewLayer) {
     TerrainCpuMesh mesh{};
     const uint32_t lodDivisor = chunk.lodTier == 0u ? 1u : (chunk.lodTier == 1u ? 2u : 3u);
     const uint32_t longitudinalSteps = (std::clamp)(
@@ -3785,7 +3790,7 @@ TerrainCpuMesh BuildChunkMesh(
         settings.surfaceRadialSegments / lodDivisor,
         16u,
         96u);
-    TerrainVolumeField volumeField(railPath, settings);
+    TerrainVolumeField volumeField(railPath, settings, editLayer, previewLayer);
 
     mesh.vertices.reserve(
         static_cast<size_t>(longitudinalSteps + 1) *
@@ -3808,7 +3813,10 @@ TerrainCpuMesh BuildChunkMesh(
             const Vector3 position = volumeField.SurfacePoint(distance, angle, &normal);
             VertexData vertex{};
             vertex.position = {position.x, position.y, position.z, 1.0f};
-            vertex.texcoord = {distance * 0.018f, at * 3.0f};
+            vertex.texcoord = PackTerrainSurfaceAttributes(
+                {distance * 0.018f, at * 3.0f},
+                0.0f,
+                volumeField.PaintVariation(distance, angle));
             vertex.normal = Scale(normal, -1.0f);
             mesh.vertices.push_back(vertex);
         }
@@ -4072,14 +4080,18 @@ TerrainChunkCpuBuild BuildTerrainChunkCpu(
     ID3D12Device* device,
     TerrainChunkDebugInfo debugChunk,
     RailPath railPath,
-    TerrainGenerationSettings settings) {
+    TerrainGenerationSettings settings,
+    TerrainEditLayer editLayer,
+    TerrainEditLayer previewLayer) {
     TerrainChunkCpuBuild build{};
     build.startDistance = debugChunk.startDistance;
     build.endDistance = debugChunk.endDistance;
     build.seed = debugChunk.seed;
     build.lodTier = debugChunk.lodTier;
+    build.editHash = debugChunk.editHash;
 
-    TerrainCpuMesh mesh = BuildChunkMesh(debugChunk, railPath, settings);
+    TerrainCpuMesh mesh = BuildChunkMesh(
+        debugChunk, railPath, settings, &editLayer, &previewLayer);
     build.vertices = std::move(mesh.vertices);
     build.indices = std::move(mesh.indices);
     build.debrisInstances = BuildDebrisGpuInstances(debugChunk);
@@ -4503,6 +4515,8 @@ void TerrainChunkManager::Update(
     ge3::core::DescriptorHeap* srvHeap,
     const RailPath& railPath,
     const TerrainGenerationSettings& settings,
+    const TerrainEditLayer* editLayer,
+    const TerrainEditLayer* previewLayer,
     float focusDistance,
     const Matrix4x4& viewProjection) {
     ++frameSerial_;
@@ -4527,12 +4541,24 @@ void TerrainChunkManager::Update(
         focusIndex + static_cast<int32_t>(settings.visibleAheadChunks));
 
     const uint32_t settingsHash = SettingsHash(settings);
+    const uint64_t editRevision =
+        (static_cast<uint64_t>(editLayer != nullptr ? editLayer->Revision() : 0u) << 32u) |
+        static_cast<uint64_t>(previewLayer != nullptr ? previewLayer->Revision() : 0u);
+    const bool editRevisionChanged = editRevision != cachedEditRevision_;
+    const auto editHashForRange = [&](float begin, float end) {
+        const uint64_t authored = editLayer != nullptr
+            ? editLayer->ContentHashForRange(begin, end) : 0ull;
+        const uint64_t preview = previewLayer != nullptr
+            ? previewLayer->ContentHashForRange(begin, end) : 0ull;
+        return authored ^ (preview + 0x9e3779b97f4a7c15ull + (authored << 6u) + (authored >> 2u));
+    };
     const float focusBucketLength = (std::max)(32.0f, settings.chunkLength);
     const int32_t focusBucket = static_cast<int32_t>(std::floor(focusDistance / focusBucketLength));
     if (settingsHash == chunkCacheSettingsHash_ &&
         firstIndex == cachedFirstChunkIndex_ &&
         lastIndex == cachedLastChunkIndex_ &&
         focusBucket == cachedFocusBucket_ &&
+        !editRevisionChanged &&
         !chunks_.empty() &&
         HasMatchingRenderChunks()) {
         EnsureHiZResources(device, srvHeap);
@@ -4545,6 +4571,7 @@ void TerrainChunkManager::Update(
         lastIndex == cachedLastChunkIndex_ &&
         !chunks_.empty()) {
         bool lodChanged = false;
+        bool editHashChanged = false;
         for (TerrainChunkDebugInfo& chunk : chunks_) {
             const float chunkMid = (chunk.startDistance + chunk.endDistance) * 0.5f;
             const uint32_t lodTier =
@@ -4553,11 +4580,19 @@ void TerrainChunkManager::Update(
                 chunk.lodTier = lodTier;
                 lodChanged = true;
             }
+            const uint64_t editHash = editHashForRange(
+                chunk.startDistance, chunk.endDistance);
+            if (chunk.editHash != editHash) {
+                chunk.editHash = editHash;
+                editHashChanged = true;
+            }
         }
         cachedFocusBucket_ = focusBucket;
-        if (lodChanged || !HasMatchingRenderChunks()) {
+        cachedEditRevision_ = editRevision;
+        if (lodChanged || editHashChanged || !HasMatchingRenderChunks()) {
             renderSettingsHash_ = settingsHash;
-            RebuildRenderChunks(device, srvHeap, railPath, settings);
+            RebuildRenderChunks(
+                device, srvHeap, railPath, settings, editLayer, previewLayer);
         }
         EnsureHiZResources(device, srvHeap);
         UpdateChunkTransforms(viewProjection);
@@ -4572,7 +4607,7 @@ void TerrainChunkManager::Update(
     }
     chunks_.clear();
     chunks_.reserve(static_cast<size_t>((std::max)(0, lastIndex - firstIndex + 1)));
-    TerrainVolumeField volumeField(railPath, settings);
+    TerrainVolumeField volumeField(railPath, settings, editLayer, previewLayer);
 
     for (int32_t chunkIndex = firstIndex; chunkIndex <= lastIndex; ++chunkIndex) {
         const float startDistance = static_cast<float>(chunkIndex) * settings.chunkLength;
@@ -4580,6 +4615,7 @@ void TerrainChunkManager::Update(
         const uint32_t seed = Hash(settings.seed ^ static_cast<uint32_t>(chunkIndex * 747796405));
         const float chunkMid = (startDistance + endDistance) * 0.5f;
         const uint32_t lodTier = TerrainLodTierForDistance(std::abs(chunkMid - focusDistance), settings);
+        const uint64_t editHash = editHashForRange(startDistance, endDistance);
         const auto reusable = std::find_if(
             reusableDebugChunks.begin(),
             reusableDebugChunks.end(),
@@ -4592,6 +4628,7 @@ void TerrainChunkManager::Update(
             TerrainChunkDebugInfo chunk = std::move(*reusable);
             reusableDebugChunks.erase(reusable);
             chunk.lodTier = lodTier;
+            chunk.editHash = editHash;
             chunks_.push_back(std::move(chunk));
             continue;
         }
@@ -4601,6 +4638,7 @@ void TerrainChunkManager::Update(
         chunk.endDistance = endDistance;
         chunk.seed = seed;
         chunk.lodTier = lodTier;
+        chunk.editHash = editHash;
 
         const uint32_t candidateCount =
             1u + static_cast<uint32_t>(settings.rockPillarDensity * 4.0f) +
@@ -4663,9 +4701,11 @@ void TerrainChunkManager::Update(
     cachedFirstChunkIndex_ = firstIndex;
     cachedLastChunkIndex_ = lastIndex;
     cachedFocusBucket_ = focusBucket;
+    cachedEditRevision_ = editRevision;
     if (settingsHash != renderSettingsHash_ || !HasMatchingRenderChunks()) {
         renderSettingsHash_ = settingsHash;
-        RebuildRenderChunks(device, srvHeap, railPath, settings);
+        RebuildRenderChunks(
+            device, srvHeap, railPath, settings, editLayer, previewLayer);
     }
     EnsureHiZResources(device, srvHeap);
     UpdateChunkTransforms(viewProjection);
@@ -4763,7 +4803,9 @@ void TerrainChunkManager::RebuildRenderChunks(
     ID3D12Device* device,
     ge3::core::DescriptorHeap* srvHeap,
     const RailPath& railPath,
-    const TerrainGenerationSettings& settings) {
+    const TerrainGenerationSettings& settings,
+    const TerrainEditLayer* editLayer,
+    const TerrainEditLayer* previewLayer) {
     const auto rebuildStart = std::chrono::steady_clock::now();
     std::vector<TerrainRenderChunk> reusableChunks = std::move(renderChunks_);
     std::vector<bool> reused(reusableChunks.size(), false);
@@ -4801,6 +4843,7 @@ void TerrainChunkManager::RebuildRenderChunks(
         renderChunk.endDistance = build.endDistance;
         renderChunk.seed = build.seed;
         renderChunk.lodTier = build.lodTier;
+        renderChunk.editHash = build.editHash;
         uploadedVertices += static_cast<uint32_t>((std::min)(build.vertices.size(), static_cast<size_t>(UINT32_MAX)));
         uploadedIndices += static_cast<uint32_t>((std::min)(build.indices.size(), static_cast<size_t>(UINT32_MAX)));
         uploadedDebris += static_cast<uint32_t>((std::min)(build.debrisInstances.size(), static_cast<size_t>(UINT32_MAX)));
@@ -4978,21 +5021,32 @@ void TerrainChunkManager::RebuildRenderChunks(
             job.endDistance = debugChunk.endDistance;
             job.seed = debugChunk.seed;
             job.lodTier = debugChunk.lodTier;
+            job.editHash = debugChunk.editHash;
             TerrainChunkDebugInfo debugCopy = debugChunk;
             RailPath railPathCopy = railPath;
             TerrainGenerationSettings settingsCopy = settings;
+            TerrainEditLayer editCopy = editLayer != nullptr
+                ? editLayer->Filtered(debugChunk.startDistance, debugChunk.endDistance)
+                : TerrainEditLayer{};
+            TerrainEditLayer previewCopy = previewLayer != nullptr
+                ? previewLayer->Filtered(debugChunk.startDistance, debugChunk.endDistance)
+                : TerrainEditLayer{};
             ID3D12Device* deviceForJob = device;
             job.future = std::async(
                 std::launch::async,
                 [debugCopy = std::move(debugCopy),
                  railPathCopy = std::move(railPathCopy),
                  settingsCopy,
+                 editCopy = std::move(editCopy),
+                 previewCopy = std::move(previewCopy),
                  deviceForJob]() mutable {
                     return BuildTerrainChunkCpu(
                         deviceForJob,
                         std::move(debugCopy),
                         std::move(railPathCopy),
-                        settingsCopy);
+                        settingsCopy,
+                        std::move(editCopy),
+                        std::move(previewCopy));
                 });
             pendingBuildJobs_.push_back(std::move(job));
             ++submittedCount;
@@ -5473,6 +5527,7 @@ bool TerrainChunkManager::HasMatchingRenderChunks() const {
         const TerrainRenderChunk& renderChunk = renderChunks_[i];
         if (chunk.seed != renderChunk.seed ||
             chunk.lodTier != renderChunk.lodTier ||
+            chunk.editHash != renderChunk.editHash ||
             std::abs(chunk.startDistance - renderChunk.startDistance) > 0.001f ||
             std::abs(chunk.endDistance - renderChunk.endDistance) > 0.001f) {
             return false;

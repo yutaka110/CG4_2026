@@ -20,6 +20,7 @@ EditorWorldObjectCapability CapabilityForEditorWorldMutation(
     case EditorWorldMutationKind::SetLocked: return EditorWorldObjectCapability::Lock;
     case EditorWorldMutationKind::AddComponent:
     case EditorWorldMutationKind::RemoveComponent:
+    case EditorWorldMutationKind::SetComponentAssetReference:
         return EditorWorldObjectCapability::Components;
     case EditorWorldMutationKind::SetComponentProperty:
         return EditorWorldObjectCapability::Transform;
@@ -39,6 +40,7 @@ const char* ToString(EditorWorldMutationKind kind) noexcept {
     case EditorWorldMutationKind::AddComponent: return "Add Component";
     case EditorWorldMutationKind::RemoveComponent: return "Remove Component";
     case EditorWorldMutationKind::SetComponentProperty: return "Set Component Property";
+    case EditorWorldMutationKind::SetComponentAssetReference: return "Set Component Asset Reference";
     }
     return "World Mutation";
 }

@@ -29,6 +29,7 @@ constexpr EditorAssetKind kAssetKindFilters[] = {
     EditorAssetKind::Course,
     EditorAssetKind::Prefab,
     EditorAssetKind::MaterialGraph,
+    EditorAssetKind::MaterialInstance,
     EditorAssetKind::VfxGraph,
     EditorAssetKind::AnimationStateMachine,
     EditorAssetKind::GameplayVisualScript,

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "../terrain/RailPath.h"
+#include "../terrain/TerrainEditLayer.h"
 #include "utils/math/Vector.h"
 
 struct CourseCameraKey {
@@ -222,6 +223,7 @@ struct CourseAsset {
     std::vector<CourseSection> sections;
     std::vector<CourseEventMarker> events;
     std::vector<CourseTerrainPlacement> terrainPlacements;
+    TerrainEditLayer terrainEditLayer{};
     std::vector<CourseRockCluster> rockClusters;
     std::vector<CourseLightingPreset> lightingPresets;
     std::vector<CourseCameraShotPreset> cameraShotPresets;

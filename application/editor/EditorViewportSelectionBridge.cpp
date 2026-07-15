@@ -99,6 +99,8 @@ bool EditorViewportSelectionBridge::PickAllowed(
     }
 
     switch (pick.source) {
+    case EditorViewportPickSource::SceneViewport:
+        return courseSelectionEnabled;
     case EditorViewportPickSource::CourseViewport:
         return courseSelectionEnabled;
     case EditorViewportPickSource::VfxRuntime:
@@ -185,6 +187,8 @@ const char* ToString(EditorViewportPickSource source) {
     switch (source) {
     case EditorViewportPickSource::Unknown:
         return "Unknown";
+    case EditorViewportPickSource::SceneViewport:
+        return "SceneViewport";
     case EditorViewportPickSource::CourseViewport:
         return "CourseViewport";
     case EditorViewportPickSource::VfxRuntime:

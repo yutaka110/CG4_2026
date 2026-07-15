@@ -20,6 +20,7 @@ enum class EditorWorldMutationKind {
     AddComponent,
     RemoveComponent,
     SetComponentProperty,
+    SetComponentAssetReference,
 };
 
 class IEditorWorldMutationPayload {
@@ -40,6 +41,18 @@ struct EditorWorldMutationState {
 };
 
 struct EditorWorldMutationRequest {
+    struct InitialProperty {
+        std::string componentType;
+        std::string property;
+        std::string value;
+    };
+
+    struct Placement {
+        std::string stableGuid;
+        std::string name;
+        std::vector<InitialProperty> initialProperties;
+    };
+
     EditorWorldMutationKind kind = EditorWorldMutationKind::Rename;
     std::vector<EditorObjectHandle> targets;
     EditorObjectHandle newParent;
@@ -49,6 +62,7 @@ struct EditorWorldMutationRequest {
     std::string componentType;
     std::string property;
     std::string propertyValue;
+    std::vector<Placement> placements;
     bool value = false;
 };
 
@@ -62,6 +76,7 @@ struct EditorWorldProviderMutationRequest {
     std::string componentType;
     std::string property;
     std::string propertyValue;
+    std::vector<EditorWorldMutationRequest::Placement> placements;
     bool value = false;
 };
 

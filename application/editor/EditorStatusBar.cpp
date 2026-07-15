@@ -13,6 +13,7 @@
 #include "EditorPlaySessionState.h"
 #include "EditorValidation.h"
 #include "documents/EditorDocumentManager.h"
+#include "tools/EditorToolManager.h"
 
 #include "../../externals/imgui/imgui.h"
 
@@ -79,6 +80,7 @@ void DrawStatusPopup(const EditorStatusBarSnapshot& snapshot, const EditorContex
     ImGui::Text("Session          %s", snapshot.session.c_str());
     ImGui::Text("Selection        %u", static_cast<unsigned int>(snapshot.selectedObjectCount));
     ImGui::Text("Command          %s", snapshot.command.c_str());
+    ImGui::Text("Interactive Tool %s", snapshot.interactiveTool.c_str());
     if (context.notifications != nullptr) {
         if (const EditorNotification* latest = context.notifications->Latest()) {
             ImGui::Separator();
@@ -155,6 +157,12 @@ EditorStatusBarSnapshot BuildEditorStatusBarSnapshot(const EditorContext& contex
             value.command = status->commandId + (status->succeeded ? " OK" : " Failed");
         }
     }
+    if (context.interactiveTools != nullptr) {
+        const EditorToolManagerSnapshot tool = context.interactiveTools->Snapshot();
+        value.interactiveTool = tool.modeLabel.empty() ? "No Mode" : tool.modeLabel;
+        if (!tool.toolLabel.empty()) value.interactiveTool += " / " + tool.toolLabel;
+        value.interactiveTool += " [" + std::string(ToString(tool.state)) + "]";
+    }
     return value;
 }
 
@@ -196,6 +204,7 @@ void DrawEditorStatusBar(EditorContext& context) {
         {"tasks", CountLabel("Tasks", snapshot.backgroundTaskCount),
             "Queued/running preview and GPU thumbnail tasks.", 70},
         {"session", snapshot.session, "Current Play/Simulate session.", 60},
+        {"tool", snapshot.interactiveTool, "Active editor mode and interactive tool.", 55},
         {"document", snapshot.activeDocument, "Active editor document.", 50},
         {"command", snapshot.command, "Latest command execution result.", 40},
     };

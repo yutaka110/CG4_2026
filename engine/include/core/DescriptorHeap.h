@@ -2,6 +2,8 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <queue>
+#include <utility>
+#include <vector>
 #include <cassert>
 
 namespace ge3::core {
@@ -24,6 +26,7 @@ namespace ge3::core {
 
         DescriptorHandle Allocate();
         void Reserve(uint32_t count);
+        void ReserveRange(uint32_t firstIndex, uint32_t count);
         void Free(uint32_t index);
         DescriptorHandle GetHandle(uint32_t index) const;
 
@@ -45,7 +48,11 @@ namespace ge3::core {
         D3D12_GPU_DESCRIPTOR_HANDLE gpuStart_{};
 
         std::queue<uint32_t> freeList_;
+        std::vector<std::pair<uint32_t, uint32_t>> reservedRanges_;
         uint32_t nextAllocate_ = 0;
+
+        bool IsReserved(uint32_t index) const;
+        void SkipReserved();
     };
 
     struct DescriptorHeapSet {

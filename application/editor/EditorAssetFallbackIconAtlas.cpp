@@ -196,6 +196,7 @@ bool BuildEditorAssetFallbackIconPixels(
     case EditorAssetKind::Course:
     case EditorAssetKind::Prefab:
     case EditorAssetKind::MaterialGraph:
+    case EditorAssetKind::MaterialInstance:
     case EditorAssetKind::VfxGraph:
     case EditorAssetKind::AnimationStateMachine:
     case EditorAssetKind::GameplayVisualScript:

@@ -780,6 +780,9 @@ EditorAssetKind EditorAssetKindForImportPath(
     if (options.includeMaterialGraphs && (ext == ".material" || ext == ".materialgraph")) {
         return EditorAssetKind::MaterialGraph;
     }
+    if (options.includeMaterialGraphs && (ext == ".materialinstance" || ext == ".matinst")) {
+        return EditorAssetKind::MaterialInstance;
+    }
     if (options.includeVfxGraphs && (ext == ".vfxgraph" || ext == ".vfxsystem")) {
         return EditorAssetKind::VfxGraph;
     }

@@ -495,6 +495,11 @@
     <ClCompile Include="application\editor\material\EditorMaterialGraph.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\material\EditorMaterialGraphPanel.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\material\EditorMaterialGraphDiagnosticsAdapter.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\material\EditorProductionMaterialPipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\texture\EditorProductionTexturePipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\shader\EditorProductionShaderPipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\lighting\EditorProductionLightingPipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\visibility\EditorProductionGpuDrivenPipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\vfx\EditorVfxGraph.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\vfx\EditorVfxGraphPanel.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\vfx\EditorVfxGraphDiagnosticsAdapter.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
@@ -583,6 +588,22 @@
     <ClCompile Include="application\editor\EditorToolRegistration.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
+    <ClCompile Include="application\editor\tools\EditorModeRegistry.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\tools\EditorToolManager.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\tools\EditorModePanels.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\tools\EditorPlacementQueryService.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\tools\EditorPlacementTools.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\terrain\EditorTerrainBrushTools.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\terrain\EditorTerrainEditCommand.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\terrain\EditorTerrainSurfaceQuery.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\geometry\EditorGeometryMesh.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\geometry\EditorGeometryEditCommand.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\geometry\EditorGeometryWorkspace.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\geometry\EditorGeometryTools.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\mesh\EditorProductionMeshAsset.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\scene\EditorProductionScenePipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\mesh\EditorMeshBakePipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\mesh\EditorMeshBakeTools.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\EditorTransactionPanel.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
@@ -645,6 +666,7 @@
     <ClCompile Include="application\terrain\TerrainVolumeField.cpp">
       <Filter>ソース ファイル\application\terrain</Filter>
     </ClCompile>
+    <ClCompile Include="application\terrain\TerrainEditLayer.cpp"><Filter>ソース ファイル\application\terrain</Filter></ClCompile>
     <ClCompile Include="application\AnimationClip.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -1638,6 +1660,11 @@
     <ClInclude Include="application\editor\material\EditorMaterialGraph.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\material\EditorMaterialGraphPanel.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\material\EditorMaterialGraphDiagnosticsAdapter.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\material\EditorProductionMaterialPipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\texture\EditorProductionTexturePipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\shader\EditorProductionShaderPipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\lighting\EditorProductionLightingPipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\visibility\EditorProductionGpuDrivenPipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\vfx\EditorVfxGraph.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\vfx\EditorVfxGraphPanel.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\vfx\EditorVfxGraphDiagnosticsAdapter.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
@@ -1647,6 +1674,23 @@
     <ClInclude Include="application\editor\gameplay\EditorGameplayVisualScript.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\gameplay\EditorGameplayVisualScriptPanel.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\gameplay\EditorGameplayVisualScriptDiagnosticsAdapter.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\tools\EditorInteractiveTool.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\tools\EditorModeRegistry.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\tools\EditorToolManager.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\tools\EditorModePanels.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\tools\EditorPlacementQueryService.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\tools\EditorPlacementTools.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\terrain\EditorTerrainBrushTools.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\terrain\EditorTerrainEditCommand.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\terrain\EditorTerrainSurfaceQuery.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\geometry\EditorGeometryMesh.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\geometry\EditorGeometryEditCommand.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\geometry\EditorGeometryWorkspace.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\geometry\EditorGeometryTools.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\mesh\EditorProductionMeshAsset.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\scene\EditorProductionScenePipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\mesh\EditorMeshBakePipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\mesh\EditorMeshBakeTools.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\AnimationStateMachine.h"><Filter>ヘッダー ファイル\application</Filter></ClInclude>
     <ClInclude Include="application\GameplayVisualScript.h"><Filter>ヘッダー ファイル\application</Filter></ClInclude>
     <ClInclude Include="application\editor\prefab\EditorPrefab.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
@@ -1815,6 +1859,7 @@
     <ClInclude Include="application\terrain\TerrainVolumeField.h">
       <Filter>ヘッダー ファイル\application\terrain</Filter>
     </ClInclude>
+    <ClInclude Include="application\terrain\TerrainEditLayer.h"><Filter>ヘッダー ファイル\application\terrain</Filter></ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Text Include="externals\imgui\LICENSE.txt">
