@@ -52,6 +52,23 @@ void EditorSelection::Add(EditorObjectHandle handle) {
     Touch();
 }
 
+void EditorSelection::Remove(const EditorObjectHandle& handle) {
+    const auto found = std::find_if(
+        handles_.begin(), handles_.end(),
+        [&handle](const EditorObjectHandle& current) { return current.SameObject(handle); });
+    if (found == handles_.end()) return;
+    handles_.erase(found);
+    Touch();
+}
+
+void EditorSelection::Toggle(EditorObjectHandle handle) {
+    if (Contains(handle)) {
+        Remove(handle);
+    } else {
+        Add(std::move(handle));
+    }
+}
+
 void EditorSelection::Set(std::vector<EditorObjectHandle> handles) {
     bool same = handles_.size() == handles.size();
     if (same) {
@@ -118,6 +135,18 @@ const char* ToString(EditorDomainId domain) {
         return "Gameplay Tuning";
     case EditorDomainId::RenderGraphPass:
         return "RenderGraph Pass";
+    case EditorDomainId::SceneEntity:
+        return "Scene Entity";
+    case EditorDomainId::SequencerKey:
+        return "Sequencer Key";
+    case EditorDomainId::MaterialGraphNode:
+        return "Material Graph Node";
+    case EditorDomainId::VfxGraphNode:
+        return "VFX Graph Node";
+    case EditorDomainId::AnimationStateMachineNode:
+        return "Animation State Machine Node";
+    case EditorDomainId::GameplayVisualScriptNode:
+        return "Gameplay Visual Script Node";
     }
     return "Unknown";
 }

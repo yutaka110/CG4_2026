@@ -65,6 +65,25 @@ bool NormalizeScratchImage(
         workingImage = decompressed.GetImage(0, 0, 0);
     }
 
+    DirectX::ScratchImage converted;
+    if (workingImage != nullptr &&
+        workingImage->format != DXGI_FORMAT_R8G8B8A8_UNORM) {
+        if (FAILED(DirectX::Convert(
+                *workingImage,
+                DXGI_FORMAT_R8G8B8A8_UNORM,
+                DirectX::TEX_FILTER_DEFAULT,
+                DirectX::TEX_THRESHOLD_DEFAULT,
+                converted))) {
+            outError = "Texture thumbnail format conversion failed.";
+            return false;
+        }
+        workingImage = converted.GetImage(0, 0, 0);
+    }
+    if (workingImage == nullptr) {
+        outError = "Texture thumbnail conversion produced an empty image.";
+        return false;
+    }
+
     const size_t maxDimension = (std::max)(1u, maxExtent);
     const double scale = (std::min)(
         1.0,
@@ -81,8 +100,39 @@ bool NormalizeScratchImage(
                 targetHeight,
                 DirectX::TEX_FILTER_DEFAULT,
                 resized))) {
-            outError = "Texture thumbnail resize failed.";
-            return false;
+            // DirectXTex can delegate resize work to platform codecs whose
+            // availability differs between editor build configurations. Keep
+            // thumbnail generation deterministic with an RGBA8 CPU fallback.
+            if (FAILED(output.Initialize2D(
+                    DXGI_FORMAT_R8G8B8A8_UNORM,
+                    targetWidth,
+                    targetHeight,
+                    1,
+                    1))) {
+                outError = "Texture thumbnail resize fallback allocation failed.";
+                return false;
+            }
+            const DirectX::Image* fallback = output.GetImage(0, 0, 0);
+            uint8_t* fallbackPixels = output.GetPixels();
+            if (fallback == nullptr || fallbackPixels == nullptr) {
+                outError = "Texture thumbnail resize fallback produced an empty image.";
+                return false;
+            }
+            for (size_t y = 0; y < targetHeight; ++y) {
+                const size_t sourceY = (std::min)(
+                    workingImage->height - 1,
+                    y * workingImage->height / targetHeight);
+                const uint8_t* sourceRow =
+                    workingImage->pixels + sourceY * workingImage->rowPitch;
+                uint8_t* targetRow = fallbackPixels + y * fallback->rowPitch;
+                for (size_t x = 0; x < targetWidth; ++x) {
+                    const size_t sourceX = (std::min)(
+                        workingImage->width - 1,
+                        x * workingImage->width / targetWidth);
+                    std::copy_n(sourceRow + sourceX * 4, 4, targetRow + x * 4);
+                }
+            }
+            return true;
         }
         convertedSource = resized.GetImage(0, 0, 0);
     }

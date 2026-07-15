@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 
 namespace editor {
@@ -43,6 +44,10 @@ void EditorAssetReferenceDiagnosticsAdapter::Validate(EditorValidationReport& re
         return;
     }
 
+    const std::vector<std::string> duplicateGuids = assetRegistry_->DuplicateGuids();
+    const std::unordered_set<std::string> duplicates(
+        duplicateGuids.begin(), duplicateGuids.end());
+
     for (const EditorAssetRecord& record : assetRegistry_->Records()) {
         const EditorObjectHandle target = MakeAssetDiagnosticHandle(record);
         if (!record.runtimeOnly && (!record.hasMetadata || record.provisionalGuid)) {
@@ -56,6 +61,28 @@ void EditorAssetReferenceDiagnosticsAdapter::Validate(EditorValidationReport& re
                     ":" +
                     record.id +
                     " is using path fallback or provisional GUID metadata. Create a durable .meta file before commercial rename/move workflows.");
+        }
+        if (!record.guid.empty() && duplicates.find(record.guid) != duplicates.end()) {
+            AddIssue(
+                report,
+                EditorValidationSeverity::Error,
+                target,
+                "guid",
+                "Duplicate durable Asset GUID",
+                std::string(ToString(record.kind)) + ":" + record.id +
+                    " shares GUID " + record.guid +
+                    ". Rename/Move is blocked until identity is regenerated or repaired.");
+        }
+        if (!record.pathOnlyReferences.empty()) {
+            AddIssue(
+                report,
+                EditorValidationSeverity::Warning,
+                target,
+                "pathOnlyReferences",
+                "Path-only asset reference",
+                std::string(ToString(record.kind)) + ":" + record.id + " contains " +
+                    std::to_string(record.pathOnlyReferences.size()) +
+                    " path-only reference(s). Run Repair Path-only References to convert resolvable entries to GUID references.");
         }
         if (record.missing) {
             AddIssue(
@@ -113,6 +140,43 @@ void EditorAssetReferenceDiagnosticsAdapter::Validate(EditorValidationReport& re
                         " at " +
                         (referenced->sourcePath.empty() ? std::string("-") : referenced->sourcePath));
             }
+        }
+        for (const std::string& dependencyGuid : record.guidDependencies) {
+            const std::vector<const EditorAssetRecord*> matches =
+                assetRegistry_->FindAllByGuid(dependencyGuid);
+            if (matches.empty()) {
+                AddIssue(
+                    report,
+                    EditorValidationSeverity::Error,
+                    target,
+                    "guidDependencies",
+                    "Missing GUID asset reference",
+                    std::string(ToString(record.kind)) + ":" + record.id +
+                        " references missing durable GUID " + dependencyGuid + ".");
+            } else if (matches.size() > 1) {
+                AddIssue(
+                    report,
+                    EditorValidationSeverity::Error,
+                    target,
+                    "guidDependencies",
+                    "Ambiguous GUID asset reference",
+                    "GUID reference " + dependencyGuid + " resolves to multiple assets.");
+            }
+        }
+    }
+
+    for (const EditorAssetRedirect& redirect : assetRegistry_->Redirects()) {
+        if (assetRegistry_->FindAllByGuid(redirect.guid).empty()) {
+            EditorAssetRecord placeholder{};
+            placeholder.kind = redirect.kind;
+            placeholder.id = redirect.currentId.empty() ? redirect.oldId : redirect.currentId;
+            AddIssue(
+                report,
+                EditorValidationSeverity::Warning,
+                MakeAssetDiagnosticHandle(placeholder),
+                "redirect",
+                "Stale Asset redirect",
+                "Redirect from " + redirect.oldId + " targets missing GUID " + redirect.guid + ".");
         }
     }
 }

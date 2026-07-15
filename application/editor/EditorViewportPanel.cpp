@@ -3,13 +3,26 @@
 #include "CourseDocumentAdapter.h"
 #include "EditorAuthoringMutationGuard.h"
 #include "EditorContext.h"
+#include "EditorLayoutPersistenceService.h"
 #include "EditorPanelLayoutService.h"
 #include "EditorPlaySessionState.h"
 #include "EditorTransformGizmoService.h"
 #include "EditorViewportInteractionService.h"
+#include "EditorViewportOverlay.h"
 #include "EditorViewportSelectionBridge.h"
+#include "EditorAssetSelection.h"
+#include "EditorNotificationCenter.h"
+#include "EditorTransactionStack.h"
+#include "prefab/EditorPrefabService.h"
+#include "world/EditorWorldMutationService.h"
+#include "world/SceneWorldObjectProvider.h"
+#include "tools/EditorToolManager.h"
+#include "documents/EditorDocumentManager.h"
 
 #include "../../externals/imgui/imgui.h"
+
+#include <algorithm>
+#include <sstream>
 
 namespace editor {
 namespace {
@@ -85,10 +98,215 @@ const char* PlaySessionLabel(const EditorPlaySessionState* playSession) {
     return playSession != nullptr ? ToString(playSession->Mode()) : "Unknown";
 }
 
-void DrawOverlayLine(const char* label, const char* value) {
-    ImGui::TextDisabled("%s", label);
-    ImGui::SameLine(112.0f);
-    ImGui::TextUnformatted(value);
+void SubmitViewportDiagnostics(EditorContext& context, const EditorPanelRect& rect) {
+    if (context.viewportOverlay == nullptr) return;
+    std::ostringstream text;
+    text << "Viewport " << static_cast<int>(rect.width) << 'x' << static_cast<int>(rect.height)
+         << "\nDocument  " << DocumentLabel(context.courseDocument)
+         << "\nSession   " << PlaySessionLabel(context.playSession);
+    if (context.viewportInteraction != nullptr) {
+        text << "\nBoundary  " << context.viewportInteraction->BoundaryLabel()
+             << "\nAuthoring " << context.viewportInteraction->AuthoringLabel();
+    } else {
+        const EditorAuthoringMutationGuard mutationGuard =
+            MakeEditorAuthoringMutationGuard(context.playSession);
+        text << "\nAuthoring " << mutationGuard.StateLabel();
+    }
+    if (context.viewportSelectionBridge != nullptr) {
+        text << "\nSelection " << context.viewportSelectionBridge->CourseSelectionLabel()
+             << "\nRequest   " << context.viewportSelectionBridge->RequestLabel();
+    }
+    if (context.transformGizmo != nullptr) {
+        text << "\nGizmo     " << context.transformGizmo->ManipulationLabel()
+             << "\nMode      " << context.transformGizmo->ModeLabel()
+             << "\nAxis      " << context.transformGizmo->AxisLabel();
+    }
+    if (context.interactiveTools != nullptr) {
+        const EditorToolManagerSnapshot tool = context.interactiveTools->Snapshot();
+        text << "\nTool      " << tool.modeLabel;
+        if (!tool.toolLabel.empty()) text << " / " << tool.toolLabel;
+    }
+
+    EditorViewportOverlayItemOptions options{};
+    options.background = true;
+    options.iconFallback = false;
+    options.priority = 100;
+    context.viewportOverlay->Sink(EditorViewportOverlayLayerId::Performance).Label(
+        10.0f,
+        10.0f,
+        text.str(),
+        IM_COL32(220, 230, 238, 230),
+        options);
+}
+
+void DrawViewportOverlayControls(
+    EditorViewportOverlayService& overlay,
+    EditorLayoutPersistenceService* persistence,
+    const EditorPanelRect& rect) {
+    const ImVec2 buttonSize(82.0f, 0.0f);
+    ImGui::SetCursorScreenPos(ImVec2(rect.x + rect.width - 92.0f, rect.y + 8.0f));
+    if (ImGui::Button("Overlays", buttonSize)) {
+        ImGui::OpenPopup("Viewport Overlay Layers");
+    }
+    if (!ImGui::BeginPopup("Viewport Overlay Layers")) return;
+
+    bool gameplayVisible = overlay.GameplayVisible();
+    if (ImGui::Checkbox("Gameplay HUD", &gameplayVisible)) {
+        overlay.SetGameplayVisible(gameplayVisible);
+        if (persistence != nullptr) persistence->SetOverlayOption("gameplay-visible", gameplayVisible);
+    }
+    bool editorVisible = overlay.EditorVisible();
+    if (ImGui::Checkbox("Editor Overlays", &editorVisible)) {
+        overlay.SetEditorVisible(editorVisible);
+        if (persistence != nullptr) persistence->SetOverlayOption("editor-visible", editorVisible);
+    }
+    bool cleanCapture = overlay.ScreenshotSuppression();
+    if (ImGui::Checkbox("Clean Screenshot Preview", &cleanCapture)) {
+        overlay.SetScreenshotSuppression(cleanCapture);
+    }
+
+    ImGui::Separator();
+    for (size_t index = 0; index < kEditorViewportOverlayLayerCount; ++index) {
+        const EditorViewportOverlayLayerId layer =
+            static_cast<EditorViewportOverlayLayerId>(index);
+        bool visible = overlay.LayerSettings(layer).visible;
+        ImGui::PushID(static_cast<int>(index));
+        if (ImGui::Checkbox(EditorViewportOverlayLayerLabel(layer), &visible)) {
+            overlay.SetLayerVisible(layer, visible);
+            if (persistence != nullptr) {
+                persistence->SetOverlayOption(
+                    std::string(EditorViewportOverlayLayerStableId(layer)) + ".visible",
+                    visible);
+            }
+        }
+        if (layer != EditorViewportOverlayLayerId::GameplayHud &&
+            ImGui::BeginPopupContextItem("LayerOptions")) {
+            EditorViewportOverlayLayerSettings settings = overlay.LayerSettings(layer);
+            bool selectedOnly = settings.selectedOnly;
+            if (ImGui::Checkbox("Selected objects only", &selectedOnly)) {
+                settings.selectedOnly = selectedOnly;
+                overlay.SetLayerSettings(layer, settings);
+                if (persistence != nullptr) {
+                    persistence->SetOverlayOption(
+                        std::string(EditorViewportOverlayLayerStableId(layer)) + ".selected-only",
+                        selectedOnly);
+                }
+            }
+            ImGui::TextDisabled("id=%s", EditorViewportOverlayLayerStableId(layer));
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndPopup();
+}
+
+void AcceptSceneAssetDrop(EditorContext& context) {
+    if (!ImGui::BeginDragDropTarget()) return;
+    if (const ImGuiPayload* raw = ImGui::AcceptDragDropPayload(kEditorAssetDragDropPayloadId)) {
+        if (raw->DataSize == sizeof(EditorAssetDragDropPayload) &&
+            context.transactions != nullptr &&
+            context.sceneWorldProvider != nullptr) {
+            const auto& payload = *static_cast<const EditorAssetDragDropPayload*>(raw->Data);
+            if (payload.kind == EditorAssetKind::Prefab && context.prefabs != nullptr) {
+                const EditorPrefabOperationResult prefab = context.prefabs->Instantiate(payload.guid.data());
+                if (prefab.succeeded && context.worldModel != nullptr) {
+                    context.worldModel->Refresh();
+                    if (const EditorWorldObjectRecord* created = context.worldModel->FindByObjectGuid(
+                            context.sceneWorldProvider->ProviderId(), prefab.rootEntityGuid)) {
+                        if (context.selection != nullptr) context.selection->SetPrimary(created->handle);
+                    }
+                }
+                if (context.notifications != nullptr) {
+                    context.notifications->Push(
+                        prefab.succeeded
+                            ? EditorNotificationSeverity::Info
+                            : EditorNotificationSeverity::Error,
+                        "Viewport Prefab Drop", prefab.message);
+                }
+                ImGui::EndDragDropTarget();
+                return;
+            }
+            if (context.interactiveTools != nullptr &&
+                context.assets != nullptr && context.assetSelection != nullptr) {
+                const EditorAssetRecord* asset = context.assets->FindByGuid(payload.guid.data());
+                if (asset == nullptr) {
+                    if (context.notifications != nullptr) {
+                        context.notifications->Push(
+                            EditorNotificationSeverity::Error,
+                            "Viewport Asset Drop",
+                            "Dropped Asset GUID is no longer registered.");
+                    }
+                    ImGui::EndDragDropTarget();
+                    return;
+                }
+                context.assetSelection->SetPrimary(
+                    MakeEditorAssetHandle(*asset, context.assets->Revision()));
+                EditorInteractiveToolEnvironment environment{};
+                environment.selection = context.selection;
+                environment.viewport = context.viewportInteraction;
+                environment.coordinates = context.viewportCoordinates;
+                environment.execution = context.interactiveExecution;
+                environment.selectionRevision = context.selection != nullptr
+                    ? context.selection->Revision() : 0;
+                environment.documentRevision = context.documentManager != nullptr
+                    ? context.documentManager->Revision() : 0;
+                if (context.documentManager != nullptr) {
+                    if (const EditorDocumentRecord* document = context.documentManager->Active()) {
+                        environment.activeDocumentKey = document->id.Key();
+                    }
+                }
+                environment.playSessionActive = context.playSession != nullptr &&
+                    context.playSession->IsActive();
+                environment.canMutateAuthoring = context.viewportInteraction != nullptr &&
+                    context.viewportInteraction->CanMutateAuthoring();
+                environment.viewportAvailable = context.viewportInteraction != nullptr &&
+                    context.viewportInteraction->ViewportAvailable();
+                std::string error;
+                const bool started =
+                    context.interactiveTools->ActivateMode("editor.mode.place", &error) &&
+                    context.interactiveTools->StartTool(
+                        "editor.tool.placeSelectedAsset",
+                        environment,
+                        *context.transactions,
+                        &error);
+                if (context.notifications != nullptr) {
+                    context.notifications->Push(
+                        started
+                            ? EditorNotificationSeverity::Info
+                            : EditorNotificationSeverity::Warning,
+                        "Viewport Asset Drop",
+                        started
+                            ? "Placement preview started. Click to place; Escape cancels."
+                            : (error.empty() ? "Placement Tool could not start." : error));
+                }
+                ImGui::EndDragDropTarget();
+                return;
+            }
+            if (context.worldMutations == nullptr) {
+                ImGui::EndDragDropTarget();
+                return;
+            }
+            EditorWorldMutationRequest request{};
+            request.kind = EditorWorldMutationKind::Create;
+            request.targets = {context.sceneWorldProvider->RootHandle()};
+            request.name = payload.displayName.data();
+            request.assetGuid = payload.guid.data();
+            request.assetType = ToString(payload.kind);
+            const EditorWorldMutationResult result = context.worldMutations->Execute(
+                request, *context.transactions,
+                context.playSession == nullptr || !context.playSession->IsActive());
+            if (result.succeeded) {
+                if (context.selection != nullptr) context.selection->Set(result.resultingSelection);
+                if (context.onWorldMutated) context.onWorldMutated(result);
+            }
+            if (context.notifications != nullptr) {
+                context.notifications->Push(
+                    result.succeeded ? EditorNotificationSeverity::Info : EditorNotificationSeverity::Error,
+                    "Viewport Asset Drop", result.message);
+            }
+        }
+    }
+    ImGui::EndDragDropTarget();
 }
 
 } // namespace
@@ -134,45 +352,35 @@ void DrawEditorViewportPanelContent(
     }
 
     DrawViewportRenderSurface(rect, renderInput);
+    AcceptSceneAssetDrop(context);
 
-    const ImVec2 panelPos(rect.x + 10.0f, rect.y + 10.0f);
-    const ImVec2 panelSize(246.0f, 184.0f);
     ImDrawList* drawList = ImGui::GetWindowDrawList();
-    if (renderInput.drawOverlay) {
-        renderInput.drawOverlay(drawList);
-    }
-    drawList->AddRectFilled(
-        panelPos,
-        ImVec2(panelPos.x + panelSize.x, panelPos.y + panelSize.y),
-        IM_COL32(12, 15, 18, 176),
-        4.0f);
-    drawList->AddRect(
-        panelPos,
-        ImVec2(panelPos.x + panelSize.x, panelPos.y + panelSize.y),
-        IM_COL32(128, 154, 176, 120),
-        4.0f);
-
-    ImGui::SetCursorScreenPos(ImVec2(panelPos.x + 10.0f, panelPos.y + 8.0f));
-    ImGui::Text("Viewport %.0fx%.0f", rect.width, rect.height);
-    DrawOverlayLine("Document", DocumentLabel(context.courseDocument));
-
-    DrawOverlayLine("Session", PlaySessionLabel(context.playSession));
-    if (context.viewportInteraction != nullptr) {
-        DrawOverlayLine("Boundary", context.viewportInteraction->BoundaryLabel());
-        DrawOverlayLine("Authoring", context.viewportInteraction->AuthoringLabel());
-    } else {
-        const EditorAuthoringMutationGuard mutationGuard =
-            MakeEditorAuthoringMutationGuard(context.playSession);
-        DrawOverlayLine("Authoring", mutationGuard.StateLabel());
-    }
-    if (context.viewportSelectionBridge != nullptr) {
-        DrawOverlayLine("Selection", context.viewportSelectionBridge->CourseSelectionLabel());
-        DrawOverlayLine("Request", context.viewportSelectionBridge->RequestLabel());
-    }
-    if (context.transformGizmo != nullptr) {
-        DrawOverlayLine("Gizmo", context.transformGizmo->ManipulationLabel());
-        DrawOverlayLine("Mode", context.transformGizmo->ModeLabel());
-        DrawOverlayLine("Axis", context.transformGizmo->AxisLabel());
+    if (context.viewportOverlay != nullptr) {
+        if (renderInput.buildOverlay) {
+            renderInput.buildOverlay(*context.viewportOverlay);
+        }
+        SubmitViewportDiagnostics(context, rect);
+        if (context.interactiveTools != nullptr &&
+            context.interactiveTools->HasActiveTool()) {
+            const IEditorInteractiveTool* tool = context.interactiveTools->ActiveTool();
+            if (tool != nullptr) tool->BuildViewportOverlay(*context.viewportOverlay);
+            const std::string hint = tool != nullptr ? tool->ViewportHint() : std::string{};
+            if (!hint.empty()) {
+                EditorViewportOverlayItemOptions options{};
+                options.background = true;
+                options.iconFallback = false;
+                options.priority = 250;
+                context.viewportOverlay->Sink(
+                    EditorViewportOverlayLayerId::AuthoringHelpers).Label(
+                        10.0f,
+                        (std::max)(36.0f, rect.height - 34.0f),
+                        hint,
+                        IM_COL32(235, 245, 255, 245),
+                        options);
+            }
+        }
+        context.viewportOverlay->Render(drawList);
+        DrawViewportOverlayControls(*context.viewportOverlay, context.layoutPersistence, rect);
     }
 }
 

@@ -24,6 +24,9 @@ enum class EditorPropertyKind {
     Enum,
     AssetRef,
     ObjectRef,
+    Array,
+    Map,
+    Struct,
 };
 
 struct EditorPropertyDescriptor {
@@ -45,6 +48,11 @@ struct EditorPropertyDescriptor {
     std::string readOnlyReason;
     std::string validationHint;
     std::string defaultValue;
+    std::string editConditionProperty;
+    std::string editConditionExpectedValue = "true";
+    std::string containerElementType;
+    std::string containerKeyType;
+    bool prefabOverrideCapable = false;
 };
 
 class EditorPropertyRegistry {

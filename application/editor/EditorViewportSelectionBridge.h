@@ -13,6 +13,7 @@ class EditorViewportInteractionService;
 
 enum class EditorViewportPickSource {
     Unknown,
+    SceneViewport,
     CourseViewport,
     VfxRuntime,
 };
@@ -30,6 +31,7 @@ struct EditorViewportPickResult {
     uint64_t localIndex = 0;
     uint32_t generation = 0;
     std::string displayName;
+    EditorObjectHandle canonicalHandle;
 };
 
 struct EditorSelectionRequest {
@@ -66,6 +68,7 @@ public:
     const char* CourseSelectionLabel() const;
     const char* BoundaryLabel() const;
     const char* RequestLabel() const;
+    void SuppressNextRequest() noexcept { suppressNextRequest_ = true; }
 
 private:
     static bool PickAllowed(
@@ -81,6 +84,9 @@ private:
     void Touch();
 
     EditorViewportSelectionBridgeState state_{};
+    uint64_t lastPickSignature_ = 0;
+    bool pickSignatureInitialized_ = false;
+    bool suppressNextRequest_ = false;
 };
 
 EditorViewportPickResult MakeEditorViewportPickResult(

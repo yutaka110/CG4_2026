@@ -15,6 +15,7 @@
 #include "EditorSelection.h"
 #include "EditorTransactionStack.h"
 #include "EditorToolRegistration.h"
+#include "io/EditorFileTransaction.h"
 
 #include <filesystem>
 #include <fstream>
@@ -46,26 +47,7 @@ bool WriteAssetMetaFile(const EditorAssetRecord& record, std::string* errorMessa
         return false;
     }
 
-    std::error_code error;
-    const std::filesystem::path path(metaPath);
-    if (path.has_parent_path()) {
-        std::filesystem::create_directories(path.parent_path(), error);
-        if (error) {
-            if (errorMessage != nullptr) {
-                *errorMessage = "Failed to create .meta directory: " + error.message();
-            }
-            return false;
-        }
-    }
-
-    std::ofstream file(path, std::ios::trunc);
-    if (!file.is_open()) {
-        if (errorMessage != nullptr) {
-            *errorMessage = "Failed to write .meta file.";
-        }
-        return false;
-    }
-
+    std::ostringstream file;
     file << "guid=" << record.guid << '\n';
     file << "logicalPath=" << (record.logicalPath.empty() ? record.sourcePath : record.logicalPath) << '\n';
     if (!record.tags.empty()) {
@@ -88,7 +70,41 @@ bool WriteAssetMetaFile(const EditorAssetRecord& record, std::string* errorMessa
         }
         file << '\n';
     }
-    return true;
+    if (!record.guidDependencies.empty()) {
+        file << "guidDependencies=";
+        for (std::size_t i = 0; i < record.guidDependencies.size(); ++i) {
+            if (i > 0) file << ',';
+            file << record.guidDependencies[i];
+        }
+        file << '\n';
+    }
+    if (!record.pathOnlyReferences.empty()) {
+        file << "pathOnlyReferences=";
+        for (std::size_t i = 0; i < record.pathOnlyReferences.size(); ++i) {
+            if (i > 0) file << ',';
+            file << record.pathOnlyReferences[i];
+        }
+        file << '\n';
+    }
+    EditorFileTransaction transaction(std::filesystem::current_path());
+    if (!transaction.StageTextWrite(
+            metaPath,
+            file.str(),
+            [&record](const std::filesystem::path& staged, std::string* validationError) {
+                std::ifstream input(staged, std::ios::binary);
+                std::ostringstream text;
+                text << input.rdbuf();
+                const bool valid = input.good() || input.eof();
+                if (!valid || text.str().find("guid=" + record.guid) == std::string::npos) {
+                    if (validationError != nullptr) *validationError = "Asset .meta validation failed.";
+                    return false;
+                }
+                return true;
+            },
+            errorMessage)) {
+        return false;
+    }
+    return transaction.Execute(nullptr, errorMessage);
 }
 
 EditorAssetRecord FirstRepairAsset(
@@ -148,16 +164,22 @@ MissingAssetRefTarget FindMissingAssetRefTarget(const EditorContext& context) {
         if (!context.propertyAccessor->Get(*selectedObject, *descriptor, value)) {
             continue;
         }
+        const EditorAssetRecord* redirectedRepair = nullptr;
         if (!value.stringValue.empty()) {
-            const EditorAssetRecord* currentAsset =
-                context.assets->Find(descriptor->assetKind, value.stringValue);
-            if (currentAsset != nullptr && !currentAsset->missing) {
+            const EditorAssetReferenceResolution current =
+                context.assets->ResolveReference(descriptor->assetKind, value.stringValue);
+            if (current.resolved && current.record != nullptr && !current.record->missing &&
+                !current.requiresRepair) {
                 continue;
+            }
+            if (current.resolved && current.record != nullptr && !current.record->missing) {
+                redirectedRepair = current.record;
             }
         }
 
-        EditorAssetRecord repairAsset =
-            FirstRepairAsset(*context.assets, descriptor->assetKind, selectedAsset);
+        EditorAssetRecord repairAsset = redirectedRepair != nullptr
+            ? *redirectedRepair
+            : FirstRepairAsset(*context.assets, descriptor->assetKind, selectedAsset);
         if (repairAsset.id.empty()) {
             continue;
         }
@@ -383,13 +405,16 @@ void EditorAssetCommandProvider::RegisterCommands(EditorContext& context) const 
 
                 EditorAssetRecord updated = *selected;
                 EnsureEditorAssetIdentity(updated);
+                if (!IsDurableEditorAssetGuid(updated.guid) || updated.provisionalGuid) {
+                    updated.guid = GenerateEditorAssetGuid();
+                }
+                updated.provisionalGuid = false;
                 std::string error;
                 if (!WriteAssetMetaFile(updated, &error)) {
                     return EditorCommandResult{false, error.empty() ? std::string("Failed to write .meta.") : error};
                 }
 
                 updated.hasMetadata = true;
-                updated.provisionalGuid = false;
                 context.assets->Register(updated);
                 if (context.assetSelection != nullptr) {
                     context.assetSelection->SetPrimary(
@@ -524,6 +549,46 @@ void EditorAssetCommandProvider::RegisterCommands(EditorContext& context) const 
             },
             [&context]() {
                 return BatchMigrateAssetMetadata(context);
+            }});
+
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
+            "asset.repairPathOnlyReferences",
+            "Repair Path-only Asset References",
+            "Asset",
+            "",
+            [&context, &commandContext]() {
+                const EditorAssetRecord* selected = SelectedAssetRecord(context);
+                return commandContext.developerToolsVisible && commandContext.canMutateAuthoring &&
+                    selected != nullptr && !selected->pathOnlyReferences.empty();
+            },
+            [&context, &commandContext]() {
+                if (!commandContext.canMutateAuthoring) return std::string("Authoring is locked during Play/Sim.");
+                const EditorAssetRecord* selected = SelectedAssetRecord(context);
+                return selected != nullptr && !selected->pathOnlyReferences.empty()
+                    ? std::string()
+                    : std::string("Selected asset has no repairable path-only references.");
+            },
+            [&context]() {
+                const EditorAssetRecord* selected = SelectedAssetRecord(context);
+                if (selected == nullptr || context.assets == nullptr) {
+                    return EditorCommandResult{false, "No asset is selected."};
+                }
+                EditorAssetMutationExecutor executor(*context.assets);
+                const EditorAssetMutationResult result = executor.Execute(
+                    EditorAssetMutationRequest{
+                        EditorAssetMutationKind::RepairReferences,
+                        selected->kind,
+                        selected->id,
+                        {},
+                        {},
+                        context.transactions});
+                if (result.succeeded && context.assetSelection != nullptr) {
+                    context.assetSelection->SetPrimary(
+                        MakeEditorAssetHandle(result.updatedRecord, context.assets->Revision()));
+                }
+                return EditorCommandResult{result.succeeded, result.message, result.warning};
             }});
 
     RegisterEditorToolCommand(

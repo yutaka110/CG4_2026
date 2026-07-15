@@ -46,6 +46,7 @@
 #include "editor/EditorCommandPalette.h"
 #include "editor/EditorCommandRegistry.h"
 #include "editor/EditorBuiltinDetailsSectionProviders.h"
+#include "editor/play/EditorRuntimeChangeSetPanel.h"
 #include "editor/EditorDetailsPanel.h"
 #include "editor/EditorDiagnosticsPanel.h"
 #include "editor/EditorDocumentLifecycleService.h"
@@ -71,6 +72,9 @@
 #include "editor/EditorViewportInteractionService.h"
 #include "editor/EditorViewportPanel.h"
 #include "editor/EditorViewportSelectionBridge.h"
+#include "editor/tools/EditorModePanels.h"
+#include "editor/tools/EditorPlacementTools.h"
+#include "editor/world/EditorWorldOutlinerPanel.h"
 #include "editor/ExistingFeatureProtection.h"
 #include "editor/ExistingFeatureProtectionPanel.h"
 #include "vfx/DistortionRenderer.h"
@@ -983,21 +987,32 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
     ID3D12Device* device,
     int bufferCount,
     DXGI_FORMAT rtvFormat,
-    ID3D12DescriptorHeap* srvHeap) {
+    ID3D12DescriptorHeap* srvHeap,
+    AppPipelines* appPipelines) {
     if (initialized_) {
         return true;
     }
 
-    if (!hwnd || !device || !srvHeap || bufferCount <= 0) {
+    if (!hwnd || !device || !srvHeap || !appPipelines || bufferCount <= 0) {
         return false;
     }
     hwnd_ = hwnd;
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    std::string fontSettingsError;
+    editorFonts_.Load(&fontSettingsError);
+    if (!editorFonts_.BuildAtlas(*ImGui::GetIO().Fonts, &fontSettingsError)) {
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
+    ImGui::GetIO().FontDefault = editorFonts_.RegularFont();
     ImGui::StyleColorsDark();
+    ImGui::GetStyle().ScaleAllSizes(editorFonts_.AppliedSettings().uiScale);
 
     if (!ImGui_ImplWin32_Init(hwnd)) {
+        editorFonts_.OnContextDestroyed();
         ImGui::DestroyContext();
         return false;
     }
@@ -1009,8 +1024,13 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
         srvHeap->GetCPUDescriptorHandleForHeapStart(),
         srvHeap->GetGPUDescriptorHandleForHeapStart())) {
         ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
         ImGui::DestroyContext();
         return false;
+    }
+    if (!fontSettingsError.empty()) {
+        editorNotifications_.Push(editor::EditorNotificationSeverity::Warning,
+            "Editor Fonts", fontSettingsError);
     }
 
     const uint32_t descriptorSize = device->GetDescriptorHandleIncrementSize(
@@ -1032,6 +1052,276 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
         editorAssetThumbnails_.SetGpuThumbnailBackend(&editorAssetThumbnailGpuBackend_);
     }
 
+    std::string documentProviderError;
+    if (editorDocumentRegistry_.Count() == 0) {
+        const bool providersRegistered =
+            editorDocumentRegistry_.Register(editorCourseDocumentProvider_, &documentProviderError) &&
+            editorDocumentRegistry_.Register(editorSceneDocumentProvider_, &documentProviderError) &&
+            editorDocumentRegistry_.Register(editorPrefabDocumentProvider_, &documentProviderError) &&
+            editorDocumentRegistry_.Register(editorMaterialGraphDocumentProvider_, &documentProviderError) &&
+            editorDocumentRegistry_.Register(editorVfxGraphDocumentProvider_, &documentProviderError) &&
+            editorDocumentRegistry_.Register(editorAnimationStateMachineDocumentProvider_, &documentProviderError) &&
+            editorDocumentRegistry_.Register(editorGameplayVisualScriptDocumentProvider_, &documentProviderError) &&
+            editorDocumentRegistry_.Register(editorEffectDocumentProvider_, &documentProviderError) &&
+            editorDocumentRegistry_.Register(editorRenderPresetDocumentProvider_, &documentProviderError) &&
+            editorDocumentRegistry_.Register(editorProjectSettingsDocumentProvider_, &documentProviderError);
+        if (!providersRegistered) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Error,
+                "Document",
+                documentProviderError.empty()
+                    ? "Failed to register built-in document providers."
+                    : documentProviderError);
+        }
+    }
+    if (!editorSceneDocumentId_.IsValid() &&
+        editorDocumentRegistry_.Find(editor::EditorDocumentTypes::Scene) != nullptr) {
+        const editor::EditorDocumentOpenResult sceneOpen = editorDocumentManager_.Open(
+            editor::EditorDocumentTypes::Scene, editorSceneDocumentPath_);
+        if (sceneOpen.succeeded) {
+            editorSceneDocumentId_ = sceneOpen.id;
+        } else {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Error,
+                "Scene Document",
+                sceneOpen.message.empty() ? "Failed to open the default Scene document." : sceneOpen.message);
+        }
+    }
+    if (editorWorldObjectRegistry_.Count() == 0) {
+        std::string worldProviderError;
+        const bool worldProvidersRegistered =
+            editorWorldObjectRegistry_.Register(editorSceneWorldProvider_, &worldProviderError) &&
+            editorWorldObjectRegistry_.Register(editorCourseWorldProvider_, &worldProviderError) &&
+            editorWorldObjectRegistry_.Register(editorVfxWorldProvider_, &worldProviderError);
+        if (!worldProvidersRegistered) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Error,
+                "Editor World",
+                worldProviderError.empty()
+                    ? "Failed to register built-in world providers."
+                    : worldProviderError);
+        }
+    }
+
+    if (editorModeRegistry_.ModeCount() == 0) {
+        editor::RegisterDefaultEditorModes(editorModeRegistry_);
+        editor::RegisterProductionPlacementTools(
+            editorModeRegistry_,
+            editor::EditorPlacementToolServices{
+                &editorWorldMutationService_,
+                &editorWorldModel_,
+                &editorSceneWorldProvider_,
+                &editorSelection_,
+                &editorAssetRegistry_,
+                &editorAssetSelection_,
+                [this](const editor::EditorWorldMutationResult& result) {
+                    editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+                    editorDirtyState_.MarkDirty(
+                        editor::EditorDirtyDomain::Unknown,
+                        "world:" + result.document.assetGuid,
+                        result.document.type + " World",
+                        result.message,
+                        editorDirtyState_.Revision() + 1);
+                    if (editor::EditorDocumentRecord* document =
+                            editorDocumentManager_.Find(result.document)) {
+                        editorDocumentManager_.MarkDirty(document->id, result.message);
+                    }
+                    editorNotifications_.Push(
+                        editor::EditorNotificationSeverity::Info,
+                        "Placement Tool",
+                        result.message);
+                }});
+        editor::RegisterProductionTerrainBrushTools(
+            editorModeRegistry_, &editorTerrainToolBinding_);
+        editorGeometryToolBinding_.workspace = &editorGeometryWorkspace_;
+        editorGeometryToolBinding_.onCommitted = [this](std::string_view operation) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Info,
+                "Modeling Tool",
+                std::string(operation) + " committed.");
+        };
+        editor::RegisterProductionGeometryTools(
+            editorModeRegistry_, &editorGeometryToolBinding_);
+        editorMeshBakeToolBinding_.workspace = &editorGeometryWorkspace_;
+        editorMeshBakeToolBinding_.pipeline = &editorMeshBakePipeline_;
+        editorMeshBakeToolBinding_.onCommitted = [this](
+            std::string_view operation,
+            std::string_view assetGuid) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Info,
+                "Mesh Asset Pipeline",
+                std::string(operation) +
+                    (assetGuid.empty() ? std::string(" committed.")
+                                       : std::string(" committed: ") + std::string(assetGuid)));
+        };
+        editor::RegisterProductionMeshBakeTools(
+            editorModeRegistry_, &editorMeshBakeToolBinding_);
+        editor::EditorError executionError{};
+        if (!editorInteractiveExecution_.Register(
+                editorWorldMutationExecution_, &executionError)) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Error,
+                "Interactive Tools",
+                executionError.message.empty()
+                    ? "Failed to register World commit execution service."
+                    : executionError.message);
+        }
+        if (!editorInteractiveExecution_.Register(
+                editorTerrainEditExecution_, &executionError)) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Error,
+                "Interactive Tools",
+                executionError.message.empty()
+                    ? "Failed to register Terrain commit execution service."
+                    : executionError.message);
+        }
+        if (!editorInteractiveExecution_.Register(
+                editorGeometryExecution_, &executionError)) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Error,
+                "Interactive Tools",
+                executionError.message.empty()
+                    ? "Failed to register Geometry commit execution service."
+                    : executionError.message);
+        }
+        if (!editorInteractiveExecution_.Register(
+                editorMeshBakeExecution_, &executionError)) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Error,
+                "Interactive Tools",
+                executionError.message.empty()
+                    ? "Failed to register Production Mesh Bake execution service."
+                    : executionError.message);
+        }
+        std::string modeError;
+        if (!editorInteractiveTools_.Initialize("editor.mode.select", &modeError)) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Error,
+                "Interactive Tools",
+                modeError.empty() ? "Failed to initialize Editor Mode framework." : modeError);
+        }
+    }
+
+    std::string productionSceneError;
+    if (!editorProductionScenePipeline_.Initialize(device, &productionSceneError)) {
+        editorNotifications_.Push(
+            editor::EditorNotificationSeverity::Error,
+            "Production Scene Pipeline",
+            productionSceneError.empty()
+                ? "Failed to initialize the E-6 D3D12 Scene Instance pipeline."
+                : productionSceneError);
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
+    std::string productionMaterialError;
+    if (!editorProductionMaterialPipeline_.Initialize(device, &productionMaterialError)) {
+        editorNotifications_.Push(
+            editor::EditorNotificationSeverity::Error,
+            "Production Material Pipeline",
+            productionMaterialError.empty()
+                ? "Failed to initialize the E-7 Material and Scene Lighting pipeline."
+                : productionMaterialError);
+        editorProductionScenePipeline_.Shutdown();
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
+    std::string productionTextureError;
+    constexpr uint32_t kProductionTextureSrvBaseIndex = 3712;
+    constexpr uint32_t kProductionTextureSrvCapacity = 320;
+    if (!editorProductionTexturePipeline_.Initialize(
+            device, srvHeap, descriptorSize,
+            kProductionTextureSrvBaseIndex, kProductionTextureSrvCapacity,
+            {}, &productionTextureError)) {
+        editorNotifications_.Push(
+            editor::EditorNotificationSeverity::Error,
+            "Production Texture Pipeline",
+            productionTextureError.empty()
+                ? "Failed to initialize the E-8 Texture Streaming and Descriptor Residency pipeline."
+                : productionTextureError);
+        editorProductionMaterialPipeline_.Shutdown();
+        editorProductionScenePipeline_.Shutdown();
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
+    std::string productionShaderError;
+    if (!editorProductionShaderPipeline_.Initialize(
+            device,
+            appPipelines->GetMainRootSignature(),
+            appPipelines->GetMainPSO(),
+            {}, &productionShaderError)) {
+        editorNotifications_.Push(
+            editor::EditorNotificationSeverity::Error,
+            "Production Shader Pipeline",
+            productionShaderError.empty()
+                ? "Failed to initialize the E-9 Shader Variant and PSO Cache pipeline."
+                : productionShaderError);
+        editorProductionTexturePipeline_.Shutdown();
+        editorProductionMaterialPipeline_.Shutdown();
+        editorProductionScenePipeline_.Shutdown();
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
+    std::string productionLightingError;
+    constexpr uint32_t kProductionShadowSrvIndex = 4032;
+    if (!editorProductionLightingPipeline_.Initialize(
+            device,
+            srvHeap,
+            descriptorSize,
+            kProductionShadowSrvIndex,
+            appPipelines->GetMainRootSignature(),
+            {},
+            &productionLightingError)) {
+        editorNotifications_.Push(
+            editor::EditorNotificationSeverity::Error,
+            "Production Lighting Pipeline",
+            productionLightingError.empty()
+                ? "Failed to initialize the E-10 Multi-Light Cluster and Shadow pipeline."
+                : productionLightingError);
+        editorProductionShaderPipeline_.Shutdown();
+        editorProductionTexturePipeline_.Shutdown();
+        editorProductionMaterialPipeline_.Shutdown();
+        editorProductionScenePipeline_.Shutdown();
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
+    std::string productionVisibilityError;
+    constexpr uint32_t kProductionVisibilityFallbackSrvIndex = 4033;
+    if (!editorProductionGpuDrivenPipeline_.Initialize(
+            device, srvHeap, descriptorSize, kProductionVisibilityFallbackSrvIndex,
+            appPipelines->GetMainRootSignature(), {},
+            &productionVisibilityError)) {
+        editorNotifications_.Push(
+            editor::EditorNotificationSeverity::Error,
+            "Production GPU Visibility Pipeline",
+            productionVisibilityError.empty()
+                ? "Failed to initialize the E-11 GPU visibility and indirect draw pipeline."
+                : productionVisibilityError);
+        editorProductionLightingPipeline_.Shutdown();
+        editorProductionShaderPipeline_.Shutdown();
+        editorProductionTexturePipeline_.Shutdown();
+        editorProductionMaterialPipeline_.Shutdown();
+        editorProductionScenePipeline_.Shutdown();
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
     initialized_ = true;
     return true;
 }
@@ -1122,6 +1412,14 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     const auto assetPipelineStart = EditorUiTimingClock::now();
     if (!editorAssetRegistryInitialized_) {
         const auto registryInitStart = EditorUiTimingClock::now();
+        editorAssetRegistry_.ConfigureRedirectStore("Resources/.assetredirects");
+        std::string redirectError;
+        if (!editorAssetRegistry_.LoadRedirects(&redirectError)) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Warning,
+                "Asset Identity",
+                redirectError.empty() ? "Failed to load Asset redirect table." : redirectError);
+        }
         editorAssetRegistry_.Clear();
         editor::IndexEditorAssetsFromFolder(editorAssetRegistry_, "Resources");
         editor::CourseMeshAssetAdapter courseMeshAssetAdapter;
@@ -1173,6 +1471,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorAssetThumbnails_.GpuThumbnails().Count(editor::EditorAssetGpuThumbnailStatus::Failed));
     imguiTiming.assetPipelineMs =
         EditorUiElapsedMs(assetPipelineStart, EditorUiTimingClock::now());
+    editorCourseDocumentProvider_.Bind(context.course);
+    bool courseDocumentPathChanged = false;
     if (context.course == nullptr) {
         editorCourseDocumentOpen_ = false;
         editorCourseDocumentPath_.clear();
@@ -1182,12 +1482,385 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         if (!currentCoursePath.empty() && currentCoursePath != editorCourseDocumentPath_) {
             editorCourseDocumentPath_ = currentCoursePath;
             editorCourseDocumentOpen_ = true;
+            courseDocumentPathChanged = true;
         } else if (editorCourseDocumentPath_.empty()) {
             editorCourseDocumentPath_ = currentCoursePath;
+            courseDocumentPathChanged = !currentCoursePath.empty();
+        }
+    }
+    if (courseDocumentPathChanged && !editorCourseDocumentPath_.empty()) {
+        const editor::EditorDocumentOpenResult openResult = editorDocumentManager_.Open(
+            editor::EditorDocumentTypes::Course,
+            editorCourseDocumentPath_);
+        if (!openResult.succeeded) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Error,
+                "Document",
+                openResult.message);
         }
     }
     CourseAsset* editableCourse =
         editorCourseDocumentOpen_ && context.course != nullptr ? context.course : nullptr;
+    editor::EditorDocumentId courseWorldDocument{};
+    if (const editor::EditorDocumentRecord* document =
+            editorDocumentManager_.FindByPath(editorCourseDocumentPath_)) {
+        courseWorldDocument = document->id;
+    } else if (context.course != nullptr) {
+        const std::filesystem::path identityPath = editorCourseDocumentPath_.empty()
+            ? std::filesystem::path(context.course->name + ".course")
+            : std::filesystem::path(editorCourseDocumentPath_);
+        courseWorldDocument = {
+            editor::MakeEditorDocumentGuid(editor::EditorDocumentTypes::Course, identityPath),
+            std::string(editor::EditorDocumentTypes::Course)};
+    }
+    editorCourseWorldProvider_.Bind(editableCourse, courseWorldDocument);
+    editorTerrainToolBinding_.course = editableCourse;
+    editorTerrainToolBinding_.runtimeTerrain = &runtimeState.terrain;
+    editorTerrainToolBinding_.document = courseWorldDocument;
+    editorTerrainToolBinding_.transactionTarget = editor::EditorObjectHandle{
+        editor::EditorDomainId::TerrainGeneration,
+        editor::BuildEditorWorldStableId(
+            courseWorldDocument, editorCourseWorldProvider_.ProviderId(), "root"),
+        0,
+        0,
+        "Procedural Terrain"};
+    editorTerrainToolBinding_.surfaceQuery = &editorTerrainSurfaceQuery_;
+    editorTerrainToolBinding_.onCommitted = [this](
+        const TerrainEditDirtyRegion&,
+        std::string_view operation) {
+        editorNotifications_.Push(
+            editor::EditorNotificationSeverity::Info,
+            "Terrain Brush",
+            std::string(operation) + " stroke committed.");
+    };
+    if (editableCourse != nullptr && courseWorldDocument.IsValid()) {
+        AppRuntimeState* terrainRuntime = &runtimeState;
+        editorTerrainEditExecution_.Bind(
+            courseWorldDocument.Key(),
+            &editableCourse->terrainEditLayer,
+            [this, terrainRuntime, courseWorldDocument](
+                const TerrainEditDirtyRegion& dirty) {
+                if (terrainRuntime != nullptr) {
+                    terrainRuntime->terrain.lastEditDirtyRegion = dirty;
+                    ++terrainRuntime->terrain.courseObjectEditRevision;
+                }
+                editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+                editorDirtyState_.MarkDirty(
+                    editor::EditorDirtyDomain::CourseAuthoring,
+                    "course.terrain_edit_layer",
+                    "Terrain Edit Layer",
+                    "Procedural Terrain stroke changed.",
+                    editorDirtyState_.Revision() + 1);
+                if (editor::EditorDocumentRecord* document =
+                        editorDocumentManager_.Find(courseWorldDocument)) {
+                    editorDocumentManager_.MarkDirty(
+                        document->id, "Procedural Terrain stroke changed.");
+                }
+            });
+    } else {
+        editorTerrainEditExecution_.Clear();
+    }
+    const std::size_t assignedWorldIdentities =
+        editorCourseWorldProvider_.EnsurePersistentIdentities();
+    if (assignedWorldIdentities > 0) {
+        editorDirtyState_.MarkDirty(
+            editor::EditorDirtyDomain::CourseAuthoring,
+            "course.world_identity",
+            "Course World Identity",
+            "Persistent editor GUIDs were assigned to Course objects.",
+            runtimeState.terrain.courseObjectEditRevision);
+        if (editor::EditorDocumentRecord* document =
+                editorDocumentManager_.Find(courseWorldDocument)) {
+            editorDocumentManager_.MarkDirty(
+                document->id, "Persistent editor GUIDs were assigned to Course objects.");
+        }
+    }
+    editorCourseSequencerProvider_.Bind(editableCourse);
+    editorSequencer_.BeginFrame();
+    editorSequencer_.RegisterProvider(editorCourseSequencerProvider_);
+    editorSequencer_.SetTransactionStack(&editorTransactions);
+    editorSequencer_.SetSequenceRange(0.0, context.courseRailLength);
+    editorSequencer_.SetPreviewPositionCallback(
+        [teleport = context.onTeleportCourseToDistance](double position) {
+            if (teleport) teleport(static_cast<float>(position));
+        });
+    editorSequencer_.SetMutationCallback(
+        [this, &runtimeState, courseWorldDocument](std::string_view reason) {
+            ++runtimeState.terrain.courseObjectEditRevision;
+            editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+            editorDirtyState_.MarkDirty(
+                editor::EditorDirtyDomain::CourseAuthoring,
+                "course.sequencer",
+                "Course Sequencer",
+                std::string(reason),
+                runtimeState.terrain.courseObjectEditRevision);
+            if (editor::EditorDocumentRecord* document =
+                    editorDocumentManager_.Find(courseWorldDocument)) {
+                editorDocumentManager_.MarkDirty(document->id, reason);
+            }
+        });
+    editorSceneWorldProvider_.Bind(
+        editorSceneDocumentProvider_.Scene(editorSceneDocumentId_), editorSceneDocumentId_);
+    editor::EditorDocumentId activeGeometryDocument{};
+    if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active();
+        activeDocument != nullptr && activeDocument->id.type == editor::EditorDocumentTypes::Scene) {
+        activeGeometryDocument = activeDocument->id;
+    }
+    editorGeometryWorkspace_.Bind(
+        &editorSceneWorldProvider_, &editorSelection_, activeGeometryDocument);
+    if (editor::EditorScene* geometryScene =
+            editorSceneDocumentProvider_.Scene(editorSceneDocumentId_)) {
+        editorMeshBakePipeline_.Bind(
+            editorSceneDocumentId_, geometryScene, &editorAssetRegistry_, std::filesystem::current_path());
+        editorGeometryExecution_.Bind(
+            editorSceneDocumentId_, geometryScene,
+            [this](std::string_view) {
+                editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+                editorDirtyState_.MarkDirty(
+                    editor::EditorDirtyDomain::Unknown,
+                    "scene.geometry",
+                    "Editable Geometry",
+                    "Scene Geometry changed.",
+                    editorDirtyState_.Revision() + 1);
+                if (editor::EditorDocumentRecord* document =
+                        editorDocumentManager_.Find(editorSceneDocumentId_)) {
+                    editorDocumentManager_.MarkDirty(
+                        document->id, "Scene Geometry changed.");
+                }
+            });
+        editorMeshBakeExecution_.Bind(
+            editorSceneDocumentId_, geometryScene, &editorAssetRegistry_,
+            &editorProductionMeshRuntimeCache_, std::filesystem::current_path(),
+            [this](std::string_view, std::string_view assetGuid) {
+                editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+                editorAssetThumbnails_.Sync(editorAssetRegistry_);
+                editorDirtyState_.MarkDirty(
+                    editor::EditorDirtyDomain::Unknown,
+                    "scene.mesh_bake",
+                    "Production Mesh Asset",
+                    "Scene Mesh Asset bake changed.",
+                    editorDirtyState_.Revision() + 1);
+                if (editor::EditorDocumentRecord* document =
+                        editorDocumentManager_.Find(editorSceneDocumentId_)) {
+                    editorDocumentManager_.MarkDirty(
+                        document->id, "Scene Mesh Asset bake changed.");
+                }
+                editorNotifications_.Push(
+                    editor::EditorNotificationSeverity::Info,
+                    "Mesh Asset Pipeline",
+                    assetGuid.empty()
+                        ? "Production Mesh Bake reverted."
+                        : "Production Mesh artifacts and runtime cache updated.");
+            });
+        if (context.frameState != nullptr) {
+            std::string productionSceneError;
+            editorProductionScenePipeline_.Sync(
+                *geometryScene,
+                editorAssetRegistry_,
+                editorProductionMeshRuntimeCache_,
+                context.frameState->cameraWorldPosition,
+                context.frameState->viewProjectionMatrix,
+                context.editorUploadCommandList,
+                context.editorCompletedFenceValue,
+                context.editorScheduledFenceValue,
+                &productionSceneError);
+            std::string productionMaterialError;
+            editorProductionMaterialPipeline_.Sync(
+                *geometryScene,
+                editorAssetRegistry_,
+                context.editorCompletedFenceValue,
+                context.editorScheduledFenceValue,
+                &productionMaterialError);
+            std::string productionLightingError;
+            editorProductionLightingPipeline_.Sync(
+                *geometryScene,
+                context.frameState->cameraWorldPosition,
+                context.frameState->viewMatrix,
+                context.frameState->projMatrix,
+                context.frameState->viewProjectionMatrix,
+                static_cast<uint32_t>((std::max)(1.0f, runtimeState.viewport.Width)),
+                static_cast<uint32_t>((std::max)(1.0f, runtimeState.viewport.Height)),
+                runtimeState.camera.nearZ,
+                runtimeState.camera.farZ,
+                &productionLightingError);
+            std::string productionTextureError;
+            editorProductionTexturePipeline_.Sync(
+                editorProductionMaterialPipeline_,
+                editorAssetRegistry_,
+                context.editorUploadCommandList,
+                context.editorCompletedFenceValue,
+                context.editorScheduledFenceValue,
+                &productionTextureError);
+            std::string productionShaderError;
+            editorProductionShaderPipeline_.Sync(
+                editorProductionMaterialPipeline_,
+                editorProductionTexturePipeline_,
+                context.editorCompletedFenceValue,
+                context.editorScheduledFenceValue,
+                &productionShaderError);
+            std::string productionVisibilityError;
+            editorProductionGpuDrivenPipeline_.Sync(
+                editorProductionScenePipeline_.GpuDrivenCandidates(),
+                editorProductionMaterialPipeline_,
+                editorProductionTexturePipeline_,
+                editorProductionShaderPipeline_,
+                context.frameState->viewProjectionMatrix,
+                context.editorCompletedFenceValue,
+                context.editorScheduledFenceValue,
+                &productionVisibilityError);
+        }
+    } else {
+        editorGeometryExecution_.Clear();
+        editorMeshBakePipeline_.Clear();
+        editorMeshBakeExecution_.Clear();
+    }
+    editorPrefabs_.Bind(
+        editorSceneDocumentProvider_.Scene(editorSceneDocumentId_),
+        editorSceneDocumentId_,
+        &editorPrefabDocumentProvider_,
+        &editorTransactions,
+        &editorSceneWorldProvider_,
+        &editorAssetRegistry_,
+        &editorDocumentManager_);
+    editorPrefabs_.SetMutationCallback(
+        [this](std::string_view reason, std::string_view changedAssetGuid) {
+            editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+            editorDirtyState_.MarkDirty(
+                editor::EditorDirtyDomain::Unknown,
+                "prefab",
+                "Prefab",
+                std::string(reason),
+                editorDirtyState_.Revision() + 1);
+            if (editor::EditorDocumentRecord* sceneDocument =
+                    editorDocumentManager_.Find(editorSceneDocumentId_)) {
+                editorDocumentManager_.MarkDirty(sceneDocument->id, reason);
+            }
+            if (!changedAssetGuid.empty()) {
+                const editor::EditorDocumentId prefabDocument =
+                    editorPrefabDocumentProvider_.DocumentForAssetGuid(changedAssetGuid);
+                if (editor::EditorDocumentRecord* document =
+                        editorDocumentManager_.Find(prefabDocument)) {
+                    editorDocumentManager_.MarkDirty(document->id, reason);
+                }
+            }
+        });
+    editorMaterialGraphs_.Bind(
+        &editorMaterialGraphDocumentProvider_,
+        &editorTransactions,
+        &editorDocumentManager_);
+    if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active();
+        activeDocument != nullptr && activeDocument->id.type == editor::EditorDocumentTypes::MaterialGraph) {
+        if (activeDocument->id != editorMaterialGraphs_.ActiveDocument()) {
+            editorMaterialGraphs_.SetActiveDocument(activeDocument->id);
+        }
+    } else if (editorMaterialGraphs_.ActiveDocument().IsValid()) {
+        editorMaterialGraphs_.SetActiveDocument({});
+    }
+    editorMaterialGraphs_.SetMutationCallback(
+        [this](const editor::EditorDocumentId& document, std::string_view reason) {
+            editorDirtyState_.MarkDirty(
+                editor::EditorDirtyDomain::Unknown,
+                "material-graph:" + document.assetGuid,
+                "Material Graph",
+                std::string(reason),
+                editorDirtyState_.Revision() + 1);
+        });
+    editorVfxGraphs_.Bind(
+        &editorVfxGraphDocumentProvider_,
+        &editorTransactions,
+        &editorDocumentManager_,
+        context.effectRuntime,
+        &editorAssetRegistry_);
+    if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active();
+        activeDocument != nullptr && activeDocument->id.type == editor::EditorDocumentTypes::VfxGraph) {
+        if (activeDocument->id != editorVfxGraphs_.ActiveDocument()) {
+            editorVfxGraphs_.SetActiveDocument(activeDocument->id);
+        }
+    } else if (editorVfxGraphs_.ActiveDocument().IsValid()) {
+        editorVfxGraphs_.SetActiveDocument({});
+    }
+    editorVfxGraphs_.SetMutationCallback(
+        [this](const editor::EditorDocumentId& document, std::string_view reason) {
+            editorDirtyState_.MarkDirty(
+                editor::EditorDirtyDomain::Unknown,
+                "vfx-graph:" + document.assetGuid,
+                "Advanced VFX Graph",
+                std::string(reason),
+                editorDirtyState_.Revision() + 1);
+        });
+    editorAnimationStateMachines_.Bind(
+        &editorAnimationStateMachineDocumentProvider_, &editorTransactions, &editorDocumentManager_);
+    if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active();
+        activeDocument != nullptr &&
+        activeDocument->id.type == editor::EditorDocumentTypes::AnimationStateMachine) {
+        if (activeDocument->id != editorAnimationStateMachines_.ActiveDocument()) {
+            editorAnimationStateMachines_.SetActiveDocument(activeDocument->id);
+        }
+    } else if (editorAnimationStateMachines_.ActiveDocument().IsValid()) {
+        editorAnimationStateMachines_.SetActiveDocument({});
+    }
+    editorAnimationStateMachines_.SetMutationCallback(
+        [this](const editor::EditorDocumentId& document, std::string_view reason) {
+            editorDirtyState_.MarkDirty(editor::EditorDirtyDomain::Unknown,
+                "animation-state-machine:" + document.assetGuid,
+                "Animation State Machine", std::string(reason),
+                editorDirtyState_.Revision() + 1);
+        });
+    editorGameplayVisualScripts_.Bind(
+        &editorGameplayVisualScriptDocumentProvider_, &editorTransactions, &editorDocumentManager_);
+    if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active();
+        activeDocument != nullptr &&
+        activeDocument->id.type == editor::EditorDocumentTypes::GameplayVisualScript) {
+        if (activeDocument->id != editorGameplayVisualScripts_.ActiveDocument()) {
+            editorGameplayVisualScripts_.SetActiveDocument(activeDocument->id);
+        }
+    } else if (editorGameplayVisualScripts_.ActiveDocument().IsValid()) {
+        editorGameplayVisualScripts_.SetActiveDocument({});
+    }
+    editorGameplayVisualScripts_.SetMutationCallback(
+        [this](const editor::EditorDocumentId& document, std::string_view reason) {
+            editorDirtyState_.MarkDirty(editor::EditorDirtyDomain::Unknown,
+                "gameplay-visual-script:" + document.assetGuid,
+                "Gameplay Visual Script", std::string(reason),
+                editorDirtyState_.Revision() + 1);
+        });
+    editorVfxWorldProvider_.Bind(
+        context.effectRuntime,
+        {editor::MakeEditorDocumentGuid(
+             editor::EditorDocumentTypes::Effect, std::filesystem::path("runtime-vfx.effect")),
+         std::string(editor::EditorDocumentTypes::Effect)});
+    uint64_t worldInputSignature = editor::EditorDocumentHash64(
+        courseWorldDocument.Key(), 1469598103934665603ull);
+    const auto mixWorldInput = [&worldInputSignature](uint64_t value) {
+        worldInputSignature ^= value;
+        worldInputSignature *= 1099511628211ull;
+    };
+    mixWorldInput(runtimeState.terrain.courseObjectEditRevision);
+    if (const editor::EditorScene* scene = editorSceneDocumentProvider_.Scene(editorSceneDocumentId_)) {
+        mixWorldInput(scene->revision);
+        mixWorldInput(scene->entities.size());
+    }
+    if (context.course != nullptr) {
+        mixWorldInput(context.course->terrainPlacements.size());
+        mixWorldInput(context.course->rockClusters.size());
+        mixWorldInput(context.course->cameraKeys.size());
+        mixWorldInput(context.course->events.size());
+    }
+    mixWorldInput(context.effectRuntime->Assets().size());
+    mixWorldInput(context.effectRuntime->Instances().size());
+    mixWorldInput(context.effectRuntime->ParticlePoolResetSerial());
+    const bool periodicWorldRefresh = editorDocumentServiceFrame_ % 30u == 0u;
+    if (worldInputSignature != editorWorldInputSignature_ || periodicWorldRefresh) {
+        const editor::EditorWorldModelRefreshResult worldRefresh = editorWorldModel_.Refresh();
+        if (worldRefresh.succeeded) {
+            editorWorldInputSignature_ = worldInputSignature;
+        } else if (editorDocumentServiceFrame_ == 0) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Error,
+                "Editor World",
+                worldRefresh.message);
+        }
+    }
     SyncEditorTransactionsFromFrame(editorTransactions, runtimeState);
     editorRailRuntimePause_.Sync(
         editor::EditorRailRuntimePauseInput{
@@ -1210,8 +1883,56 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             "Course object edit revision changed.",
             courseObjectRevision);
         editorCourseObjectDirtyRevision_ = courseObjectRevision;
+        if (editor::EditorDocumentRecord* document =
+                editorDocumentManager_.FindByPath(editorCourseDocumentPath_)) {
+            editorDocumentManager_.MarkDirty(document->id, "Course object edit revision changed.");
+        }
     } else if (courseObjectRevision < editorCourseObjectDirtyRevision_) {
         editorCourseObjectDirtyRevision_ = courseObjectRevision;
+    }
+    ++editorDocumentServiceFrame_;
+    if (!editorDocumentRecoveryScanned_ && editorDocumentManager_.OpenCount() > 0) {
+        editorDocumentRecoveryScanned_ = true;
+        const editor::EditorDocumentRecoveryScanResult recoveryScan =
+            editorDocumentRecoveryService_.Scan();
+        for (const editor::EditorDocumentRecoveryCandidate& candidate : recoveryScan.candidates) {
+            if (editorDocumentManager_.Find(candidate.autosave.id) == nullptr) continue;
+            if (candidate.sourceChangedSinceAutosave) {
+                editorDocumentManager_.SetConflict(
+                    candidate.autosave.id,
+                    editor::EditorDocumentConflictState::ExternalModified);
+                editorNotifications_.Push(
+                    editor::EditorNotificationSeverity::Warning,
+                    "Document Recovery",
+                    candidate.message);
+                continue;
+            }
+            std::string recoveryError;
+            if (editorDocumentRecoveryService_.Recover(candidate, &recoveryError)) {
+                editorNotifications_.Push(
+                    editor::EditorNotificationSeverity::Info,
+                    "Document Recovery",
+                    "Recovered autosaved authoring changes for " + candidate.autosave.id.Key());
+            } else {
+                editorNotifications_.Push(
+                    editor::EditorNotificationSeverity::Error,
+                    "Document Recovery",
+                    recoveryError);
+            }
+        }
+    }
+    if (editorDocumentServiceFrame_ % 120u == 0u) {
+        editorExternalChangeMonitor_.Poll(editorDocumentManager_);
+    }
+    if (editorDocumentServiceFrame_ % 600u == 0u) {
+        const editor::EditorAutosaveResult autosaveResult =
+            editorAutosaveService_.AutosaveDirtyDocuments();
+        for (const std::string& autosaveError : autosaveResult.errors) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Error,
+                "Document Autosave",
+                autosaveError);
+        }
     }
     const auto validationStart = EditorUiTimingClock::now();
     editorToolRegistry_.BeginFrame();
@@ -1248,6 +1969,18 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     editor::EditorAssetThumbnailDiagnosticsAdapter assetThumbnailDiagnosticsAdapter(
         &editorAssetRegistry_,
         &editorAssetThumbnails_);
+    editor::EditorMaterialGraphDiagnosticsAdapter materialGraphDiagnosticsAdapter(
+        &editorMaterialGraphDocumentProvider_,
+        &editorDocumentManager_,
+        &editorAssetRegistry_);
+    editor::EditorVfxGraphDiagnosticsAdapter vfxGraphDiagnosticsAdapter(
+        &editorVfxGraphDocumentProvider_,
+        &editorDocumentManager_,
+        &editorAssetRegistry_);
+    editor::EditorAnimationStateMachineDiagnosticsAdapter animationStateMachineDiagnosticsAdapter(
+        &editorAnimationStateMachineDocumentProvider_, &editorDocumentManager_, &editorAssetRegistry_);
+    editor::EditorGameplayVisualScriptDiagnosticsAdapter gameplayVisualScriptDiagnosticsAdapter(
+        &editorGameplayVisualScriptDocumentProvider_, &editorDocumentManager_);
     editor::EditorValidationService editorValidationService;
     editor::RunAppEditorFrameProviderToolPipeline(
         editor::AppEditorFrameProviderToolModuleInput{
@@ -1262,7 +1995,11 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             &courseValidationAdapter,
             &effectDiagnosticsAdapter,
             &assetReferenceDiagnosticsAdapter,
-            &assetThumbnailDiagnosticsAdapter});
+            &assetThumbnailDiagnosticsAdapter,
+            &materialGraphDiagnosticsAdapter,
+            &vfxGraphDiagnosticsAdapter,
+            &animationStateMachineDiagnosticsAdapter,
+            &gameplayVisualScriptDiagnosticsAdapter});
     const editor::EditorValidationReport editorValidationReport = editorValidationService.Validate();
     imguiTiming.validationMs =
         EditorUiElapsedMs(validationStart, EditorUiTimingClock::now());
@@ -1311,6 +2048,83 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     const ImGuiIO& imguiIO = ImGui::GetIO();
     const editor::EditorViewportRenderTargetState& editorViewportTarget =
         editorViewportRenderTarget_.State();
+    editorViewportCoordinates_.Update(
+        editor::EditorViewportCoordinateContext{
+            editorPanelLayout_.ViewportRect(),
+            editorViewportTarget.renderWidth,
+            editorViewportTarget.renderHeight,
+            context.frameState != nullptr
+                ? context.frameState->viewProjectionMatrix
+                : MakeIdentity4x4()});
+    editorLayoutPersistence_.EnsureLoaded();
+    editorViewportOverlay_.SetGameplayVisible(
+        editorLayoutPersistence_.OverlayOption("gameplay-visible", true));
+    editorViewportOverlay_.SetEditorVisible(
+        editorLayoutPersistence_.OverlayOption("editor-visible", true));
+    for (size_t index = 0; index < editor::kEditorViewportOverlayLayerCount; ++index) {
+        const auto layer = static_cast<editor::EditorViewportOverlayLayerId>(index);
+        editor::EditorViewportOverlayLayerSettings settings =
+            editorViewportOverlay_.LayerSettings(layer);
+        const std::string prefix = std::string(editor::EditorViewportOverlayLayerStableId(layer));
+        settings.visible = editorLayoutPersistence_.OverlayOption(
+            prefix + ".visible",
+            settings.visible);
+        settings.selectedOnly = editorLayoutPersistence_.OverlayOption(
+            prefix + ".selected-only",
+            settings.selectedOnly);
+        editorViewportOverlay_.SetLayerSettings(layer, settings);
+    }
+    editorViewportOverlay_.BeginFrame(
+        editor::EditorViewportOverlayFrameContext{
+            editorViewportTarget,
+            static_cast<uint32_t>((std::max)(1.0f, editorWorkSize.x)),
+            static_cast<uint32_t>((std::max)(1.0f, editorWorkSize.y)),
+            &editorViewportCoordinates_,
+            context.frameState != nullptr
+                ? context.frameState->cameraWorldPosition
+                : Vector3{},
+            1.0f});
+    {
+        editor::EditorViewportOverlayCommandSink boundsSink =
+            editorViewportOverlay_.Sink(editor::EditorViewportOverlayLayerId::AuthoringHelpers);
+        editor::EditorViewportOverlayCommandSink labelSink =
+            editorViewportOverlay_.Sink(editor::EditorViewportOverlayLayerId::ObjectLabels);
+        const editor::EditorObjectHandle* primary = editorSelection_.Primary();
+        for (const editor::EditorProductionSceneInstance& instance :
+             editorProductionScenePipeline_.Instances()) {
+            float minimumX = FLT_MAX;
+            float minimumY = FLT_MAX;
+            float maximumX = -FLT_MAX;
+            float maximumY = -FLT_MAX;
+            bool projected = false;
+            for (uint32_t corner = 0; corner < 8; ++corner) {
+                const Vector3 point{
+                    (corner & 1u) != 0 ? instance.boundsMax.x : instance.boundsMin.x,
+                    (corner & 2u) != 0 ? instance.boundsMax.y : instance.boundsMin.y,
+                    (corner & 4u) != 0 ? instance.boundsMax.z : instance.boundsMin.z};
+                const editor::EditorViewportProjectedPoint screen =
+                    editorViewportCoordinates_.ProjectWorld(point);
+                if (!screen.valid || screen.behind) continue;
+                minimumX = (std::min)(minimumX, screen.render.x);
+                minimumY = (std::min)(minimumY, screen.render.y);
+                maximumX = (std::max)(maximumX, screen.render.x);
+                maximumY = (std::max)(maximumY, screen.render.y);
+                projected = true;
+            }
+            if (!projected) continue;
+            const bool selected = primary != nullptr &&
+                primary->domain == editor::EditorDomainId::SceneEntity &&
+                primary->stableId.find(instance.entityGuid) != std::string::npos;
+            const editor::EditorViewportOverlayItemOptions options{
+                selected, true, false, -1.0f, 0.0f,
+                (std::numeric_limits<float>::max)(), selected ? 100 : 0};
+            boundsSink.Rect(minimumX, minimumY, maximumX, maximumY,
+                selected ? 0xff48d9ffu : 0x9077b7ffu, selected ? 2.0f : 1.0f, options);
+            labelSink.Label(minimumX, minimumY,
+                "LOD" + std::to_string(instance.selectedLod),
+                selected ? 0xffb8efffu : 0xff9fc9ffu, options);
+        }
+    }
     editorViewportInteraction_.Update(
         editor::EditorViewportInteractionInput{
             editorPanelLayout_.ViewportRect(),
@@ -1328,54 +2142,131 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     runtimeState.terrain.courseObjectAuthoringInputLocked =
         editorViewportInteraction_.AuthoringInputLocked();
     std::vector<editor::EditorViewportPickResult> viewportPickResults;
+    const bool scenePickRequested = editorViewportInteraction_.CanUseViewportInput() &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    if (scenePickRequested) {
+        const editor::EditorViewportWorldRay ray = editorViewportCoordinates_.DisplayToWorldRay(
+            imguiIO.MousePos.x, imguiIO.MousePos.y);
+        const editor::EditorProductionSceneRayHit hit = ray.valid
+            ? editorProductionScenePipeline_.Raycast(ray.origin, ray.direction)
+            : editor::EditorProductionSceneRayHit{};
+        if (hit.valid) {
+            const editor::EditorScene* scene =
+                editorSceneDocumentProvider_.Scene(editorSceneDocumentId_);
+            const editor::EditorSceneEntity* entity = scene != nullptr
+                ? scene->FindEntity(hit.entityGuid) : nullptr;
+            editor::EditorViewportPickResult pick = editor::MakeEditorViewportPickResult(
+                editor::EditorViewportPickSource::SceneViewport,
+                editor::EditorDomainId::SceneEntity,
+                "scene-entity",
+                0,
+                static_cast<uint32_t>(scene != nullptr ? scene->revision : 0),
+                entity != nullptr ? entity->name : "Scene Entity");
+            pick.canonicalHandle = {
+                editor::EditorDomainId::SceneEntity,
+                editor::BuildEditorWorldStableId(
+                    editorSceneDocumentId_, editorSceneWorldProvider_.ProviderId(), hit.entityGuid),
+                0,
+                static_cast<uint32_t>(scene != nullptr ? scene->revision : 0),
+                entity != nullptr ? entity->name : "Scene Entity"};
+            viewportPickResults.push_back(std::move(pick));
+        }
+    } else if (const editor::EditorObjectHandle* primary = editorSelection_.Primary();
+               primary != nullptr && primary->domain == editor::EditorDomainId::SceneEntity) {
+        editor::EditorViewportPickResult pick = editor::MakeEditorViewportPickResult(
+            editor::EditorViewportPickSource::SceneViewport,
+            editor::EditorDomainId::SceneEntity,
+            "scene-entity",
+            primary->localIndex,
+            primary->generation,
+            primary->displayName);
+        pick.canonicalHandle = *primary;
+        viewportPickResults.push_back(std::move(pick));
+    }
     if (runtimeState.terrain.selectedCourseTerrainPlacement >= 0) {
         const uint64_t index =
             static_cast<uint64_t>(runtimeState.terrain.selectedCourseTerrainPlacement);
-        viewportPickResults.push_back(
-            editor::MakeEditorViewportPickResult(
+        editor::EditorViewportPickResult pick = editor::MakeEditorViewportPickResult(
                 editor::EditorViewportPickSource::CourseViewport,
                 editor::EditorDomainId::CourseTerrainPlacement,
                 "course-terrain",
                 index,
                 runtimeState.terrain.courseObjectEditRevision,
-                "Course Terrain #" + std::to_string(index)));
+                "Course Terrain #" + std::to_string(index));
+        if (const editor::EditorWorldObjectRecord* record =
+                editorWorldModel_.FindByDomainIndex(
+                    editor::EditorDomainId::CourseTerrainPlacement, index)) {
+            pick.canonicalHandle = record->handle;
+        }
+        viewportPickResults.push_back(std::move(pick));
     }
     if (runtimeState.terrain.selectedCourseRockCluster >= 0) {
         const uint64_t index =
             static_cast<uint64_t>(runtimeState.terrain.selectedCourseRockCluster);
-        viewportPickResults.push_back(
-            editor::MakeEditorViewportPickResult(
+        editor::EditorViewportPickResult pick = editor::MakeEditorViewportPickResult(
                 editor::EditorViewportPickSource::CourseViewport,
                 editor::EditorDomainId::CourseRockCluster,
                 "course-rock",
                 index,
                 runtimeState.terrain.courseObjectEditRevision,
-                "Course Rock Cluster #" + std::to_string(index)));
+                "Course Rock Cluster #" + std::to_string(index));
+        if (const editor::EditorWorldObjectRecord* record =
+                editorWorldModel_.FindByDomainIndex(
+                    editor::EditorDomainId::CourseRockCluster, index)) {
+            pick.canonicalHandle = record->handle;
+        }
+        viewportPickResults.push_back(std::move(pick));
     }
     if (selectedEffectInstanceId_ != 0) {
         const uint64_t index = static_cast<uint64_t>(selectedEffectInstanceId_);
-        viewportPickResults.push_back(
-            editor::MakeEditorViewportPickResult(
+        editor::EditorViewportPickResult pick = editor::MakeEditorViewportPickResult(
                 editor::EditorViewportPickSource::VfxRuntime,
                 editor::EditorDomainId::VfxEffectInstance,
                 "vfx-instance",
                 index,
                 0,
-                "VFX Instance #" + std::to_string(index)));
+                "VFX Instance #" + std::to_string(index));
+        if (const editor::EditorWorldObjectRecord* record =
+                editorWorldModel_.FindByObjectGuid(
+                    editorVfxWorldProvider_.ProviderId(), "instance-" + std::to_string(index))) {
+            pick.canonicalHandle = record->handle;
+        }
+        viewportPickResults.push_back(std::move(pick));
     }
     editorViewportSelectionBridge_.Sync(
         editor::EditorViewportSelectionBridgeInput{
             &editorSelection_,
             &editorViewportInteraction_,
             &viewportPickResults});
+    runtimeState.terrain.selectedCourseTerrainPlacements.clear();
+    runtimeState.terrain.selectedCourseRockClusters.clear();
+    for (const editor::EditorObjectHandle& handle : editorSelection_.Handles()) {
+        if (handle.domain == editor::EditorDomainId::CourseTerrainPlacement) {
+            runtimeState.terrain.selectedCourseTerrainPlacements.push_back(
+                static_cast<int>(handle.localIndex));
+        } else if (handle.domain == editor::EditorDomainId::CourseRockCluster) {
+            runtimeState.terrain.selectedCourseRockClusters.push_back(
+                static_cast<int>(handle.localIndex));
+        }
+    }
+    if (editorViewportInteraction_.MouseInsideViewport() &&
+        editorViewportInteraction_.CanMutateAuthoring() &&
+        !ImGui::GetIO().WantTextInput && !ImGui::GetIO().KeyCtrl) {
+        if (ImGui::IsKeyPressed(ImGuiKey_W)) runtimeState.terrain.courseObjectGizmoMode = 0;
+        if (ImGui::IsKeyPressed(ImGuiKey_E)) runtimeState.terrain.courseObjectGizmoMode = 2;
+        if (ImGui::IsKeyPressed(ImGuiKey_R)) runtimeState.terrain.courseObjectGizmoMode = 1;
+    }
     editorTransformGizmo_.Update(
         editor::EditorTransformGizmoInput{
             &editorSelection_,
             &editorViewportInteraction_,
+            &editorViewportCoordinates_,
             &editorViewportSelectionBridge_,
             &editorTransactions,
             editor::EditorTransformGizmoModeFromIndex(runtimeState.terrain.courseObjectGizmoMode),
             editor::EditorTransformGizmoAxisFromIndex(runtimeState.terrain.courseObjectActiveAxis),
+            editor::EditorTransformGizmoSpaceFromIndex(runtimeState.terrain.courseObjectGizmoSpace),
+            editor::EditorTransformGizmoPivotModeFromIndex(runtimeState.terrain.courseObjectPivotMode),
             runtimeState.terrain.courseObjectSnapEnabled});
     runtimeState.terrain.courseObjectGizmoMode =
         editor::ToCourseGizmoMode(editorTransformGizmo_.State().mode);
@@ -1405,6 +2296,109 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             context.courseDistance,
             context.courseSpeed,
             context.courseRailLength});
+    {
+        const editor::EditorProductionTexturePipelineStats& textureStats =
+            editorProductionTexturePipeline_.Stats();
+        std::ostringstream detail;
+        detail << "resident=" << textureStats.residentTextures
+               << " descriptors=" << textureStats.residentDescriptors
+               << " mips(full/partial)=" << textureStats.fullMipTextures
+               << "/" << textureStats.partialMipTextures
+               << " gpuMiB=" << std::fixed << std::setprecision(2)
+               << static_cast<double>(textureStats.residentGpuBytes) / (1024.0 * 1024.0)
+               << "/" << static_cast<double>(textureStats.gpuBudgetBytes) / (1024.0 * 1024.0)
+               << " pending=" << textureStats.pendingGpuRetirements
+               << " fallback=" << textureStats.fallbackTextures
+               << " hits/misses=" << textureStats.cacheHits << "/" << textureStats.cacheMisses;
+        editorRuntimeInspector_.AddRecord(
+            editor::EditorRuntimeWatchRecord{
+                "RenderGraph",
+                "Texture Residency",
+                textureStats.fallbackTextures == 0 ? "Resident" : "Fallback",
+                detail.str(),
+                textureStats.fallbackTextures == 0
+                    ? editor::EditorRuntimeWatchSeverity::Info
+                    : editor::EditorRuntimeWatchSeverity::Warning,
+                editorDocumentServiceFrame_});
+    }
+    {
+        const editor::EditorProductionShaderPipelineStats& shaderStats =
+            editorProductionShaderPipeline_.Stats();
+        std::ostringstream detail;
+        detail << "variants=" << shaderStats.residentVariants
+               << " queued=" << shaderStats.queuedCompiles
+               << " ready/fallback/LKG=" << shaderStats.readyBindings
+               << "/" << shaderStats.fallbackBindings
+               << "/" << shaderStats.lastKnownGoodBindings
+               << " normal=" << shaderStats.normalMapBindings
+               << " PSO lib hit/miss=" << shaderStats.pipelineLibraryHits
+               << "/" << shaderStats.pipelineLibraryMisses
+               << " compile ok/fail=" << shaderStats.compilesCompleted
+               << "/" << shaderStats.compilesFailed
+               << " pending=" << shaderStats.pendingGpuRetirements;
+        editorRuntimeInspector_.AddRecord(
+            editor::EditorRuntimeWatchRecord{
+                "RenderGraph",
+                "Shader Variants / PSO Cache",
+                shaderStats.failedVariants == 0 ? "Ready" : "Fallback",
+                detail.str(),
+                shaderStats.failedVariants == 0
+                    ? editor::EditorRuntimeWatchSeverity::Info
+                    : editor::EditorRuntimeWatchSeverity::Warning,
+                editorDocumentServiceFrame_});
+    }
+    {
+        const editor::EditorProductionLightingStats& lightingStats =
+            editorProductionLightingPipeline_.Stats();
+        std::ostringstream detail;
+        detail << "lights=" << lightingStats.visibleLights
+               << "/" << lightingStats.submittedLights
+               << " rejected=" << lightingStats.rejectedByLightBudget
+               << " clusters=" << lightingStats.clusterCount
+               << " indices=" << lightingStats.clusterIndexCount
+               << " overflow=" << lightingStats.clusterOverflowCount
+               << " shadows=" << lightingStats.residentShadowMaps
+               << "/" << lightingStats.shadowRequests
+               << " shadowDraws=" << lightingStats.renderedShadowDraws
+               << " atlasMiB=" << std::fixed << std::setprecision(2)
+               << static_cast<double>(lightingStats.shadowAtlasBytes) / (1024.0 * 1024.0);
+        const bool constrained = lightingStats.rejectedByLightBudget != 0 ||
+            lightingStats.clusterOverflowCount != 0 ||
+            lightingStats.rejectedByShadowBudget != 0;
+        editorRuntimeInspector_.AddRecord(
+            editor::EditorRuntimeWatchRecord{
+                "RenderGraph",
+                "Multi-Light Clusters / Shadow Atlas",
+                constrained ? "Budget Fallback" : "Resident",
+                detail.str(),
+                constrained ? editor::EditorRuntimeWatchSeverity::Warning
+                            : editor::EditorRuntimeWatchSeverity::Info,
+                editorDocumentServiceFrame_});
+    }
+    {
+        const editor::EditorProductionGpuDrivenStats& visibilityStats =
+            editorProductionGpuDrivenPipeline_.Stats();
+        std::ostringstream detail;
+        detail << "instances=" << visibilityStats.residentInstances
+               << "/" << visibilityStats.submittedInstances
+               << " visible(readback)=" << visibilityStats.gpuVisibleInstances
+               << " batches=" << visibilityStats.batches
+               << " fallback=" << visibilityStats.cpuFallbackPackets
+               << " rejected(instance/batch)=" << visibilityStats.rejectedByInstanceBudget
+               << "/" << visibilityStats.rejectedByBatchBudget
+               << " dispatch/readback=" << visibilityStats.dispatches
+               << "/" << visibilityStats.readbacks
+               << " command=" << (visibilityStats.commandLayoutValidated ? "valid" : "pending")
+               << " occlusion=" << (visibilityStats.occlusionEnabled ? "Hi-Z" : "frustum");
+        const bool constrained = !visibilityStats.ready ||
+            visibilityStats.cpuFallbackPackets != 0 || visibilityStats.ringStalls != 0;
+        editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
+            "RenderGraph", "GPU Visibility / Indirect Draw",
+            constrained ? "CPU Fallback" : "GPU Driven", detail.str(),
+            constrained ? editor::EditorRuntimeWatchSeverity::Warning
+                        : editor::EditorRuntimeWatchSeverity::Info,
+            editorDocumentServiceFrame_});
+    }
     const editor::EditorCommandContext editorCommandContext =
         editor::BuildEditorCommandContext(
             editor::EditorCommandContextInput{
@@ -1421,7 +2415,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             &editorDirtyState_,
             &editorConfirmService_,
             &editorNotifications_,
-            &editorSaveApplyPolicy});
+            &editorSaveApplyPolicy,
+            &editorDocumentManager_,
+            &editorDocumentSaveService_});
     editor::EditorContext editorContext{
         &editorSelection_,
         &editorTransactions,
@@ -1434,10 +2430,15 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &editorPropertyEditService_,
         &editorValidationReport,
         &editorDirtyState_,
-        &editorDocumentLifecycle_,
-        &editorLayout_,
+            &editorDocumentLifecycle_,
+            &editorDocumentManager_,
+            &editorDocumentSaveService_,
+            &editorWorldModel_,
+            &editorWorldMutationExecution_,
+            &editorLayout_,
         &editorPanelLayout_,
         &editorViewportInteraction_,
+        &editorViewportCoordinates_,
         &editorViewportSelectionBridge_,
         &editorTransformGizmo_,
         &editorNotifications_,
@@ -1452,9 +2453,90 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &editorCommandInputRouter_,
         &editorCommandPalette_,
         showDeveloperTools_};
+    editorContext.viewportOverlay = &editorViewportOverlay_;
+    editorContext.layoutPersistence = &editorLayoutPersistence_;
+    editorContext.worldMutations = &editorWorldMutationService_;
+    editorContext.sceneWorldProvider = &editorSceneWorldProvider_;
+    editorContext.assetWorkspaceStatus = &editorAssetWorkspaceStatus_;
+    editorContext.sequencer = &editorSequencer_;
+    editorContext.prefabs = &editorPrefabs_;
+    editorContext.materialGraphs = &editorMaterialGraphs_;
+    editorContext.vfxGraphs = &editorVfxGraphs_;
+    editorContext.animationStateMachines = &editorAnimationStateMachines_;
+    editorContext.gameplayVisualScripts = &editorGameplayVisualScripts_;
+    editorContext.interactiveTools = &editorInteractiveTools_;
+    editorContext.interactiveExecution = &editorInteractiveExecution_;
+    editorContext.onWorldMutated = [&](const editor::EditorWorldMutationResult& result) {
+        if (result.document.type == editor::EditorDocumentTypes::Course) {
+            ++runtimeState.terrain.courseObjectEditRevision;
+        }
+        editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+        editorDirtyState_.MarkDirty(
+            result.document.type == editor::EditorDocumentTypes::Course
+                ? editor::EditorDirtyDomain::CourseAuthoring
+                : editor::EditorDirtyDomain::Unknown,
+            "world:" + result.document.assetGuid,
+            result.document.type + " World",
+            result.message,
+            editorDirtyState_.Revision() + 1);
+        if (editor::EditorDocumentRecord* document = editorDocumentManager_.Find(result.document)) {
+            editorDocumentManager_.MarkDirty(document->id, result.message);
+        }
+    };
+
+    editor::EditorInteractiveToolEnvironment interactiveEnvironment{};
+    interactiveEnvironment.selection = &editorSelection_;
+    interactiveEnvironment.viewport = &editorViewportInteraction_;
+    interactiveEnvironment.coordinates = &editorViewportCoordinates_;
+    interactiveEnvironment.execution = &editorInteractiveExecution_;
+    interactiveEnvironment.selectionRevision = editorSelection_.Revision();
+    interactiveEnvironment.documentRevision = editorDocumentManager_.Revision();
+    if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active()) {
+        interactiveEnvironment.activeDocumentKey = activeDocument->id.Key();
+    }
+    interactiveEnvironment.playSessionActive = editorPlaySession_.IsActive();
+    interactiveEnvironment.canMutateAuthoring = editorCommandContext.canMutateAuthoring;
+    interactiveEnvironment.viewportAvailable = editorViewportInteraction_.ViewportAvailable();
+    editor::EditorInteractiveToolFrameInput interactiveInput{};
+    interactiveInput.mouseX = ImGui::GetIO().MousePos.x;
+    interactiveInput.mouseY = ImGui::GetIO().MousePos.y;
+    interactiveInput.viewportPrimaryPressed =
+        editorViewportInteraction_.CanUseViewportInput() &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    interactiveInput.viewportPrimaryDown =
+        editorViewportInteraction_.CanUseViewportInput() &&
+        ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    interactiveInput.viewportPrimaryReleased =
+        editorViewportInteraction_.MouseInsideViewport() &&
+        ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+    if (!ImGui::GetIO().WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) editorInteractiveTools_.RequestCancel();
+        if (ImGui::IsKeyPressed(ImGuiKey_Enter)) editorInteractiveTools_.RequestAccept();
+        if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_1)) {
+            editorInteractiveTools_.ActivateMode("editor.mode.select");
+        }
+        if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_2)) {
+            editorInteractiveTools_.ActivateMode("editor.mode.inspect");
+        }
+        if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_3)) {
+            editorInteractiveTools_.ActivateMode("editor.mode.place");
+        }
+        if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_4)) {
+            editorInteractiveTools_.ActivateMode("editor.mode.terrain");
+        }
+        if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_5)) {
+            editorInteractiveTools_.ActivateMode("editor.mode.modeling");
+        }
+    }
+    editorInteractiveTools_.Tick(
+        interactiveEnvironment, interactiveInput, editorTransactions);
     AppRuntimeState* runtimeStateForClose = &runtimeState;
     auto closeCourseDocument = [this, runtimeStateForClose]() {
         editorCourseDocumentOpen_ = false;
+        if (editor::EditorDocumentRecord* document =
+                editorDocumentManager_.FindByPath(editorCourseDocumentPath_)) {
+            editorDocumentManager_.Close(document->id, true, nullptr);
+        }
         if (runtimeStateForClose != nullptr) {
             runtimeStateForClose->terrain.selectedCourseTerrainPlacement = -1;
             runtimeStateForClose->terrain.selectedCourseRockCluster = -1;
@@ -1469,6 +2551,10 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     };
     auto reopenCourseDocument = [this]() {
         editorCourseDocumentOpen_ = true;
+        if (editor::EditorDocumentRecord* document =
+                editorDocumentManager_.FindByPath(editorCourseDocumentPath_)) {
+            editorDocumentManager_.Reopen(document->id, nullptr);
+        }
         editorSelection_.Clear();
     };
     editor::RunAppEditorCommandToolPipeline(
@@ -1506,10 +2592,80 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         context.renderPassDebugInfo
     };
     editorPanelRegistry_.Clear();
+    if (editorLayoutPersistence_.ActivePanel(
+            editor::EditorPanelHostArea::LeftSidebar).empty()) {
+        editorLayoutPersistence_.SetActivePanel(
+            editor::EditorPanelHostArea::LeftSidebar,
+            "editor.worldOutliner");
+    }
+    const std::string activeRightInspector = editorLayoutPersistence_.ActivePanel(
+        editor::EditorPanelHostArea::RightInspector);
+    if (activeRightInspector.empty()) {
+        editorLayoutPersistence_.SetActivePanel(
+            editor::EditorPanelHostArea::RightInspector,
+            "editor.details");
+    } else if (activeRightInspector == "vfx.inspector") {
+        editorLayoutPersistence_.SetActivePanelFromUser(
+            editor::EditorPanelHostArea::RightInspector,
+            "editor.details");
+    } else if (activeRightInspector == "editor.performance") {
+        editorLayoutPersistence_.SetActivePanelFromUser(
+            editor::EditorPanelHostArea::RightInspector,
+            "editor.details");
+    }
+    if (editorLayoutPersistence_.ActivePanel(
+            editor::EditorPanelHostArea::BottomDock).empty()) {
+        editorLayoutPersistence_.SetActivePanel(
+            editor::EditorPanelHostArea::BottomDock,
+            "editor.diagnostics");
+    }
     const auto panelVisible = [this](const char* panelId, bool fallback = true) {
         return editorLayoutPersistence_.IsPanelVisible(panelId, fallback);
     };
-    const auto registerPanel = [this](editor::EditorPanelDescriptor descriptor) {
+    const auto registerPanel =
+        [this, &editorValidationReport](editor::EditorPanelDescriptor descriptor) {
+        if (descriptor.id == "editor.performance") {
+            descriptor.area = editor::EditorPanelHostArea::BottomDock;
+        }
+        if (descriptor.area == editor::EditorPanelHostArea::BottomDock) {
+            if (descriptor.id == "vfx.runtimeStatus" ||
+                descriptor.id == "vfx.runtimeQueues" ||
+                descriptor.id == "render.graph" ||
+                descriptor.id == "editor.performance") {
+                descriptor.bottomDockGroup = editor::EditorBottomDockGroup::Profiling;
+            } else if (descriptor.id == "course.timeline" ||
+                       descriptor.id == "editor.transactions" ||
+                       descriptor.id == "material.graph") {
+                descriptor.bottomDockGroup = editor::EditorBottomDockGroup::Authoring;
+            } else if (descriptor.id == "editor.featureGuard" ||
+                       descriptor.id == "editor.properties" ||
+                       descriptor.id == "gameplay.railLockOn") {
+                descriptor.bottomDockGroup = editor::EditorBottomDockGroup::Developer;
+            } else {
+                descriptor.bottomDockGroup = editor::EditorBottomDockGroup::Output;
+            }
+        }
+        if (descriptor.id == "editor.diagnostics") {
+            descriptor.badge = [&editorValidationReport]() {
+                return editor::EditorPanelBadge{
+                    editorValidationReport.warningCount,
+                    editorValidationReport.errorCount};
+            };
+        } else if (descriptor.id == "editor.notifications") {
+            descriptor.badge = [this]() {
+                editor::EditorPanelBadge badge{};
+                for (const editor::EditorNotification& notification :
+                     editorNotifications_.Notifications()) {
+                    if (notification.severity == editor::EditorNotificationSeverity::Error) {
+                        ++badge.errorCount;
+                    } else if (notification.severity ==
+                               editor::EditorNotificationSeverity::Warning) {
+                        ++badge.warningCount;
+                    }
+                }
+                return badge;
+            };
+        }
         return editorToolRegistry_.RegisterPanel(
                 editor::EditorPanelRegistrationDescriptor{
                     {},
@@ -1602,7 +2758,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         static_cast<float>(editorViewportTarget.renderWidth),
                         static_cast<float>(editorViewportTarget.renderHeight),
                         true,
-                        context.onDrawEditorViewportOverlay});
+                        context.onBuildEditorViewportOverlay});
             }});
 
     registerPanel(
@@ -1617,49 +2773,12 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             }});
     registerPanel(
         editor::EditorPanelDescriptor{
-            "vfx.inspector",
-            "VFX Inspector",
-            "VFX",
-            editor::EditorPanelHostArea::RightInspector,
-            panelVisible("vfx.inspector"),
-            [&]() {
-                if (ImGui::Button("Viewport Focus")) {
-                    viewportFocusMode_ = true;
-                }
-                ImGui::Separator();
-
-                if (ImGui::CollapsingHeader("Runtime Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    DrawSkinningTimingPanel(runtimeState);
-                    DrawVfxRuntimeControlsPanel(
-                        VfxRuntimeControlsPanelInput{
-                            &runtimeState,
-                            &effectRuntime,
-                            &trailMeshStreamStartupTelemetryFrames_});
-                }
-
-                if (ImGui::CollapsingHeader("Effect Instances", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    DrawEffectInstancePanel(
-                        EffectInstancePanelInput{
-                            &effectRuntime,
-                            &selectedEffectInstanceId_,
-                            context.loadedEffectAssets,
-                            context.effectAuthoringRegistry});
-                }
-
-                if (ImGui::CollapsingHeader("Scene Controls")) {
-                    DrawSceneLightingControlsPanel(runtimeState);
-                    ImGui::Separator();
-                    DrawMaterialSettingsControlsPanel(runtimeState, context.onAddParticle);
-                }
-
-                if (ImGui::CollapsingHeader("Debug Views")) {
-                    DrawDebugViewsPanel(runtimeState);
-                }
-
-                if (ImGui::CollapsingHeader("PostProcess")) {
-                    DrawPostProcessPanel(postProcessStack);
-                }
-            }});
+            "editor.toolPalette",
+            "Tool Palette",
+            "Editor",
+            editor::EditorPanelHostArea::LeftSidebar,
+            panelVisible("editor.toolPalette"),
+            [&]() { editor::DrawEditorModePalettePanel(editorContext); }});
     registerPanel(
         editor::EditorPanelDescriptor{
             "editor.details",
@@ -1683,7 +2802,93 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         &editorAssetSelection_,
                         &editorValidationReport,
                         &editorDetailsSectionProviders_,
-                        editorCommandContext.canMutateAuthoring});
+                        &editorDetailsViewState_,
+                        &editorPrefabs_,
+                        &editorPrefabs_,
+                        &editorWorldModel_,
+                        editorCommandContext.canMutateAuthoring,
+                        &editorWorldMutationService_,
+                        &editorSceneWorldProvider_,
+                        editorContext.onWorldMutated});
+            }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "editor.toolProperties",
+            "Tool Properties",
+            "Editor",
+            editor::EditorPanelHostArea::RightInspector,
+            panelVisible("editor.toolProperties"),
+            [&]() { editor::DrawEditorToolPropertiesPanel(editorContext); }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "vfx.details",
+            "VFX Details",
+            "VFX",
+            editor::EditorPanelHostArea::RightInspector,
+            panelVisible("vfx.details"),
+            [&]() {
+                if (ImGui::Button("Viewport Focus")) {
+                    viewportFocusMode_ = true;
+                }
+                ImGui::Separator();
+                DrawEffectInstancePanel(
+                    EffectInstancePanelInput{
+                        &effectRuntime,
+                        &selectedEffectInstanceId_,
+                        context.loadedEffectAssets,
+                        context.effectAuthoringRegistry});
+                ImGui::Separator();
+                DrawMaterialSettingsControlsPanel(runtimeState, context.onAddParticle);
+            }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "vfx.runtimeInspector",
+            "VFX Runtime",
+            "VFX",
+            editor::EditorPanelHostArea::RightInspector,
+            panelVisible("vfx.runtimeInspector"),
+            [&]() {
+                DrawVfxRuntimeControlsPanel(
+                    VfxRuntimeControlsPanelInput{
+                        &runtimeState,
+                        &effectRuntime,
+                        &trailMeshStreamStartupTelemetryFrames_});
+            }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "scene.lighting",
+            "Scene Lighting",
+            "Scene",
+            editor::EditorPanelHostArea::RightInspector,
+            panelVisible("scene.lighting"),
+            [&]() { DrawSceneLightingControlsPanel(runtimeState); }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "postprocess.inspector",
+            "Post Process",
+            "Render",
+            editor::EditorPanelHostArea::RightInspector,
+            panelVisible("postprocess.inspector"),
+            [&]() { DrawPostProcessPanel(postProcessStack); }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "render.debugViews",
+            "Render Debug Views",
+            "Render",
+            editor::EditorPanelHostArea::RightInspector,
+            panelVisible("render.debugViews"),
+            [&]() { DrawDebugViewsPanel(runtimeState); }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "editor.performance",
+            "Performance",
+            "Editor",
+            editor::EditorPanelHostArea::RightInspector,
+            panelVisible("editor.performance"),
+            [&]() {
+                DrawSkinningTimingPanel(runtimeState);
+                ImGui::Separator();
+                ImGui::TextDisabled("GPU/CPU timing and VFX runtime telemetry are read-only in this panel.");
             }});
     registerPanel(
         editor::EditorPanelDescriptor{
@@ -1694,6 +2899,87 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             panelVisible("editor.runtimeWatch"),
             [&]() {
                 editor::DrawEditorRuntimeInspectorPanel(editorRuntimeInspector_);
+            }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "editor.runtimeChanges",
+            "Runtime Changes",
+            "Editor",
+            editor::EditorPanelHostArea::RightInspector,
+            panelVisible("editor.runtimeChanges"),
+            [&]() {
+                editor::DrawEditorRuntimeChangeSetPanel(
+                    editorPlaySessionSnapshot_,
+                    editorPlaySession_,
+                    context.course,
+                    &runtimeState,
+                    &effectRuntime,
+                    &postProcessStack,
+                    editorCommandRegistry);
+            }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "editor.worldOutliner",
+            "World Outliner",
+            "Editor",
+            editor::EditorPanelHostArea::LeftSidebar,
+            panelVisible("editor.worldOutliner"),
+            [&]() {
+                editor::DrawEditorWorldOutlinerPanel(
+                    editorWorldOutlinerState_,
+                    editor::EditorWorldOutlinerPanelContext{
+                        &editorWorldModel_,
+                        &editorSelection_,
+                        &editorWorldMutationService_,
+                        &editorTransactions,
+                        &editorNotifications_,
+                        editorCommandContext.canMutateAuthoring,
+                        [&](const editor::EditorWorldMutationResult& result) {
+                            if (result.document.type == editor::EditorDocumentTypes::Course) {
+                                ++runtimeState.terrain.courseObjectEditRevision;
+                            }
+                            editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+                            editorDirtyState_.MarkDirty(
+                                result.document.type == editor::EditorDocumentTypes::Course
+                                    ? editor::EditorDirtyDomain::CourseAuthoring
+                                    : editor::EditorDirtyDomain::Unknown,
+                                "world:" + result.document.assetGuid,
+                                result.document.type + " World",
+                                result.message,
+                                editorDirtyState_.Revision() + 1);
+                            if (editor::EditorDocumentRecord* document =
+                                    editorDocumentManager_.Find(result.document)) {
+                                editorDocumentManager_.MarkDirty(document->id, result.message);
+                            }
+                        },
+                        [&](const editor::EditorObjectHandle& handle) {
+                            if (handle.domain == editor::EditorDomainId::CourseTerrainPlacement) {
+                                runtimeState.terrain.selectedCourseTerrainPlacement =
+                                    static_cast<int>(handle.localIndex);
+                                runtimeState.terrain.selectedCourseRockCluster = -1;
+                                runtimeState.terrain.courseObjectSelectionType = 1;
+                            } else if (handle.domain == editor::EditorDomainId::CourseRockCluster) {
+                                runtimeState.terrain.selectedCourseTerrainPlacement = -1;
+                                runtimeState.terrain.selectedCourseRockCluster =
+                                    static_cast<int>(handle.localIndex);
+                                runtimeState.terrain.courseObjectSelectionType = 2;
+                            } else if (handle.domain == editor::EditorDomainId::VfxEffectInstance) {
+                                if (const editor::EditorWorldObjectRecord* record =
+                                        editorWorldModel_.Resolve(handle)) {
+                                    constexpr std::string_view prefix = "instance-";
+                                    if (record->objectGuid.rfind(prefix, 0) == 0) {
+                                        selectedEffectInstanceId_ = static_cast<uint32_t>(
+                                            std::stoul(record->objectGuid.substr(prefix.size())));
+                                    }
+                                }
+                            } else {
+                                runtimeState.terrain.selectedCourseTerrainPlacement = -1;
+                                runtimeState.terrain.selectedCourseRockCluster = -1;
+                                runtimeState.terrain.courseObjectSelectionType = 0;
+                                selectedEffectInstanceId_ = 0;
+                                editorViewportSelectionBridge_.SuppressNextRequest();
+                            }
+                        }});
             }});
     registerPanel(
         editor::EditorPanelDescriptor{
@@ -1730,6 +3016,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         &editorAssetThumbnails_,
                         &editorTransactions,
                         &editorNotifications_,
+                        &editorContentBrowserState_,
+                        &editorAssetWorkspaceStatus_,
                         hwnd_,
                         &pendingExternalAssetImportPaths_});
             }});
@@ -1832,7 +3120,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         &editorValidationReport,
                         &editorSelection_,
                         &editorAssetRegistry_,
-                        &editorAssetSelection_});
+                        &editorAssetSelection_,
+                        &editorWorldModel_});
             }});
     registerPanel(
         editor::EditorPanelDescriptor{
@@ -1853,6 +3142,76 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             panelVisible("editor.properties"),
             [&]() {
                 editor::DrawEditorPropertyRegistryPanel(editorPropertyRegistry_, &editorTransactions);
+            }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "material.graph",
+            "Material Graph",
+            "Material",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("material.graph"),
+            [&]() {
+                editor::DrawEditorMaterialGraphPanel(
+                    editor::EditorMaterialGraphPanelContext{
+                        &editorMaterialGraphs_,
+                        &editorDocumentManager_,
+                        &editorAssetSelection_,
+                        &editorNotifications_,
+                        editorCommandContext.canMutateAuthoring});
+            }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "vfx.graph",
+            "Advanced VFX Graph",
+            "VFX",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("vfx.graph"),
+            [&]() {
+                editor::DrawEditorVfxGraphPanel(
+                    editor::EditorVfxGraphPanelContext{
+                        &editorVfxGraphs_,
+                        &editorDocumentManager_,
+                        &editorAssetSelection_,
+                        &editorNotifications_,
+                        editorCommandContext.canMutateAuthoring});
+            }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "animation.stateMachine",
+            "Animation State Machine",
+            "Animation",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("animation.stateMachine"),
+            [&]() {
+                editor::DrawEditorAnimationStateMachinePanel(
+                    editor::EditorAnimationStateMachinePanelContext{
+                        &editorAnimationStateMachines_, &editorDocumentManager_,
+                        &editorAssetSelection_, &editorNotifications_,
+                        editorCommandContext.canMutateAuthoring});
+            }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "gameplay.visualScript",
+            "Gameplay Visual Script",
+            "Gameplay",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("gameplay.visualScript"),
+            [&]() {
+                editor::DrawEditorGameplayVisualScriptPanel(
+                    editor::EditorGameplayVisualScriptPanelContext{
+                        &editorGameplayVisualScripts_, &editorDocumentManager_,
+                        &editorAssetSelection_, &editorNotifications_,
+                        editorCommandContext.canMutateAuthoring});
+            }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "editor.fontSettings",
+            "Editor Fonts",
+            "Editor",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("editor.fontSettings"),
+            [&]() {
+                editor::DrawEditorFontSettingsPanel(editorFonts_, &editorNotifications_);
             }});
     registerPanel(
         editor::EditorPanelDescriptor{
@@ -1938,7 +3297,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         &editorDirtyState_,
                         &editorDocumentLifecycle_,
                         &editorConfirmService_,
-                        editorCommandContext.canMutateAuthoring});
+                        editorCommandContext.canMutateAuthoring,
+                        &editorSequencer_});
             }});
 
     imguiTiming.panelRegistryMs =
@@ -1977,6 +3337,18 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorPanelLayout_.DiagnosticsRect(),
         "Editor Bottom Dock",
         &editorLayoutPersistence_);
+    interactiveEnvironment.selectionRevision = editorSelection_.Revision();
+    interactiveEnvironment.documentRevision = editorDocumentManager_.Revision();
+    interactiveEnvironment.activeDocumentKey.clear();
+    if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active()) {
+        interactiveEnvironment.activeDocumentKey = activeDocument->id.Key();
+    }
+    interactiveEnvironment.playSessionActive = editorPlaySession_.IsActive();
+    interactiveEnvironment.canMutateAuthoring =
+        !interactiveEnvironment.playSessionActive &&
+        editorViewportInteraction_.CanMutateAuthoring();
+    interactiveEnvironment.viewportAvailable = editorViewportInteraction_.ViewportAvailable();
+    editorInteractiveTools_.Reconcile(interactiveEnvironment, editorTransactions);
     imguiTiming.panelDrawMs = EditorUiElapsedMs(panelDrawStart, EditorUiTimingClock::now());
 
     const auto layoutPersistenceStart = EditorUiTimingClock::now();
@@ -1993,6 +3365,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorLayoutPersistence_.CaptureLayout(editorPanelLayoutConfig);
     }
     editorLayoutPersistence_.SaveIfDirty();
+    editorContentBrowserState_.SaveIfDirty();
+    editorDetailsViewState_.SaveIfDirty();
     imguiTiming.layoutPersistenceMs =
         EditorUiElapsedMs(layoutPersistenceStart, EditorUiTimingClock::now());
     imguiTiming.buildUiMs = EditorUiElapsedMs(buildUiStart, EditorUiTimingClock::now());
@@ -2022,9 +3396,24 @@ void AppImGuiLayer::Shutdown() {
         return;
     }
 
+    editorInteractiveTools_.Shutdown();
+    editorTerrainEditExecution_.Clear();
+    editorGeometryExecution_.Clear();
+    editorGeometryWorkspace_.Clear();
+    editorMeshBakeExecution_.Clear();
+    editorMeshBakePipeline_.Clear();
+    editorProductionMeshRuntimeCache_.Clear();
+    editorProductionGpuDrivenPipeline_.Shutdown();
+    editorProductionLightingPipeline_.Shutdown();
+    editorProductionShaderPipeline_.Shutdown();
+    editorProductionTexturePipeline_.Shutdown();
+    editorProductionMaterialPipeline_.Shutdown();
+    editorProductionScenePipeline_.Shutdown();
+    editorInteractiveExecution_.Clear();
     editorAssetThumbnails_.Clear();
     ImGui_ImplDX12_Shutdown();
     ImGui_ImplWin32_Shutdown();
+    editorFonts_.OnContextDestroyed();
     ImGui::DestroyContext();
     initialized_ = false;
 }
@@ -2051,18 +3440,56 @@ const editor::EditorViewportRenderTargetState& AppImGuiLayer::EditorViewportRend
     return editorViewportRenderTarget_.State();
 }
 
+const editor::EditorViewportOverlayService& AppImGuiLayer::EditorViewportOverlay() const {
+    return editorViewportOverlay_;
+}
+
+const editor::EditorProductionScenePipeline& AppImGuiLayer::ProductionScenePipeline() const {
+    return editorProductionScenePipeline_;
+}
+
+const editor::EditorProductionMaterialPipeline& AppImGuiLayer::ProductionMaterialPipeline() const {
+    return editorProductionMaterialPipeline_;
+}
+
+const editor::EditorProductionTexturePipeline& AppImGuiLayer::ProductionTexturePipeline() const {
+    return editorProductionTexturePipeline_;
+}
+
+const editor::EditorProductionShaderPipeline& AppImGuiLayer::ProductionShaderPipeline() const {
+    return editorProductionShaderPipeline_;
+}
+
+editor::EditorProductionLightingPipeline& AppImGuiLayer::ProductionLightingPipeline() {
+    return editorProductionLightingPipeline_;
+}
+
+const editor::EditorProductionLightingPipeline& AppImGuiLayer::ProductionLightingPipeline() const {
+    return editorProductionLightingPipeline_;
+}
+
+editor::EditorProductionGpuDrivenPipeline& AppImGuiLayer::ProductionGpuDrivenPipeline() {
+    return editorProductionGpuDrivenPipeline_;
+}
+
+const editor::EditorProductionGpuDrivenPipeline& AppImGuiLayer::ProductionGpuDrivenPipeline() const {
+    return editorProductionGpuDrivenPipeline_;
+}
+
 #else
 
 bool AppImGuiLayer::Initialize(HWND hwnd,
     ID3D12Device* device,
     int bufferCount,
     DXGI_FORMAT rtvFormat,
-    ID3D12DescriptorHeap* srvHeap) {
+    ID3D12DescriptorHeap* srvHeap,
+    AppPipelines* appPipelines) {
     (void)hwnd;
     (void)device;
     (void)bufferCount;
     (void)rtvFormat;
     (void)srvHeap;
+    (void)appPipelines;
     initialized_ = false;
     return true;
 }
@@ -2106,6 +3533,42 @@ void AppImGuiLayer::CompleteEditorRuntimeFrameAdvance(bool advanced) {
 
 const editor::EditorViewportRenderTargetState& AppImGuiLayer::EditorViewportRenderTargetState() const {
     return editorViewportRenderTarget_.State();
+}
+
+const editor::EditorViewportOverlayService& AppImGuiLayer::EditorViewportOverlay() const {
+    return editorViewportOverlay_;
+}
+
+const editor::EditorProductionScenePipeline& AppImGuiLayer::ProductionScenePipeline() const {
+    return editorProductionScenePipeline_;
+}
+
+const editor::EditorProductionMaterialPipeline& AppImGuiLayer::ProductionMaterialPipeline() const {
+    return editorProductionMaterialPipeline_;
+}
+
+const editor::EditorProductionTexturePipeline& AppImGuiLayer::ProductionTexturePipeline() const {
+    return editorProductionTexturePipeline_;
+}
+
+const editor::EditorProductionShaderPipeline& AppImGuiLayer::ProductionShaderPipeline() const {
+    return editorProductionShaderPipeline_;
+}
+
+editor::EditorProductionLightingPipeline& AppImGuiLayer::ProductionLightingPipeline() {
+    return editorProductionLightingPipeline_;
+}
+
+const editor::EditorProductionLightingPipeline& AppImGuiLayer::ProductionLightingPipeline() const {
+    return editorProductionLightingPipeline_;
+}
+
+editor::EditorProductionGpuDrivenPipeline& AppImGuiLayer::ProductionGpuDrivenPipeline() {
+    return editorProductionGpuDrivenPipeline_;
+}
+
+const editor::EditorProductionGpuDrivenPipeline& AppImGuiLayer::ProductionGpuDrivenPipeline() const {
+    return editorProductionGpuDrivenPipeline_;
 }
 
 void AppImGuiLayer::Shutdown() {

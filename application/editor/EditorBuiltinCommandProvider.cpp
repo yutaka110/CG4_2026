@@ -3,9 +3,12 @@
 #include "EditorCommandContext.h"
 #include "EditorCommandPalette.h"
 #include "EditorContext.h"
+#include "EditorLayoutPersistenceService.h"
 #include "EditorPlaySessionState.h"
 #include "EditorSaveApplyPolicy.h"
 #include "EditorToolRegistration.h"
+#include "documents/EditorDocumentManager.h"
+#include "documents/EditorDocumentSaveService.h"
 
 namespace editor {
 
@@ -48,6 +51,40 @@ void EditorBuiltinCommandProvider::RegisterCommands(EditorContext& context) cons
                 }
                 commandPalette->Open();
                 return EditorCommandResult{true, "Opened command palette."};
+            }});
+
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
+            "editor.saveAll",
+            "Save All",
+            "File",
+            "Ctrl+Shift+S",
+            [manager = context.documentManager,
+             saveService = context.documentSaveService,
+             &commandContext]() {
+                return commandContext.canMutateAuthoring && manager != nullptr &&
+                    saveService != nullptr && manager->DirtyCount() > 0;
+            },
+            [manager = context.documentManager,
+             saveService = context.documentSaveService,
+             &commandContext]() {
+                if (!commandContext.canMutateAuthoring) {
+                    return std::string("Authoring is locked during Play/Sim.");
+                }
+                if (manager == nullptr || saveService == nullptr) {
+                    return std::string("Document Save All service is unavailable.");
+                }
+                return manager->DirtyCount() > 0
+                    ? std::string()
+                    : std::string("No dirty documents require saving.");
+            },
+            [saveService = context.documentSaveService]() {
+                if (saveService == nullptr) {
+                    return EditorCommandResult{false, "Document Save All service is unavailable."};
+                }
+                const EditorDocumentSaveResult result = saveService->SaveAll();
+                return EditorCommandResult{result.succeeded, result.message};
             }});
 
     RegisterEditorToolCommand(
@@ -372,6 +409,155 @@ void EditorBuiltinCommandProvider::RegisterCommands(EditorContext& context) cons
             },
             [input]() {
                 return input.redo ? input.redo() : EditorCommandResult{false, "Redo callback is unavailable."};
+            }});
+
+    const auto transformEnabled = [&commandContext]() {
+        return commandContext.developerToolsVisible && commandContext.canMutateAuthoring;
+    };
+    const auto transformDisabledReason = [&commandContext]() {
+        if (!commandContext.developerToolsVisible) {
+            return std::string("Developer tools are hidden.");
+        }
+        return commandContext.canMutateAuthoring
+            ? std::string()
+            : std::string("Authoring is locked during Play/Sim.");
+    };
+    const auto registerTransformMode =
+        [&](const char* id,
+            const char* label,
+            const char* shortcut,
+            EditorTransformGizmoMode mode) {
+            RegisterEditorToolCommand(
+                context,
+                EditorCommand{
+                    id,
+                    label,
+                    "Edit",
+                    shortcut,
+                    transformEnabled,
+                    transformDisabledReason,
+                    [input, mode]() {
+                        return input.setTransformMode
+                            ? input.setTransformMode(mode)
+                            : EditorCommandResult{false, "Transform mode service is unavailable."};
+                    }});
+        };
+    registerTransformMode(
+        "editor.transform.translate", "Translate", "W", EditorTransformGizmoMode::Translate);
+    registerTransformMode(
+        "editor.transform.rotate", "Rotate", "E", EditorTransformGizmoMode::Rotate);
+    registerTransformMode(
+        "editor.transform.scale", "Scale", "R", EditorTransformGizmoMode::Scale);
+
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
+            "editor.transform.toggleSpace",
+            "Toggle World/Local",
+            "Edit",
+            "",
+            transformEnabled,
+            transformDisabledReason,
+            [input]() {
+                return input.toggleTransformSpace
+                    ? input.toggleTransformSpace()
+                    : EditorCommandResult{false, "Transform space service is unavailable."};
+            }});
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
+            "editor.transform.toggleSnap",
+            "Toggle Transform Snap",
+            "Edit",
+            "",
+            transformEnabled,
+            transformDisabledReason,
+            [input]() {
+                return input.toggleTransformSnap
+                    ? input.toggleTransformSnap()
+                    : EditorCommandResult{false, "Transform snap service is unavailable."};
+            }});
+
+    EditorLayoutPersistenceService* layoutPersistence = context.layoutPersistence;
+    const auto registerWindowArea =
+        [&](const char* id,
+            const char* label,
+            EditorBottomDockGroup group,
+            bool developer) {
+            RegisterEditorToolCommand(
+                context,
+                EditorCommand{
+                    id,
+                    label,
+                    "Window",
+                    "",
+                    [layoutPersistence, &commandContext]() {
+                        return commandContext.developerToolsVisible && layoutPersistence != nullptr;
+                    },
+                    [layoutPersistence, &commandContext]() {
+                        if (!commandContext.developerToolsVisible) {
+                            return std::string("Developer tools are hidden.");
+                        }
+                        return layoutPersistence != nullptr
+                            ? std::string()
+                            : std::string("Editor layout persistence is unavailable.");
+                    },
+                    [layoutPersistence, group, developer]() {
+                        if (layoutPersistence == nullptr) {
+                            return EditorCommandResult{false, "Editor layout persistence is unavailable."};
+                        }
+                        if (developer) {
+                            layoutPersistence->SetBottomDockDeveloperPanelsVisible(true);
+                        }
+                        layoutPersistence->SetActiveBottomDockGroup(group);
+                        return EditorCommandResult{
+                            true, std::string("Opened Bottom Dock ") + ToString(group) + "."};
+                    }});
+        };
+    registerWindowArea(
+        "window.bottomDock.output", "Bottom Dock: Output", EditorBottomDockGroup::Output, false);
+    registerWindowArea(
+        "window.bottomDock.profiling", "Bottom Dock: Profiling", EditorBottomDockGroup::Profiling, false);
+    registerWindowArea(
+        "window.bottomDock.authoring", "Bottom Dock: Authoring", EditorBottomDockGroup::Authoring, false);
+    registerWindowArea(
+        "window.bottomDock.developer", "Bottom Dock: Developer", EditorBottomDockGroup::Developer, true);
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
+            "window.details",
+            "Focus Details",
+            "Window",
+            "",
+            [layoutPersistence, &commandContext]() {
+                return commandContext.developerToolsVisible && layoutPersistence != nullptr;
+            },
+            [layoutPersistence]() {
+                return layoutPersistence != nullptr
+                    ? std::string()
+                    : std::string("Editor layout persistence is unavailable.");
+            },
+            [layoutPersistence]() {
+                if (layoutPersistence == nullptr) {
+                    return EditorCommandResult{false, "Editor layout persistence is unavailable."};
+                }
+                layoutPersistence->SetPanelVisible("editor.details", true);
+                layoutPersistence->SetActivePanelFromUser(
+                    EditorPanelHostArea::RightInspector, "editor.details");
+                return EditorCommandResult{true, "Focused Details."};
+            }});
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
+            "editor.help.evolutionDesign",
+            "Editor Evolution Design",
+            "Help",
+            "",
+            []() { return true; },
+            []() { return std::string(); },
+            []() {
+                return EditorCommandResult{
+                    true, "Editor design: docs/EditorEvolutionDesign.md"};
             }});
 }
 

@@ -17,6 +17,8 @@ struct EditorPlaySessionRuntimeControlRequest {
     AppRuntimeState* runtimeState = nullptr;
     EditorNotificationCenter* notifications = nullptr;
     const char* source = "editor.playSession.runtimeControl";
+    EffectRuntime* effectRuntime = nullptr;
+    PostProcessStack* postProcessStack = nullptr;
 };
 
 struct EditorPlaySessionRuntimeControlResult {

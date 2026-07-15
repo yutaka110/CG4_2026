@@ -2,7 +2,11 @@
 
 #include "../../externals/imgui/imgui.h"
 
+#include <algorithm>
+#include <array>
+#include <cctype>
 #include <string>
+#include <vector>
 
 namespace editor {
 
@@ -21,6 +25,33 @@ ImVec4 OpaqueStyleColor(ImGuiCol color) {
     value.w = 1.0f;
     return value;
 }
+
+bool ContainsCaseInsensitive(std::string_view value, std::string_view search) {
+    if (search.empty()) return true;
+    const auto equals = [](char lhs, char rhs) {
+        return std::tolower(static_cast<unsigned char>(lhs)) ==
+            std::tolower(static_cast<unsigned char>(rhs));
+    };
+    return std::search(
+               value.begin(), value.end(), search.begin(), search.end(), equals) !=
+        value.end();
+}
+
+bool PanelMatchesSearch(
+    const EditorPanelDescriptor& panel,
+    std::string_view search) {
+    return ContainsCaseInsensitive(panel.label, search) ||
+        ContainsCaseInsensitive(panel.id, search) ||
+        ContainsCaseInsensitive(panel.category, search);
+}
+
+constexpr std::array<EditorBottomDockGroup, 4> kBottomDockGroups{
+    EditorBottomDockGroup::Output,
+    EditorBottomDockGroup::Profiling,
+    EditorBottomDockGroup::Authoring,
+    EditorBottomDockGroup::Developer};
+
+constexpr const char* kBottomDockPanelPayload = "EDITOR_BOTTOM_DOCK_PANEL";
 
 } // namespace
 
@@ -109,6 +140,12 @@ void EditorPanelHost::DrawArea(
         return;
     }
 
+    if (area == EditorPanelHostArea::BottomDock && persistence != nullptr) {
+        DrawBottomDock(registry, *persistence, windowId);
+        ImGui::End();
+        return;
+    }
+
     const std::string tabBarId =
         std::string(windowId) + "." + ToString(area) + ".tabs";
     if (ImGui::BeginTabBar(tabBarId.c_str())) {
@@ -117,6 +154,262 @@ void EditorPanelHost::DrawArea(
     }
 
     ImGui::End();
+}
+
+void EditorPanelHost::DrawBottomDock(
+    const EditorPanelRegistry& registry,
+    EditorLayoutPersistenceService& persistence,
+    const char* windowId) {
+    EditorBottomDockGroup activeGroup = persistence.ActiveBottomDockGroup();
+    if (!persistence.BottomDockDeveloperPanelsVisible() &&
+        activeGroup == EditorBottomDockGroup::Developer) {
+        activeGroup = EditorBottomDockGroup::Output;
+        persistence.SetActiveBottomDockGroup(activeGroup);
+    }
+
+    ImGui::PushID(windowId);
+    const bool compactGroups = ImGui::GetContentRegionAvail().x < 520.0f;
+    if (compactGroups) {
+        const std::string areaLabel = std::string("Area: ") + ToString(activeGroup);
+        if (ImGui::Button(areaLabel.c_str())) ImGui::OpenPopup("BottomDockAreas");
+        if (ImGui::BeginPopup("BottomDockAreas")) {
+            for (const EditorBottomDockGroup group : kBottomDockGroups) {
+                if (group == EditorBottomDockGroup::Developer &&
+                    !persistence.BottomDockDeveloperPanelsVisible()) {
+                    continue;
+                }
+                if (ImGui::MenuItem(ToString(group), nullptr, group == activeGroup)) {
+                    persistence.SetActiveBottomDockGroup(group);
+                    activeGroup = group;
+                }
+            }
+            ImGui::EndPopup();
+        }
+    } else {
+        bool firstGroup = true;
+        for (const EditorBottomDockGroup group : kBottomDockGroups) {
+            if (group == EditorBottomDockGroup::Developer &&
+                !persistence.BottomDockDeveloperPanelsVisible()) {
+                continue;
+            }
+            if (!firstGroup) ImGui::SameLine();
+            firstGroup = false;
+            const bool selected = group == activeGroup;
+            if (selected) {
+                ImGui::PushStyleColor(
+                    ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_TabActive));
+            }
+            if (ImGui::Button(ToString(group))) {
+                persistence.SetActiveBottomDockGroup(group);
+                activeGroup = group;
+            }
+            if (selected) ImGui::PopStyleColor();
+
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* payload =
+                        ImGui::AcceptDragDropPayload(kBottomDockPanelPayload)) {
+                    const char* panelId = static_cast<const char*>(payload->Data);
+                    if (panelId != nullptr && payload->DataSize > 1) {
+                        persistence.SetBottomDockGroup(panelId, group);
+                        persistence.SetActiveBottomDockGroup(group);
+                        persistence.SetActivePanelFromUser(
+                            EditorPanelHostArea::BottomDock, panelId);
+                        activeGroup = group;
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+        }
+    }
+
+    ImGui::SameLine();
+    bool developerPanels = persistence.BottomDockDeveloperPanelsVisible();
+    if (ImGui::Checkbox("Developer", &developerPanels)) {
+        persistence.SetBottomDockDeveloperPanelsVisible(developerPanels);
+        activeGroup = persistence.ActiveBottomDockGroup();
+    }
+
+    const float searchWidth = (std::clamp)(
+        ImGui::GetContentRegionAvail().x - 125.0f, 100.0f, 220.0f);
+    ImGui::SetNextItemWidth(searchWidth);
+    std::array<char, 160> searchBuffer{};
+    const std::size_t searchLength = (std::min)(
+        persistence.BottomDockSearch().size(), searchBuffer.size() - 1);
+    std::copy_n(
+        persistence.BottomDockSearch().data(),
+        searchLength,
+        searchBuffer.data());
+    if (ImGui::InputTextWithHint(
+            "##BottomDockSearch",
+            "Search tabs...",
+            searchBuffer.data(),
+            searchBuffer.size())) {
+        persistence.SetBottomDockSearch(searchBuffer.data());
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Tabs")) ImGui::OpenPopup("BottomDockOverflow");
+    if (ImGui::BeginPopup("BottomDockOverflow")) {
+        for (const EditorBottomDockGroup group : kBottomDockGroups) {
+            if (group == EditorBottomDockGroup::Developer &&
+                !persistence.BottomDockDeveloperPanelsVisible()) {
+                continue;
+            }
+            if (!ImGui::BeginMenu(ToString(group))) continue;
+            for (const EditorPanelDescriptor& panel : registry.AllPanels()) {
+                if (panel.area != EditorPanelHostArea::BottomDock || !panel.visible ||
+                    persistence.BottomDockGroup(panel.id, panel.bottomDockGroup) != group ||
+                    !PanelMatchesSearch(panel, persistence.BottomDockSearch())) {
+                    continue;
+                }
+                if (ImGui::MenuItem(
+                        panel.label.c_str(),
+                        nullptr,
+                        persistence.ActivePanel(EditorPanelHostArea::BottomDock) == panel.id)) {
+                    persistence.SetActiveBottomDockGroup(group);
+                    persistence.SetActivePanelFromUser(EditorPanelHostArea::BottomDock, panel.id);
+                    activeGroup = group;
+                }
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndPopup();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Reopen")) ImGui::OpenPopup("BottomDockReopen");
+    if (ImGui::BeginPopup("BottomDockReopen")) {
+        bool anyClosed = false;
+        for (const EditorPanelDescriptor& panel : registry.AllPanels()) {
+            if (panel.area != EditorPanelHostArea::BottomDock || panel.visible) continue;
+            anyClosed = true;
+            const EditorBottomDockGroup group =
+                persistence.BottomDockGroup(panel.id, panel.bottomDockGroup);
+            const std::string label =
+                std::string(ToString(group)) + " / " + panel.label;
+            if (ImGui::MenuItem(label.c_str())) {
+                persistence.SetPanelVisible(panel.id, true);
+                persistence.SetActiveBottomDockGroup(group);
+                persistence.SetActivePanelFromUser(EditorPanelHostArea::BottomDock, panel.id);
+                activeGroup = group;
+            }
+        }
+        if (!anyClosed) ImGui::TextDisabled("No closed panels");
+        ImGui::EndPopup();
+    }
+
+    ImGui::Separator();
+
+    std::vector<const EditorPanelDescriptor*> panels;
+    for (const EditorPanelDescriptor& panel : registry.AllPanels()) {
+        if (panel.area != EditorPanelHostArea::BottomDock || !panel.visible ||
+            persistence.BottomDockGroup(panel.id, panel.bottomDockGroup) != activeGroup ||
+            !PanelMatchesSearch(panel, persistence.BottomDockSearch())) {
+            continue;
+        }
+        panels.push_back(&panel);
+    }
+    std::stable_sort(
+        panels.begin(), panels.end(),
+        [&persistence](const EditorPanelDescriptor* lhs, const EditorPanelDescriptor* rhs) {
+            return persistence.IsPanelPinned(lhs->id) && !persistence.IsPanelPinned(rhs->id);
+        });
+
+    if (panels.empty()) {
+        ImGui::TextDisabled(
+            persistence.BottomDockSearch().empty()
+                ? "No panels in this area. Use Reopen or drag a tab here."
+                : "No tabs match the current search.");
+        ImGui::PopID();
+        return;
+    }
+
+    const std::string activePanel = persistence.ActivePanel(EditorPanelHostArea::BottomDock);
+    bool activeAvailable = false;
+    for (const EditorPanelDescriptor* panel : panels) {
+        if (panel != nullptr && panel->id == activePanel) activeAvailable = true;
+    }
+    if (!activeAvailable && persistence.BottomDockSearch().empty()) {
+        persistence.SetActivePanelFromUser(EditorPanelHostArea::BottomDock, panels.front()->id);
+    }
+    const std::string selectedPanel =
+        activeAvailable ? activePanel : panels.front()->id;
+
+    const std::string tabBarId = std::string(windowId) + ".BottomDock.tabs";
+    if (ImGui::BeginTabBar(
+            tabBarId.c_str(),
+            ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_FittingPolicyScroll)) {
+        for (const EditorPanelDescriptor* panel : panels) {
+            if (panel == nullptr || !panel->draw) continue;
+            const bool pinned = persistence.IsPanelPinned(panel->id);
+            const EditorPanelBadge badge = panel->badge ? panel->badge() : EditorPanelBadge{};
+            std::string displayLabel = pinned ? "* " + panel->label : panel->label;
+            if (badge.errorCount > 0) {
+                displayLabel += " E:" + std::to_string(badge.errorCount);
+            }
+            if (badge.warningCount > 0) {
+                displayLabel += " W:" + std::to_string(badge.warningCount);
+            }
+            displayLabel += "###" + panel->id;
+
+            ImGuiTabItemFlags tabFlags = ImGuiTabItemFlags_None;
+            if (selectedPanel == panel->id) tabFlags |= ImGuiTabItemFlags_SetSelected;
+            bool open = true;
+            bool* openPointer = panel->closeable && !pinned ? &open : nullptr;
+            const bool drawContents =
+                ImGui::BeginTabItem(displayLabel.c_str(), openPointer, tabFlags);
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+                persistence.SetActivePanelFromUser(EditorPanelHostArea::BottomDock, panel->id);
+            }
+            if (ImGui::BeginDragDropSource()) {
+                ImGui::SetDragDropPayload(
+                    kBottomDockPanelPayload,
+                    panel->id.c_str(),
+                    panel->id.size() + 1);
+                ImGui::TextUnformatted(panel->label.c_str());
+                ImGui::EndDragDropSource();
+            }
+            if (ImGui::BeginPopupContextItem()) {
+                if (panel->pinnable && ImGui::MenuItem(pinned ? "Unpin" : "Pin")) {
+                    persistence.SetPanelPinned(panel->id, !pinned);
+                }
+                if (ImGui::BeginMenu("Move To")) {
+                    for (const EditorBottomDockGroup group : kBottomDockGroups) {
+                        if (group == EditorBottomDockGroup::Developer &&
+                            !persistence.BottomDockDeveloperPanelsVisible()) {
+                            continue;
+                        }
+                        if (ImGui::MenuItem(ToString(group), nullptr, group == activeGroup)) {
+                            persistence.SetBottomDockGroup(panel->id, group);
+                            persistence.SetActiveBottomDockGroup(group);
+                        }
+                    }
+                    ImGui::EndMenu();
+                }
+                if (panel->closeable && !pinned && ImGui::MenuItem("Close")) {
+                    persistence.SetPanelVisible(panel->id, false);
+                }
+                ImGui::EndPopup();
+            }
+            if (drawContents) {
+                const std::string childId = panel->id + ".scroll";
+                ImGui::PushStyleColor(ImGuiCol_ChildBg, OpaqueStyleColor(ImGuiCol_ChildBg));
+                if (ImGui::BeginChild(
+                        childId.c_str(),
+                        ImVec2(0.0f, 0.0f),
+                        false,
+                        ImGuiWindowFlags_HorizontalScrollbar)) {
+                    panel->draw();
+                }
+                ImGui::EndChild();
+                ImGui::PopStyleColor();
+                ImGui::EndTabItem();
+            }
+            if (!open) persistence.SetPanelVisible(panel->id, false);
+        }
+        ImGui::EndTabBar();
+    }
+    ImGui::PopID();
 }
 
 } // namespace editor

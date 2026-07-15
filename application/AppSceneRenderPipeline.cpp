@@ -1,4 +1,10 @@
 #include "AppSceneRenderPipeline.h"
+#include "editor/scene/EditorProductionScenePipeline.h"
+#include "editor/material/EditorProductionMaterialPipeline.h"
+#include "editor/texture/EditorProductionTexturePipeline.h"
+#include "editor/shader/EditorProductionShaderPipeline.h"
+#include "editor/lighting/EditorProductionLightingPipeline.h"
+#include "editor/visibility/EditorProductionGpuDrivenPipeline.h"
 
 #include <Windows.h>
 
@@ -568,6 +574,34 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         1.0f,
         0,
         D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
+    if (ctx.productionGpuDrivenPipeline != nullptr) {
+        ctx.renderGraph->AddPass({
+            "Visibility.ProductionGpuDriven",
+            ge3::graphics::RenderPassLayer::Geometry,
+            {},
+            "",
+            [ctx](ge3::graphics::RenderPassContext& passContext) {
+                D3D12_GPU_DESCRIPTOR_HANDLE hiZ{};
+                if (ctx.terrainChunkManager != nullptr) hiZ = ctx.terrainChunkManager->GetHiZDebugSrv(2);
+                ctx.productionGpuDrivenPipeline->DispatchVisibility(
+                    passContext.commandList, hiZ, hiZ.ptr != 0);
+            },
+            true});
+    }
+
+    if (ctx.productionLightingPipeline != nullptr && ctx.productionScenePipeline != nullptr) {
+        ctx.renderGraph->AddPass({
+            "Lighting.ProductionShadowAtlas",
+            ge3::graphics::RenderPassLayer::Geometry,
+            {},
+            "",
+            [ctx](ge3::graphics::RenderPassContext& passContext) {
+                ctx.productionLightingPipeline->RenderShadowMaps(
+                    passContext.commandList, ctx.productionScenePipeline->RenderPackets());
+            },
+            true});
+    }
     ctx.renderGraph->DeclarePersistentDepthTarget(
         "SceneDepthReadOnly",
         DXGI_FORMAT_D24_UNORM_S8_UINT,
@@ -755,6 +789,154 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     ctx.scene->pointLightResource->GetGPUVirtualAddress(),
                     ctx.scene->spotLightResource->GetGPUVirtualAddress(),
                     model->mesh.indexCount);
+            }
+
+            if (ctx.productionScenePipeline != nullptr) {
+                const bool gpuDriven = ctx.productionGpuDrivenPipeline != nullptr &&
+                    ctx.productionGpuDrivenPipeline->Ready();
+                if (gpuDriven) {
+                    const auto& batches = ctx.productionGpuDrivenPipeline->Batches();
+                    for (uint32_t batchIndex = 0; batchIndex < batches.size(); ++batchIndex) {
+                        const editor::EditorProductionGpuDrivenBatch& batch = batches[batchIndex];
+                        ID3D12PipelineState* productionPso = batch.pipelineState != nullptr
+                            ? batch.pipelineState : ctx.appPipelines->GetMainPSO();
+                        if (!ctx.frameRenderer->PrepareMainPass(
+                                passContext.commandList, ctx.runtimeState->viewport,
+                                ctx.runtimeState->scissorRect,
+                                ctx.appPipelines->GetMainRootSignature(), productionPso)) continue;
+                        D3D12_GPU_VIRTUAL_ADDRESS materialAddress = batch.materialAddress != 0
+                            ? batch.materialAddress : ctx.scene->materialResource->GetGPUVirtualAddress();
+                        D3D12_GPU_VIRTUAL_ADDRESS directionalAddress =
+                            ctx.scene->directionalLightResource->GetGPUVirtualAddress();
+                        D3D12_GPU_VIRTUAL_ADDRESS pointAddress =
+                            ctx.scene->pointLightResource->GetGPUVirtualAddress();
+                        D3D12_GPU_VIRTUAL_ADDRESS spotAddress =
+                            ctx.scene->spotLightResource->GetGPUVirtualAddress();
+                        if (ctx.productionMaterialPipeline != nullptr) {
+                            const auto& lighting = ctx.productionMaterialPipeline->Lighting();
+                            if (lighting.directionalAddress != 0) directionalAddress = lighting.directionalAddress;
+                            if (lighting.pointAddress != 0) pointAddress = lighting.pointAddress;
+                            if (lighting.spotAddress != 0) spotAddress = lighting.spotAddress;
+                        }
+                        const D3D12_GPU_DESCRIPTOR_HANDLE albedo = batch.albedoHandle.ptr != 0
+                            ? batch.albedoHandle : ctx.scene->textureSrvHandleGPU2;
+                        const D3D12_GPU_DESCRIPTOR_HANDLE normal = batch.normalHandle.ptr != 0
+                            ? batch.normalHandle : ctx.scene->textureSrvHandleGPU2;
+                        if (ctx.frameRenderer->PrepareIndirectMainBatch(
+                                passContext.commandList, batch.representative.vertexBuffer,
+                                batch.representative.indexBuffer, materialAddress, albedo, normal,
+                                ctx.scene->textureSrvHandleGPU2,
+                                ctx.scene->skyboxTextureSrvHandleGPU,
+                                directionalAddress,
+                                ctx.scene->cameraResource->GetGPUVirtualAddress(),
+                                pointAddress, spotAddress,
+                                ctx.productionLightingPipeline ? ctx.productionLightingPipeline->LightBufferAddress() : 0,
+                                ctx.productionLightingPipeline ? ctx.productionLightingPipeline->ClusterRangeBufferAddress() : 0,
+                                ctx.productionLightingPipeline ? ctx.productionLightingPipeline->ClusterIndexBufferAddress() : 0,
+                                ctx.productionLightingPipeline ? ctx.productionLightingPipeline->ConstantsAddress() : 0,
+                                ctx.productionLightingPipeline ? ctx.productionLightingPipeline->ShadowAtlasHandle() : D3D12_GPU_DESCRIPTOR_HANDLE{})) {
+                            ctx.productionGpuDrivenPipeline->ExecuteBatch(passContext.commandList, batchIndex);
+                        }
+                    }
+                    ctx.productionGpuDrivenPipeline->RecordReadback(passContext.commandList);
+                }
+                const auto& directPackets = gpuDriven
+                    ? ctx.productionGpuDrivenPipeline->CpuFallbackPackets()
+                    : ctx.productionScenePipeline->RenderPackets();
+                for (const editor::EditorProductionSceneRenderPacket& packet : directPackets) {
+                    if (packet.indexCount == 0 || packet.transformAddress == 0 ||
+                        packet.vertexBuffer.BufferLocation == 0 ||
+                        packet.indexBuffer.BufferLocation == 0) {
+                        continue;
+                    }
+                    ID3D12PipelineState* productionPso = ctx.appPipelines->GetMainPSO();
+                    if (ctx.productionShaderPipeline != nullptr) {
+                        const editor::EditorProductionShaderBinding* shaderBinding =
+                            ctx.productionShaderPipeline->Resolve(
+                                packet.entityGuid, packet.materialSlot);
+                        if (shaderBinding != nullptr && shaderBinding->pipelineState != nullptr) {
+                            productionPso = shaderBinding->pipelineState;
+                        }
+                    }
+                    if (!ctx.frameRenderer->PrepareMainPass(
+                            passContext.commandList,
+                            ctx.runtimeState->viewport,
+                            ctx.runtimeState->scissorRect,
+                            ctx.appPipelines->GetMainRootSignature(),
+                            productionPso)) {
+                        continue;
+                    }
+                    D3D12_GPU_VIRTUAL_ADDRESS materialAddress =
+                        ctx.scene->materialResource->GetGPUVirtualAddress();
+                    D3D12_GPU_VIRTUAL_ADDRESS directionalAddress =
+                        ctx.scene->directionalLightResource->GetGPUVirtualAddress();
+                    D3D12_GPU_VIRTUAL_ADDRESS pointAddress =
+                        ctx.scene->pointLightResource->GetGPUVirtualAddress();
+                    D3D12_GPU_VIRTUAL_ADDRESS spotAddress =
+                        ctx.scene->spotLightResource->GetGPUVirtualAddress();
+                    D3D12_GPU_DESCRIPTOR_HANDLE albedoTexture =
+                        ctx.scene->textureSrvHandleGPU2;
+                    D3D12_GPU_DESCRIPTOR_HANDLE normalTexture =
+                        ctx.scene->textureSrvHandleGPU2;
+                    if (ctx.productionMaterialPipeline != nullptr) {
+                        const editor::EditorProductionMaterialBinding* binding =
+                            ctx.productionMaterialPipeline->Resolve(
+                                packet.entityGuid, packet.materialSlot);
+                        if (binding != nullptr && !binding->fallback &&
+                            binding->materialAddress != 0) {
+                            materialAddress = binding->materialAddress;
+                        }
+                        const editor::EditorProductionSceneLighting& lighting =
+                            ctx.productionMaterialPipeline->Lighting();
+                        if (lighting.directionalAddress != 0)
+                            directionalAddress = lighting.directionalAddress;
+                        if (lighting.pointAddress != 0)
+                            pointAddress = lighting.pointAddress;
+                        if (lighting.spotAddress != 0)
+                            spotAddress = lighting.spotAddress;
+                    }
+                    if (ctx.productionTexturePipeline != nullptr) {
+                        const editor::EditorProductionTextureBinding* textureBinding =
+                            ctx.productionTexturePipeline->Resolve(
+                                packet.entityGuid, packet.materialSlot);
+                        if (textureBinding != nullptr) {
+                            if (!textureBinding->albedoFallback &&
+                                textureBinding->albedoHandle.ptr != 0) {
+                                albedoTexture = textureBinding->albedoHandle;
+                            }
+                            if (!textureBinding->normalFallback &&
+                                textureBinding->normalHandle.ptr != 0) {
+                                normalTexture = textureBinding->normalHandle;
+                            }
+                        }
+                    }
+                    ctx.frameRenderer->DrawMainModel(
+                        passContext.commandList,
+                        packet.vertexBuffer,
+                        packet.indexBuffer,
+                        materialAddress,
+                        packet.transformAddress,
+                        albedoTexture,
+                        normalTexture,
+                        ctx.scene->textureSrvHandleGPU2,
+                        ctx.scene->skyboxTextureSrvHandleGPU,
+                        directionalAddress,
+                        ctx.scene->cameraResource->GetGPUVirtualAddress(),
+                        pointAddress,
+                        spotAddress,
+                        packet.indexCount,
+                        ctx.productionLightingPipeline != nullptr
+                            ? ctx.productionLightingPipeline->LightBufferAddress() : 0,
+                        ctx.productionLightingPipeline != nullptr
+                            ? ctx.productionLightingPipeline->ClusterRangeBufferAddress() : 0,
+                        ctx.productionLightingPipeline != nullptr
+                            ? ctx.productionLightingPipeline->ClusterIndexBufferAddress() : 0,
+                        ctx.productionLightingPipeline != nullptr
+                            ? ctx.productionLightingPipeline->ConstantsAddress() : 0,
+                        ctx.productionLightingPipeline != nullptr
+                            ? ctx.productionLightingPipeline->ShadowAtlasHandle()
+                            : D3D12_GPU_DESCRIPTOR_HANDLE{});
+                }
             }
 
             if (ctx.runtimeState->showSkinnedModel) {

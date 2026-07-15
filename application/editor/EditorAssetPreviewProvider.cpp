@@ -1,4 +1,5 @@
 #include "EditorAssetPreviewProvider.h"
+#include "mesh/EditorProductionMeshAsset.h"
 
 #include <assimp/Importer.hpp>
 #include <assimp/material.h>
@@ -536,6 +537,43 @@ EditorAssetPreviewInfo BuildMeshPreview(const EditorAssetRecord& record, const s
     const std::filesystem::path source(record.sourcePath);
     if (FileExists(source)) {
         info.byteSize = TryFileSize(source);
+        EditorProductionMeshAssetDocument bakedSource{};
+        const std::string bakedText = extension == ".mesh" ? ReadSmallTextFile(source) : std::string{};
+        if (!bakedText.empty() && EditorProductionMeshAssetDocument::Deserialize(
+                bakedText, bakedSource, nullptr)) {
+            info.vertexCount = static_cast<uint32_t>(bakedSource.geometry.vertices.size());
+            info.faceCount = static_cast<uint32_t>(bakedSource.geometry.triangles.size());
+            uint32_t maxMaterialSlot = 0;
+            const Vector3 first = bakedSource.geometry.vertices.front().position;
+            Vector3 minimum = first;
+            Vector3 maximum = first;
+            for (const EditorGeometryVertex& vertex : bakedSource.geometry.vertices) {
+                minimum.x = (std::min)(minimum.x, vertex.position.x);
+                minimum.y = (std::min)(minimum.y, vertex.position.y);
+                minimum.z = (std::min)(minimum.z, vertex.position.z);
+                maximum.x = (std::max)(maximum.x, vertex.position.x);
+                maximum.y = (std::max)(maximum.y, vertex.position.y);
+                maximum.z = (std::max)(maximum.z, vertex.position.z);
+            }
+            for (const EditorGeometryTriangle& triangle : bakedSource.geometry.triangles) {
+                maxMaterialSlot = (std::max)(maxMaterialSlot, triangle.materialSlot);
+            }
+            info.materialSlotCount = maxMaterialSlot + 1;
+            info.boundsMin[0] = minimum.x;
+            info.boundsMin[1] = minimum.y;
+            info.boundsMin[2] = minimum.z;
+            info.boundsMax[0] = maximum.x;
+            info.boundsMax[1] = maximum.y;
+            info.boundsMax[2] = maximum.z;
+            const float dx = maximum.x - minimum.x;
+            const float dy = maximum.y - minimum.y;
+            const float dz = maximum.z - minimum.z;
+            info.boundsRadius = 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz);
+            info.previewCameraDistance = (std::max)(3.0f, info.boundsRadius * 2.8f);
+            info.hasPreviewGeometry = true;
+            info.hasMaterialBinding = info.materialSlotCount > 0;
+            info.lineCount = CountTextLines(source);
+        } else {
         const MeshPreviewSourceSummary productionSummary = ParseAssimpMeshPreviewSummary(source);
         if (productionSummary.hasBounds && productionSummary.faces > 0) {
             info.vertexCount = productionSummary.vertices;
@@ -585,6 +623,7 @@ EditorAssetPreviewInfo BuildMeshPreview(const EditorAssetRecord& record, const s
             info.previewCameraDistance = 3.0f;
         } else if (extension == ".glb" || extension == ".fbx") {
             info.previewCameraDistance = 3.0f;
+        }
         }
     }
     if (info.previewCameraDistance <= 0.0f) {
@@ -699,6 +738,18 @@ EditorAssetPreviewInfo EditorAssetPreviewProvider::BuildPreview(const EditorAsse
         return BuildMeshPreview(record, extension);
     case EditorAssetKind::Course:
         return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "CRS");
+    case EditorAssetKind::Prefab:
+        return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "PFB");
+    case EditorAssetKind::MaterialGraph:
+        return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "MAT");
+    case EditorAssetKind::MaterialInstance:
+        return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "MI");
+    case EditorAssetKind::VfxGraph:
+        return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "VFXG");
+    case EditorAssetKind::AnimationStateMachine:
+        return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "ASM");
+    case EditorAssetKind::GameplayVisualScript:
+        return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "GVS");
     case EditorAssetKind::Effect:
         return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "FX");
     case EditorAssetKind::Audio:

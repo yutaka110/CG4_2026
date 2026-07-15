@@ -2,6 +2,7 @@
 
 #include "EditorDetailsEditController.h"
 #include "EditorDetailsSectionProvider.h"
+#include "EditorDetailsViewState.h"
 #include "EditorPropertyClipboardService.h"
 #include "EditorPropertyRegistry.h"
 #include "EditorAssetSelection.h"
@@ -9,8 +10,11 @@
 #include "EditorPropertyAccessor.h"
 #include "EditorTransactionStack.h"
 #include "EditorValidation.h"
+#include "world/EditorWorldModel.h"
 
 namespace editor {
+
+class EditorPrefabService;
 
 struct EditorDetailsPanelContext {
     const EditorSelection* selection = nullptr;
@@ -26,7 +30,14 @@ struct EditorDetailsPanelContext {
     const EditorAssetSelection* assetSelection = nullptr;
     const EditorValidationReport* validationReport = nullptr;
     const EditorDetailsSectionProviderRegistry* sectionProviders = nullptr;
+    EditorDetailsViewState* viewState = nullptr;
+    IEditorPrefabOverrideProvider* prefabOverrides = nullptr;
+    EditorPrefabService* prefabService = nullptr;
+    const EditorWorldModel* worldModel = nullptr;
     bool canMutateAuthoring = true;
+    EditorWorldMutationService* worldMutations = nullptr;
+    SceneWorldObjectProvider* sceneWorldProvider = nullptr;
+    std::function<void(const EditorWorldMutationResult&)> onWorldMutated;
 };
 
 void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context);

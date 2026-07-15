@@ -27,39 +27,33 @@ constexpr EditorAssetKind kAssetKindFilters[] = {
     EditorAssetKind::Mesh,
     EditorAssetKind::Effect,
     EditorAssetKind::Course,
+    EditorAssetKind::Prefab,
+    EditorAssetKind::MaterialGraph,
+    EditorAssetKind::MaterialInstance,
+    EditorAssetKind::VfxGraph,
+    EditorAssetKind::AnimationStateMachine,
+    EditorAssetKind::GameplayVisualScript,
     EditorAssetKind::Texture,
     EditorAssetKind::Audio,
 };
 
+enum class PendingAssetContextAction {
+    None,
+    Duplicate,
+    Reimport,
+    Delete,
+};
+
+struct PendingAssetContextRequest {
+    PendingAssetContextAction action = PendingAssetContextAction::None;
+    EditorAssetKind kind = EditorAssetKind::Unknown;
+    std::string id;
+};
+
+PendingAssetContextRequest gPendingAssetContextRequest{};
+
 const char* FilterLabel(EditorAssetKind kind) {
     return kind == EditorAssetKind::Unknown ? "All" : ToString(kind);
-}
-
-bool ContainsFilterText(const EditorAssetRecord& record, const char* filterText) {
-    if (filterText == nullptr || filterText[0] == '\0') {
-        return true;
-    }
-
-    const std::string filter = filterText;
-    if (record.id.find(filter) != std::string::npos ||
-        record.guid.find(filter) != std::string::npos ||
-        record.logicalPath.find(filter) != std::string::npos ||
-        record.displayName.find(filter) != std::string::npos ||
-        record.sourcePath.find(filter) != std::string::npos ||
-        std::string(ToString(record.kind)).find(filter) != std::string::npos) {
-        return true;
-    }
-    for (const std::string& tag : record.tags) {
-        if (tag.find(filter) != std::string::npos) {
-            return true;
-        }
-    }
-    for (const std::string& dependency : record.dependencies) {
-        if (dependency.find(filter) != std::string::npos) {
-            return true;
-        }
-    }
-    return false;
 }
 
 std::string ShortGuid(const std::string& guid) {
@@ -207,27 +201,19 @@ ImVec4 SafetyColor(EditorAssetMutationRisk risk) {
     return ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
 }
 
-std::vector<const EditorAssetRecord*> FilterVisibleAssets(
-    const EditorAssetRegistry& registry,
-    EditorAssetKind kindFilter,
-    const char* textFilter) {
-    std::vector<const EditorAssetRecord*> visible;
-    for (const EditorAssetRecord& record : registry.Records()) {
-        if (kindFilter != EditorAssetKind::Unknown && record.kind != kindFilter) {
-            continue;
-        }
-        if (!ContainsFilterText(record, textFilter)) {
-            continue;
-        }
-        visible.push_back(&record);
-    }
-    return visible;
-}
+void PushAssetMutationNotification(
+    EditorNotificationCenter* notifications,
+    const EditorAssetMutationResult& result);
+void PushAssetImportNotification(
+    EditorNotificationCenter* notifications,
+    const EditorAssetImportResult& result);
 
 void SelectAssetRecord(
     const EditorAssetRecord& record,
     EditorAssetRegistry& registry,
-    EditorAssetSelection* assetSelection) {
+    EditorAssetSelection* assetSelection,
+    EditorContentBrowserState* browserState = nullptr) {
+    if (browserState != nullptr) browserState->SetSelectedAssetGuid(record.guid);
     if (assetSelection == nullptr) {
         return;
     }
@@ -627,6 +613,25 @@ void DrawMutationControls(
 
     ImGui::Separator();
     ImGui::TextUnformatted("Mutation");
+    if (ImGui::SmallButton("Duplicate")) {
+        EditorAssetMutationExecutor executor(registry);
+        const EditorAssetMutationResult result = executor.Execute(
+            EditorAssetMutationRequest{
+                EditorAssetMutationKind::Duplicate,
+                selectedRecord.kind,
+                selectedRecord.id,
+                {},
+                {},
+                transactions});
+        PushAssetMutationNotification(notifications, result);
+        if (result.succeeded && assetSelection != nullptr) {
+            assetSelection->SetPrimary(
+                MakeEditorAssetHandle(result.updatedRecord, registry.Revision()));
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Copies source and creates a new durable GUID .meta atomically. Undoable.");
+    }
     ImGui::SetNextItemWidth(180.0f);
     ImGui::InputText("Rename Id", renameBuffer.data(), renameBuffer.size());
     ImGui::SameLine();
@@ -695,6 +700,124 @@ void DrawMutationControls(
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Deletes the asset and .meta file only when no indexed dependents exist.");
     }
+    ImGui::BeginDisabled(selectedRecord.pathOnlyReferences.empty());
+    if (ImGui::SmallButton("Repair Path Refs")) {
+        EditorAssetMutationExecutor executor(registry);
+        const EditorAssetMutationResult result = executor.Execute(
+            EditorAssetMutationRequest{
+                EditorAssetMutationKind::RepairReferences,
+                selectedRecord.kind,
+                selectedRecord.id,
+                {},
+                {},
+                transactions});
+        PushAssetMutationNotification(notifications, result);
+        if (result.succeeded && assetSelection != nullptr) {
+            assetSelection->SetPrimary(
+                MakeEditorAssetHandle(result.updatedRecord, registry.Revision()));
+        }
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Converts resolvable path-only references to durable Asset GUID references. Undoable.");
+    }
+}
+
+void DrawAssetDragSource(const EditorAssetRecord& record) {
+    if (!record.referenceable || record.missing || record.guid.empty() ||
+        !ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) return;
+    EditorAssetDragDropPayload payload{};
+    payload.kind = record.kind;
+    std::snprintf(payload.guid.data(), payload.guid.size(), "%s", record.guid.c_str());
+    std::snprintf(payload.id.data(), payload.id.size(), "%s", record.id.c_str());
+    std::snprintf(payload.displayName.data(), payload.displayName.size(), "%s",
+        record.displayName.empty() ? record.id.c_str() : record.displayName.c_str());
+    ImGui::SetDragDropPayload(kEditorAssetDragDropPayloadId, &payload, sizeof(payload));
+    ImGui::Text("%s:%s", ToString(record.kind), record.id.c_str());
+    ImGui::TextDisabled("Drop into Viewport or compatible Details AssetRef.");
+    ImGui::EndDragDropSource();
+}
+
+void DrawAssetContextMenu(
+    const EditorAssetRecord& record,
+    EditorAssetRegistry& registry,
+    EditorAssetSelection* assetSelection,
+    EditorContentBrowserState* browserState) {
+    if (!ImGui::BeginPopupContextItem("AssetContext")) return;
+    const EditorAssetRecord snapshot = record;
+    SelectAssetRecord(snapshot, registry, assetSelection, browserState);
+    if (ImGui::MenuItem(
+            browserState != nullptr && browserState->IsFavorite(snapshot.guid)
+                ? "Remove Favorite" : "Add Favorite")) {
+        if (browserState != nullptr) browserState->ToggleFavorite(snapshot.guid);
+    }
+    if (browserState != nullptr && ImGui::BeginMenu("Collections")) {
+        if (browserState->Collections().empty()) ImGui::TextDisabled("No collections");
+        for (const auto& pair : browserState->Collections()) {
+            const bool member = browserState->IsInCollection(pair.first, snapshot.guid);
+            if (ImGui::MenuItem(pair.first.c_str(), nullptr, member)) {
+                if (member) browserState->RemoveFromCollection(pair.first, snapshot.guid);
+                else browserState->AddToCollection(pair.first, snapshot.guid);
+            }
+        }
+        ImGui::EndMenu();
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Duplicate")) {
+        gPendingAssetContextRequest = {
+            PendingAssetContextAction::Duplicate, snapshot.kind, snapshot.id};
+    }
+    if (ImGui::MenuItem("Reimport", nullptr, false, !snapshot.runtimeOnly)) {
+        gPendingAssetContextRequest = {
+            PendingAssetContextAction::Reimport, snapshot.kind, snapshot.id};
+    }
+    if (ImGui::MenuItem("Rename / Move...")) {
+        SelectAssetRecord(snapshot, registry, assetSelection, browserState);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Selects this Asset for the transaction-backed Rename/Move controls above.");
+    }
+    const EditorAssetMutationSafetyReport deleteSafety =
+        EvaluateEditorAssetMutationSafety(registry, snapshot, EditorAssetMutationKind::Delete);
+    if (ImGui::MenuItem("Delete", nullptr, false, !deleteSafety.Blocked())) {
+        gPendingAssetContextRequest = {
+            PendingAssetContextAction::Delete, snapshot.kind, snapshot.id};
+    }
+    ImGui::EndPopup();
+}
+
+void ProcessPendingAssetContextRequest(
+    EditorAssetRegistry& registry,
+    EditorAssetSelection* assetSelection,
+    EditorAssetThumbnailService* thumbnails,
+    EditorTransactionStack* transactions,
+    EditorNotificationCenter* notifications,
+    EditorContentBrowserState* browserState) {
+    const PendingAssetContextRequest request = std::move(gPendingAssetContextRequest);
+    gPendingAssetContextRequest = {};
+    if (request.action == PendingAssetContextAction::None) return;
+    const EditorAssetRecord* target = registry.Find(request.kind, request.id);
+    if (target == nullptr) return;
+    if (request.action == PendingAssetContextAction::Reimport) {
+        EditorAssetImportService service(registry, thumbnails);
+        const EditorAssetImportResult result = service.Reimport(request.kind, request.id);
+        PushAssetImportNotification(notifications, result);
+        if (result.succeeded) SelectAssetRecord(result.record, registry, assetSelection, browserState);
+        return;
+    }
+    const EditorAssetMutationKind kind = request.action == PendingAssetContextAction::Duplicate
+        ? EditorAssetMutationKind::Duplicate : EditorAssetMutationKind::Delete;
+    EditorAssetMutationExecutor executor(registry);
+    const EditorAssetMutationResult result = executor.Execute(
+        EditorAssetMutationRequest{kind, request.kind, request.id, {}, {}, transactions});
+    PushAssetMutationNotification(notifications, result);
+    if (result.succeeded && kind == EditorAssetMutationKind::Duplicate) {
+        SelectAssetRecord(result.updatedRecord, registry, assetSelection, browserState);
+    } else if (result.succeeded) {
+        if (assetSelection != nullptr) assetSelection->Clear();
+        if (browserState != nullptr) browserState->SetSelectedAssetGuid({});
+    }
+    if (result.succeeded && thumbnails != nullptr) thumbnails->Sync(registry);
 }
 
 void DrawThumbnailPreviewLine(
@@ -743,7 +866,8 @@ void DrawThumbnailTile(
     bool selected,
     const EditorAssetThumbnailEntry& thumbnail,
     EditorAssetRegistry& registry,
-    EditorAssetSelection* assetSelection) {
+    EditorAssetSelection* assetSelection,
+    EditorContentBrowserState* browserState) {
     ImGui::PushID((std::string(ToString(record.kind)) + ":" + record.id).c_str());
     const ImVec4 color = ThumbnailStatusColor(thumbnail.status);
     const bool hasGpuTexture =
@@ -781,8 +905,11 @@ void DrawThumbnailTile(
         ImGui::PopStyleColor(3);
     }
     if (clicked) {
-        SelectAssetRecord(record, registry, assetSelection);
+        SelectAssetRecord(record, registry, assetSelection, browserState);
     }
+    DrawAssetDragSource(record);
+    DrawAssetContextMenu(
+        record, registry, assetSelection, browserState);
     if (ImGui::IsItemHovered()) {
         const std::string summary = PreviewSummary(thumbnail);
         const std::string gpuSummary = GpuThumbnailSummary(thumbnail);
@@ -812,7 +939,8 @@ void DrawAssetGrid(
     EditorAssetRegistry& registry,
     EditorAssetSelection* assetSelection,
     const EditorAssetHandle* selectedAsset,
-    const EditorAssetThumbnailService* thumbnails) {
+    EditorAssetThumbnailService* thumbnails,
+    EditorContentBrowserState* browserState) {
     const float tileWidth = 124.0f;
     const float availableWidth = (std::max)(tileWidth, ImGui::GetContentRegionAvail().x);
     const int columns = (std::max)(1, static_cast<int>(availableWidth / tileWidth));
@@ -842,11 +970,63 @@ void DrawAssetGrid(
             selected,
             ResolveThumbnail(*record, thumbnails),
             registry,
-            assetSelection);
+            assetSelection,
+            browserState);
         column = (column + 1) % columns;
     }
 
     ImGui::EndTable();
+}
+
+void DrawContentBrowserNavigation(
+    EditorContentBrowserState& state,
+    const EditorAssetRegistry& registry) {
+    ImGui::TextUnformatted("Folders");
+    for (const std::string& folder : state.BuildFolders(registry)) {
+        const int depth = static_cast<int>(std::count(folder.begin(), folder.end(), '/'));
+        ImGui::Indent(static_cast<float>((std::max)(0, depth - 1)) * 10.0f);
+        const std::string label = std::filesystem::path(folder).filename().string().empty()
+            ? folder : std::filesystem::path(folder).filename().string();
+        if (ImGui::Selectable(
+                (label + "##folder:" + folder).c_str(),
+                state.SelectedFolder() == folder)) {
+            state.SetSelectedFolder(folder);
+        }
+        ImGui::Unindent(static_cast<float>((std::max)(0, depth - 1)) * 10.0f);
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Collections");
+    if (ImGui::Selectable("All Assets##collection", state.ActiveCollection().empty())) {
+        state.SetActiveCollection({});
+        state.SetFavoritesOnly(false);
+    }
+    if (ImGui::Selectable("Favorites", state.FavoritesOnly())) {
+        state.SetFavoritesOnly(true);
+        state.SetActiveCollection({});
+    }
+    std::vector<std::string> collectionNames;
+    for (const auto& pair : state.Collections()) collectionNames.push_back(pair.first);
+    std::sort(collectionNames.begin(), collectionNames.end());
+    for (const std::string& name : collectionNames) {
+        const bool selected = state.ActiveCollection() == name;
+        if (ImGui::Selectable((name + "##collection").c_str(), selected)) {
+            state.SetFavoritesOnly(false);
+            state.SetActiveCollection(name);
+        }
+        if (ImGui::BeginPopupContextItem(("CollectionContext:" + name).c_str())) {
+            if (ImGui::MenuItem("Delete Collection")) state.RemoveCollection(name);
+            ImGui::EndPopup();
+        }
+    }
+    static std::array<char, 64> collectionBuffer{};
+    ImGui::SetNextItemWidth(130.0f);
+    ImGui::InputText("##newCollection", collectionBuffer.data(), collectionBuffer.size());
+    ImGui::SameLine();
+    if (ImGui::SmallButton("+")) {
+        if (state.CreateCollection(collectionBuffer.data())) collectionBuffer.fill('\0');
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Create Collection");
 }
 
 } // namespace
@@ -858,16 +1038,35 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
     }
 
     EditorAssetRegistry& registry = *context.registry;
-    static EditorAssetKind kindFilter = EditorAssetKind::Unknown;
-    static std::array<char, 128> textFilter{};
-    static bool gridView = false;
+    static EditorContentBrowserState fallbackState;
+    EditorContentBrowserState& browserState =
+        context.browserState != nullptr ? *context.browserState : fallbackState;
+    browserState.EnsureLoaded();
+    ProcessPendingAssetContextRequest(
+        registry,
+        context.assetSelection,
+        context.thumbnails,
+        context.transactions,
+        context.notifications,
+        &browserState);
 
-    const EditorAssetThumbnailService* thumbnails = context.thumbnails;
+    if (context.assetSelection != nullptr && !context.assetSelection->HasPrimary() &&
+        !browserState.SelectedAssetGuid().empty()) {
+        if (const EditorAssetRecord* restored =
+                registry.FindByGuid(browserState.SelectedAssetGuid())) {
+            context.assetSelection->SetPrimary(MakeEditorAssetHandle(*restored, registry.Revision()));
+        }
+    }
+
+    EditorAssetThumbnailService* thumbnails = context.thumbnails;
     ImGui::Text(
-        "Registry  Assets %u  Mesh %u  Meta %u  Auto GUID %u  Deps %u  Missing %u  Revision %u",
+        "Registry  Assets %u  Mesh %u  Durable %u/%u (%.1f%%)  Redirects %u  Auto GUID %u  Deps %u  Missing %u  Revision %u",
         static_cast<unsigned int>(registry.Count()),
         static_cast<unsigned int>(registry.Count(EditorAssetKind::Mesh)),
-        static_cast<unsigned int>(registry.CountWithMetadata()),
+        static_cast<unsigned int>(registry.CountDurableAssets()),
+        static_cast<unsigned int>(registry.CountMetadataEligibleAssets()),
+        registry.MetadataCoveragePercent(),
+        static_cast<unsigned int>(registry.Redirects().size()),
         static_cast<unsigned int>(registry.CountWithProvisionalGuid()),
         static_cast<unsigned int>(registry.CountWithDependencies()),
         static_cast<unsigned int>(registry.CountMissing()),
@@ -939,6 +1138,10 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
 
     const EditorAssetHandle* selectedAsset =
         context.assetSelection != nullptr ? context.assetSelection->Primary() : nullptr;
+    if (selectedAsset != nullptr && !selectedAsset->guid.empty() &&
+        browserState.SelectedAssetGuid() != selectedAsset->guid) {
+        browserState.SetSelectedAssetGuid(selectedAsset->guid);
+    }
     const EditorAssetRecord* activeSelectedRecord = nullptr;
     if (selectedAsset != nullptr) {
         const EditorAssetHandleResolveResult selectedResolve =
@@ -1050,12 +1253,26 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
         context.pendingExternalImportPaths,
         activeSelectedRecord);
 
+    ImGui::BeginChild("ContentBrowserNavigation", ImVec2(210.0f, 190.0f), true);
+    DrawContentBrowserNavigation(browserState, registry);
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    std::array<char, 128> textFilter{};
+    std::snprintf(textFilter.data(), textFilter.size(), "%s", browserState.SearchText().c_str());
+    ImGui::SetNextItemWidth(320.0f);
+    if (ImGui::InputText("Search", textFilter.data(), textFilter.size())) {
+        browserState.SetSearchText(textFilter.data());
+    }
+
+    EditorAssetKind kindFilter = browserState.KindFilter();
     ImGui::SetNextItemWidth(180.0f);
     if (ImGui::BeginCombo("Kind", FilterLabel(kindFilter))) {
         for (EditorAssetKind candidate : kAssetKindFilters) {
             const bool selected = candidate == kindFilter;
             if (ImGui::Selectable(FilterLabel(candidate), selected)) {
                 kindFilter = candidate;
+                browserState.SetKindFilter(candidate);
             }
             if (selected) {
                 ImGui::SetItemDefaultFocus();
@@ -1064,28 +1281,57 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
         ImGui::EndCombo();
     }
 
+    const std::vector<std::string> tags = browserState.BuildTags(registry);
+    ImGui::SetNextItemWidth(180.0f);
+    const char* tagPreview = browserState.TagFilter().empty()
+        ? "All Tags" : browserState.TagFilter().c_str();
+    if (ImGui::BeginCombo("Tag", tagPreview)) {
+        if (ImGui::Selectable("All Tags", browserState.TagFilter().empty())) {
+            browserState.SetTagFilter({});
+        }
+        for (const std::string& tag : tags) {
+            if (ImGui::Selectable(tag.c_str(), browserState.TagFilter() == tag)) {
+                browserState.SetTagFilter(tag);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::Button(
+            browserState.ViewMode() == EditorContentBrowserViewMode::Grid
+                ? "Grid [active]" : "Grid")) {
+        browserState.SetViewMode(EditorContentBrowserViewMode::Grid);
+    }
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(260.0f);
-    ImGui::InputText("Filter", textFilter.data(), textFilter.size());
-    ImGui::SameLine();
-    ImGui::Checkbox("Grid", &gridView);
+    if (ImGui::Button(
+            browserState.ViewMode() == EditorContentBrowserViewMode::List
+                ? "List [active]" : "List")) {
+        browserState.SetViewMode(EditorContentBrowserViewMode::List);
+    }
+    ImGui::TextDisabled(
+        "Folder: %s  Collection: %s  Favorites: %s  State r%u",
+        browserState.SelectedFolder().c_str(),
+        browserState.ActiveCollection().empty() ? "All" : browserState.ActiveCollection().c_str(),
+        browserState.FavoritesOnly() ? "only" : "all",
+        browserState.Revision());
+    ImGui::EndGroup();
     ImGui::Separator();
 
     const std::vector<const EditorAssetRecord*> visibleAssets =
-        FilterVisibleAssets(registry, kindFilter, textFilter.data());
-    if (gridView) {
+        browserState.FilterAssets(registry);
+    if (browserState.ViewMode() == EditorContentBrowserViewMode::Grid) {
         DrawAssetGrid(
             visibleAssets,
             registry,
             context.assetSelection,
             selectedAsset,
-            thumbnails);
+            thumbnails,
+            &browserState);
         return;
     }
 
     if (!ImGui::BeginTable(
             "EditorAssetBrowserTable",
-            11,
+            14,
             ImGuiTableFlags_Borders |
                 ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_Resizable |
@@ -1100,6 +1346,9 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
     ImGui::TableSetupColumn("GUID", ImGuiTableColumnFlags_WidthFixed, 122.0f);
     ImGui::TableSetupColumn("Display", ImGuiTableColumnFlags_WidthFixed, 210.0f);
     ImGui::TableSetupColumn("Meta", ImGuiTableColumnFlags_WidthFixed, 58.0f);
+    ImGui::TableSetupColumn("Fav", ImGuiTableColumnFlags_WidthFixed, 42.0f);
+    ImGui::TableSetupColumn("SCM", ImGuiTableColumnFlags_WidthFixed, 82.0f);
+    ImGui::TableSetupColumn("Dirty/Cook", ImGuiTableColumnFlags_WidthFixed, 104.0f);
     ImGui::TableSetupColumn("Missing", ImGuiTableColumnFlags_WidthFixed, 68.0f);
     ImGui::TableSetupColumn("Ref", ImGuiTableColumnFlags_WidthFixed, 52.0f);
     ImGui::TableSetupColumn("Deps", ImGuiTableColumnFlags_WidthFixed, 58.0f);
@@ -1125,11 +1374,14 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
                 record.id.c_str(),
                 selected,
                 ImGuiSelectableFlags_SpanAllColumns)) {
-            if (context.assetSelection != nullptr) {
-                context.assetSelection->SetPrimary(
-                    MakeEditorAssetHandle(record, registry.Revision()));
-            }
+            SelectAssetRecord(record, registry, context.assetSelection, &browserState);
         }
+        DrawAssetDragSource(record);
+        DrawAssetContextMenu(
+            record,
+            registry,
+            context.assetSelection,
+            &browserState);
         ImGui::TableNextColumn();
         const EditorAssetThumbnailEntry thumbnail = ResolveThumbnail(record, thumbnails);
         ImGui::TextColored(
@@ -1159,6 +1411,21 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
         ImGui::TextUnformatted(record.displayName.c_str());
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(MetadataLabel(record));
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(browserState.IsFavorite(record.guid) ? "*" : "-");
+        const EditorAssetWorkspaceStatus workspaceStatus = context.workspaceStatus != nullptr
+            ? context.workspaceStatus->QueryStatus(record)
+            : EditorAssetWorkspaceStatus{};
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(ToString(workspaceStatus.sourceControl));
+        if (ImGui::IsItemHovered() && !workspaceStatus.detail.empty()) {
+            ImGui::SetTooltip("%s", workspaceStatus.detail.c_str());
+        }
+        ImGui::TableNextColumn();
+        ImGui::Text(
+            "%s / %s",
+            workspaceStatus.dirty ? "Dirty" : "Clean",
+            ToString(workspaceStatus.cook));
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(record.missing ? "yes" : "no");
         ImGui::TableNextColumn();

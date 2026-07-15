@@ -61,7 +61,12 @@ void AppFrameRenderer::DrawMainModel(
     D3D12_GPU_VIRTUAL_ADDRESS cameraBufferAddress,
     D3D12_GPU_VIRTUAL_ADDRESS pointLightBufferAddress,
     D3D12_GPU_VIRTUAL_ADDRESS spotLightBufferAddress,
-    uint32_t indexCount) const {
+    uint32_t indexCount,
+    D3D12_GPU_VIRTUAL_ADDRESS productionLightBufferAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS productionClusterRangeAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS productionClusterIndexAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS productionLightingConstantsAddress,
+    D3D12_GPU_DESCRIPTOR_HANDLE productionShadowAtlasHandle) const {
     if (commandList == nullptr || indexCount == 0 ||
         vertexBufferView.BufferLocation == 0 || indexBufferView.BufferLocation == 0 ||
         materialBufferAddress == 0 || transformBufferAddress == 0 ||
@@ -71,24 +76,66 @@ void AppFrameRenderer::DrawMainModel(
         return;
     }
 
+    PrepareIndirectMainBatch(commandList, vertexBufferView, indexBufferView,
+        materialBufferAddress, textureHandle, receivedTextureHandle,
+        motionMaskTextureHandle, environmentTextureHandle,
+        directionalLightBufferAddress, cameraBufferAddress,
+        pointLightBufferAddress, spotLightBufferAddress,
+        productionLightBufferAddress, productionClusterRangeAddress,
+        productionClusterIndexAddress, productionLightingConstantsAddress,
+        productionShadowAtlasHandle);
+    commandList->SetGraphicsRootConstantBufferView(1, transformBufferAddress);
+    commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+}
+
+bool AppFrameRenderer::PrepareIndirectMainBatch(
+    ID3D12GraphicsCommandList* commandList,
+    const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
+    const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
+    D3D12_GPU_VIRTUAL_ADDRESS materialBufferAddress,
+    D3D12_GPU_DESCRIPTOR_HANDLE textureHandle,
+    D3D12_GPU_DESCRIPTOR_HANDLE normalTextureHandle,
+    D3D12_GPU_DESCRIPTOR_HANDLE motionMaskTextureHandle,
+    D3D12_GPU_DESCRIPTOR_HANDLE environmentTextureHandle,
+    D3D12_GPU_VIRTUAL_ADDRESS directionalLightBufferAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS cameraBufferAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS pointLightBufferAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS spotLightBufferAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS productionLightBufferAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS productionClusterRangeAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS productionClusterIndexAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS productionLightingConstantsAddress,
+    D3D12_GPU_DESCRIPTOR_HANDLE productionShadowAtlasHandle) const {
+    if (commandList == nullptr || vertexBufferView.BufferLocation == 0 ||
+        indexBufferView.BufferLocation == 0 || materialBufferAddress == 0 ||
+        textureHandle.ptr == 0 || directionalLightBufferAddress == 0 ||
+        cameraBufferAddress == 0 || pointLightBufferAddress == 0 ||
+        spotLightBufferAddress == 0) return false;
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
     commandList->IASetIndexBuffer(&indexBufferView);
-
     ge3::graphics::MaterialInstance material{};
-    material.name = "MainModel";
+    material.name = "ProductionIndirect";
     material.parameters.cbv[0] = materialBufferAddress;
-    material.parameters.cbv[1] = transformBufferAddress;
     material.parameters.cbv[3] = directionalLightBufferAddress;
     material.parameters.cbv[6] = cameraBufferAddress;
     material.parameters.cbv[7] = pointLightBufferAddress;
     material.parameters.cbv[8] = spotLightBufferAddress;
     material.textures.srv[2] = textureHandle;
-    material.textures.srv[4] = receivedTextureHandle;
+    material.textures.srv[4] = normalTextureHandle;
     material.textures.srv[5] = motionMaskTextureHandle;
     material.textures.srv[9] = environmentTextureHandle;
     ApplyMaterialInstance(commandList, material);
-    commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+    if (productionLightBufferAddress != 0 && productionClusterRangeAddress != 0 &&
+        productionClusterIndexAddress != 0 && productionLightingConstantsAddress != 0 &&
+        productionShadowAtlasHandle.ptr != 0) {
+        commandList->SetGraphicsRootShaderResourceView(12, productionLightBufferAddress);
+        commandList->SetGraphicsRootShaderResourceView(13, productionClusterRangeAddress);
+        commandList->SetGraphicsRootShaderResourceView(14, productionClusterIndexAddress);
+        commandList->SetGraphicsRootConstantBufferView(15, productionLightingConstantsAddress);
+        commandList->SetGraphicsRootDescriptorTable(16, productionShadowAtlasHandle);
+    }
+    return true;
 }
 
 void AppFrameRenderer::DrawSkinnedModel(
@@ -141,7 +188,7 @@ void AppFrameRenderer::DrawSkinnedModel(
     material.textures.srv[5] = motionMaskTextureHandle;
     material.textures.srv[9] = environmentTextureHandle;
     ApplyMaterialInstance(commandList, material);
-    commandList->SetGraphicsRootDescriptorTable(12, matrixPaletteHandle);
+    commandList->SetGraphicsRootDescriptorTable(18, matrixPaletteHandle);
     commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
 }
 

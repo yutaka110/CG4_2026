@@ -24,6 +24,12 @@ enum class EditorDomainId : uint32_t {
     CameraRig,
     GameplayTuning,
     RenderGraphPass,
+    SceneEntity,
+    SequencerKey,
+    MaterialGraphNode,
+    VfxGraphNode,
+    AnimationStateMachineNode,
+    GameplayVisualScriptNode,
 };
 
 struct EditorObjectHandle {
@@ -41,6 +47,8 @@ public:
     void Clear();
     void SetPrimary(EditorObjectHandle handle);
     void Add(EditorObjectHandle handle);
+    void Remove(const EditorObjectHandle& handle);
+    void Toggle(EditorObjectHandle handle);
     void Set(std::vector<EditorObjectHandle> handles);
 
     bool Empty() const { return handles_.empty(); }

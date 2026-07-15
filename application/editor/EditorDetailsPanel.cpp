@@ -1,10 +1,14 @@
 #include "EditorDetailsPanel.h"
 
+#include "prefab/EditorPrefabService.h"
+#include "world/SceneWorldObjectProvider.h"
+
 #include "../../externals/imgui/imgui.h"
 
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -313,7 +317,8 @@ DetailsPropertyWidgetResult CaptureImmediateWidgetResult(bool changed) {
 DetailsPropertyWidgetResult DrawPropertyEditor(
     const EditorPropertyDescriptor& descriptor,
     EditorPropertyValue& value,
-    const EditorAssetRegistry* assetRegistry) {
+    const EditorAssetRegistry* assetRegistry,
+    const EditorWorldModel* worldModel) {
     switch (descriptor.kind) {
     case EditorPropertyKind::Bool:
         return CaptureImmediateWidgetResult(ImGui::Checkbox("##value", &value.boolValue));
@@ -371,9 +376,9 @@ DetailsPropertyWidgetResult DrawPropertyEditor(
                 bool changed = false;
                 const char* preview = value.stringValue.empty() ? "<unset>" : value.stringValue.c_str();
                 if (ImGui::BeginCombo("##value", preview)) {
-                    const bool unresolved =
-                        !value.stringValue.empty() &&
-                        assetRegistry->Find(descriptor.assetKind, value.stringValue) == nullptr;
+                    const EditorAssetReferenceResolution currentResolution =
+                        assetRegistry->ResolveReference(descriptor.assetKind, value.stringValue);
+                    const bool unresolved = !value.stringValue.empty() && !currentResolution.resolved;
                     if (unresolved) {
                         ImGui::TextDisabled("Unresolved: %s", value.stringValue.c_str());
                         ImGui::Separator();
@@ -385,7 +390,7 @@ DetailsPropertyWidgetResult DrawPropertyEditor(
                         if (!asset->referenceable) {
                             continue;
                         }
-                        const bool selected = asset->id == value.stringValue;
+                        const bool selected = currentResolution.record == asset;
                         if (asset->missing) {
                             ImGui::BeginDisabled();
                         }
@@ -410,12 +415,69 @@ DetailsPropertyWidgetResult DrawPropertyEditor(
                     }
                     ImGui::EndCombo();
                 }
+                ImGui::SameLine();
+                ImGui::SmallButton("Drop##assetRef");
+                if (ImGui::BeginDragDropTarget()) {
+                    if (const ImGuiPayload* raw =
+                            ImGui::AcceptDragDropPayload(kEditorAssetDragDropPayloadId)) {
+                        if (raw->DataSize == sizeof(EditorAssetDragDropPayload) && raw->Data != nullptr) {
+                            const auto& payload =
+                                *static_cast<const EditorAssetDragDropPayload*>(raw->Data);
+                            if (payload.kind == descriptor.assetKind) {
+                                const EditorAssetRecord* dropped =
+                                    assetRegistry->FindByGuid(payload.guid.data());
+                                if (dropped != nullptr && dropped->referenceable && !dropped->missing) {
+                                    value.stringValue = dropped->id;
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                    ImGui::EndDragDropTarget();
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Drop a %s Asset from Content Browser.", ToString(descriptor.assetKind));
+                }
                 return CaptureImmediateWidgetResult(changed);
             }
         }
         [[fallthrough]];
-    case EditorPropertyKind::String:
     case EditorPropertyKind::ObjectRef: {
+        bool changed = false;
+        if (worldModel != nullptr && ImGui::BeginCombo(
+                "##value", value.stringValue.empty() ? "<unset>" : value.stringValue.c_str())) {
+            if (ImGui::Selectable("<unset>", value.stringValue.empty())) {
+                value.stringValue.clear();
+                changed = true;
+            }
+            for (const EditorWorldObjectRecord& object : worldModel->Objects()) {
+                if (object.missing) continue;
+                const bool selected = value.stringValue == object.handle.stableId;
+                const std::string label = object.displayName.empty()
+                    ? object.handle.stableId : object.displayName + "##" + object.handle.stableId;
+                if (ImGui::Selectable(label.c_str(), selected)) {
+                    value.stringValue = object.handle.stableId;
+                    changed = true;
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s\n%s", object.typeName.c_str(), object.handle.stableId.c_str());
+                }
+            }
+            ImGui::EndCombo();
+        }
+        return CaptureImmediateWidgetResult(changed);
+    }
+    case EditorPropertyKind::Array:
+    case EditorPropertyKind::Map:
+    case EditorPropertyKind::Struct: {
+        std::array<char, 1024> buffer{};
+        std::snprintf(buffer.data(), buffer.size(), "%s", value.stringValue.c_str());
+        const bool changed = ImGui::InputTextMultiline(
+            "##value", buffer.data(), buffer.size(), ImVec2(0.0f, 58.0f));
+        if (changed) value.stringValue = buffer.data();
+        return CaptureContinuousWidgetResult(changed);
+    }
+    case EditorPropertyKind::String: {
         std::array<char, 256> buffer{};
         std::snprintf(buffer.data(), buffer.size(), "%s", value.stringValue.c_str());
         if (ImGui::InputText("##value", buffer.data(), buffer.size())) {
@@ -689,6 +751,69 @@ void DrawDetailsEditFailureTooltip(const EditorPropertyEditSessionResult& result
     }
 }
 
+bool EvaluateEditCondition(
+    const EditorDetailsPanelContext& context,
+    const std::vector<EditorObjectHandle>& selectedObjects,
+    const EditorPropertyDescriptor& descriptor,
+    std::string& reason) {
+    if (descriptor.editConditionProperty.empty()) return true;
+    const EditorPropertyDescriptor* condition = context.propertyRegistry->Find(
+        descriptor.domain, descriptor.editConditionProperty);
+    if (condition == nullptr) {
+        reason = "Edit condition property is not registered: " + descriptor.editConditionProperty;
+        return false;
+    }
+    for (const EditorObjectHandle& object : selectedObjects) {
+        EditorPropertyValue value{};
+        if (!context.propertyAccessor->CanAccess(object, *condition) ||
+            !context.propertyAccessor->Get(object, *condition, value)) {
+            reason = "Edit condition value is unavailable: " + descriptor.editConditionProperty;
+            return false;
+        }
+        if (FormatEditorPropertyValue(*condition, value) != descriptor.editConditionExpectedValue) {
+            reason = descriptor.editConditionProperty + " must equal " +
+                descriptor.editConditionExpectedValue;
+            return false;
+        }
+    }
+    return true;
+}
+
+const EditorValidationIssue* FindPropertyValidationIssue(
+    const EditorValidationReport* report,
+    const std::vector<EditorObjectHandle>& selectedObjects,
+    const EditorPropertyDescriptor& descriptor) {
+    if (report == nullptr) return nullptr;
+    const EditorValidationIssue* best = nullptr;
+    for (const EditorValidationIssue& issue : report->issues) {
+        const std::string suffix = "." + descriptor.name;
+        const bool propertyMatches =
+            issue.propertyPath == descriptor.name ||
+            issue.propertyPath == descriptor.displayName ||
+            (issue.propertyPath.size() > suffix.size() &&
+                issue.propertyPath.compare(
+                    issue.propertyPath.size() - suffix.size(), suffix.size(), suffix) == 0);
+        if (!propertyMatches) continue;
+        const bool targetSelected = std::any_of(
+            selectedObjects.begin(), selectedObjects.end(),
+            [&](const EditorObjectHandle& object) { return issue.target.SameObject(object); });
+        if (!targetSelected) continue;
+        if (best == nullptr || static_cast<int>(issue.severity) > static_cast<int>(best->severity)) {
+            best = &issue;
+        }
+    }
+    return best;
+}
+
+bool IsChangedProperty(
+    const EditorPropertyDescriptor& descriptor,
+    const DetailsSelectionPropertyState& state,
+    const DetailsDeltaView& delta) {
+    if (!delta.afterValue.empty() || state.mixed) return true;
+    return descriptor.resettable && !descriptor.defaultValue.empty() &&
+        state.displayValue != descriptor.defaultValue;
+}
+
 const char* DescriptorStateText(
     const EditorPropertyDescriptor& descriptor,
     bool canAccess,
@@ -737,6 +862,9 @@ void DrawCustomDetailsSections(
     sectionContext.validationReport = context.validationReport;
     sectionContext.canMutateAuthoring = context.canMutateAuthoring;
     sectionContext.source = "editor.details.section";
+    sectionContext.worldMutations = context.worldMutations;
+    sectionContext.sceneWorldProvider = context.sceneWorldProvider;
+    sectionContext.onWorldMutated = context.onWorldMutated;
 
     ImGui::Separator();
     for (EditorDetailsSectionProvider* provider : providers) {
@@ -770,6 +898,10 @@ void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context) {
         ImGui::TextUnformatted("Property edit session unavailable.");
         return;
     }
+    static EditorDetailsViewState fallbackViewState;
+    EditorDetailsViewState& viewState =
+        context.viewState != nullptr ? *context.viewState : fallbackViewState;
+    viewState.EnsureLoaded();
 
     const std::vector<EditorObjectHandle>& selectedObjects = context.selection->Handles();
     const EditorObjectHandle* selected = context.selection->Primary();
@@ -794,6 +926,78 @@ void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context) {
         FindDetailsPropertyIntersection(*context.propertyRegistry, selectedObjects);
     DrawSelectedObjectHeader(selectedObjects, properties.size());
     DrawSelectedValidationIssues(context.validationReport, selectedObjects);
+    if (selectedObjects.size() == 1 && context.prefabService != nullptr &&
+        context.sceneWorldProvider != nullptr) {
+        const EditorSceneEntity* entity = context.sceneWorldProvider->ResolveEntity(*selected);
+        const EditorScenePrefabInstance* instance = entity != nullptr
+            ? context.prefabService->InstanceForEntity(entity->guid) : nullptr;
+        if (instance != nullptr &&
+            ImGui::CollapsingHeader("Prefab Instance", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Text("Asset: %s", instance->prefabAssetGuid.c_str());
+            const char* status = "Connected";
+            if (instance->status == EditorScenePrefabInstanceStatus::MissingAsset) {
+                status = "Missing Asset";
+            } else if (instance->status == EditorScenePrefabInstanceStatus::Disconnected) {
+                status = "Disconnected";
+            }
+            ImGui::Text("Status: %s | Overrides: %zu", status, instance->overrides.size());
+            ImGui::BeginDisabled(!context.canMutateAuthoring);
+            EditorPrefabOperationResult operation{};
+            bool executed = false;
+            if (instance->status == EditorScenePrefabInstanceStatus::MissingAsset) {
+                if (ImGui::Button("Recover Missing Prefab")) {
+                    operation = context.prefabService->RecoverMissingInstance(instance->instanceGuid);
+                    executed = true;
+                }
+            } else {
+                ImGui::BeginDisabled(instance->overrides.empty());
+                if (ImGui::Button("Apply Overrides")) {
+                    operation = context.prefabService->ApplyInstance(instance->instanceGuid);
+                    executed = true;
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button("Revert Instance")) {
+                    operation = context.prefabService->RevertInstance(instance->instanceGuid);
+                    executed = true;
+                }
+            }
+            ImGui::EndDisabled();
+            if (executed && context.notifications != nullptr) {
+                context.notifications->Push(
+                    operation.succeeded
+                        ? EditorNotificationSeverity::Info
+                        : EditorNotificationSeverity::Error,
+                    "Prefab", operation.message);
+            }
+            ImGui::Separator();
+        }
+    }
+    std::array<char, 128> searchBuffer{};
+    std::snprintf(searchBuffer.data(), searchBuffer.size(), "%s", viewState.SearchText().c_str());
+    ImGui::SetNextItemWidth(260.0f);
+    if (ImGui::InputText("Property Search", searchBuffer.data(), searchBuffer.size())) {
+        viewState.SetSearchText(searchBuffer.data());
+    }
+    bool favoritesOnly = viewState.FavoritesOnly();
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Favorites", &favoritesOnly)) viewState.SetFavoritesOnly(favoritesOnly);
+    bool changedOnly = viewState.ChangedOnly();
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Changed", &changedOnly)) viewState.SetChangedOnly(changedOnly);
+    ImGui::SameLine();
+    if (ImGui::Button("Categories")) ImGui::OpenPopup("DetailsCategories");
+    if (ImGui::BeginPopup("DetailsCategories")) {
+        std::set<std::string> categories;
+        for (const EditorPropertyDescriptor* property : properties) {
+            if (property != nullptr) categories.insert(property->category);
+        }
+        for (const std::string& category : categories) {
+            bool open = viewState.IsCategoryOpen(category);
+            if (ImGui::Checkbox(category.c_str(), &open)) viewState.SetCategoryOpen(category, open);
+        }
+        ImGui::EndPopup();
+    }
     ImGui::Separator();
 
     if (!singleDomainSelection) {
@@ -810,7 +1014,7 @@ void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context) {
 
     if (!ImGui::BeginTable(
             "EditorDetailsProperties",
-            7,
+            9,
             ImGuiTableFlags_Borders |
                 ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_Resizable |
@@ -819,24 +1023,39 @@ void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context) {
         return;
     }
 
-    ImGui::TableSetupColumn("Category", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+    ImGui::TableSetupColumn("Fav", ImGuiTableColumnFlags_WidthFixed, 38.0f);
+    ImGui::TableSetupColumn("Category", ImGuiTableColumnFlags_WidthFixed, 120.0f);
     ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 180.0f);
     ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 72.0f);
     ImGui::TableSetupColumn("Range", ImGuiTableColumnFlags_WidthFixed, 110.0f);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 280.0f);
     ImGui::TableSetupColumn("Delta", ImGuiTableColumnFlags_WidthFixed, 170.0f);
-    ImGui::TableSetupColumn("State");
+    ImGui::TableSetupColumn("State/Validation", ImGuiTableColumnFlags_WidthFixed, 190.0f);
+    ImGui::TableSetupColumn("Prefab");
     ImGui::TableHeadersRow();
 
     for (const EditorPropertyDescriptor* descriptor : properties) {
         if (descriptor == nullptr) {
             continue;
         }
+        if (!viewState.Matches(*descriptor) ||
+            !viewState.IsCategoryOpen(descriptor->category)) continue;
 
         const DetailsDeltaView delta =
             FindSelectionDeltaView(context.transactions, selectedObjects, *descriptor);
         const DetailsSelectionPropertyState propertyState =
             ReadSelectionPropertyState(*context.propertyAccessor, selectedObjects, *descriptor);
+        const bool changedProperty = IsChangedProperty(*descriptor, propertyState, delta);
+        if (viewState.ChangedOnly() && !changedProperty) continue;
+        std::string editConditionReason;
+        const bool editConditionMet = EvaluateEditCondition(
+            context, selectedObjects, *descriptor, editConditionReason);
+        const EditorValidationIssue* validationIssue = FindPropertyValidationIssue(
+            context.validationReport, selectedObjects, *descriptor);
+        const EditorPrefabOverrideInfo prefabInfo =
+            context.prefabOverrides != nullptr && !selectedObjects.empty()
+            ? context.prefabOverrides->QueryOverride(selectedObjects.front(), *descriptor)
+            : EditorPrefabOverrideInfo{};
         const bool canAccess = propertyState.canAccess;
         const bool supportsSelectionEdit =
             selectedObjects.size() <= 1 || descriptor->supportsMultiEdit;
@@ -848,12 +1067,30 @@ void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context) {
             canAccess &&
             !descriptor->readOnly &&
             !editLocked &&
+            editConditionMet &&
             supportsSelectionEdit;
         ImGui::TableNextRow();
+        if (changedProperty) {
+            ImGui::TableSetBgColor(
+                ImGuiTableBgTarget_RowBg0,
+                IM_COL32(96, 72, 16, 90));
+        }
+        ImGui::TableNextColumn();
+        ImGui::PushID((descriptor->name + ".favorite").c_str());
+        const bool favorite = viewState.IsFavorite(descriptor->domain, descriptor->name);
+        if (ImGui::SmallButton(favorite ? "*" : "+")) {
+            viewState.ToggleFavorite(descriptor->domain, descriptor->name);
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip(favorite ? "Remove Favorite" : "Add Favorite");
+        ImGui::PopID();
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(descriptor->category.c_str());
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted(descriptor->displayName.c_str());
+        if (changedProperty) {
+            ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.25f, 1.0f), "* %s", descriptor->displayName.c_str());
+        } else {
+            ImGui::TextUnformatted(descriptor->displayName.c_str());
+        }
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(ToString(descriptor->kind));
         ImGui::TableNextColumn();
@@ -883,7 +1120,11 @@ void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context) {
             }
             EditorPropertyValue editedValue = propertyState.value;
             const DetailsPropertyWidgetResult editResult =
-                DrawPropertyEditor(*descriptor, editedValue, context.assetRegistry);
+                DrawPropertyEditor(
+                    *descriptor,
+                    editedValue,
+                    context.assetRegistry,
+                    context.worldModel);
             if (editResult.activated) {
                 const EditorPropertyEditSessionResult beginResult =
                     BeginDetailsPropertyEditForTargets(editContext, selectedObjects, *descriptor);
@@ -941,7 +1182,39 @@ void DrawEditorDetailsPanel(const EditorDetailsPanelContext& context) {
             ImGui::TextUnformatted("-");
         }
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted(DescriptorStateText(*descriptor, canAccess, editLocked, delta));
+        if (validationIssue != nullptr) {
+            ImGui::TextColored(
+                ColorForValidationSeverity(validationIssue->severity),
+                "%s: %s",
+                ToString(validationIssue->severity),
+                validationIssue->message.c_str());
+        } else if (!editConditionMet) {
+            ImGui::TextDisabled("Condition: %s", editConditionReason.c_str());
+        } else {
+            ImGui::TextUnformatted(DescriptorStateText(*descriptor, canAccess, editLocked, delta));
+        }
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(ToString(prefabInfo.state));
+        if (prefabInfo.canRevert && context.prefabOverrides != nullptr && selectedObjects.size() == 1) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Revert")) {
+                std::string error;
+                if (!context.prefabOverrides->RevertOverride(
+                        selectedObjects.front(), *descriptor, &error) &&
+                    context.notifications != nullptr) {
+                    context.notifications->Push(
+                        EditorNotificationSeverity::Error,
+                        "Prefab Override",
+                        error);
+                }
+            }
+        }
+        if (ImGui::IsItemHovered() && (!prefabInfo.detail.empty() || !prefabInfo.sourcePrefab.empty())) {
+            ImGui::SetTooltip(
+                "%s\nSource: %s",
+                prefabInfo.detail.c_str(),
+                prefabInfo.sourcePrefab.empty() ? "-" : prefabInfo.sourcePrefab.c_str());
+        }
     }
 
     ImGui::EndTable();

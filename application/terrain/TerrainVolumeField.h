@@ -2,6 +2,7 @@
 
 #include "RailPath.h"
 #include "TerrainGenerationSettings.h"
+#include "TerrainEditLayer.h"
 #include "utils/math/Vector.h"
 
 struct TerrainVolumeLocalSample {
@@ -18,7 +19,9 @@ class TerrainVolumeField {
 public:
     TerrainVolumeField(
         const RailPath& railPath,
-        const TerrainGenerationSettings& settings);
+        const TerrainGenerationSettings& settings,
+        const TerrainEditLayer* edits = nullptr,
+        const TerrainEditLayer* preview = nullptr);
 
     TerrainVolumeLocalSample SampleLocal(
         float distance,
@@ -30,6 +33,7 @@ public:
         Vector3* outNormal = nullptr) const;
     float OpeningMask(float distance, float angle) const;
     float OpenCanyonBlend(float distance) const;
+    float PaintVariation(float distance, float angle) const;
     Vector3 EstimateNormal(
         float distance,
         float lateral,
@@ -43,4 +47,6 @@ private:
 
     const RailPath& railPath_;
     const TerrainGenerationSettings& settings_;
+    const TerrainEditLayer* edits_ = nullptr;
+    const TerrainEditLayer* preview_ = nullptr;
 };

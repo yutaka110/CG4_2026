@@ -267,6 +267,9 @@ EditorPropertyValidationResult ValidateEditorPropertyValue(
     case EditorPropertyKind::String:
     case EditorPropertyKind::ObjectRef:
     case EditorPropertyKind::AssetRef:
+    case EditorPropertyKind::Array:
+    case EditorPropertyKind::Map:
+    case EditorPropertyKind::Struct:
         break;
     case EditorPropertyKind::Enum:
         if (!descriptor.enumOptions.empty() &&
@@ -589,6 +592,7 @@ EditorPropertyApplyDeltaResult EditorPropertyEditService::ApplyDelta(
         EditorPropertyValue applyValue;
         EditorPropertyValue currentValue;
         bool hadCurrentValue = false;
+        std::string appliedValueSummary;
     };
     std::vector<PreparedDelta> prepared;
     prepared.reserve(changes.size());
@@ -666,6 +670,7 @@ EditorPropertyApplyDeltaResult EditorPropertyEditService::ApplyDelta(
         }
 
         const std::string afterSummary = FormatEditorPropertyValue(*delta.descriptor, afterValue);
+        applied.back().appliedValueSummary = afterSummary;
         changed = changed ||
             !delta.hadCurrentValue ||
             FormatEditorPropertyValue(*delta.descriptor, delta.currentValue) != afterSummary;
@@ -673,7 +678,16 @@ EditorPropertyApplyDeltaResult EditorPropertyEditService::ApplyDelta(
             appliedSummary += "; ";
         }
         appliedSummary += delta.change.propertyPath + "=" + afterSummary;
-        MarkDeltaDirty(request, *delta.descriptor, delta.change.target, afterSummary);
+    }
+
+    // Dirty state is published only after every target has applied successfully. If a later
+    // target fails, rollback restores values without leaving a partially committed dirty state.
+    for (const PreparedDelta& delta : applied) {
+        MarkDeltaDirty(
+            request,
+            *delta.descriptor,
+            delta.change.target,
+            delta.appliedValueSummary);
     }
 
     return MakeDeltaResult(

@@ -1,0 +1,9 @@
+format=editor-autosave-v1
+type=course
+guid=3238c262ad101d3f37027db2de8ebb2f
+sourcePath=Resources/courses/CanyonAssaultRoute01.course
+documentRevision=2
+schemaVersion=3
+sourceContentHash=13784233719877253482
+sourceWriteTime=134278670699121976
+autosaveContentHash=10047265870347055763

@@ -4,6 +4,7 @@
 #include "EditorAssetMeshThumbnailPreviewRenderer.h"
 #include "EditorAssetPreviewSceneRenderer.h"
 #include "EditorAssetThumbnailTextureLoader.h"
+#include "mesh/EditorProductionMeshAsset.h"
 
 #include <assimp/Importer.hpp>
 #include <assimp/material.h>
@@ -459,6 +460,62 @@ bool BuildProductionPreviewMeshPayload(
         extension != ".glb" &&
         extension != ".mesh") {
         return false;
+    }
+
+    if (extension == ".mesh") {
+        std::error_code sourceSizeError;
+        const std::uintmax_t sourceSize = std::filesystem::file_size(sourcePath, sourceSizeError);
+        std::ifstream source;
+        if (!sourceSizeError && sourceSize <= 64u * 1024u * 1024u) {
+            source.open(sourcePath, std::ios::binary);
+        }
+        std::ostringstream text;
+        if (source) text << source.rdbuf();
+        EditorProductionMeshAssetDocument document{};
+        if (source && EditorProductionMeshAssetDocument::Deserialize(
+                text.str(), document, nullptr)) {
+            constexpr std::size_t kMaxBakedPreviewTriangles = 4096;
+            outPayload = {};
+            outPayload.productionLoader = true;
+            bool hasBounds = false;
+            Vec3 minimum{};
+            Vec3 maximum{};
+            outPayload.vertices.reserve(document.geometry.vertices.size());
+            for (const EditorGeometryVertex& sourceVertex : document.geometry.vertices) {
+                PreviewMeshVertex vertex{};
+                vertex.position[0] = sourceVertex.position.x;
+                vertex.position[1] = sourceVertex.position.y;
+                vertex.position[2] = sourceVertex.position.z;
+                vertex.normal[0] = sourceVertex.normal.x;
+                vertex.normal[1] = sourceVertex.normal.y;
+                vertex.normal[2] = sourceVertex.normal.z;
+                vertex.texcoord[0] = sourceVertex.u;
+                vertex.texcoord[1] = sourceVertex.v;
+                const std::array<float, 3> color = MaterialColor(request.swatchRgba, 0, 1);
+                vertex.color[0] = color[0];
+                vertex.color[1] = color[1];
+                vertex.color[2] = color[2];
+                vertex.roughness = 0.58f;
+                outPayload.vertices.push_back(vertex);
+                AccumulateBounds(
+                    {sourceVertex.position.x, sourceVertex.position.y, sourceVertex.position.z},
+                    minimum, maximum, hasBounds);
+            }
+            const std::size_t triangleCount = (std::min)(
+                document.geometry.triangles.size(), kMaxBakedPreviewTriangles);
+            uint32_t maxSlot = 0;
+            outPayload.indices.reserve(triangleCount * 3);
+            for (std::size_t index = 0; index < triangleCount; ++index) {
+                const EditorGeometryTriangle& triangle = document.geometry.triangles[index];
+                outPayload.indices.insert(outPayload.indices.end(),
+                    {triangle.vertices[0], triangle.vertices[1], triangle.vertices[2]});
+                maxSlot = (std::max)(maxSlot, triangle.materialSlot);
+            }
+            outPayload.materialSlotCount = maxSlot + 1;
+            outMinPoint = minimum;
+            outMaxPoint = maximum;
+            return hasBounds && !outPayload.indices.empty();
+        }
     }
 
     Assimp::Importer importer;

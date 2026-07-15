@@ -89,6 +89,8 @@ struct EditorToolbarItemDescriptor {
     bool visible = true;
     bool allowReplace = true;
     EditorToolFeatureGate feature{};
+    std::string contextualDocumentType;
+    std::string compactLabel;
 };
 
 struct EditorMenuSectionDescriptor {
@@ -112,6 +114,7 @@ struct EditorMenuItemDescriptor {
     bool visible = true;
     bool allowReplace = true;
     EditorToolFeatureGate feature{};
+    std::string contextualDocumentType;
 };
 
 struct EditorAssetProviderDescriptor {

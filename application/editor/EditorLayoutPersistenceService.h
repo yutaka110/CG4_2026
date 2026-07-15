@@ -27,6 +27,26 @@ public:
 
     bool IsPanelVisible(std::string_view panelId, bool fallback = true) const;
     void SetPanelVisible(std::string_view panelId, bool visible);
+    bool IsPanelPinned(std::string_view panelId, bool fallback = false) const;
+    void SetPanelPinned(std::string_view panelId, bool pinned);
+    EditorBottomDockGroup BottomDockGroup(
+        std::string_view panelId,
+        EditorBottomDockGroup fallback) const;
+    void SetBottomDockGroup(
+        std::string_view panelId,
+        EditorBottomDockGroup group);
+    EditorBottomDockGroup ActiveBottomDockGroup() const {
+        return activeBottomDockGroup_;
+    }
+    void SetActiveBottomDockGroup(EditorBottomDockGroup group);
+    const std::string& BottomDockSearch() const { return bottomDockSearch_; }
+    void SetBottomDockSearch(std::string search);
+    bool BottomDockDeveloperPanelsVisible() const {
+        return bottomDockDeveloperPanelsVisible_;
+    }
+    void SetBottomDockDeveloperPanelsVisible(bool visible);
+    bool OverlayOption(std::string_view optionId, bool fallback = false) const;
+    void SetOverlayOption(std::string_view optionId, bool enabled);
 
     std::string ActivePanel(EditorPanelHostArea area) const;
     void SetActivePanel(EditorPanelHostArea area, std::string_view panelId);
@@ -69,7 +89,13 @@ private:
     std::string workspacePreset_ = "Authoring";
 
     std::unordered_map<std::string, bool> panelVisibility_;
+    std::unordered_map<std::string, bool> panelPinned_;
+    std::unordered_map<std::string, EditorBottomDockGroup> bottomDockGroups_;
+    std::unordered_map<std::string, bool> overlayOptions_;
     std::unordered_map<EditorPanelHostArea, std::string> activePanels_;
+    EditorBottomDockGroup activeBottomDockGroup_ = EditorBottomDockGroup::Output;
+    std::string bottomDockSearch_;
+    bool bottomDockDeveloperPanelsVisible_ = false;
 };
 
 } // namespace editor

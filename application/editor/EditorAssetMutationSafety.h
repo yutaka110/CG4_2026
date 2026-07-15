@@ -8,9 +8,11 @@
 namespace editor {
 
 enum class EditorAssetMutationKind {
+    Duplicate,
     Rename,
     Move,
     Delete,
+    RepairReferences,
 };
 
 enum class EditorAssetMutationRisk {

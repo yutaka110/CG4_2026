@@ -122,6 +122,9 @@ std::string FormatEditorPropertyValue(
     case EditorPropertyKind::Enum:
     case EditorPropertyKind::AssetRef:
     case EditorPropertyKind::ObjectRef:
+    case EditorPropertyKind::Array:
+    case EditorPropertyKind::Map:
+    case EditorPropertyKind::Struct:
         return value.stringValue;
     }
     return {};
@@ -175,6 +178,9 @@ bool ParseEditorPropertyValue(
     case EditorPropertyKind::String:
     case EditorPropertyKind::AssetRef:
     case EditorPropertyKind::ObjectRef:
+    case EditorPropertyKind::Array:
+    case EditorPropertyKind::Map:
+    case EditorPropertyKind::Struct:
         outValue.stringValue = std::string(text);
         return true;
     case EditorPropertyKind::Enum:

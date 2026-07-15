@@ -14,6 +14,7 @@
 #include "editor/EditorModalConfirmService.h"
 #include "editor/EditorTransactionStack.h"
 #include "editor/EditorViewportAuthoringInputGuard.h"
+#include "editor/sequencer/EditorSequencer.h"
 
 #include "../../externals/imgui/imgui.h"
 
@@ -354,6 +355,184 @@ bool DrawAuthoringTimeline(
         }
     }
 
+    return changed;
+}
+
+bool DrawProviderSequencer(
+    const CourseTimelineDebugPanelInput& input,
+    bool canMutate,
+    std::string& authoringStatus) {
+    editor::EditorSequencerService* sequencer = input.sequencer;
+    if (sequencer == nullptr) return false;
+
+    sequencer->SetPreviewPosition(input.currentDistance, false);
+    bool changed = false;
+    const bool keyboardShortcutAllowed =
+        ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        !ImGui::GetIO().WantTextInput && ImGui::GetIO().KeyCtrl;
+    const bool copyShortcut = keyboardShortcutAllowed && ImGui::IsKeyPressed(ImGuiKey_C, false);
+    const bool pasteShortcut = keyboardShortcutAllowed && ImGui::IsKeyPressed(ImGuiKey_V, false);
+    if (ImGui::Button("Copy Keys")) {
+        std::string error;
+        authoringStatus = sequencer->CopySelection(error)
+            ? "Copied " + std::to_string(sequencer->ClipboardCount()) + " Sequencer key(s)."
+            : error;
+    }
+    if (copyShortcut) {
+        std::string error;
+        authoringStatus = sequencer->CopySelection(error)
+            ? "Copied " + std::to_string(sequencer->ClipboardCount()) + " Sequencer key(s)."
+            : error;
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!canMutate || sequencer->ClipboardCount() == 0);
+    if (ImGui::Button("Paste Keys")) {
+        std::string error;
+        changed = sequencer->PasteAt(sequencer->PreviewPosition(), error);
+        authoringStatus = changed ? "Pasted Sequencer keys." : error;
+    }
+    if (pasteShortcut && canMutate && sequencer->ClipboardCount() > 0) {
+        std::string error;
+        changed = sequencer->PasteAt(sequencer->PreviewPosition(), error);
+        authoringStatus = changed ? "Pasted Sequencer keys." : error;
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    bool snapEnabled = sequencer->SnapEnabled();
+    if (ImGui::Checkbox("Snap", &snapEnabled)) sequencer->SetSnapEnabled(snapEnabled);
+    ImGui::SameLine();
+    float snapInterval = static_cast<float>(sequencer->SnapInterval());
+    ImGui::SetNextItemWidth(90.0f);
+    if (ImGui::DragFloat("##SequencerSnap", &snapInterval, 0.5f, 0.1f, 100.0f, "%.1fm")) {
+        sequencer->SetSnapInterval(snapInterval);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled(
+        "Selected %u | Clipboard %u | Ctrl/Shift-click multi-select",
+        static_cast<unsigned int>(sequencer->Selection().size()),
+        static_cast<unsigned int>(sequencer->ClipboardCount()));
+
+    const std::vector<editor::EditorSequencerTrack> tracks = sequencer->BuildTracks();
+    const float railLength = (std::max)(1.0f, input.railLength);
+    const ImVec2 canvasPos = ImGui::GetCursorScreenPos();
+    const float canvasWidth = (std::max)(ImGui::GetContentRegionAvail().x, 420.0f);
+    constexpr float headerWidth = 138.0f;
+    constexpr float rulerHeight = 24.0f;
+    constexpr float rowHeight = 28.0f;
+    const float canvasHeight = rulerHeight + rowHeight * static_cast<float>(tracks.size());
+    const float trackLeft = canvasPos.x + headerWidth;
+    const float trackWidth = (std::max)(1.0f, canvasWidth - headerWidth);
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(
+        canvasPos,
+        ImVec2(canvasPos.x + canvasWidth, canvasPos.y + canvasHeight),
+        IM_COL32(15, 18, 23, 255), 4.0f);
+    drawList->AddRect(
+        canvasPos,
+        ImVec2(canvasPos.x + canvasWidth, canvasPos.y + canvasHeight),
+        IM_COL32(75, 88, 104, 255), 4.0f);
+    drawList->AddLine(
+        ImVec2(trackLeft, canvasPos.y),
+        ImVec2(trackLeft, canvasPos.y + canvasHeight),
+        IM_COL32(62, 72, 86, 255));
+    for (int tick = 0; tick <= 10; ++tick) {
+        const float x = trackLeft + trackWidth * static_cast<float>(tick) / 10.0f;
+        drawList->AddLine(
+            ImVec2(x, canvasPos.y + rulerHeight),
+            ImVec2(x, canvasPos.y + canvasHeight),
+            IM_COL32(43, 50, 61, 180));
+        char text[32]{};
+        std::snprintf(text, sizeof(text), "%.0f", railLength * tick / 10.0f);
+        drawList->AddText(ImVec2(x + 2.0f, canvasPos.y + 4.0f), IM_COL32(145, 157, 173, 255), text);
+    }
+    for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex) {
+        const editor::EditorSequencerTrack& track = tracks[trackIndex];
+        const float rowTop = canvasPos.y + rulerHeight + rowHeight * static_cast<float>(trackIndex);
+        if ((trackIndex & 1u) != 0u) {
+            drawList->AddRectFilled(
+                ImVec2(canvasPos.x, rowTop),
+                ImVec2(canvasPos.x + canvasWidth, rowTop + rowHeight),
+                IM_COL32(24, 28, 35, 160));
+        }
+        drawList->AddText(
+            ImVec2(canvasPos.x + 7.0f, rowTop + 6.0f),
+            track.locked ? IM_COL32(120, 126, 136, 255) : IM_COL32(218, 225, 234, 255),
+            track.label.c_str());
+    }
+    const float previewX = trackLeft +
+        static_cast<float>((std::clamp)(sequencer->PreviewPosition() / railLength, 0.0, 1.0)) * trackWidth;
+    drawList->AddLine(
+        ImVec2(previewX, canvasPos.y),
+        ImVec2(previewX, canvasPos.y + canvasHeight),
+        IM_COL32(255, 255, 255, 255), 2.0f);
+
+    ImGui::Dummy(ImVec2(canvasWidth, canvasHeight));
+    bool keyHovered = false;
+    static float dragStartX = 0.0f;
+    for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex) {
+        const editor::EditorSequencerTrack& track = tracks[trackIndex];
+        const float rowTop = canvasPos.y + rulerHeight + rowHeight * static_cast<float>(trackIndex);
+        for (std::size_t keyIndex = 0; keyIndex < track.keys.size(); ++keyIndex) {
+            const editor::EditorSequencerKeyState& key = track.keys[keyIndex];
+            const float x = trackLeft +
+                static_cast<float>((std::clamp)(key.time / railLength, 0.0, 1.0)) * trackWidth;
+            const bool selected = sequencer->IsSelected(key.handle);
+            const ImU32 color = static_cast<ImU32>(track.colorRgba);
+            drawList->AddCircleFilled(ImVec2(x, rowTop + rowHeight * 0.5f), selected ? 6.5f : 5.0f, color);
+            if (selected) {
+                drawList->AddCircle(ImVec2(x, rowTop + rowHeight * 0.5f), 8.0f, IM_COL32(255, 255, 255, 255), 0, 2.0f);
+            }
+            ImGui::SetCursorScreenPos(ImVec2(x - 9.0f, rowTop + 3.0f));
+            ImGui::PushID(track.id.c_str());
+            ImGui::PushID(static_cast<int>(keyIndex));
+            ImGui::InvisibleButton("##SequencerKey", ImVec2(18.0f, rowHeight - 6.0f));
+            if (ImGui::IsItemHovered()) {
+                keyHovered = true;
+                ImGui::SetTooltip("%s\n%s  %.2fm%s",
+                    track.label.c_str(), key.label.c_str(), key.time,
+                    key.locked ? " [Locked]" : "");
+            }
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+                const ImGuiIO& io = ImGui::GetIO();
+                sequencer->Select(key.handle, io.KeyCtrl || io.KeyShift, io.KeyCtrl);
+            }
+            if (canMutate && !key.locked && ImGui::IsItemActivated()) {
+                std::string error;
+                if (sequencer->BeginInteractiveEdit(error)) {
+                    dragStartX = ImGui::GetIO().MousePos.x;
+                } else {
+                    authoringStatus = error;
+                }
+            }
+            if (canMutate && sequencer->InteractiveEditActive() && ImGui::IsItemActive() &&
+                ImGui::IsMouseDragging(ImGuiMouseButton_Left, 1.0f)) {
+                const double delta =
+                    (ImGui::GetIO().MousePos.x - dragStartX) / trackWidth * railLength;
+                std::string error;
+                if (!sequencer->PreviewInteractiveMove(delta, error)) authoringStatus = error;
+            }
+            if (sequencer->InteractiveEditActive() && ImGui::IsItemDeactivated()) {
+                std::string error;
+                if (sequencer->CommitInteractiveEdit("Move Sequencer Keys", error)) {
+                    changed = true;
+                    authoringStatus = "Moved Sequencer key(s).";
+                } else {
+                    authoringStatus = error;
+                }
+            }
+            ImGui::PopID();
+            ImGui::PopID();
+        }
+    }
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    const bool mouseInTrack = mouse.x >= trackLeft && mouse.x <= trackLeft + trackWidth &&
+        mouse.y >= canvasPos.y && mouse.y <= canvasPos.y + canvasHeight;
+    if (!keyHovered && mouseInTrack && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        const double position = (mouse.x - trackLeft) / trackWidth * railLength;
+        sequencer->SetPreviewPosition(position, true);
+        authoringStatus = "Sequencer preview: " + std::to_string(sequencer->PreviewPosition()) + "m";
+    }
+    ImGui::SetCursorScreenPos(ImVec2(canvasPos.x, canvasPos.y + canvasHeight + 6.0f));
     return changed;
 }
 
@@ -1507,6 +1686,14 @@ bool DrawCourseObjectEditor(const CourseTimelineDebugPanelInput& input, CourseAs
     ImGui::Combo("Gizmo", &editor.courseObjectGizmoMode, gizmoModes, IM_ARRAYSIZE(gizmoModes));
     ImGui::SameLine();
     ImGui::Checkbox("Snap", &editor.courseObjectSnapEnabled);
+    ImGui::SameLine();
+    const char* gizmoSpaces[] = {"World", "Local"};
+    ImGui::SetNextItemWidth(96.0f);
+    ImGui::Combo("Space", &editor.courseObjectGizmoSpace, gizmoSpaces, IM_ARRAYSIZE(gizmoSpaces));
+    ImGui::SameLine();
+    const char* pivotModes[] = {"Active", "Median", "Individual"};
+    ImGui::SetNextItemWidth(104.0f);
+    ImGui::Combo("Pivot", &editor.courseObjectPivotMode, pivotModes, IM_ARRAYSIZE(pivotModes));
     if (ImGui::Button("Undo")) {
         editor.courseObjectUndoRequested = true;
     }
@@ -2047,9 +2234,13 @@ void DrawCourseAuthoring(
         ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.22f, 1.0f), "Unsaved authoring changes.");
     }
 
-    ImGui::BeginDisabled(!canMutate);
-    changed |= DrawAuthoringTimeline(input, course, authoringStatus);
-    ImGui::EndDisabled();
+    if (input.sequencer != nullptr) {
+        changed |= DrawProviderSequencer(input, canMutate, authoringStatus);
+    } else {
+        ImGui::BeginDisabled(!canMutate);
+        changed |= DrawAuthoringTimeline(input, course, authoringStatus);
+        ImGui::EndDisabled();
+    }
 
     if (ImGui::BeginTabBar("CourseAuthoringTabs")) {
         if (ImGui::BeginTabItem("Events")) {

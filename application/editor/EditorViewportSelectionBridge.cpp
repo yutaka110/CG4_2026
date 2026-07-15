@@ -6,6 +6,30 @@
 #include <utility>
 
 namespace editor {
+namespace {
+
+uint64_t PickSignature(const std::vector<EditorViewportPickResult>* picks) {
+    uint64_t hash = 1469598103934665603ull;
+    if (picks == nullptr) return hash;
+    const auto append = [&hash](std::string_view value) {
+        for (const unsigned char byte : value) {
+            hash ^= byte;
+            hash *= 1099511628211ull;
+        }
+    };
+    for (const EditorViewportPickResult& pick : *picks) {
+        hash ^= static_cast<uint64_t>(pick.source) |
+            (static_cast<uint64_t>(pick.domain) << 8) |
+            (pick.localIndex << 16);
+        hash *= 1099511628211ull;
+        append(pick.canonicalHandle.stableId.empty()
+            ? pick.stablePrefix
+            : pick.canonicalHandle.stableId);
+    }
+    return hash;
+}
+
+} // namespace
 
 void EditorViewportSelectionBridge::Sync(const EditorViewportSelectionBridgeInput& input) {
     state_.selectionConnected = input.selection != nullptr;
@@ -16,6 +40,17 @@ void EditorViewportSelectionBridge::Sync(const EditorViewportSelectionBridgeInpu
     state_.vfxSelectionEnabled = true;
     state_.pickResultCount =
         input.pickResults != nullptr ? static_cast<uint32_t>(input.pickResults->size()) : 0;
+
+    const uint64_t signature = PickSignature(input.pickResults);
+    if (suppressNextRequest_) {
+        suppressNextRequest_ = false;
+        pickSignatureInitialized_ = true;
+        lastPickSignature_ = signature;
+        return;
+    }
+    if (pickSignatureInitialized_ && signature == lastPickSignature_) return;
+    pickSignatureInitialized_ = true;
+    lastPickSignature_ = signature;
 
     if (input.selection == nullptr) {
         state_.bridgedHandleCount = 0;
@@ -64,6 +99,8 @@ bool EditorViewportSelectionBridge::PickAllowed(
     }
 
     switch (pick.source) {
+    case EditorViewportPickSource::SceneViewport:
+        return courseSelectionEnabled;
     case EditorViewportPickSource::CourseViewport:
         return courseSelectionEnabled;
     case EditorViewportPickSource::VfxRuntime:
@@ -76,6 +113,7 @@ bool EditorViewportSelectionBridge::PickAllowed(
 
 EditorObjectHandle EditorViewportSelectionBridge::BuildHandle(
     const EditorViewportPickResult& pick) {
+    if (!pick.canonicalHandle.stableId.empty()) return pick.canonicalHandle;
     EditorObjectHandle handle{};
     handle.domain = pick.domain;
     handle.stableId = BuildStableIndexedId(pick.stablePrefix, pick.localIndex);
@@ -149,6 +187,8 @@ const char* ToString(EditorViewportPickSource source) {
     switch (source) {
     case EditorViewportPickSource::Unknown:
         return "Unknown";
+    case EditorViewportPickSource::SceneViewport:
+        return "SceneViewport";
     case EditorViewportPickSource::CourseViewport:
         return "CourseViewport";
     case EditorViewportPickSource::VfxRuntime:

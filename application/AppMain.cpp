@@ -470,6 +470,9 @@ int AppMain::Run() {
 	auto& heaps = engineContext.GetHeaps();
 	ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap = heaps.srv.GetHeap();
 	heaps.srv.Reserve(160);
+	// Fixed high ranges are owned outside the monotonic allocator:
+	// 3200-3711 Editor thumbnails, 3712-4095 E-8 production Texture residency.
+	heaps.srv.ReserveRange(3200, 896);
 
 
 
@@ -782,7 +785,8 @@ imguiLayer.Initialize(
 	device.Get(),
 	static_cast<int>(swapChain.BufferCount()),
 	kRtvFormat,
-	srvDescriptorHeap.Get());
+	srvDescriptorHeap.Get(),
+	&appPipelines);
 bootstrap.SetDropCallback(
 	[&imguiLayer](const std::wstring& path) {
 		imguiLayer.QueueExternalAssetDrop(std::filesystem::path(path));

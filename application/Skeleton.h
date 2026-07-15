@@ -27,4 +27,7 @@ struct Skeleton {
 
 Skeleton CreateSkeleton(const Node& rootNode);
 void ApplyAnimation(Skeleton& skeleton, const AnimationClip& animation, float animationTime);
+void ApplyAnimationBlend(Skeleton& skeleton,
+    const AnimationClip& fromAnimation, float fromTime,
+    const AnimationClip& toAnimation, float toTime, float blendAlpha);
 void UpdateSkeleton(Skeleton& skeleton);

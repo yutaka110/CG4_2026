@@ -7,6 +7,7 @@
 #include "EditorPlaySessionIsolationSnapshot.h"
 #include "EditorPlaySessionState.h"
 #include "EditorTransactionStack.h"
+#include "play/EditorRuntimeApplyChange.h"
 
 namespace editor {
 
@@ -22,6 +23,8 @@ struct EditorRuntimeAuthoringApplyRequest {
     EditorNotificationCenter* notifications = nullptr;
     uint32_t validationErrorCount = 0;
     const char* source = "editor.runtimeAuthoringApply";
+    EffectRuntime* effectRuntime = nullptr;
+    PostProcessStack* postProcessStack = nullptr;
 };
 
 struct EditorRuntimeAuthoringApplyResult {
@@ -37,10 +40,6 @@ class EditorRuntimeAuthoringApplyService {
 public:
     EditorRuntimeAuthoringApplyResult Apply(
         const EditorRuntimeAuthoringApplyRequest& request) const;
-    EditorRuntimeAuthoringApplyResult ApplyTransaction(
-        const EditorRuntimeAuthoringApplyRequest& request,
-        const EditorTransactionRecord& record,
-        EditorTransactionApplyMode mode) const;
 };
 
 } // namespace editor

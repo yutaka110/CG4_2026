@@ -24,6 +24,14 @@ class EffectResourceCache;
 namespace ge3::graphics {
 class RenderGraph;
 }
+namespace editor {
+class EditorProductionScenePipeline;
+class EditorProductionMaterialPipeline;
+class EditorProductionTexturePipeline;
+class EditorProductionShaderPipeline;
+class EditorProductionLightingPipeline;
+class EditorProductionGpuDrivenPipeline;
+}
 
 struct AppFrameGraphBuildContext {
     ge3::graphics::RenderGraph* renderGraph = nullptr;
@@ -52,6 +60,12 @@ struct AppFrameGraphBuildContext {
     ParticleRenderFallback primaryParticleFx{};
     float beamTime = 0.0f;
     TerrainChunkManager* terrainChunkManager = nullptr;
+    const editor::EditorProductionScenePipeline* productionScenePipeline = nullptr;
+    const editor::EditorProductionMaterialPipeline* productionMaterialPipeline = nullptr;
+    const editor::EditorProductionTexturePipeline* productionTexturePipeline = nullptr;
+    const editor::EditorProductionShaderPipeline* productionShaderPipeline = nullptr;
+    editor::EditorProductionLightingPipeline* productionLightingPipeline = nullptr;
+    editor::EditorProductionGpuDrivenPipeline* productionGpuDrivenPipeline = nullptr;
 };
 
 class AppFrameGraphBuilder {

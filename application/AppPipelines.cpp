@@ -355,7 +355,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     // ------------------------------
     D3D12_ROOT_SIGNATURE_DESC descriptionRootSignature{};
 
-    D3D12_STATIC_SAMPLER_DESC staticSamplers[1] = {};
+    D3D12_STATIC_SAMPLER_DESC staticSamplers[2] = {};
     staticSamplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     staticSamplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     staticSamplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -364,6 +364,14 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     staticSamplers[0].MaxLOD = D3D12_FLOAT32_MAX;
     staticSamplers[0].ShaderRegister = 0;
     staticSamplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    staticSamplers[1].Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    staticSamplers[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    staticSamplers[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    staticSamplers[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    staticSamplers[1].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    staticSamplers[1].MaxLOD = D3D12_FLOAT32_MAX;
+    staticSamplers[1].ShaderRegister = 1;
+    staticSamplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     descriptionRootSignature.pStaticSamplers = staticSamplers;
     descriptionRootSignature.NumStaticSamplers = _countof(staticSamplers);
@@ -400,7 +408,13 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     cascadeShadowRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     cascadeShadowRange.OffsetInDescriptorsFromTableStart = 0;
 
-    D3D12_ROOT_PARAMETER rootParameters[12] = {};
+    D3D12_DESCRIPTOR_RANGE productionShadowRange = {};
+    productionShadowRange.BaseShaderRegister = 23;
+    productionShadowRange.NumDescriptors = 1;
+    productionShadowRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    productionShadowRange.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_ROOT_PARAMETER rootParameters[18] = {};
     rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     rootParameters[0].Descriptor.ShaderRegister = 0;
@@ -454,6 +468,31 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     rootParameters[11].DescriptorTable.NumDescriptorRanges = 1;
     rootParameters[11].DescriptorTable.pDescriptorRanges = &cascadeShadowRange;
 
+    rootParameters[12].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rootParameters[12].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParameters[12].Descriptor.ShaderRegister = 20;
+
+    rootParameters[13].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rootParameters[13].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParameters[13].Descriptor.ShaderRegister = 21;
+
+    rootParameters[14].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rootParameters[14].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParameters[14].Descriptor.ShaderRegister = 22;
+
+    rootParameters[15].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParameters[15].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParameters[15].Descriptor.ShaderRegister = 6;
+
+    rootParameters[16].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParameters[16].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParameters[16].DescriptorTable.NumDescriptorRanges = 1;
+    rootParameters[16].DescriptorTable.pDescriptorRanges = &productionShadowRange;
+
+    rootParameters[17].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParameters[17].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    rootParameters[17].Descriptor.ShaderRegister = 7;
+
     descriptionRootSignature.pParameters = rootParameters;
     descriptionRootSignature.NumParameters = _countof(rootParameters);
 
@@ -478,14 +517,14 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     matrixPaletteRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     matrixPaletteRange.OffsetInDescriptorsFromTableStart = 0;
 
-    D3D12_ROOT_PARAMETER skinnedRootParameters[13] = {};
+    D3D12_ROOT_PARAMETER skinnedRootParameters[19] = {};
     for (uint32_t index = 0; index < _countof(rootParameters); ++index) {
         skinnedRootParameters[index] = rootParameters[index];
     }
-    skinnedRootParameters[12].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    skinnedRootParameters[12].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-    skinnedRootParameters[12].DescriptorTable.NumDescriptorRanges = 1;
-    skinnedRootParameters[12].DescriptorTable.pDescriptorRanges = &matrixPaletteRange;
+    skinnedRootParameters[18].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    skinnedRootParameters[18].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    skinnedRootParameters[18].DescriptorTable.NumDescriptorRanges = 1;
+    skinnedRootParameters[18].DescriptorTable.pDescriptorRanges = &matrixPaletteRange;
 
     D3D12_ROOT_SIGNATURE_DESC skinnedRootSignatureDesc = descriptionRootSignature;
     skinnedRootSignatureDesc.pParameters = skinnedRootParameters;

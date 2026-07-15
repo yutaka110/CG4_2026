@@ -11,6 +11,8 @@
 #include "EffectAssetLoader.h"
 #include "EffectRuntime.h"
 #include "editor/EditorAutomationGate.h"
+#include "editor/EditorAssetFolderIndexer.h"
+#include "editor/EditorAssetImportService.h"
 #include "editor/EditorCoreRegressionTests.h"
 #include "editor/EditorSmokeRun.h"
 #include "include/vfx/VfxRenderInputs.h"
@@ -32,6 +34,40 @@ bool HasArgument(std::wstring_view target) {
     }
     LocalFree(argv);
     return found;
+}
+
+int RunEditorAssetMetaMigration() {
+    const std::filesystem::path resourcesRoot = "Resources";
+    editor::EditorAssetRegistry registry;
+    const editor::EditorAssetFolderIndexResult indexed =
+        editor::IndexEditorAssetsFromFolder(registry, resourcesRoot);
+
+    editor::EditorAssetImportOptions options{};
+    options.resourcesRoot = resourcesRoot;
+    editor::EditorAssetImportService importService(registry);
+    const editor::EditorAssetImportResult migrated =
+        importService.BatchMigrateMetadata(options);
+
+    const std::size_t eligible = registry.CountMetadataEligibleAssets();
+    const std::size_t durable = registry.CountDurableAssets();
+    const std::vector<std::string> duplicates = registry.DuplicateGuids();
+    const bool ok =
+        migrated.succeeded && indexed.identityCollisions == 0 &&
+        eligible == durable && duplicates.empty();
+
+    std::ofstream log("editor_asset_meta_migration.log", std::ios::trunc);
+    log << "Editor Asset Metadata Migration\n";
+    log << "scannedFiles=" << indexed.scannedFiles << '\n';
+    log << "registeredAssets=" << indexed.registeredAssets << '\n';
+    log << "identityCollisions=" << indexed.identityCollisions << '\n';
+    log << "migratedAssets=" << migrated.migratedCount << '\n';
+    log << "skippedAssets=" << migrated.skippedCount << '\n';
+    log << "eligibleAssets=" << eligible << '\n';
+    log << "durableAssets=" << durable << '\n';
+    log << "coveragePercent=" << registry.MetadataCoveragePercent() << '\n';
+    log << "duplicateGuids=" << duplicates.size() << '\n';
+    log << "result=" << (ok ? "ok" : "failed") << '\n';
+    return ok ? 0 : 1;
 }
 
 int RunEffectAuthoringSmoke() {
@@ -137,6 +173,9 @@ int RunEffectAuthoringSmoke() {
 } // namespace
 
 AppCommandLineResult RunAppCommandLineTools() {
+    if (HasArgument(L"--editor-asset-meta-migrate")) {
+        return {true, RunEditorAssetMetaMigration()};
+    }
     if (HasArgument(L"--editor-commercial-gates")) {
         return {true, editor::RunEditorCommercialAutomationGates(RunEffectAuthoringSmoke)};
     }

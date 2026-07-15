@@ -34,6 +34,10 @@ struct AppEditorFrameProviderToolModuleInput {
     const EditorValidationAdapter* vfxValidation = nullptr;
     const EditorValidationAdapter* assetReferenceValidation = nullptr;
     const EditorValidationAdapter* assetThumbnailValidation = nullptr;
+    const EditorValidationAdapter* materialGraphValidation = nullptr;
+    const EditorValidationAdapter* vfxGraphValidation = nullptr;
+    const EditorValidationAdapter* animationStateMachineValidation = nullptr;
+    const EditorValidationAdapter* gameplayVisualScriptValidation = nullptr;
 };
 
 struct AppEditorCommandToolModuleInput {

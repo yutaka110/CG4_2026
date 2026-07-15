@@ -8,6 +8,8 @@
 #include "EditorDocumentLifecycleService.h"
 #include "EditorSaveApplyPolicy.h"
 #include "EditorToolRegistration.h"
+#include "documents/EditorDocumentManager.h"
+#include "documents/EditorDocumentSaveService.h"
 
 namespace editor {
 
@@ -25,10 +27,12 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
         MakeEditorAuthoringMutationGuard(context.playSession);
     EditorDirtyStateService* dirtyState = context.dirtyState;
     EditorDocumentLifecycleService* documentLifecycle = context.documentLifecycle;
+    EditorDocumentManager* documentManager = context.documentManager;
+    EditorDocumentSaveService* documentSaveService = context.documentSaveService;
     const CourseEditorCommandProviderInput input = input_;
     const EditorSaveApplyPolicyInput policyInput{
         commandContext.developerToolsVisible,
-        static_cast<bool>(input.saveCourse),
+        static_cast<bool>(input.saveCourse) || documentSaveService != nullptr,
         static_cast<bool>(input.applyCourse),
         static_cast<bool>(input.reloadCourse),
         dirtyState,
@@ -52,7 +56,19 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
                     EditorSaveApplyAction::SaveCourse,
                     policyInput).reason;
             },
-            [input, dirtyState]() {
+            [input, dirtyState, documentManager, documentSaveService]() {
+                if (documentManager != nullptr && documentSaveService != nullptr) {
+                    for (const EditorDocumentRecord& document : documentManager->Documents()) {
+                        if (document.open && document.id.type == EditorDocumentTypes::Course) {
+                            const EditorDocumentSaveResult result =
+                                documentSaveService->Save(document.id);
+                            if (result.succeeded && dirtyState != nullptr) {
+                                dirtyState->ClearDomain(EditorDirtyDomain::CourseAuthoring);
+                            }
+                            return EditorCommandResult{result.succeeded, result.message};
+                        }
+                    }
+                }
                 std::string error;
                 const bool saved = input.saveCourse && input.saveCourse(&error);
                 if (saved && dirtyState != nullptr) {
@@ -61,6 +77,36 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
                 return EditorCommandResult{
                     saved,
                     saved ? std::string("Saved course.") : (error.empty() ? std::string("Save failed.") : error)};
+            }});
+
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
+            "document.saveAll",
+            "Save All Documents",
+            "File",
+            "Ctrl+Alt+S",
+            [documentManager, documentSaveService]() {
+                return documentManager != nullptr && documentSaveService != nullptr &&
+                    documentManager->DirtyCount() > 0;
+            },
+            [documentManager, documentSaveService]() {
+                if (documentManager == nullptr || documentSaveService == nullptr) {
+                    return std::string("Generic document services are unavailable.");
+                }
+                return documentManager->DirtyCount() == 0
+                    ? std::string("No dirty documents require saving.")
+                    : std::string();
+            },
+            [documentSaveService, dirtyState]() {
+                if (documentSaveService == nullptr) {
+                    return EditorCommandResult{false, "Generic document save service is unavailable."};
+                }
+                const EditorDocumentSaveResult result = documentSaveService->SaveAll();
+                if (result.succeeded && dirtyState != nullptr) {
+                    dirtyState->ClearDomain(EditorDirtyDomain::CourseAuthoring);
+                }
+                return EditorCommandResult{result.succeeded, result.message};
             }});
 
     RegisterEditorToolCommand(

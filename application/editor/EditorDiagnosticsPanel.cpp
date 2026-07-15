@@ -2,6 +2,7 @@
 
 #include "EditorAssetReferenceDiagnosticsAdapter.h"
 #include "EditorAssetSelection.h"
+#include "world/EditorWorldModel.h"
 
 #include "../../externals/imgui/imgui.h"
 
@@ -177,7 +178,16 @@ void DrawEditorDiagnosticsPanel(const EditorDiagnosticsPanelContext& context) {
                 SelectAssetFromDiagnostic(issue, context.assetRegistry, context.assetSelection);
             }
         } else {
-            ImGui::TextUnformatted(object.c_str());
+            if (ImGui::Selectable(object.c_str(), false, ImGuiSelectableFlags_SpanAllColumns) &&
+                context.selection != nullptr) {
+                const EditorWorldObjectRecord* canonical =
+                    context.worldModel != nullptr
+                        ? context.worldModel->FindByDomainIndex(
+                              issue.target.domain, issue.target.localIndex)
+                        : nullptr;
+                context.selection->SetPrimary(
+                    canonical != nullptr ? canonical->handle : issue.target);
+            }
         }
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(issue.propertyPath.empty() ? "-" : issue.propertyPath.c_str());

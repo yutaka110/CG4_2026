@@ -26,6 +26,11 @@ struct EditorAssetImportOptions {
     bool includeMeshes = true;
     bool includeEffects = true;
     bool includeCourseAssets = true;
+    bool includePrefabs = true;
+    bool includeMaterialGraphs = true;
+    bool includeVfxGraphs = true;
+    bool includeAnimationStateMachines = true;
+    bool includeGameplayVisualScripts = true;
     bool includeTextures = true;
     bool includeAudio = true;
 };

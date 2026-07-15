@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <functional>
 #include <vector>
 
 #include "EditorAssetSelection.h"
@@ -11,6 +12,10 @@
 #include "EditorValidation.h"
 
 namespace editor {
+
+class EditorWorldMutationService;
+class SceneWorldObjectProvider;
+struct EditorWorldMutationResult;
 
 struct EditorDetailsSectionContext {
     const std::vector<EditorObjectHandle>* selectedObjects = nullptr;
@@ -26,6 +31,9 @@ struct EditorDetailsSectionContext {
     const EditorValidationReport* validationReport = nullptr;
     bool canMutateAuthoring = true;
     const char* source = "editor.details.section";
+    EditorWorldMutationService* worldMutations = nullptr;
+    SceneWorldObjectProvider* sceneWorldProvider = nullptr;
+    std::function<void(const EditorWorldMutationResult&)> onWorldMutated;
 };
 
 class EditorDetailsSectionProvider {

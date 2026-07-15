@@ -1,5 +1,7 @@
 #include "Skeleton.h"
 
+#include <algorithm>
+
 namespace {
 
 int32_t CreateJoint(
@@ -54,6 +56,38 @@ void ApplyAnimation(Skeleton& skeleton, const AnimationClip& animation, float an
                 CalculateValue(nodeAnimation.scale, animationTime, joint.bindTransform.scale);
         }
 
+        joint.localMatrix = MakeLocalMatrix(joint.transform);
+    }
+}
+
+void ApplyAnimationBlend(Skeleton& skeleton,
+    const AnimationClip& fromAnimation, float fromTime,
+    const AnimationClip& toAnimation, float toTime, float blendAlpha) {
+    const float alpha = (std::clamp)(blendAlpha, 0.0f, 1.0f);
+    for (Joint& joint : skeleton.joints) {
+        QuaternionTransform from = joint.bindTransform;
+        QuaternionTransform to = joint.bindTransform;
+        const auto fromFound = fromAnimation.nodeAnimations.find(joint.name);
+        if (fromFound != fromAnimation.nodeAnimations.end()) {
+            from.translate = CalculateValue(fromFound->second.translate, fromTime, from.translate);
+            from.rotate = CalculateValue(fromFound->second.rotate, fromTime, from.rotate);
+            from.scale = CalculateValue(fromFound->second.scale, fromTime, from.scale);
+        }
+        const auto toFound = toAnimation.nodeAnimations.find(joint.name);
+        if (toFound != toAnimation.nodeAnimations.end()) {
+            to.translate = CalculateValue(toFound->second.translate, toTime, to.translate);
+            to.rotate = CalculateValue(toFound->second.rotate, toTime, to.rotate);
+            to.scale = CalculateValue(toFound->second.scale, toTime, to.scale);
+        }
+        joint.transform.translate = {
+            from.translate.x + (to.translate.x - from.translate.x) * alpha,
+            from.translate.y + (to.translate.y - from.translate.y) * alpha,
+            from.translate.z + (to.translate.z - from.translate.z) * alpha};
+        joint.transform.scale = {
+            from.scale.x + (to.scale.x - from.scale.x) * alpha,
+            from.scale.y + (to.scale.y - from.scale.y) * alpha,
+            from.scale.z + (to.scale.z - from.scale.z) * alpha};
+        joint.transform.rotate = Slerp(from.rotate, to.rotate, alpha);
         joint.localMatrix = MakeLocalMatrix(joint.transform);
     }
 }

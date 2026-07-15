@@ -1,4 +1,5 @@
 #include "EditorTransactionPanel.h"
+#include "asset/EditorAssetMutationUndoCommand.h"
 
 #include "../../externals/imgui/imgui.h"
 
@@ -28,6 +29,11 @@ void DrawEditorTransactionPanel(const EditorTransactionStack& transactions) {
         static_cast<unsigned int>(transactions.RedoDepth()),
         transactions.Revision(),
         static_cast<unsigned int>(transactions.MaxHistory()));
+    ImGui::Text(
+        "History memory: %llu / %llu bytes%s",
+        static_cast<unsigned long long>(transactions.HistoryBytes()),
+        static_cast<unsigned long long>(transactions.MemoryBudgetBytes()),
+        transactions.Busy() ? "  BUSY" : "");
 
     if (const EditorTransactionRecord* last = transactions.LastTransaction()) {
         ImGui::Text(
@@ -36,7 +42,35 @@ void DrawEditorTransactionPanel(const EditorTransactionStack& transactions) {
             last->label.c_str());
         ImGui::Text("Target: %s / %s", ToString(last->target.domain), last->target.stableId.c_str());
         ImGui::Text("Payload: %s", ToString(last->payload.kind));
-        if (last->payload.kind == EditorTransactionPayloadKind::PropertyDelta) {
+        if (last->payload.kind == EditorTransactionPayloadKind::Command && last->command != nullptr) {
+            ImGui::Text(
+                "Command: %.*s / %.*s",
+                static_cast<int>(last->command->DomainId().size()),
+                last->command->DomainId().data(),
+                static_cast<int>(last->command->TypeId().size()),
+                last->command->TypeId().data());
+            ImGui::Text(
+                "Estimated: %llu bytes",
+                static_cast<unsigned long long>(last->estimatedBytes));
+            if (const auto* assetCommand =
+                    dynamic_cast<const EditorAssetMutationUndoCommand*>(last->command.get())) {
+                const EditorAssetMutationChange& change = assetCommand->Change();
+                ImGui::Text(
+                    "Asset: %s %s:%s",
+                    ToString(change.kind),
+                    ToString(change.beforeRecord.kind),
+                    change.beforeRecord.id.c_str());
+                if (change.kind != EditorAssetMutationKind::Delete) {
+                    ImGui::Text(
+                        "After: %s:%s",
+                        ToString(change.afterRecord.kind),
+                        change.afterRecord.id.c_str());
+                }
+                ImGui::Text(
+                    "Reference rewrites: %u",
+                    static_cast<unsigned int>(change.dependencyRewrites.size()));
+            }
+        } else if (last->payload.kind == EditorTransactionPayloadKind::PropertyDelta) {
             ImGui::Text("Property: %s", last->payload.propertyPath.c_str());
             ImGui::Text(
                 "Value: %s -> %s",
@@ -51,22 +85,6 @@ void DrawEditorTransactionPanel(const EditorTransactionStack& transactions) {
                     change.beforeValue.c_str(),
                     change.afterValue.c_str());
             }
-        } else if (last->payload.kind == EditorTransactionPayloadKind::AssetMutation) {
-            const EditorAssetMutationChange& change = last->payload.assetMutation;
-            ImGui::Text(
-                "Asset: %s %s:%s",
-                ToString(change.kind),
-                ToString(change.beforeRecord.kind),
-                change.beforeRecord.id.c_str());
-            if (change.kind != EditorAssetMutationKind::Delete) {
-                ImGui::Text(
-                    "After: %s:%s",
-                    ToString(change.afterRecord.kind),
-                    change.afterRecord.id.c_str());
-            }
-            ImGui::Text(
-                "Reference rewrites: %u",
-                static_cast<unsigned int>(change.dependencyRewrites.size()));
         }
     } else {
         ImGui::TextUnformatted("Last: none");

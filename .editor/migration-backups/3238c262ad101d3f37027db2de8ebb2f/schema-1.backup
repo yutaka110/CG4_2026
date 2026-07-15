@@ -1,0 +1,182 @@
+# Rail shooter course DSL
+# row format:
+# course|name
+# rail|x|y|z|corridorRadius|speed
+# camera|distance|backDistance|verticalOffset|lateralOffset|lookAheadDistance|lookUpOffset|lookForwardOffset|fovDeg|rollDeg
+# section|start|end|name|category
+# terrain|distance|layer|id|meshId|lateralOffset|verticalOffset|forwardOffset|scaleX|scaleY|scaleZ|pitchDeg|yawDeg|rollDeg|collisionMode|renderPriority|cullBehind|cullAhead
+# rock_cluster|distance|id|meshId|anchor|type|count|minScale|maxScale|spreadX|spreadY|spreadZ|clearLaneRadius|cullBehind|cullAhead
+# lighting|distance|id|blendDistance|sunR|sunG|sunB|sunIntensity|sunDirX|sunDirY|sunDirZ|ambientR|ambientG|ambientB|fogR|fogG|fogB|fogIntensity|fogStart|fogEnd|fogDensity|backlitFogLift|openingGlow|foregroundSilhouette|lowFogLayer|coolFloorHaze
+# camera_shot_preset|id|mode|backOffset|verticalOffset|lateralOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake
+# camera_blend_asset|id|blendIn|blendOut|curve|weightScale
+# camera_shot|start|end|id|mode|blendIn|blendOut|backOffset|verticalOffset|lateralOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake|presetId|blendAssetId|weightScale
+# terrain_material|distance|id|blendDistance|baseR|baseG|baseB|brightness|noise|strata|breakup|specular|rim|backlight|floorShadow|detailNormal|microDetail|cavityAo|skyFill
+# cinematic_shot_set|start|end|id|label|heroLandmarksCsv|vistaLandmarksCsv|lightingId|cameraShotId|terrainMaterialId|fogMood|compositionNotes
+# event|distance|type|id|payload
+
+course|Canyon Assault Route 01
+
+# Main camera/terrain rail. Distances are arc-length evaluated by RailPath.
+rail|-18|4|-120|20|12
+rail|-8|7|-40|18|12
+rail|20|12|45|16|13
+rail|5|5|130|15|13
+rail|-34|16|220|17|14
+rail|-6|28|320|21|15
+rail|40|18|430|18|16
+rail|18|8|540|16|16
+rail|-22|14|650|19|17
+rail|0|18|760|22|18
+rail|36|26|910|20|18
+rail|-18|10|1060|14|19
+rail|-54|8|1210|15|18
+rail|-10|34|1390|24|16
+rail|48|20|1560|21|17
+rail|8|12|1740|16|22
+rail|-26|18|1940|18|24
+rail|18|30|2160|24|18
+rail|0|22|2380|28|14
+
+# Camera keys define the cinematic rail rig.
+camera|0|24|7|0|64|2|8|54|0
+camera|120|22|6|0|60|2|10|52|0
+camera|240|20|6|-2|58|2|10|50|-3
+camera|420|18|5|4|54|1|12|49|4
+camera|610|17|5|-4|56|1|12|51|-5
+camera|720|14|3|0|44|0|14|58|0
+camera|980|26|9|-5|78|5|18|62|-7
+camera|1280|24|7|4|64|3|10|50|5
+camera|1680|16|4|0|48|1|16|66|0
+camera|2100|30|11|0|86|6|20|56|0
+camera|2380|34|12|0|96|8|24|48|0
+
+section|0|180|Intro|Establishing
+section|180|420|First Contact|Tutorial Combat
+section|420|720|Crossfire|Lateral Pressure
+section|720|980|Tunnel Dive|Obstacle Run
+section|980|1280|Falling Spire|Setpiece
+section|1280|1680|Mid Boss Gatekeeper|Boss
+section|1680|2100|Escape Run|High Speed
+section|2100|2380|Final Gate|Finale
+
+# Layered course terrain. Gameplay is near/proxy collision, hero is cinematic silhouette, vista is no-collision background.
+terrain|15|hero_landmark|intro_left_silhouette_wall|curved_canyon_wall|-48|11|72|9|26|30|0|16|-7|none|12|80|260
+terrain|40|vista_background|intro_far_hole_wall_left|vista_hole_wall|46|58|980|58|46|5|0|10|2|none|0|260|820
+terrain|55|hero_landmark|intro_right_silhouette_wall|curved_canyon_wall|50|12|105|8|24|32|0|-14|6|none|12|90|280
+terrain|115|hero_landmark|intro_organic_arch_gate|organic_arch_large|0|38|330|34|52|7|0|0|0|none|20|220|640
+terrain|155|vista_background|intro_mist_spire_stack|root_spire_column|12|62|1060|36|72|6|0|-8|-3|none|0|260|860
+terrain|430|hero_landmark|crossfire_left_curved_wall|curved_canyon_wall|-32|10|70|7|18|18|0|12|-8|none|10|140|180
+terrain|520|hero_landmark|crossfire_right_curved_wall|curved_canyon_wall|34|12|80|7|20|20|0|-10|8|none|10|140|180
+terrain|735|hero_landmark|tunnel_mouth_rib_crown|rib_tunnel_wall|0|13|84|16|12|6|0|0|0|none|20|180|300
+terrain|776|gameplay_collision|tunnel_left_collision_wall|animated_cube|-12|2|18|2|7|8|0|6|0|proxy|30|80|220
+terrain|828|gameplay_collision|tunnel_right_collision_wall|animated_cube|12|2|18|2|7|8|0|-6|0|proxy|30|80|220
+terrain|875|hero_landmark|rib_tunnel_interior_sweep|rib_tunnel_wall|0|4|130|22|7|12|0|0|0|none|20|180|300
+terrain|980|vista_background|spire_far_hole_wall|vista_hole_wall|64|42|760|32|34|5|0|-18|0|none|0|420|220
+terrain|1010|hero_landmark|falling_spire_root_column|root_spire_column|-6|30|160|13|42|8|0|4|0|none|20|220|220
+terrain|1085|gameplay_collision|spire_debris_collision_lane|animated_cube|0|4|30|5|3|8|0|0|0|proxy|30|90|240
+terrain|1160|hero_landmark|spire_broken_bridge_arc|spire_broken_bridge_arc|20|18|120|18|5|5|0|-28|10|none|20|220|420
+terrain|1265|vista_background|gatekeeper_shadow_wall|vista_hole_wall|0|36|520|40|32|5|0|0|0|none|0|480|300
+
+# DebrisCompositionSystem rock clusters. These replace loose static floating rocks with authored debris groups.
+rock_cluster|430|crossfire_left_wall_chips|curved_canyon_wall|left_wall|attached_debris|3|0.18|0.38|7|1.8|6|34|90|150
+rock_cluster|520|crossfire_right_wall_chips|curved_canyon_wall|right_wall|attached_debris|3|0.18|0.36|7|1.8|6|34|90|150
+rock_cluster|780|tunnel_floor_contact_stones|rib_tunnel_wall|floor|attached_debris|4|0.16|0.34|10|1.4|7|24|70|160
+rock_cluster|1015|falling_spire_break_mass|root_spire_column|ceiling_break|hero_fracture|3|0.62|1.28|14|6|10|34|120|240
+rock_cluster|1085|spire_falling_event_debris|spire_broken_bridge_arc|ceiling_break|falling_debris|5|0.24|0.68|16|9|12|38|50|150
+rock_cluster|1265|gatekeeper_far_silhouette_rocks|vista_hole_wall|vista_wall|vista_silhouette|4|1.10|2.40|72|20|64|54|300|360
+
+# CourseLightingPreset: distance-driven sun, clear color, and DistanceFog values.
+lighting|0|intro_backlit_mist|0|1.00|0.68|0.50|2.55|-0.50|-0.42|0.76|0.08|0.07|0.07|0.40|0.36|0.34|0.32|260|1850|0.11|0.46|0.74|1.02|0.12|0.08
+lighting|180|first_contact_readability|80|1.00|0.68|0.46|2.65|-0.42|-0.50|0.74|0.20|0.18|0.17|0.45|0.39|0.36|0.42|170|1320|0.20|0.42|0.72|0.68|0.20|0.16
+lighting|420|crossfire_side_rim|120|1.00|0.62|0.40|3.10|-0.68|-0.36|0.62|0.16|0.14|0.14|0.44|0.34|0.30|0.44|150|1080|0.23|0.50|0.82|0.82|0.20|0.16
+lighting|720|tunnel_compression|90|0.74|0.84|1.00|1.70|-0.22|-0.70|0.48|0.06|0.07|0.09|0.26|0.30|0.36|0.32|65|720|0.34|0.22|0.34|0.88|0.36|0.30
+lighting|980|falling_spire_dust_wall|120|1.00|0.66|0.46|2.55|-0.58|-0.32|0.77|0.14|0.12|0.11|0.48|0.39|0.34|0.42|185|1220|0.20|0.42|0.64|1.00|0.24|0.12
+lighting|1280|gatekeeper_shadow|110|0.90|0.48|0.36|2.45|-0.54|-0.42|0.72|0.10|0.08|0.08|0.34|0.28|0.28|0.48|135|1050|0.30|0.38|0.62|0.94|0.32|0.16
+lighting|1680|escape_blooming_exit|120|1.00|0.76|0.56|3.00|-0.38|-0.40|0.84|0.18|0.16|0.14|0.46|0.38|0.34|0.36|210|1380|0.16|0.44|0.88|0.78|0.12|0.10
+lighting|2100|final_gate_silhouette|160|1.00|0.66|0.46|2.45|-0.50|-0.34|0.80|0.07|0.06|0.055|0.36|0.30|0.28|0.38|240|1120|0.18|0.42|0.68|1.00|0.14|0.10
+
+# CameraShotPreset / BlendAsset: reusable camera shot shapes and authored blend behavior.
+camera_shot_preset|intro_arch_reveal_preset|Arch Reveal|10|8|0|28|4|14|7|-1|0.04
+camera_shot_preset|first_contact_readable_lane_preset|Combat Readability|2|1|1|10|0|3|-3|1|0.04
+camera_shot_preset|crossfire_wall_scrape_preset|Wall Scrape|-2|-1|5|2|-1|7|3|5|0.08
+camera_shot_preset|tunnel_dive_compression_preset|Tunnel Compression|-4|-2|0|-10|-1|6|7|0|0.18
+camera_shot_preset|falling_spire_reveal_preset|Falling Spire Reveal|8|5|-6|22|4|8|3|-4|0.18
+camera_shot_preset|gatekeeper_shadow_pass_preset|Boss Shadow Pass|6|2|4|18|3|6|-5|4|0.22
+camera_shot_preset|escape_speed_widen_preset|Escape Speed|-6|-2|0|20|-1|8|9|0|0.16
+camera_shot_preset|final_gate_silhouette_hold_preset|Final Gate Silhouette|4|2|5|12|2|8|-4|2|0.10
+
+camera_blend_asset|reveal_linear_34_42|34|42|linear|1.00
+camera_blend_asset|combat_linear_30_34|30|34|linear|1.00
+camera_blend_asset|scrape_linear_32_42|32|42|linear|1.00
+camera_blend_asset|tunnel_linear_28_36|28|36|linear|1.00
+camera_blend_asset|spire_linear_35_52|35|52|linear|1.00
+camera_blend_asset|boss_linear_36_44|36|44|linear|1.00
+camera_blend_asset|escape_linear_24_38|24|38|linear|1.00
+camera_blend_asset|finale_linear_36_48|36|48|linear|1.00
+
+# CinematicCameraShot: shot instances bind distance ranges to presets and blend assets.
+camera_shot|25|170|intro_arch_reveal|-|0|0|0|0|0|0|0|0|0|0|0|intro_arch_reveal_preset|reveal_linear_34_42|1.00
+camera_shot|205|350|first_contact_readable_lane|-|0|0|0|0|0|0|0|0|0|0|0|first_contact_readable_lane_preset|combat_linear_30_34|1.00
+camera_shot|430|650|crossfire_wall_scrape|-|0|0|0|0|0|0|0|0|0|0|0|crossfire_wall_scrape_preset|scrape_linear_32_42|1.00
+camera_shot|735|930|tunnel_dive_compression|-|0|0|0|0|0|0|0|0|0|0|0|tunnel_dive_compression_preset|tunnel_linear_28_36|1.00
+camera_shot|990|1235|falling_spire_reveal|-|0|0|0|0|0|0|0|0|0|0|0|falling_spire_reveal_preset|spire_linear_35_52|1.00
+camera_shot|1265|1460|gatekeeper_shadow_pass|-|0|0|0|0|0|0|0|0|0|0|0|gatekeeper_shadow_pass_preset|boss_linear_36_44|1.00
+camera_shot|1690|1880|escape_speed_widen|-|0|0|0|0|0|0|0|0|0|0|0|escape_speed_widen_preset|escape_linear_24_38|1.00
+camera_shot|2110|2380|final_gate_silhouette_hold|-|0|0|0|0|0|0|0|0|0|0|0|final_gate_silhouette_hold_preset|finale_linear_36_48|1.00
+
+# TerrainMaterialPreset: authored terrain surface response by section.
+terrain_material|0|intro_wet_organic_rock|0|0.46|0.39|0.35|0.54|1.22|1.28|1.16|0.12|1.48|1.18|0.72|1.48|1.34|1.28|0.05
+terrain_material|180|first_contact_readable_strata|80|0.86|0.74|0.62|0.86|0.98|1.02|0.92|0.09|1.02|0.82|0.42|1.12|1.02|0.92|0.20
+terrain_material|420|crossfire_dark_wall_rim|120|0.68|0.56|0.50|0.78|1.18|1.26|1.12|0.09|1.42|1.02|0.60|1.28|1.16|1.06|0.14
+terrain_material|720|tunnel_cold_ribs|90|0.48|0.52|0.62|0.62|1.32|1.42|1.18|0.07|1.58|1.18|0.62|1.46|1.30|1.10|0.10
+terrain_material|980|spire_dust_chalk|120|0.72|0.58|0.48|0.72|1.18|1.10|0.96|0.07|1.18|0.96|0.58|1.14|1.08|1.08|0.08
+terrain_material|1280|gatekeeper_soot_wall|110|0.52|0.44|0.42|0.66|1.30|1.28|1.10|0.07|1.52|1.02|0.62|1.34|1.20|1.12|0.10
+terrain_material|1680|escape_sunlit_floor|120|0.78|0.64|0.50|0.78|0.94|0.94|0.86|0.08|0.98|0.78|0.44|1.04|1.00|0.96|0.12
+terrain_material|2100|final_gate_obsidian_rim|120|0.42|0.34|0.30|0.54|1.20|1.24|1.08|0.06|1.38|0.84|0.68|1.28|1.16|1.18|0.06
+
+# CinematicShotSet: distance-authored composition bundles. Landmark ids reference terrain placements.
+cinematic_shot_set|0|180|intro_arch_reveal_set|Intro Arch Reveal|intro_organic_arch_gate,intro_left_silhouette_wall,intro_right_silhouette_wall|intro_far_hole_wall_left,intro_mist_spire_stack|intro_backlit_mist|intro_arch_reveal|intro_wet_organic_rock|backlit mist|hold two dark canyon walls at the frame edge while the huge arch, distant root column, and hole wall create scale beyond the player lane
+cinematic_shot_set|180|420|first_contact_readability_set|First Contact Readability|intro_organic_arch_gate|intro_mist_spire_stack|first_contact_readability|first_contact_readable_lane|first_contact_readable_strata|readable haze|keep the combat lane clean while root columns and far mist frame the first lock-on lesson
+cinematic_shot_set|420|720|crossfire_wall_scrape_set|Crossfire Wall Scrape|crossfire_left_curved_wall,crossfire_right_curved_wall|-|crossfire_side_rim|crossfire_wall_scrape|crossfire_dark_wall_rim|side rim dust|walls scrape the frame edges while rim light separates enemies from dark organic rock
+cinematic_shot_set|720|980|tunnel_dive_set|Tunnel Dive Compression|tunnel_mouth_rib_crown,rib_tunnel_interior_sweep|-|tunnel_compression|tunnel_dive_compression|tunnel_cold_ribs|cold tunnel haze|rib tunnel compresses the frame with cooler fog and roll selling speed and claustrophobia
+cinematic_shot_set|980|1280|falling_spire_set|Falling Spire Reveal|falling_spire_root_column,spire_broken_bridge_arc|spire_far_hole_wall|falling_spire_dust_wall|falling_spire_reveal|spire_dust_chalk|dust wall silhouette|vertical reveal with falling debris silhouettes and warm dust catching the backlight
+cinematic_shot_set|1280|1680|gatekeeper_shadow_set|Gatekeeper Shadow Pass|-|gatekeeper_shadow_wall|gatekeeper_shadow|gatekeeper_shadow_pass|gatekeeper_soot_wall|boss shadow haze|dark boss approach where the shadow wall and low fog make the gatekeeper read before pressure rises
+cinematic_shot_set|1680|2100|escape_speed_set|Escape Speed Widen|-|-|escape_blooming_exit|escape_speed_widen|escape_sunlit_floor|blooming exit haze|wide fast exit with sunlit floor streaks and reduced foreground clutter for speed
+cinematic_shot_set|2100|2380|final_gate_silhouette_set|Final Gate Silhouette|-|-|final_gate_silhouette|final_gate_silhouette_hold|final_gate_obsidian_rim|dark gate haze|hold a dark gate silhouette against a controlled pale opening instead of washing the frame out
+
+event|35|vfx|sun_glint_intro|wide canyon reveal and first dust glints
+event|75|enemy_wave|intro_scout_pair|two slow scouts teach lock-on magnetism
+event|125|enemy_wave|intro_lockon_line|three drones line up for first combo
+event|205|enemy_wave|drone_intro_v|five drones fan from center
+event|270|enemy_wave|first_contact_split|front split wave asks for left-right tracking
+event|350|enemy_wave|first_contact_combo_ladder|staggered ladder keeps the combo alive
+event|430|vfx|crossfire_warning_flare|left cliff muzzle flashes announce pressure shift
+event|465|enemy_wave|cliff_crossfire_left|left cliff turrets and crossing drones
+event|535|enemy_wave|crossfire_low_high_mix|low drones pull aim while high drones punish tunnel vision
+event|615|enemy_wave|cliff_crossfire_right|right cliff mirror wave
+event|680|enemy_wave|crossfire_pincer|final first-minute pincer before tunnel compression
+event|735|setpiece|tunnel_entry|camera compresses and tunnel light drops
+event|758|vfx|tunnel_light_drop|blue daylight cuts to warm slit lights
+event|776|obstacle|tunnel_left_rib_01|left wall rib teaches narrow clearance
+event|805|enemy_wave|tunnel_probe_slalom|slow probes mark the safe weave path
+event|828|obstacle|tunnel_right_rib_01|right wall rib forces lateral correction
+event|860|obstacle|tunnel_ceiling_teeth_01|ceiling teeth press the player low
+event|895|enemy_wave|tunnel_exit_pinwheel|exit drones rotate around the tunnel mouth
+event|925|obstacle|tunnel_split_pillars_01|center pillars split the aiming lane
+event|955|vfx|tunnel_exit_haze|controlled sunlight haze before the canyon opens
+event|990|setpiece|spire_collapse_start|large silhouette collapse begins
+event|1015|vfx|spire_dust_wall|dust wall reveals falling debris silhouettes
+event|1045|obstacle|spire_falling_slab_left|foreground slab drops across left lane
+event|1075|enemy_wave|spire_guard_line|spire guards appear between debris beats
+event|1108|obstacle|spire_falling_slab_right|right slab falls after guard line
+event|1130|vfx|spire_shockwave|shockwave dust and falling shards
+event|1160|enemy_wave|spire_shard_crossfire|turrets and drones fire through the dust
+event|1195|obstacle|spire_core_fragment|large core fragment blocks center briefly
+event|1235|enemy_wave|spire_escape_chasers|fast chasers bridge into the boss approach
+event|1265|setpiece|gatekeeper_shadow_pass|boss shadow crosses the canyon wall
+event|1290|boss|gatekeeper_intro|mid boss enters from upper canyon
+event|1470|boss_phase|gatekeeper_weakpoints|side pods open
+event|1690|setpiece|escape_alarm|speed ramp and rear explosions
+event|1870|enemy_wave|pursuit_swarm|fast weak enemies from behind
+event|2110|setpiece|final_gate_open|large gate reveal
+event|2320|checkpoint|stage_clear|score tally and next route preload

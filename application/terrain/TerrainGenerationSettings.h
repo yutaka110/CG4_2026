@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "utils/math/Vector.h"
+#include "TerrainEditLayer.h"
 
 enum class TerrainDisplayMode : uint32_t {
     Lit = 0,
@@ -56,6 +58,8 @@ struct TerrainGenerationSettings {
 };
 
 struct TerrainAuthoringState {
+    TerrainEditLayer previewEditLayer{};
+    TerrainEditDirtyRegion lastEditDirtyRegion{};
     bool enabled = true;
     bool autoAdvancePreview = false;
     bool showDebugDraw = false;
@@ -82,6 +86,10 @@ struct TerrainAuthoringState {
     int selectedCourseRockCluster = -1;
     int courseObjectGizmoMode = 0;
     int courseObjectActiveAxis = -1;
+    int courseObjectGizmoSpace = 1;
+    int courseObjectPivotMode = 0;
+    std::vector<int> selectedCourseTerrainPlacements{};
+    std::vector<int> selectedCourseRockClusters{};
     float courseObjectFramePadding = 1.12f;
     float courseObjectMoveSensitivity = 0.08f;
     float courseObjectScaleSensitivity = 0.012f;

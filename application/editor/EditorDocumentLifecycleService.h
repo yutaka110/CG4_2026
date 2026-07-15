@@ -12,12 +12,15 @@ class CourseDocumentAdapter;
 class EditorDirtyStateService;
 class EditorModalConfirmService;
 class EditorNotificationCenter;
+class EditorDocumentManager;
+class EditorDocumentSaveService;
 struct EditorSaveApplyPolicyInput;
 
 enum class EditorDocumentLifecycleAction {
     ReloadCourse,
     CloseCourse,
     ReopenCourse,
+    SaveAllAndClose,
 };
 
 struct EditorDocumentLifecycleServices {
@@ -26,6 +29,8 @@ struct EditorDocumentLifecycleServices {
     EditorModalConfirmService* confirmService = nullptr;
     EditorNotificationCenter* notifications = nullptr;
     const EditorSaveApplyPolicyInput* saveApplyPolicy = nullptr;
+    EditorDocumentManager* documentManager = nullptr;
+    EditorDocumentSaveService* documentSaveService = nullptr;
 };
 
 struct EditorDocumentLifecycleResult {
@@ -50,6 +55,7 @@ public:
     bool CanReopenCourse(bool hasReopenCallback) const;
     std::string ReopenCourseDisabledReason(bool hasReopenCallback) const;
     EditorDocumentLifecycleResult RequestReopenCourse(std::function<void()> reopenCourse);
+    EditorDocumentLifecycleResult RequestSaveAllAndClose();
 
     uint32_t Revision() const { return revision_; }
     EditorDocumentLifecycleAction LastAction() const { return lastAction_; }

@@ -14,8 +14,20 @@
 #include "editor/EditorPropertyRegistry.h"
 #include "editor/EditorRuntimeAuthoringApplyService.h"
 #include "editor/EditorToolbar.h"
+#include "editor/core/EditorExecutionContext.h"
+#include "editor/play/EditorRuntimeApplyExecutionService.h"
+#include "editor/documents/EditorDocumentManager.h"
+#include "editor/world/IEditorWorldMutationExecutionService.h"
+#include "editor/world/EditorWorldMutationUndoCommand.h"
+#include "editor/sequencer/EditorSequencer.h"
+#include "editor/prefab/EditorPrefabService.h"
+#include "editor/material/EditorMaterialGraph.h"
+#include "editor/vfx/EditorVfxGraph.h"
+#include "editor/animation/EditorAnimationStateMachine.h"
+#include "editor/gameplay/EditorGameplayVisualScript.h"
 
 #include <string>
+#include <memory>
 #include <utility>
 
 namespace editor {
@@ -28,68 +40,122 @@ bool HasCommandPipelineInput(const AppEditorCommandToolModuleInput& input) {
         input.runtimeState != nullptr;
 }
 
+EditorDocumentId WorldMutationDocument(const EditorTransactionRecord* transaction) {
+    if (transaction == nullptr || transaction->command == nullptr) return {};
+    const auto* command = dynamic_cast<const EditorWorldMutationUndoCommand*>(
+        transaction->command.get());
+    return command != nullptr ? command->Document() : EditorDocumentId{};
+}
+
+void MarkWorldMutationDirty(
+    const EditorDocumentId& document,
+    std::string reason,
+    EditorDirtyStateService* dirtyState,
+    EditorDocumentManager* documentManager) {
+    if (!document.IsValid()) return;
+    if (dirtyState != nullptr) {
+        dirtyState->MarkDirty(
+            document.type == EditorDocumentTypes::Course
+                ? EditorDirtyDomain::CourseAuthoring
+                : EditorDirtyDomain::Unknown,
+            "world:" + document.assetGuid,
+            document.type + " World",
+            reason,
+            dirtyState->Revision() + 1);
+    }
+    if (documentManager != nullptr && documentManager->Find(document) != nullptr) {
+        documentManager->MarkDirty(document, std::move(reason));
+    }
+}
+
 EditorCommandResult UndoEditorTransaction(
     const AppImGuiFrameContext& context,
     AppRuntimeState& runtimeState,
-    const EditorRuntimeAuthoringApplyService& runtimeAuthoringApply,
     EditorTransactionStack* transactions,
     EditorAssetRegistry* assets,
     EditorDirtyStateService* dirtyState,
-    EditorNotificationCenter* notifications) {
+    EditorNotificationCenter* notifications,
+    IEditorWorldMutationExecutionService* worldExecution,
+    EditorDocumentManager* documentManager,
+    EditorSequencerService* sequencer,
+    EditorPrefabService* prefabs,
+    EditorMaterialGraphService* materialGraphs,
+    EditorVfxGraphService* vfxGraphs,
+    EditorAnimationStateMachineService* animationStateMachines,
+    EditorGameplayVisualScriptService* gameplayVisualScripts) {
     const EditorTransactionRecord* next =
         transactions != nullptr ? transactions->NextUndoTransaction() : nullptr;
-    if (next != nullptr &&
-        next->payload.kind == EditorTransactionPayloadKind::AssetMutation) {
+    if (next != nullptr && next->command != nullptr &&
+        (next->command->DomainId() == "asset" || next->command->DomainId() == "runtime-apply" ||
+            next->command->DomainId() == "world" || next->command->DomainId() == "sequencer" ||
+            next->command->DomainId() == "prefab" || next->command->DomainId() == "material-graph" ||
+            next->command->DomainId() == "vfx-graph" ||
+            next->command->DomainId() == "animation-state-machine" ||
+            next->command->DomainId() == "gameplay-visual-script")) {
+        const bool assetCommand = next->command->DomainId() == "asset";
+        const bool worldCommand = next->command->DomainId() == "world";
+        const bool sequencerCommand = next->command->DomainId() == "sequencer";
+        const bool prefabCommand = next->command->DomainId() == "prefab";
+        const bool materialGraphCommand = next->command->DomainId() == "material-graph";
+        const bool vfxGraphCommand = next->command->DomainId() == "vfx-graph";
+        const bool animationStateMachineCommand = next->command->DomainId() == "animation-state-machine";
+        const bool gameplayVisualScriptCommand = next->command->DomainId() == "gameplay-visual-script";
+        const EditorDocumentId worldDocument = worldCommand
+            ? WorldMutationDocument(next)
+            : EditorDocumentId{};
         if (assets == nullptr) {
-            return EditorCommandResult{false, "Asset registry is unavailable."};
+            if (assetCommand) return EditorCommandResult{false, "Asset registry is unavailable."};
         }
-        EditorAssetMutationExecutor executor(*assets);
-        EditorAssetMutationResult applyResult{};
-        const bool applied =
-            transactions->Undo(
-                [&](const EditorTransactionRecord& record, EditorTransactionApplyMode mode) {
-                    applyResult = executor.ApplyTransaction(record, mode);
-                    return applyResult.succeeded;
-                });
-        if (notifications != nullptr && !applyResult.message.empty()) {
-            notifications->Push(
-                applied ? EditorNotificationSeverity::Info : EditorNotificationSeverity::Error,
-                "Asset",
-                applyResult.message);
+        EditorExecutionContext execution;
+        EditorError registrationError;
+        std::unique_ptr<EditorAssetMutationExecutor> assetExecution;
+        if (assetCommand) {
+            assetExecution = std::make_unique<EditorAssetMutationExecutor>(*assets);
+            execution.Register(*assetExecution, &registrationError);
         }
-        return EditorCommandResult{
-            applied,
-            applyResult.message.empty()
-                ? std::string("Asset undo failed.")
-                : applyResult.message};
-    }
-    if (next != nullptr &&
-        next->payload.kind == EditorTransactionPayloadKind::RuntimeAuthoringApply) {
-        EditorRuntimeAuthoringApplyResult applyResult{};
-        const bool applied =
-            transactions->Undo(
-                [&](const EditorTransactionRecord& record, EditorTransactionApplyMode mode) {
-                    applyResult =
-                        runtimeAuthoringApply.ApplyTransaction(
-                            EditorRuntimeAuthoringApplyRequest{
-                                nullptr,
-                                nullptr,
-                                context.course,
-                                &runtimeState,
-                                transactions,
-                                dirtyState,
-                                notifications,
-                                0,
-                                "editor.command.runtimeApplyUndo"},
-                            record,
-                            mode);
-                    return applyResult.succeeded;
-                });
-        return EditorCommandResult{
-            applied,
-            applyResult.message.empty()
-                ? std::string("Runtime authoring apply undo failed.")
-                : applyResult.message};
+        EditorRuntimeApplyExecutionService runtimeExecution(
+            EditorRuntimeApplyExecutionTargets{
+                context.course, &runtimeState, context.effectRuntime, context.postProcessStack,
+                dirtyState, notifications, "editor.command.runtimeApplyUndo"});
+        if (!assetCommand && !worldCommand && !sequencerCommand && !prefabCommand &&
+            !materialGraphCommand && !vfxGraphCommand && !animationStateMachineCommand &&
+            !gameplayVisualScriptCommand) {
+            execution.Register(runtimeExecution, &registrationError);
+        }
+        if (worldCommand && worldExecution != nullptr) {
+            execution.Register(*worldExecution, &registrationError);
+        }
+        if (sequencerCommand && sequencer != nullptr) {
+            execution.Register(*sequencer, &registrationError);
+        }
+        if (prefabCommand && prefabs != nullptr) {
+            execution.Register(*prefabs, &registrationError);
+        }
+        if (materialGraphCommand && materialGraphs != nullptr) {
+            execution.Register(*materialGraphs, &registrationError);
+        }
+        if (vfxGraphCommand && vfxGraphs != nullptr) {
+            execution.Register(*vfxGraphs, &registrationError);
+        }
+        if (animationStateMachineCommand && animationStateMachines != nullptr) {
+            execution.Register(*animationStateMachines, &registrationError);
+        }
+        if (gameplayVisualScriptCommand && gameplayVisualScripts != nullptr) {
+            execution.Register(*gameplayVisualScripts, &registrationError);
+        }
+        EditorError error;
+        const bool applied = transactions->Undo(execution, &error);
+        if (!applied && notifications != nullptr) {
+            notifications->Push(EditorNotificationSeverity::Error, "Transaction", error.message);
+        }
+        if (applied && worldCommand) {
+            MarkWorldMutationDirty(
+                worldDocument,
+                "World mutation undo applied.",
+                dirtyState,
+                documentManager);
+        }
+        return EditorCommandResult{applied, applied ? "Undo completed." : error.message};
     }
     if (runtimeState.terrain.courseObjectUndoDepth == 0) {
         return EditorCommandResult{false, "Undo stack is empty."};
@@ -101,65 +167,91 @@ EditorCommandResult UndoEditorTransaction(
 EditorCommandResult RedoEditorTransaction(
     const AppImGuiFrameContext& context,
     AppRuntimeState& runtimeState,
-    const EditorRuntimeAuthoringApplyService& runtimeAuthoringApply,
     EditorTransactionStack* transactions,
     EditorAssetRegistry* assets,
     EditorDirtyStateService* dirtyState,
-    EditorNotificationCenter* notifications) {
+    EditorNotificationCenter* notifications,
+    IEditorWorldMutationExecutionService* worldExecution,
+    EditorDocumentManager* documentManager,
+    EditorSequencerService* sequencer,
+    EditorPrefabService* prefabs,
+    EditorMaterialGraphService* materialGraphs,
+    EditorVfxGraphService* vfxGraphs,
+    EditorAnimationStateMachineService* animationStateMachines,
+    EditorGameplayVisualScriptService* gameplayVisualScripts) {
     const EditorTransactionRecord* next =
         transactions != nullptr ? transactions->NextRedoTransaction() : nullptr;
-    if (next != nullptr &&
-        next->payload.kind == EditorTransactionPayloadKind::AssetMutation) {
+    if (next != nullptr && next->command != nullptr &&
+        (next->command->DomainId() == "asset" || next->command->DomainId() == "runtime-apply" ||
+            next->command->DomainId() == "world" || next->command->DomainId() == "sequencer" ||
+            next->command->DomainId() == "prefab" || next->command->DomainId() == "material-graph" ||
+            next->command->DomainId() == "vfx-graph" ||
+            next->command->DomainId() == "animation-state-machine" ||
+            next->command->DomainId() == "gameplay-visual-script")) {
+        const bool assetCommand = next->command->DomainId() == "asset";
+        const bool worldCommand = next->command->DomainId() == "world";
+        const bool sequencerCommand = next->command->DomainId() == "sequencer";
+        const bool prefabCommand = next->command->DomainId() == "prefab";
+        const bool materialGraphCommand = next->command->DomainId() == "material-graph";
+        const bool vfxGraphCommand = next->command->DomainId() == "vfx-graph";
+        const bool animationStateMachineCommand = next->command->DomainId() == "animation-state-machine";
+        const bool gameplayVisualScriptCommand = next->command->DomainId() == "gameplay-visual-script";
+        const EditorDocumentId worldDocument = worldCommand
+            ? WorldMutationDocument(next)
+            : EditorDocumentId{};
         if (assets == nullptr) {
-            return EditorCommandResult{false, "Asset registry is unavailable."};
+            if (assetCommand) return EditorCommandResult{false, "Asset registry is unavailable."};
         }
-        EditorAssetMutationExecutor executor(*assets);
-        EditorAssetMutationResult applyResult{};
-        const bool applied =
-            transactions->Redo(
-                [&](const EditorTransactionRecord& record, EditorTransactionApplyMode mode) {
-                    applyResult = executor.ApplyTransaction(record, mode);
-                    return applyResult.succeeded;
-                });
-        if (notifications != nullptr && !applyResult.message.empty()) {
-            notifications->Push(
-                applied ? EditorNotificationSeverity::Info : EditorNotificationSeverity::Error,
-                "Asset",
-                applyResult.message);
+        EditorExecutionContext execution;
+        EditorError registrationError;
+        std::unique_ptr<EditorAssetMutationExecutor> assetExecution;
+        if (assetCommand) {
+            assetExecution = std::make_unique<EditorAssetMutationExecutor>(*assets);
+            execution.Register(*assetExecution, &registrationError);
         }
-        return EditorCommandResult{
-            applied,
-            applyResult.message.empty()
-                ? std::string("Asset redo failed.")
-                : applyResult.message};
-    }
-    if (next != nullptr &&
-        next->payload.kind == EditorTransactionPayloadKind::RuntimeAuthoringApply) {
-        EditorRuntimeAuthoringApplyResult applyResult{};
-        const bool applied =
-            transactions->Redo(
-                [&](const EditorTransactionRecord& record, EditorTransactionApplyMode mode) {
-                    applyResult =
-                        runtimeAuthoringApply.ApplyTransaction(
-                            EditorRuntimeAuthoringApplyRequest{
-                                nullptr,
-                                nullptr,
-                                context.course,
-                                &runtimeState,
-                                transactions,
-                                dirtyState,
-                                notifications,
-                                0,
-                                "editor.command.runtimeApplyRedo"},
-                            record,
-                            mode);
-                    return applyResult.succeeded;
-                });
-        return EditorCommandResult{
-            applied,
-            applyResult.message.empty()
-                ? std::string("Runtime authoring apply redo failed.")
-                : applyResult.message};
+        EditorRuntimeApplyExecutionService runtimeExecution(
+            EditorRuntimeApplyExecutionTargets{
+                context.course, &runtimeState, context.effectRuntime, context.postProcessStack,
+                dirtyState, notifications, "editor.command.runtimeApplyRedo"});
+        if (!assetCommand && !worldCommand && !sequencerCommand && !prefabCommand &&
+            !materialGraphCommand && !vfxGraphCommand && !animationStateMachineCommand &&
+            !gameplayVisualScriptCommand) {
+            execution.Register(runtimeExecution, &registrationError);
+        }
+        if (worldCommand && worldExecution != nullptr) {
+            execution.Register(*worldExecution, &registrationError);
+        }
+        if (sequencerCommand && sequencer != nullptr) {
+            execution.Register(*sequencer, &registrationError);
+        }
+        if (prefabCommand && prefabs != nullptr) {
+            execution.Register(*prefabs, &registrationError);
+        }
+        if (materialGraphCommand && materialGraphs != nullptr) {
+            execution.Register(*materialGraphs, &registrationError);
+        }
+        if (vfxGraphCommand && vfxGraphs != nullptr) {
+            execution.Register(*vfxGraphs, &registrationError);
+        }
+        if (animationStateMachineCommand && animationStateMachines != nullptr) {
+            execution.Register(*animationStateMachines, &registrationError);
+        }
+        if (gameplayVisualScriptCommand && gameplayVisualScripts != nullptr) {
+            execution.Register(*gameplayVisualScripts, &registrationError);
+        }
+        EditorError error;
+        const bool applied = transactions->Redo(execution, &error);
+        if (!applied && notifications != nullptr) {
+            notifications->Push(EditorNotificationSeverity::Error, "Transaction", error.message);
+        }
+        if (applied && worldCommand) {
+            MarkWorldMutationDirty(
+                worldDocument,
+                "World mutation redo applied.",
+                dirtyState,
+                documentManager);
+        }
+        return EditorCommandResult{applied, applied ? "Redo completed." : error.message};
     }
     if (runtimeState.terrain.courseObjectRedoDepth == 0) {
         return EditorCommandResult{false, "Redo stack is empty."};
@@ -331,6 +423,42 @@ void RegisterAppEditorFrameProviderToolModules(
                         true,
                         {}},
                     *moduleContext.validation);
+                if (input.materialGraphValidation != nullptr) {
+                    moduleContext.tools->RegisterValidationAdapter(
+                        EditorValidationAdapterRegistrationDescriptor{
+                            {},
+                            "material.validation.graph",
+                            input.materialGraphValidation,
+                            40,
+                            true,
+                            {}},
+                        *moduleContext.validation);
+                }
+                if (input.vfxGraphValidation != nullptr) {
+                    moduleContext.tools->RegisterValidationAdapter(
+                        EditorValidationAdapterRegistrationDescriptor{
+                            {},
+                            "vfx.validation.graph",
+                            input.vfxGraphValidation,
+                            45,
+                            true,
+                            {}},
+                        *moduleContext.validation);
+                }
+                if (input.animationStateMachineValidation != nullptr) {
+                    moduleContext.tools->RegisterValidationAdapter(
+                        EditorValidationAdapterRegistrationDescriptor{
+                            {}, "animation.validation.stateMachine",
+                            input.animationStateMachineValidation, 50, true, {}},
+                        *moduleContext.validation);
+                }
+                if (input.gameplayVisualScriptValidation != nullptr) {
+                    moduleContext.tools->RegisterValidationAdapter(
+                        EditorValidationAdapterRegistrationDescriptor{
+                            {}, "gameplay.validation.visualScript",
+                            input.gameplayVisualScriptValidation, 55, true, {}},
+                        *moduleContext.validation);
+                }
                 moduleContext.tools->RegisterValidationAdapter(
                     EditorValidationAdapterRegistrationDescriptor{
                         {},
@@ -460,15 +588,30 @@ void RegisterAppEditorCommandToolModules(
                          transactions = editorContext.transactions,
                          assets = editorContext.assets,
                          dirtyState = editorContext.dirtyState,
-                         notifications = editorContext.notifications]() {
+                         notifications = editorContext.notifications,
+                         worldExecution = editorContext.worldMutationExecution,
+                         documentManager = editorContext.documentManager,
+                         sequencer = editorContext.sequencer,
+                         prefabs = editorContext.prefabs,
+                         materialGraphs = editorContext.materialGraphs,
+                         vfxGraphs = editorContext.vfxGraphs,
+                         animationStateMachines = editorContext.animationStateMachines,
+                         gameplayVisualScripts = editorContext.gameplayVisualScripts]() {
                             return UndoEditorTransaction(
                                 context,
                                 runtimeState,
-                                runtimeAuthoringApply,
                                 transactions,
                                 assets,
                                 dirtyState,
-                                notifications);
+                                notifications,
+                                worldExecution,
+                                documentManager,
+                                sequencer,
+                                prefabs,
+                                materialGraphs,
+                                vfxGraphs,
+                                animationStateMachines,
+                                gameplayVisualScripts);
                         },
                         [&context,
                          &runtimeState,
@@ -476,15 +619,30 @@ void RegisterAppEditorCommandToolModules(
                          transactions = editorContext.transactions,
                          assets = editorContext.assets,
                          dirtyState = editorContext.dirtyState,
-                         notifications = editorContext.notifications]() {
+                         notifications = editorContext.notifications,
+                         worldExecution = editorContext.worldMutationExecution,
+                         documentManager = editorContext.documentManager,
+                         sequencer = editorContext.sequencer,
+                         prefabs = editorContext.prefabs,
+                         materialGraphs = editorContext.materialGraphs,
+                         vfxGraphs = editorContext.vfxGraphs,
+                         animationStateMachines = editorContext.animationStateMachines,
+                         gameplayVisualScripts = editorContext.gameplayVisualScripts]() {
                             return RedoEditorTransaction(
                                 context,
                                 runtimeState,
-                                runtimeAuthoringApply,
                                 transactions,
                                 assets,
                                 dirtyState,
-                                notifications);
+                                notifications,
+                                worldExecution,
+                                documentManager,
+                                sequencer,
+                                prefabs,
+                                materialGraphs,
+                                vfxGraphs,
+                                animationStateMachines,
+                                gameplayVisualScripts);
                         },
                         [&context,
                          &runtimeState,
@@ -500,7 +658,9 @@ void RegisterAppEditorCommandToolModules(
                                         context.course,
                                         &runtimeState,
                                         notifications,
-                                        "editor.command.playSession"},
+                                        "editor.command.playSession",
+                                        context.effectRuntime,
+                                        context.postProcessStack},
                                     mode);
                             return EditorCommandResult{result.succeeded, result.message};
                         },
@@ -518,7 +678,9 @@ void RegisterAppEditorCommandToolModules(
                                         context.course,
                                         &runtimeState,
                                         notifications,
-                                        "editor.command.playSession"});
+                                        "editor.command.playSession",
+                                        context.effectRuntime,
+                                        context.postProcessStack});
                             return EditorCommandResult{result.succeeded, result.message};
                         },
                         [&context,
@@ -535,7 +697,9 @@ void RegisterAppEditorCommandToolModules(
                                         context.course,
                                         &runtimeState,
                                         notifications,
-                                        "editor.command.runtimeControl"});
+                                        "editor.command.runtimeControl",
+                                        context.effectRuntime,
+                                        context.postProcessStack});
                             return EditorCommandResult{result.succeeded, result.message};
                         },
                         [&context,
@@ -552,7 +716,9 @@ void RegisterAppEditorCommandToolModules(
                                         context.course,
                                         &runtimeState,
                                         notifications,
-                                        "editor.command.runtimeControl"});
+                                        "editor.command.runtimeControl",
+                                        context.effectRuntime,
+                                        context.postProcessStack});
                             return EditorCommandResult{result.succeeded, result.message};
                         },
                         [&context,
@@ -569,7 +735,9 @@ void RegisterAppEditorCommandToolModules(
                                         context.course,
                                         &runtimeState,
                                         notifications,
-                                        "editor.command.runtimeControl"});
+                                        "editor.command.runtimeControl",
+                                        context.effectRuntime,
+                                        context.postProcessStack});
                             return EditorCommandResult{result.succeeded, result.message};
                         },
                         [&context,
@@ -586,7 +754,9 @@ void RegisterAppEditorCommandToolModules(
                                         context.course,
                                         &runtimeState,
                                         notifications,
-                                        "editor.command.runtimeControl"});
+                                        "editor.command.runtimeControl",
+                                        context.effectRuntime,
+                                        context.postProcessStack});
                             if (result.succeeded && context.onApplyCourse) {
                                 context.onApplyCourse();
                             }
@@ -624,6 +794,8 @@ void RegisterAppEditorCommandToolModules(
                                          playSession,
                                          &playSessionSnapshot,
                                          course = context.course,
+                                         effectRuntime = context.effectRuntime,
+                                         postProcessStack = context.postProcessStack,
                                          runtimeStatePtr = &runtimeState,
                                          transactions,
                                          dirtyState,
@@ -639,7 +811,9 @@ void RegisterAppEditorCommandToolModules(
                                                     dirtyState,
                                                     notifications,
                                                     validationErrorCount,
-                                                    "editor.command.runtimeApply"});
+                                                    "editor.command.runtimeApply",
+                                                    effectRuntime,
+                                                    postProcessStack});
                                         },
                                         []() {}});
                             return EditorCommandResult{
@@ -647,6 +821,32 @@ void RegisterAppEditorCommandToolModules(
                                 requested
                                     ? std::string("Runtime apply confirmation requested.")
                                     : std::string("Runtime apply confirmation is already pending.")};
+                        },
+                        [&runtimeState](EditorTransformGizmoMode mode) {
+                            runtimeState.terrain.courseObjectGizmoMode =
+                                ToCourseGizmoMode(mode);
+                            runtimeState.terrain.courseObjectActiveAxis = -1;
+                            return EditorCommandResult{
+                                true, std::string("Transform mode: ") + ToString(mode) + "."};
+                        },
+                        [&runtimeState]() {
+                            runtimeState.terrain.courseObjectGizmoSpace =
+                                runtimeState.terrain.courseObjectGizmoSpace == 0 ? 1 : 0;
+                            return EditorCommandResult{
+                                true,
+                                std::string("Transform space: ") +
+                                    (runtimeState.terrain.courseObjectGizmoSpace == 0
+                                         ? "World."
+                                         : "Local.")};
+                        },
+                        [&runtimeState]() {
+                            runtimeState.terrain.courseObjectSnapEnabled =
+                                !runtimeState.terrain.courseObjectSnapEnabled;
+                            return EditorCommandResult{
+                                true,
+                                runtimeState.terrain.courseObjectSnapEnabled
+                                    ? "Transform snap enabled."
+                                    : "Transform snap disabled."};
                         }});
                 builtinProvider.RegisterCommands(editorContext);
             }},
