@@ -25,6 +25,26 @@ void SetPassEnabled(PostProcessPass* pass, bool enabled) {
     }
 }
 
+const char* WarpTunnelPhaseLabel(WarpTunnelPhase phase) {
+    switch (phase) {
+    case WarpTunnelPhase::Idle: return "Idle";
+    case WarpTunnelPhase::Enter: return "Enter";
+    case WarpTunnelPhase::Cruise: return "Cruise";
+    case WarpTunnelPhase::Exit: return "Exit";
+    }
+    return "Unknown";
+}
+
+const char* DissolvePhaseLabel(DissolvePhase phase) {
+    switch (phase) {
+    case DissolvePhase::Idle: return "Idle";
+    case DissolvePhase::DissolveOut: return "DissolveOut";
+    case DissolvePhase::Switch: return "Switch";
+    case DissolvePhase::DissolveIn: return "DissolveIn";
+    }
+    return "Unknown";
+}
+
 void DrawBloomGlareControls(PostProcessStack& postProcessStack, std::vector<PostProcessPass>& passes) {
     PostProcessPass* extract = FindPass(passes, "BloomExtract");
     PostProcessPass* downsampleQuarter = FindPass(passes, "BloomDownsampleQuarter");
@@ -130,8 +150,71 @@ void DrawBloomGlareControls(PostProcessStack& postProcessStack, std::vector<Post
 void DrawPostProcessPanel(
     PostProcessStack& postProcessStack) {
     std::vector<PostProcessPass>& passes = postProcessStack.MutablePasses();
+    ImGui::SeparatorText("Assignment Shortcuts");
+    ImGui::TextUnformatted("0: Reset  1: WarpTunnel  2: Grayscale  3: Vignette");
+    ImGui::TextUnformatted("4: BoxBlur  5: GaussianBlur  6: Outline  7: Dissolve  8: Random");
     DrawBloomGlareControls(postProcessStack, passes);
     for (PostProcessPass& pass : passes) {
+        if (pass.pipeline == "WarpTunnelComposite") {
+            continue;
+        }
+        if (pass.pipeline == "DissolveMask") {
+            continue;
+        }
+        if (pass.pipeline == "WarpTunnelGenerate") {
+            PostProcessPass* compositePass = nullptr;
+            for (PostProcessPass& candidate : passes) {
+                if (candidate.pipeline == "WarpTunnelComposite") {
+                    compositePass = &candidate;
+                    break;
+                }
+            }
+
+            ImGui::PushID(pass.name.c_str());
+            const WarpTunnelPhase phase = postProcessStack.GetWarpTunnelPhase();
+            bool enabled = phase == WarpTunnelPhase::Enter || phase == WarpTunnelPhase::Cruise;
+            if (ImGui::Checkbox("WarpTunnel", &enabled)) {
+                if (enabled) {
+                    postProcessStack.StartWarpTunnel();
+                } else {
+                    postProcessStack.StopWarpTunnel();
+                }
+            }
+            ImGui::SameLine();
+            ImGui::SliderFloat("Intensity", &pass.intensity, 0.0f, 1.0f);
+            ImGui::Text(
+                "Phase: %s  Transition: %.3f  Flash: %.3f",
+                WarpTunnelPhaseLabel(postProcessStack.GetWarpTunnelPhase()),
+                postProcessStack.WarpTunnelTransition(),
+                postProcessStack.WarpTunnelFlash());
+            float enterDuration = postProcessStack.WarpTunnelEnterDuration();
+            float exitDuration = postProcessStack.WarpTunnelExitDuration();
+            bool durationChanged = ImGui::SliderFloat("Enter Duration", &enterDuration, 0.10f, 3.0f);
+            durationChanged |= ImGui::SliderFloat("Exit Duration", &exitDuration, 0.10f, 3.0f);
+            if (durationChanged) {
+                postProcessStack.SetWarpTunnelDurations(enterDuration, exitDuration);
+            }
+            ImGui::SliderFloat("Time", &pass.parameters.warpTime, 0.0f, 30.0f);
+            ImGui::SliderFloat("Center X", &pass.parameters.warpCenterX, 0.0f, 1.0f);
+            ImGui::SliderFloat("Center Y", &pass.parameters.warpCenterY, 0.0f, 1.0f);
+            ImGui::SliderFloat("Refraction", &pass.parameters.warpRefractionStrength, 0.0f, 0.1f);
+            ImGui::SliderFloat("Scene Swirl", &pass.parameters.warpSceneSwirl, -2.0f, 2.0f);
+            ImGui::SliderFloat("Rotation Speed", &pass.parameters.warpRotationSpeed, -4.0f, 4.0f);
+            ImGui::SliderFloat("Flow Speed", &pass.parameters.warpFlowSpeed, -4.0f, 4.0f);
+            ImGui::SliderFloat("Arms", &pass.parameters.warpArms, 1.0f, 32.0f);
+            ImGui::SliderFloat("Rings", &pass.parameters.warpRings, -24.0f, 24.0f);
+            ImGui::SliderFloat("Twist X", &pass.parameters.warpTwistX, -24.0f, 24.0f);
+            ImGui::SliderFloat("Twist Y", &pass.parameters.warpTwistY, -24.0f, 24.0f);
+            ImGui::SliderFloat("Tunnel Exposure", &pass.parameters.warpTunnelExposure, 0.0f, 4.0f);
+            ImGui::SliderFloat("Aspect Ratio", &pass.parameters.warpAspectRatio, 0.5f, 4.0f);
+            if (compositePass != nullptr) {
+                compositePass->intensity = pass.intensity;
+                compositePass->parameters = pass.parameters;
+            }
+            ImGui::Text("  Generate 0.50x -> refract/radial blur/transition Composite 1.00x");
+            ImGui::PopID();
+            continue;
+        }
         if (pass.pipeline == "BoxBlurVertical") {
             continue;
         }
@@ -222,6 +305,60 @@ void DrawPostProcessPanel(
             ImGui::PopID();
             continue;
         }
+        if (pass.pipeline == "Dissolve") {
+            PostProcessPass* maskPass = nullptr;
+            for (PostProcessPass& candidate : passes) {
+                if (candidate.pipeline == "DissolveMask") {
+                    maskPass = &candidate;
+                    break;
+                }
+            }
+
+            ImGui::PushID(pass.name.c_str());
+            const DissolvePhase phase = postProcessStack.GetDissolvePhase();
+            if (phase == DissolvePhase::Idle) {
+                if (ImGui::Button("Start Dissolve Transition")) {
+                    postProcessStack.StartDissolveTransition();
+                }
+            } else if (ImGui::Button("Cancel Dissolve Transition")) {
+                postProcessStack.CancelDissolveTransition();
+            }
+            ImGui::SameLine();
+            ImGui::SliderFloat("Intensity", &pass.intensity, 0.0f, 1.0f);
+            ImGui::Text(
+                "Phase: %s  Threshold: %.3f%s",
+                DissolvePhaseLabel(phase),
+                postProcessStack.DissolveThreshold(),
+                postProcessStack.HasDissolveSwitchRequest() ? "  Switch Pending" : "");
+
+            float outDuration = postProcessStack.DissolveOutDuration();
+            float switchDuration = postProcessStack.DissolveSwitchDuration();
+            float inDuration = postProcessStack.DissolveInDuration();
+            bool durationChanged = ImGui::SliderFloat("Out Duration", &outDuration, 0.05f, 3.0f);
+            durationChanged |= ImGui::SliderFloat("Switch Hold", &switchDuration, 0.0f, 1.0f);
+            durationChanged |= ImGui::SliderFloat("In Duration", &inDuration, 0.05f, 3.0f);
+            if (durationChanged) {
+                postProcessStack.SetDissolveDurations(outDuration, switchDuration, inDuration);
+            }
+
+            ImGui::SliderFloat("Edge Width", &pass.parameters.dissolveEdgeWidth, 0.0f, 0.3f);
+            ImGui::SliderFloat("Edge Softness", &pass.parameters.dissolveSoftness, 0.001f, 0.15f);
+            ImGui::ColorEdit3("Edge Color", &pass.parameters.dissolveEdgeColorR);
+            ImGui::SliderFloat("Burn Strength", &pass.parameters.dissolveBurnStrength, 0.0f, 5.0f);
+            ImGui::SliderFloat("Noise Scale", &pass.parameters.dissolveNoiseScale, 0.5f, 24.0f);
+            ImGui::SliderFloat("Noise Speed", &pass.parameters.dissolveNoiseSpeed, 0.0f, 2.0f);
+            ImGui::SliderFloat("Center X", &pass.parameters.dissolveCenterX, 0.0f, 1.0f);
+            ImGui::SliderFloat("Center Y", &pass.parameters.dissolveCenterY, 0.0f, 1.0f);
+            ImGui::SliderFloat("Direction Blend", &pass.parameters.dissolveDirectionBlend, 0.0f, 1.0f);
+            ImGui::SliderFloat("Seed", &pass.parameters.dissolveSeed, 0.0f, 100.0f);
+            if (maskPass != nullptr) {
+                maskPass->intensity = pass.intensity;
+                maskPass->parameters = pass.parameters;
+            }
+            ImGui::TextUnformatted("  Mask -> Threshold/Edge -> hidden Switch point -> reveal");
+            ImGui::PopID();
+            continue;
+        }
 
         ImGui::PushID(pass.name.c_str());
         ImGui::Checkbox(pass.name.c_str(), &pass.enabled);
@@ -293,6 +430,15 @@ void DrawPostProcessPanel(
             ImGui::SliderFloat("Radius", &pass.parameters.vignetteRadius, 0.0f, 1.5f);
             ImGui::SliderFloat("Softness", &pass.parameters.vignetteSoftness, 0.01f, 1.0f);
             ImGui::SliderFloat("Power", &pass.parameters.vignettePower, 0.1f, 4.0f);
+        } else if (pass.pipeline == "Random") {
+            ImGui::SliderFloat("Seed", &pass.parameters.randomSeed, 0.0f, 1000.0f);
+            ImGui::SliderFloat("Noise Scale", &pass.parameters.randomScale, 32.0f, 1200.0f);
+            ImGui::SliderFloat("Animation Speed", &pass.parameters.randomSpeed, 0.0f, 4.0f);
+            ImGui::SliderFloat("Seed Frame Rate", &pass.parameters.randomFrameRate, 1.0f, 60.0f);
+            ImGui::SliderFloat("Contrast", &pass.parameters.randomContrast, 0.0f, 4.0f);
+            ImGui::SliderFloat("Brightness", &pass.parameters.randomBrightness, -1.0f, 1.0f);
+            ImGui::SliderFloat("Color Amount", &pass.parameters.randomColorAmount, 0.0f, 1.0f);
+            ImGui::TextUnformatted("  UV + quantized time seed -> deterministic GPU random");
         }
         ImGui::Text("  %s -> %s pipeline=%s scale=%.2f",
             pass.inputResource.c_str(),

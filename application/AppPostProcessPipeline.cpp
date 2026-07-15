@@ -58,6 +58,21 @@ ID3D12PipelineState* ResolvePostProcessPso(const AppPipelines& pipelines, const 
     if (name == "GlowComposite") {
         return pipelines.GetGlowCompositePSO();
     }
+    if (name == "WarpTunnelGenerate") {
+        return pipelines.GetWarpTunnelGeneratePSO();
+    }
+    if (name == "WarpTunnelComposite") {
+        return pipelines.GetWarpTunnelCompositePSO();
+    }
+    if (name == "DissolveMask") {
+        return pipelines.GetDissolveMaskPSO();
+    }
+    if (name == "Dissolve") {
+        return pipelines.GetDissolvePSO();
+    }
+    if (name == "Random") {
+        return pipelines.GetRandomPSO();
+    }
     if (name == "PrewittOutline") {
         return pipelines.GetPrewittOutlinePSO();
     }
@@ -162,6 +177,53 @@ void BuildPassParams(const PostProcessPass& postPass, float passParams[kPostProc
         passParams[4] = postPass.parameters.glowTintB;
         return;
     }
+    if (postPass.pipeline == "WarpTunnelGenerate" || postPass.pipeline == "WarpTunnelComposite") {
+        passParams[1] = postPass.parameters.warpTime;
+        passParams[2] = postPass.parameters.warpTransition;
+        passParams[3] = postPass.parameters.warpCenterX;
+        passParams[4] = postPass.parameters.warpCenterY;
+        passParams[5] = postPass.parameters.warpRefractionStrength;
+        passParams[6] = postPass.parameters.warpSceneSwirl;
+        passParams[7] = postPass.parameters.warpRotationSpeed;
+        passParams[8] = postPass.parameters.warpFlowSpeed;
+        passParams[9] = postPass.parameters.warpArms;
+        passParams[10] = postPass.parameters.warpRings;
+        passParams[11] = postPass.parameters.warpTwistX;
+        passParams[12] = postPass.parameters.warpTwistY;
+        passParams[13] = postPass.parameters.warpTunnelExposure;
+        passParams[14] = postPass.parameters.warpFlash;
+        passParams[15] = postPass.parameters.warpAspectRatio;
+        return;
+    }
+    if (postPass.pipeline == "DissolveMask" || postPass.pipeline == "Dissolve") {
+        passParams[1] = postPass.parameters.dissolveTime;
+        passParams[2] = postPass.parameters.dissolveThreshold;
+        passParams[3] = postPass.parameters.dissolveEdgeWidth;
+        passParams[4] = postPass.parameters.dissolveNoiseScale;
+        passParams[5] = postPass.parameters.dissolveNoiseSpeed;
+        passParams[6] = postPass.parameters.dissolveEdgeColorR;
+        passParams[7] = postPass.parameters.dissolveEdgeColorG;
+        passParams[8] = postPass.parameters.dissolveEdgeColorB;
+        passParams[9] = postPass.parameters.dissolveBurnStrength;
+        passParams[10] = postPass.parameters.dissolveCenterX;
+        passParams[11] = postPass.parameters.dissolveCenterY;
+        passParams[12] = postPass.parameters.dissolveAspectRatio;
+        passParams[13] = postPass.parameters.dissolveDirectionBlend;
+        passParams[14] = postPass.parameters.dissolveSoftness;
+        passParams[15] = postPass.parameters.dissolveSeed;
+        return;
+    }
+    if (postPass.pipeline == "Random") {
+        passParams[1] = postPass.parameters.randomTime;
+        passParams[2] = postPass.parameters.randomSeed;
+        passParams[3] = postPass.parameters.randomScale;
+        passParams[4] = postPass.parameters.randomSpeed;
+        passParams[5] = postPass.parameters.randomFrameRate;
+        passParams[6] = postPass.parameters.randomContrast;
+        passParams[7] = postPass.parameters.randomBrightness;
+        passParams[8] = postPass.parameters.randomColorAmount;
+        return;
+    }
     if (postPass.pipeline == "PrewittOutline") {
         passParams[1] = postPass.parameters.outlineThreshold;
         passParams[2] = postPass.parameters.outlineThickness;
@@ -232,6 +294,29 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     } else {
                         passParams[3] = 16.0f / 9.0f;
                     }
+                }
+                if (postPass.pipeline == "WarpTunnelGenerate" || postPass.pipeline == "WarpTunnelComposite") {
+                    // Treat the authored time as an offset and keep both passes
+                    // synchronized to the same gameplay/render clock.
+                    passParams[1] += ctx.beamTime;
+                    uint32_t targetWidth = 0;
+                    uint32_t targetHeight = 0;
+                    if (ctx.vfxRenderTargets->GetTargetSize(postPass.outputResource, targetWidth, targetHeight) &&
+                        targetHeight > 0) {
+                        passParams[15] = static_cast<float>(targetWidth) / static_cast<float>(targetHeight);
+                    }
+                }
+                if (postPass.pipeline == "DissolveMask" || postPass.pipeline == "Dissolve") {
+                    passParams[1] += ctx.beamTime;
+                    uint32_t targetWidth = 0;
+                    uint32_t targetHeight = 0;
+                    if (ctx.vfxRenderTargets->GetTargetSize(postPass.outputResource, targetWidth, targetHeight) &&
+                        targetHeight > 0) {
+                        passParams[12] = static_cast<float>(targetWidth) / static_cast<float>(targetHeight);
+                    }
+                }
+                if (postPass.pipeline == "Random") {
+                    passParams[1] += ctx.beamTime;
                 }
                 if (postPass.pipeline == "PrewittOutline" || postPass.pipeline == "DistanceFog" || postPass.pipeline == "ContactAO") {
                     ctx.vfxRenderTargets->ExecuteDebugPreviewPass(

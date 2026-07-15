@@ -329,6 +329,11 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
         L"resources/ContactAO.PS.hlsl",
         L"resources/ToneMapping.PS.hlsl",
         L"resources/GlowComposite.PS.hlsl",
+        L"resources/WarpTunnelGenerate.PS.hlsl",
+        L"resources/WarpTunnelComposite.PS.hlsl",
+        L"resources/DissolveMask.PS.hlsl",
+        L"resources/Dissolve.PS.hlsl",
+        L"resources/Random.PS.hlsl",
         L"resources/PrewittOutline.PS.hlsl",
         L"resources/Grayscale.PS.hlsl",
         L"resources/Vignette.PS.hlsl",
@@ -1507,6 +1512,11 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     contactAoPs_ = Compile_(L"resources/ContactAO.PS.hlsl", L"ps_6_0");
     toneMappingPs_ = Compile_(L"resources/ToneMapping.PS.hlsl", L"ps_6_0");
     glowCompositePs_ = Compile_(L"resources/GlowComposite.PS.hlsl", L"ps_6_0");
+    warpTunnelGeneratePs_ = Compile_(L"resources/WarpTunnelGenerate.PS.hlsl", L"ps_6_0");
+    warpTunnelCompositePs_ = Compile_(L"resources/WarpTunnelComposite.PS.hlsl", L"ps_6_0");
+    dissolveMaskPs_ = Compile_(L"resources/DissolveMask.PS.hlsl", L"ps_6_0");
+    dissolvePs_ = Compile_(L"resources/Dissolve.PS.hlsl", L"ps_6_0");
+    randomPs_ = Compile_(L"resources/Random.PS.hlsl", L"ps_6_0");
     prewittOutlinePs_ = Compile_(L"resources/PrewittOutline.PS.hlsl", L"ps_6_0");
     grayscalePs_ = Compile_(L"resources/Grayscale.PS.hlsl", L"ps_6_0");
     vignettePs_ = Compile_(L"resources/Vignette.PS.hlsl", L"ps_6_0");
@@ -1524,7 +1534,9 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         !bloomDownsamplePs_ || !bloomUpsamplePs_ || !blurHorizontalPs_ || !blurVerticalPs_ ||
         !boxBlurHorizontalPs_ || !boxBlurVerticalPs_ || !gaussianBlurHorizontalPs_ || !gaussianBlurVerticalPs_ ||
         !distortionCompositePs_ || !accretionCompositePs_ || !distanceFogPs_ || !contactAoPs_ ||
-        !toneMappingPs_ || !glowCompositePs_ || !prewittOutlinePs_ || !grayscalePs_ || !vignettePs_ ||
+        !toneMappingPs_ || !glowCompositePs_ || !warpTunnelGeneratePs_ || !warpTunnelCompositePs_ ||
+        !dissolveMaskPs_ || !dissolvePs_ || !randomPs_ ||
+        !prewittOutlinePs_ || !grayscalePs_ || !vignettePs_ ||
         !debugDepthPreviewPs_ || !debugEmissivePreviewPs_) {
         OutputDebugStringA("[AppPipelines] Shader compilation failed.\n");
         return false;
@@ -2108,6 +2120,41 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
     {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d = compositeDesc;
+        d.PS = { warpTunnelGeneratePs_->GetBufferPointer(), warpTunnelGeneratePs_->GetBufferSize() };
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&warpTunnelGeneratePso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(WarpTunnelGenerate)", hr);
+    }
+
+    {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = compositeDesc;
+        d.PS = { warpTunnelCompositePs_->GetBufferPointer(), warpTunnelCompositePs_->GetBufferSize() };
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&warpTunnelCompositePso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(WarpTunnelComposite)", hr);
+    }
+
+    {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = compositeDesc;
+        d.PS = { dissolveMaskPs_->GetBufferPointer(), dissolveMaskPs_->GetBufferSize() };
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&dissolveMaskPso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(DissolveMask)", hr);
+    }
+
+    {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = compositeDesc;
+        d.PS = { dissolvePs_->GetBufferPointer(), dissolvePs_->GetBufferSize() };
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&dissolvePso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Dissolve)", hr);
+    }
+
+    {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = compositeDesc;
+        d.PS = { randomPs_->GetBufferPointer(), randomPs_->GetBufferSize() };
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&randomPso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Random)", hr);
+    }
+
+    {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = compositeDesc;
         d.PS = { prewittOutlinePs_->GetBufferPointer(), prewittOutlinePs_->GetBufferSize() };
         hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&prewittOutlinePso_));
         if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(PrewittOutline)", hr);
@@ -2547,6 +2594,11 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         L"resources/ContactAO.PS.hlsl",
         L"resources/ToneMapping.PS.hlsl",
         L"resources/GlowComposite.PS.hlsl",
+        L"resources/WarpTunnelGenerate.PS.hlsl",
+        L"resources/WarpTunnelComposite.PS.hlsl",
+        L"resources/DissolveMask.PS.hlsl",
+        L"resources/Dissolve.PS.hlsl",
+        L"resources/Random.PS.hlsl",
         L"resources/PrewittOutline.PS.hlsl",
         L"resources/Grayscale.PS.hlsl",
         L"resources/Vignette.PS.hlsl",

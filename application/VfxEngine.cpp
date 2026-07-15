@@ -755,6 +755,8 @@ void VfxEngine::Update(AppVfxRuntimeState& runtimeState, float deltaTime) {
 
     beamTime_ += deltaTime;
     beam_.SetTime(beamTime_);
+    postProcessStack_.UpdateWarpTunnel(deltaTime);
+    postProcessStack_.UpdateDissolve(deltaTime);
     effectRuntime_.Update(deltaTime);
 
     if (!effectHotReloadConfigured_) {

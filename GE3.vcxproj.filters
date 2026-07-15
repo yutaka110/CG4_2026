@@ -940,6 +940,11 @@
     <FxCompile Include="Resources\TrailMeshBuild.CS.hlsl" />
     <FxCompile Include="Resources\FullscreenComposite.VS.hlsl" />
     <FxCompile Include="Resources\FullscreenComposite.PS.hlsl" />
+    <FxCompile Include="Resources\WarpTunnelGenerate.PS.hlsl" />
+    <FxCompile Include="Resources\WarpTunnelComposite.PS.hlsl" />
+    <FxCompile Include="Resources\DissolveMask.PS.hlsl" />
+    <FxCompile Include="Resources\Dissolve.PS.hlsl" />
+    <FxCompile Include="Resources\Random.PS.hlsl" />
     <FxCompile Include="Resources\Grayscale.PS.hlsl" />
     <FxCompile Include="Resources\Accretion.PS.hlsl" />
     <FxCompile Include="Resources\DistanceFog.PS.hlsl" />

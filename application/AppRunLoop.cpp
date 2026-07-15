@@ -4011,6 +4011,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     if (!railShooterInitialized_) {
         EnterRailShooterScene();
     }
+    ProcessPostProcessShowcaseShortcuts();
     if (railPath_.Length() <= 0.0f) {
         ApplyRailShooterCourse();
     }
@@ -5091,6 +5092,88 @@ bool AppRunLoop::WasKeyPressed(int virtualKey) {
     const bool pressed = down && !previousKeyDown_[static_cast<size_t>(virtualKey)];
     previousKeyDown_[static_cast<size_t>(virtualKey)] = down;
     return pressed;
+}
+
+void AppRunLoop::ProcessPostProcessShowcaseShortcuts() {
+    if (hwnd_ == nullptr || GetForegroundWindow() != hwnd_) {
+        return;
+    }
+#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
+    // Number entry in an active editor widget must not change the rendered look.
+    if (ImGui::GetIO().WantTextInput || ImGui::IsAnyItemActive()) {
+        return;
+    }
+#endif
+
+    const auto digitPressed = [this](int digitKey, int numpadKey) {
+        const bool mainKeyboard = WasKeyPressed(digitKey);
+        const bool numericKeypad = WasKeyPressed(numpadKey);
+        return mainKeyboard || numericKeypad;
+    };
+    const auto toggleSinglePass = [this](const char* passName) {
+        PostProcessStack& stack = vfxEngine_.PostProcess();
+        stack.SetEnabled(passName, !stack.IsEnabled(passName));
+    };
+    const auto togglePassPair = [this](const char* firstName, const char* secondName) {
+        PostProcessStack& stack = vfxEngine_.PostProcess();
+        const bool enabled = stack.IsEnabled(firstName) && stack.IsEnabled(secondName);
+        stack.SetEnabled(firstName, !enabled);
+        stack.SetEnabled(secondName, !enabled);
+    };
+
+    const bool resetPressed = digitPressed('0', VK_NUMPAD0);
+    const bool warpTunnelPressed = digitPressed('1', VK_NUMPAD1);
+    const bool grayscalePressed = digitPressed('2', VK_NUMPAD2);
+    const bool vignettePressed = digitPressed('3', VK_NUMPAD3);
+    const bool boxBlurPressed = digitPressed('4', VK_NUMPAD4);
+    const bool gaussianBlurPressed = digitPressed('5', VK_NUMPAD5);
+    const bool outlinePressed = digitPressed('6', VK_NUMPAD6);
+    const bool dissolvePressed = digitPressed('7', VK_NUMPAD7);
+    const bool randomPressed = digitPressed('8', VK_NUMPAD8);
+
+    PostProcessStack& stack = vfxEngine_.PostProcess();
+    if (resetPressed) {
+        stack.SetEnabled("Grayscale", false);
+        stack.SetEnabled("Vignette", false);
+        stack.SetEnabled("BoxBlurHorizontal", false);
+        stack.SetEnabled("BoxBlurVertical", false);
+        stack.SetEnabled("GaussianBlurHorizontal", false);
+        stack.SetEnabled("GaussianBlurVertical", false);
+        stack.SetEnabled("PrewittOutline", false);
+        stack.CancelDissolveTransition();
+        stack.SetEnabled("Random", false);
+        stack.StopWarpTunnel();
+        return;
+    }
+    if (grayscalePressed) {
+        toggleSinglePass("Grayscale");
+    }
+    if (vignettePressed) {
+        toggleSinglePass("Vignette");
+    }
+    if (boxBlurPressed) {
+        togglePassPair("BoxBlurHorizontal", "BoxBlurVertical");
+    }
+    if (gaussianBlurPressed) {
+        togglePassPair("GaussianBlurHorizontal", "GaussianBlurVertical");
+    }
+    if (outlinePressed) {
+        toggleSinglePass("PrewittOutline");
+    }
+    if (warpTunnelPressed) {
+        const WarpTunnelPhase phase = stack.GetWarpTunnelPhase();
+        if (phase == WarpTunnelPhase::Idle || phase == WarpTunnelPhase::Exit) {
+            stack.StartWarpTunnel();
+        } else {
+            stack.StopWarpTunnel();
+        }
+    }
+    if (dissolvePressed) {
+        stack.StartDissolveTransition();
+    }
+    if (randomPressed) {
+        toggleSinglePass("Random");
+    }
 }
 
 AppRunLoop::CourseObjectEditSnapshot AppRunLoop::CaptureCourseObjectSnapshot() const {

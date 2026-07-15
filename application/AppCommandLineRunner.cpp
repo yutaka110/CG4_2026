@@ -10,11 +10,13 @@
 
 #include "EffectAssetLoader.h"
 #include "EffectRuntime.h"
+#if defined(GE3_BUILD_EDITOR) && GE3_BUILD_EDITOR
 #include "editor/EditorAutomationGate.h"
 #include "editor/EditorAssetFolderIndexer.h"
 #include "editor/EditorAssetImportService.h"
 #include "editor/EditorCoreRegressionTests.h"
 #include "editor/EditorSmokeRun.h"
+#endif
 #include "include/vfx/VfxRenderInputs.h"
 
 namespace {
@@ -36,6 +38,7 @@ bool HasArgument(std::wstring_view target) {
     return found;
 }
 
+#if defined(GE3_BUILD_EDITOR) && GE3_BUILD_EDITOR
 int RunEditorAssetMetaMigration() {
     const std::filesystem::path resourcesRoot = "Resources";
     editor::EditorAssetRegistry registry;
@@ -69,6 +72,7 @@ int RunEditorAssetMetaMigration() {
     log << "result=" << (ok ? "ok" : "failed") << '\n';
     return ok ? 0 : 1;
 }
+#endif
 
 int RunEffectAuthoringSmoke() {
     constexpr const char* kAssetName = "authoring_registry_only_demo";
@@ -173,6 +177,7 @@ int RunEffectAuthoringSmoke() {
 } // namespace
 
 AppCommandLineResult RunAppCommandLineTools() {
+#if defined(GE3_BUILD_EDITOR) && GE3_BUILD_EDITOR
     if (HasArgument(L"--editor-asset-meta-migrate")) {
         return {true, RunEditorAssetMetaMigration()};
     }
@@ -185,6 +190,7 @@ AppCommandLineResult RunAppCommandLineTools() {
     if (HasArgument(L"--editor-core-regression")) {
         return {true, editor::RunEditorCoreRegressionTests()};
     }
+#endif
     if (HasArgument(L"--effect-authoring-smoke")) {
         return {true, RunEffectAuthoringSmoke()};
     }

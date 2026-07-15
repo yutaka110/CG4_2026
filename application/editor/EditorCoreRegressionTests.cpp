@@ -1772,6 +1772,109 @@ void TestProductionPropertyAdapters(RegressionRunner& runner) {
     PostProcessStack postProcessStack;
     postProcessStack.ResetToVfxDefaults();
     runner.Expect(!postProcessStack.Passes().empty(), "post-process defaults should provide editable passes");
+    postProcessStack.StartWarpTunnel();
+    runner.Expect(
+        postProcessStack.GetWarpTunnelPhase() == WarpTunnelPhase::Enter &&
+            postProcessStack.IsEnabled("WarpTunnelGenerate") &&
+            postProcessStack.IsEnabled("WarpTunnelComposite"),
+        "warp tunnel enter should atomically enable both render passes");
+    postProcessStack.UpdateWarpTunnel(0.325f);
+    runner.Expect(
+        postProcessStack.WarpTunnelTransition() > 0.45f &&
+            postProcessStack.WarpTunnelFlash() > 0.9f,
+        "warp tunnel enter should drive reveal progress and flash");
+    postProcessStack.UpdateWarpTunnel(0.325f);
+    runner.Expect(
+        postProcessStack.GetWarpTunnelPhase() == WarpTunnelPhase::Cruise &&
+            postProcessStack.WarpTunnelTransition() >= 1.0f,
+        "warp tunnel should settle into cruise");
+    postProcessStack.StopWarpTunnel();
+    postProcessStack.UpdateWarpTunnel(0.55f);
+    runner.Expect(
+        postProcessStack.GetWarpTunnelPhase() == WarpTunnelPhase::Idle &&
+            !postProcessStack.IsEnabled("WarpTunnelGenerate") &&
+            !postProcessStack.IsEnabled("WarpTunnelComposite"),
+        "warp tunnel exit should return to idle and disable both passes");
+
+    postProcessStack.SetEnabled("DissolveMask", true);
+    postProcessStack.SetEnabled("Dissolve", true);
+    const PostProcessExecutionPlan dissolvePlan = postProcessStack.BuildExecutionPlan();
+    const PostProcessPass* resolvedDissolveMask = nullptr;
+    const PostProcessPass* resolvedDissolve = nullptr;
+    for (const PostProcessExecutionPass& executionPass : dissolvePlan.passes) {
+        if (executionPass.pass.pipeline == "DissolveMask") {
+            resolvedDissolveMask = &executionPass.pass;
+        } else if (executionPass.pass.pipeline == "Dissolve") {
+            resolvedDissolve = &executionPass.pass;
+        }
+    }
+    runner.Expect(
+        resolvedDissolveMask != nullptr && resolvedDissolve != nullptr,
+        "dissolve should schedule mask generation and composite as a pair");
+    runner.Expect(
+        resolvedDissolveMask != nullptr && resolvedDissolve != nullptr &&
+            resolvedDissolveMask->outputResource == resolvedDissolve->secondaryInputResource &&
+            resolvedDissolve->inputResource != resolvedDissolve->outputResource &&
+            resolvedDissolve->secondaryInputResource != resolvedDissolve->outputResource,
+        "dissolve should sample its generated mask without an SRV/RTV conflict");
+    postProcessStack.SetEnabled("DissolveMask", false);
+    postProcessStack.SetEnabled("Dissolve", false);
+
+    postProcessStack.SetDissolveDurations(0.8f, 0.12f, 0.7f);
+    postProcessStack.StartDissolveTransition();
+    runner.Expect(
+        postProcessStack.GetDissolvePhase() == DissolvePhase::DissolveOut &&
+            postProcessStack.IsEnabled("DissolveMask") &&
+            postProcessStack.IsEnabled("Dissolve") &&
+            postProcessStack.DissolveThreshold() == 0.0f,
+        "dissolve transition should start at a clean source image and enable both passes");
+    postProcessStack.UpdateDissolve(0.4f);
+    runner.Expect(
+        postProcessStack.GetDissolvePhase() == DissolvePhase::DissolveOut &&
+            postProcessStack.DissolveThreshold() > 0.45f &&
+            postProcessStack.DissolveThreshold() < 0.55f,
+        "dissolve out should animate threshold with a smooth curve");
+    postProcessStack.UpdateDissolve(0.4f);
+    runner.Expect(
+        postProcessStack.GetDissolvePhase() == DissolvePhase::Switch &&
+            postProcessStack.DissolveThreshold() == 1.0f &&
+            postProcessStack.ConsumeDissolveSwitchRequest() &&
+            !postProcessStack.ConsumeDissolveSwitchRequest() &&
+            postProcessStack.GetWarpTunnelPhase() == WarpTunnelPhase::Idle,
+        "dissolve switch should publish one request without changing warp tunnel state");
+    postProcessStack.UpdateDissolve(0.12f);
+    runner.Expect(
+        postProcessStack.GetDissolvePhase() == DissolvePhase::DissolveIn &&
+            postProcessStack.DissolveThreshold() == 1.0f,
+        "dissolve switch hold should advance to dissolve in");
+    postProcessStack.UpdateDissolve(0.35f);
+    runner.Expect(
+        postProcessStack.DissolveThreshold() > 0.45f &&
+            postProcessStack.DissolveThreshold() < 0.55f,
+        "dissolve in should reveal the switched image smoothly");
+    postProcessStack.UpdateDissolve(0.35f);
+    runner.Expect(
+        postProcessStack.GetDissolvePhase() == DissolvePhase::Idle &&
+            postProcessStack.DissolveThreshold() == 0.0f &&
+            !postProcessStack.IsEnabled("DissolveMask") &&
+            !postProcessStack.IsEnabled("Dissolve"),
+        "dissolve in should restore the source and disable both passes");
+
+    postProcessStack.SetEnabled("Random", true);
+    const PostProcessExecutionPlan randomPlan = postProcessStack.BuildExecutionPlan();
+    const PostProcessPass* resolvedRandom = nullptr;
+    for (const PostProcessExecutionPass& executionPass : randomPlan.passes) {
+        if (executionPass.pass.pipeline == "Random") {
+            resolvedRandom = &executionPass.pass;
+            break;
+        }
+    }
+    runner.Expect(
+        resolvedRandom != nullptr &&
+            resolvedRandom->inputResource != resolvedRandom->outputResource &&
+            resolvedRandom->parameters.randomFrameRate == 24.0f,
+        "random post effect should schedule safely with deterministic seed timing defaults");
+    postProcessStack.SetEnabled("Random", false);
 
     AppRuntimeState runtimeState;
     runtimeState.terrain.settings.chunkLength = 80.0f;

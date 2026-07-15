@@ -163,6 +163,7 @@ private:
     void CaptureRailGpuTimingCpuMetadata(uint32_t backBufferIndex);
     void ConfigureEditorPresentPolicy();
     void LogEditorPresentPolicy() const;
+    void ProcessPostProcessShowcaseShortcuts();
     bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
