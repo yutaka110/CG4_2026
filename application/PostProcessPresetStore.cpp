@@ -120,6 +120,44 @@ void WritePass(std::ostream& output, const PostProcessPass& pass) {
     output << prefix << "contactAoFalloff=" << pass.parameters.contactAoFalloff << "\n";
     output << prefix << "contactAoNearPlane=" << pass.parameters.contactAoNearPlane << "\n";
     output << prefix << "contactAoFarPlane=" << pass.parameters.contactAoFarPlane << "\n";
+    output << prefix << "warpTime=" << pass.parameters.warpTime << "\n";
+    output << prefix << "warpTransition=" << pass.parameters.warpTransition << "\n";
+    output << prefix << "warpCenterX=" << pass.parameters.warpCenterX << "\n";
+    output << prefix << "warpCenterY=" << pass.parameters.warpCenterY << "\n";
+    output << prefix << "warpRefractionStrength=" << pass.parameters.warpRefractionStrength << "\n";
+    output << prefix << "warpSceneSwirl=" << pass.parameters.warpSceneSwirl << "\n";
+    output << prefix << "warpRotationSpeed=" << pass.parameters.warpRotationSpeed << "\n";
+    output << prefix << "warpFlowSpeed=" << pass.parameters.warpFlowSpeed << "\n";
+    output << prefix << "warpArms=" << pass.parameters.warpArms << "\n";
+    output << prefix << "warpRings=" << pass.parameters.warpRings << "\n";
+    output << prefix << "warpTwistX=" << pass.parameters.warpTwistX << "\n";
+    output << prefix << "warpTwistY=" << pass.parameters.warpTwistY << "\n";
+    output << prefix << "warpTunnelExposure=" << pass.parameters.warpTunnelExposure << "\n";
+    output << prefix << "warpFlash=" << pass.parameters.warpFlash << "\n";
+    output << prefix << "warpAspectRatio=" << pass.parameters.warpAspectRatio << "\n";
+    output << prefix << "dissolveTime=" << pass.parameters.dissolveTime << "\n";
+    output << prefix << "dissolveThreshold=" << pass.parameters.dissolveThreshold << "\n";
+    output << prefix << "dissolveEdgeWidth=" << pass.parameters.dissolveEdgeWidth << "\n";
+    output << prefix << "dissolveNoiseScale=" << pass.parameters.dissolveNoiseScale << "\n";
+    output << prefix << "dissolveNoiseSpeed=" << pass.parameters.dissolveNoiseSpeed << "\n";
+    output << prefix << "dissolveEdgeColorR=" << pass.parameters.dissolveEdgeColorR << "\n";
+    output << prefix << "dissolveEdgeColorG=" << pass.parameters.dissolveEdgeColorG << "\n";
+    output << prefix << "dissolveEdgeColorB=" << pass.parameters.dissolveEdgeColorB << "\n";
+    output << prefix << "dissolveBurnStrength=" << pass.parameters.dissolveBurnStrength << "\n";
+    output << prefix << "dissolveCenterX=" << pass.parameters.dissolveCenterX << "\n";
+    output << prefix << "dissolveCenterY=" << pass.parameters.dissolveCenterY << "\n";
+    output << prefix << "dissolveAspectRatio=" << pass.parameters.dissolveAspectRatio << "\n";
+    output << prefix << "dissolveDirectionBlend=" << pass.parameters.dissolveDirectionBlend << "\n";
+    output << prefix << "dissolveSoftness=" << pass.parameters.dissolveSoftness << "\n";
+    output << prefix << "dissolveSeed=" << pass.parameters.dissolveSeed << "\n";
+    output << prefix << "randomTime=" << pass.parameters.randomTime << "\n";
+    output << prefix << "randomSeed=" << pass.parameters.randomSeed << "\n";
+    output << prefix << "randomScale=" << pass.parameters.randomScale << "\n";
+    output << prefix << "randomSpeed=" << pass.parameters.randomSpeed << "\n";
+    output << prefix << "randomFrameRate=" << pass.parameters.randomFrameRate << "\n";
+    output << prefix << "randomContrast=" << pass.parameters.randomContrast << "\n";
+    output << prefix << "randomBrightness=" << pass.parameters.randomBrightness << "\n";
+    output << prefix << "randomColorAmount=" << pass.parameters.randomColorAmount << "\n";
 }
 
 void ApplyFloatField(PostProcessPass& pass, const std::string& field, float value) {
@@ -184,6 +222,44 @@ void ApplyFloatField(PostProcessPass& pass, const std::string& field, float valu
     else if (field == "contactAoFalloff") pass.parameters.contactAoFalloff = value;
     else if (field == "contactAoNearPlane") pass.parameters.contactAoNearPlane = value;
     else if (field == "contactAoFarPlane") pass.parameters.contactAoFarPlane = value;
+    else if (field == "warpTime") pass.parameters.warpTime = value;
+    else if (field == "warpTransition") pass.parameters.warpTransition = value;
+    else if (field == "warpCenterX") pass.parameters.warpCenterX = value;
+    else if (field == "warpCenterY") pass.parameters.warpCenterY = value;
+    else if (field == "warpRefractionStrength") pass.parameters.warpRefractionStrength = value;
+    else if (field == "warpSceneSwirl") pass.parameters.warpSceneSwirl = value;
+    else if (field == "warpRotationSpeed") pass.parameters.warpRotationSpeed = value;
+    else if (field == "warpFlowSpeed") pass.parameters.warpFlowSpeed = value;
+    else if (field == "warpArms") pass.parameters.warpArms = value;
+    else if (field == "warpRings") pass.parameters.warpRings = value;
+    else if (field == "warpTwistX") pass.parameters.warpTwistX = value;
+    else if (field == "warpTwistY") pass.parameters.warpTwistY = value;
+    else if (field == "warpTunnelExposure") pass.parameters.warpTunnelExposure = value;
+    else if (field == "warpFlash") pass.parameters.warpFlash = value;
+    else if (field == "warpAspectRatio") pass.parameters.warpAspectRatio = value;
+    else if (field == "dissolveTime") pass.parameters.dissolveTime = value;
+    else if (field == "dissolveThreshold") pass.parameters.dissolveThreshold = value;
+    else if (field == "dissolveEdgeWidth") pass.parameters.dissolveEdgeWidth = value;
+    else if (field == "dissolveNoiseScale") pass.parameters.dissolveNoiseScale = value;
+    else if (field == "dissolveNoiseSpeed") pass.parameters.dissolveNoiseSpeed = value;
+    else if (field == "dissolveEdgeColorR") pass.parameters.dissolveEdgeColorR = value;
+    else if (field == "dissolveEdgeColorG") pass.parameters.dissolveEdgeColorG = value;
+    else if (field == "dissolveEdgeColorB") pass.parameters.dissolveEdgeColorB = value;
+    else if (field == "dissolveBurnStrength") pass.parameters.dissolveBurnStrength = value;
+    else if (field == "dissolveCenterX") pass.parameters.dissolveCenterX = value;
+    else if (field == "dissolveCenterY") pass.parameters.dissolveCenterY = value;
+    else if (field == "dissolveAspectRatio") pass.parameters.dissolveAspectRatio = value;
+    else if (field == "dissolveDirectionBlend") pass.parameters.dissolveDirectionBlend = value;
+    else if (field == "dissolveSoftness") pass.parameters.dissolveSoftness = value;
+    else if (field == "dissolveSeed") pass.parameters.dissolveSeed = value;
+    else if (field == "randomTime") pass.parameters.randomTime = value;
+    else if (field == "randomSeed") pass.parameters.randomSeed = value;
+    else if (field == "randomScale") pass.parameters.randomScale = value;
+    else if (field == "randomSpeed") pass.parameters.randomSpeed = value;
+    else if (field == "randomFrameRate") pass.parameters.randomFrameRate = value;
+    else if (field == "randomContrast") pass.parameters.randomContrast = value;
+    else if (field == "randomBrightness") pass.parameters.randomBrightness = value;
+    else if (field == "randomColorAmount") pass.parameters.randomColorAmount = value;
 }
 } // namespace
 
@@ -241,6 +317,14 @@ bool PostProcessPresetStore::Load(PostProcessStack& stack, std::string* error) {
         if (ParseFloat(value, numericValue)) {
             ApplyFloatField(*pass, field, numericValue);
         }
+    }
+
+    // Presets store pass enable flags; translate them back into the atomic
+    // transition controller instead of leaving its state out of sync.
+    if (stack.IsEnabled("WarpTunnelGenerate") && stack.IsEnabled("WarpTunnelComposite")) {
+        stack.StartWarpTunnel();
+    } else {
+        stack.StopWarpTunnel();
     }
 
     return true;

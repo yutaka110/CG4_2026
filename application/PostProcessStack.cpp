@@ -1,11 +1,19 @@
 #include "PostProcessStack.h"
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace {
 constexpr const char* kPostProcessOutputResource = "PostProcessOutput";
 constexpr const char* kPostProcessSwapOutputResource = "PostProcessSwapOutput";
 constexpr const char* kPostProcessPreviousInputResource = "PostProcessPreviousInput";
+constexpr const char* kPostProcessPreviousSwapOutputResource = "PostProcessPreviousSwapOutput";
+
+float SmoothStep01(float value) {
+    const float saturated = (std::clamp)(value, 0.0f, 1.0f);
+    return saturated * saturated * (3.0f - 2.0f * saturated);
+}
 
 std::string ResolvePostProcessInputResource(
     std::string_view resource,
@@ -20,16 +28,35 @@ std::string ResolvePostProcessInputResource(
     return std::string(resource);
 }
 
-std::string ResolvePostProcessOutputResource(std::string_view resource, std::string_view currentOutput) {
-    if (resource != kPostProcessSwapOutputResource) {
+std::string ResolvePostProcessOutputResource(
+    std::string_view resource,
+    std::string_view currentOutput,
+    std::string_view previousInput) {
+    std::string_view swapSource = currentOutput;
+    if (resource == kPostProcessPreviousSwapOutputResource) {
+        swapSource = previousInput;
+    } else if (resource != kPostProcessSwapOutputResource) {
         return std::string(resource);
     }
-    return currentOutput == "PostColorA" ? "PostColorB" : "PostColorA";
+    return swapSource == "PostColorA" ? "PostColorB" : "PostColorA";
 }
 } // namespace
 
 void PostProcessStack::ResetToVfxDefaults() {
     passes_.clear();
+    warpTunnelPhase_ = WarpTunnelPhase::Idle;
+    warpTunnelTransition_ = 0.0f;
+    warpTunnelFlash_ = 0.0f;
+    warpTunnelPhaseElapsed_ = 0.0f;
+    warpTunnelEnterDuration_ = 0.65f;
+    warpTunnelExitDuration_ = 0.55f;
+    dissolvePhase_ = DissolvePhase::Idle;
+    dissolveThreshold_ = 0.0f;
+    dissolvePhaseElapsed_ = 0.0f;
+    dissolveOutDuration_ = 0.80f;
+    dissolveSwitchDuration_ = 0.12f;
+    dissolveInDuration_ = 0.70f;
+    dissolveSwitchRequested_ = false;
     PostProcessPass bloomExtract{};
     bloomExtract.name = "BloomExtract";
     bloomExtract.inputResource = "VfxAccumulation";
@@ -260,6 +287,58 @@ void PostProcessStack::ResetToVfxDefaults() {
     glowComposite.parameters.glowTintB = 1.2f;
     passes_.push_back(glowComposite);
 
+    // WarpTunnel is an atomic two-pass branch. Both passes stay disabled until
+    // the effect director enables them together in the gameplay integration block.
+    PostProcessPass warpTunnelGenerate{};
+    warpTunnelGenerate.name = "WarpTunnelGenerate";
+    warpTunnelGenerate.inputResource = kPostProcessOutputResource;
+    warpTunnelGenerate.outputResource = "WarpTunnelHalf";
+    warpTunnelGenerate.pipeline = "WarpTunnelGenerate";
+    warpTunnelGenerate.secondaryInputResource = kPostProcessOutputResource;
+    warpTunnelGenerate.tertiaryInputResource = kPostProcessOutputResource;
+    warpTunnelGenerate.enabled = false;
+    warpTunnelGenerate.intensity = 1.0f;
+    warpTunnelGenerate.resolutionScale = 0.5f;
+    passes_.push_back(warpTunnelGenerate);
+
+    PostProcessPass warpTunnelComposite{};
+    warpTunnelComposite.name = "WarpTunnelComposite";
+    warpTunnelComposite.inputResource = "WarpTunnelHalf";
+    warpTunnelComposite.outputResource = kPostProcessPreviousSwapOutputResource;
+    warpTunnelComposite.pipeline = "WarpTunnelComposite";
+    warpTunnelComposite.secondaryInputResource = kPostProcessPreviousInputResource;
+    warpTunnelComposite.tertiaryInputResource = kPostProcessPreviousInputResource;
+    warpTunnelComposite.enabled = false;
+    warpTunnelComposite.intensity = 1.0f;
+    warpTunnelComposite.resolutionScale = 1.0f;
+    passes_.push_back(warpTunnelComposite);
+
+    // Dissolve is also an atomic side branch: first generate the grayscale
+    // assignment mask, then combine it with the preserved SceneColor.
+    PostProcessPass dissolveMask{};
+    dissolveMask.name = "DissolveMask";
+    dissolveMask.inputResource = kPostProcessOutputResource;
+    dissolveMask.outputResource = "DissolveMaskTexture";
+    dissolveMask.pipeline = "DissolveMask";
+    dissolveMask.secondaryInputResource = kPostProcessOutputResource;
+    dissolveMask.tertiaryInputResource = kPostProcessOutputResource;
+    dissolveMask.enabled = false;
+    dissolveMask.intensity = 1.0f;
+    dissolveMask.resolutionScale = 1.0f;
+    passes_.push_back(dissolveMask);
+
+    PostProcessPass dissolve{};
+    dissolve.name = "Dissolve";
+    dissolve.inputResource = kPostProcessPreviousInputResource;
+    dissolve.outputResource = kPostProcessPreviousSwapOutputResource;
+    dissolve.pipeline = "Dissolve";
+    dissolve.secondaryInputResource = "DissolveMaskTexture";
+    dissolve.tertiaryInputResource = kPostProcessPreviousInputResource;
+    dissolve.enabled = false;
+    dissolve.intensity = 1.0f;
+    dissolve.resolutionScale = 1.0f;
+    passes_.push_back(dissolve);
+
     PostProcessPass boxBlurHorizontal{};
     boxBlurHorizontal.name = "BoxBlurHorizontal";
     boxBlurHorizontal.inputResource = kPostProcessOutputResource;
@@ -360,6 +439,19 @@ void PostProcessStack::ResetToVfxDefaults() {
     vignette.parameters.vignetteSoftness = 0.35f;
     vignette.parameters.vignettePower = 1.0f;
     passes_.push_back(vignette);
+
+    PostProcessPass random{};
+    random.name = "Random";
+    random.inputResource = kPostProcessOutputResource;
+    random.outputResource = kPostProcessSwapOutputResource;
+    random.pipeline = "Random";
+    random.secondaryInputResource = kPostProcessOutputResource;
+    random.tertiaryInputResource = kPostProcessOutputResource;
+    random.enabled = false;
+    random.intensity = 1.0f;
+    random.resolutionScale = 1.0f;
+    passes_.push_back(random);
+    SyncDissolvePasses_();
 }
 
 void PostProcessStack::SetEnabled(const std::string& name, bool enabled) {
@@ -398,6 +490,184 @@ float PostProcessStack::Intensity(const std::string& name) const {
     return 0.0f;
 }
 
+void PostProcessStack::StartWarpTunnel() {
+    if (warpTunnelPhase_ == WarpTunnelPhase::Enter ||
+        warpTunnelPhase_ == WarpTunnelPhase::Cruise) {
+        SyncWarpTunnelPasses_();
+        return;
+    }
+    warpTunnelPhase_ = WarpTunnelPhase::Enter;
+    warpTunnelPhaseElapsed_ = 0.0f;
+    SyncWarpTunnelPasses_();
+}
+
+void PostProcessStack::StopWarpTunnel() {
+    if (warpTunnelPhase_ == WarpTunnelPhase::Idle ||
+        warpTunnelPhase_ == WarpTunnelPhase::Exit) {
+        SyncWarpTunnelPasses_();
+        return;
+    }
+    warpTunnelPhase_ = WarpTunnelPhase::Exit;
+    warpTunnelPhaseElapsed_ = 0.0f;
+    SyncWarpTunnelPasses_();
+}
+
+void PostProcessStack::UpdateWarpTunnel(float deltaTime) {
+    constexpr float kPi = 3.14159265359f;
+    const float safeDeltaTime = (std::max)(0.0f, deltaTime);
+    warpTunnelPhaseElapsed_ += safeDeltaTime;
+
+    switch (warpTunnelPhase_) {
+    case WarpTunnelPhase::Idle:
+        warpTunnelTransition_ = 0.0f;
+        warpTunnelFlash_ = 0.0f;
+        break;
+    case WarpTunnelPhase::Enter: {
+        warpTunnelTransition_ = (std::min)(
+            1.0f,
+            warpTunnelTransition_ + safeDeltaTime / (std::max)(0.05f, warpTunnelEnterDuration_));
+        const float phaseProgress = (std::clamp)(
+            warpTunnelPhaseElapsed_ / (std::max)(0.05f, warpTunnelEnterDuration_),
+            0.0f,
+            1.0f);
+        warpTunnelFlash_ = std::sin(phaseProgress * kPi) * 1.15f;
+        if (warpTunnelTransition_ >= 1.0f) {
+            warpTunnelPhase_ = WarpTunnelPhase::Cruise;
+            warpTunnelPhaseElapsed_ = 0.0f;
+            warpTunnelFlash_ = 0.0f;
+        }
+        break;
+    }
+    case WarpTunnelPhase::Cruise:
+        warpTunnelTransition_ = 1.0f;
+        warpTunnelFlash_ = 0.0f;
+        break;
+    case WarpTunnelPhase::Exit: {
+        warpTunnelTransition_ = (std::max)(
+            0.0f,
+            warpTunnelTransition_ - safeDeltaTime / (std::max)(0.05f, warpTunnelExitDuration_));
+        const float phaseProgress = (std::clamp)(
+            warpTunnelPhaseElapsed_ / (std::max)(0.05f, warpTunnelExitDuration_),
+            0.0f,
+            1.0f);
+        warpTunnelFlash_ = std::sin(phaseProgress * kPi) * 0.85f;
+        if (warpTunnelTransition_ <= 0.0f) {
+            warpTunnelPhase_ = WarpTunnelPhase::Idle;
+            warpTunnelPhaseElapsed_ = 0.0f;
+            warpTunnelFlash_ = 0.0f;
+        }
+        break;
+    }
+    }
+
+    SyncWarpTunnelPasses_();
+}
+
+void PostProcessStack::SetWarpTunnelDurations(float enterDuration, float exitDuration) {
+    warpTunnelEnterDuration_ = (std::clamp)(enterDuration, 0.05f, 10.0f);
+    warpTunnelExitDuration_ = (std::clamp)(exitDuration, 0.05f, 10.0f);
+}
+
+void PostProcessStack::SyncWarpTunnelPasses_() {
+    const bool enabled = warpTunnelPhase_ != WarpTunnelPhase::Idle;
+    for (PostProcessPass& pass : passes_) {
+        if (pass.pipeline != "WarpTunnelGenerate" && pass.pipeline != "WarpTunnelComposite") {
+            continue;
+        }
+        pass.enabled = enabled;
+        pass.parameters.warpTransition = warpTunnelTransition_;
+        pass.parameters.warpFlash = warpTunnelFlash_;
+    }
+}
+
+void PostProcessStack::StartDissolveTransition() {
+    if (dissolvePhase_ != DissolvePhase::Idle) {
+        return;
+    }
+    dissolvePhase_ = DissolvePhase::DissolveOut;
+    dissolveThreshold_ = 0.0f;
+    dissolvePhaseElapsed_ = 0.0f;
+    dissolveSwitchRequested_ = false;
+    SyncDissolvePasses_();
+}
+
+void PostProcessStack::CancelDissolveTransition() {
+    dissolvePhase_ = DissolvePhase::Idle;
+    dissolveThreshold_ = 0.0f;
+    dissolvePhaseElapsed_ = 0.0f;
+    dissolveSwitchRequested_ = false;
+    SyncDissolvePasses_();
+}
+
+void PostProcessStack::UpdateDissolve(float deltaTime) {
+    const float safeDeltaTime = (std::max)(0.0f, deltaTime);
+    dissolvePhaseElapsed_ += safeDeltaTime;
+
+    switch (dissolvePhase_) {
+    case DissolvePhase::Idle:
+        dissolveThreshold_ = 0.0f;
+        break;
+    case DissolvePhase::DissolveOut: {
+        const float progress = dissolvePhaseElapsed_ / (std::max)(0.05f, dissolveOutDuration_);
+        dissolveThreshold_ = SmoothStep01(progress);
+        if (progress >= 1.0f) {
+            dissolvePhase_ = DissolvePhase::Switch;
+            dissolveThreshold_ = 1.0f;
+            dissolvePhaseElapsed_ = 0.0f;
+            // This one-shot request is the safe point for a stage, camera,
+            // gameplay phase, or post-effect change while the screen is hidden.
+            dissolveSwitchRequested_ = true;
+        }
+        break;
+    }
+    case DissolvePhase::Switch:
+        dissolveThreshold_ = 1.0f;
+        if (dissolvePhaseElapsed_ >= (std::max)(0.0f, dissolveSwitchDuration_)) {
+            dissolvePhase_ = DissolvePhase::DissolveIn;
+            dissolvePhaseElapsed_ = 0.0f;
+        }
+        break;
+    case DissolvePhase::DissolveIn: {
+        const float progress = dissolvePhaseElapsed_ / (std::max)(0.05f, dissolveInDuration_);
+        dissolveThreshold_ = 1.0f - SmoothStep01(progress);
+        if (progress >= 1.0f) {
+            dissolvePhase_ = DissolvePhase::Idle;
+            dissolveThreshold_ = 0.0f;
+            dissolvePhaseElapsed_ = 0.0f;
+        }
+        break;
+    }
+    }
+
+    SyncDissolvePasses_();
+}
+
+void PostProcessStack::SetDissolveDurations(
+    float outDuration,
+    float switchDuration,
+    float inDuration) {
+    dissolveOutDuration_ = (std::clamp)(outDuration, 0.05f, 10.0f);
+    dissolveSwitchDuration_ = (std::clamp)(switchDuration, 0.0f, 10.0f);
+    dissolveInDuration_ = (std::clamp)(inDuration, 0.05f, 10.0f);
+}
+
+bool PostProcessStack::ConsumeDissolveSwitchRequest() {
+    const bool requested = dissolveSwitchRequested_;
+    dissolveSwitchRequested_ = false;
+    return requested;
+}
+
+void PostProcessStack::SyncDissolvePasses_() {
+    const bool enabled = dissolvePhase_ != DissolvePhase::Idle;
+    for (PostProcessPass& pass : passes_) {
+        if (pass.pipeline != "DissolveMask" && pass.pipeline != "Dissolve") {
+            continue;
+        }
+        pass.enabled = enabled;
+        pass.parameters.dissolveThreshold = dissolveThreshold_;
+    }
+}
+
 std::string PostProcessStack::FinalOutputResource() const {
     return BuildExecutionPlan().finalOutputResource;
 }
@@ -418,7 +688,10 @@ PostProcessExecutionPlan PostProcessStack::BuildExecutionPlan() const {
         PostProcessPass resolvedPass = pass;
         resolvedPass.inputResource =
             ResolvePostProcessInputResource(pass.inputResource, plan.finalOutputResource, previousInputResource);
-        resolvedPass.outputResource = ResolvePostProcessOutputResource(pass.outputResource, plan.finalOutputResource);
+        resolvedPass.outputResource = ResolvePostProcessOutputResource(
+            pass.outputResource,
+            plan.finalOutputResource,
+            previousInputResource);
         resolvedPass.secondaryInputResource =
             ResolvePostProcessInputResource(
                 pass.secondaryInputResource,

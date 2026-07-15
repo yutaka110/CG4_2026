@@ -226,6 +226,7 @@ std::vector<EditorFontFileInfo> EditorFontService::DiscoverFonts() const {
 }
 
 bool EditorFontService::BuildAtlas(ImFontAtlas& atlas, std::string* errorMessage) {
+#if defined(GE3_BUILD_EDITOR) && GE3_BUILD_EDITOR
     if (!loaded_) Load();
     atlas.Clear();
     regularFont_ = nullptr;
@@ -267,6 +268,16 @@ bool EditorFontService::BuildAtlas(ImFontAtlas& atlas, std::string* errorMessage
         : "Configured Editor fonts were added to the ImGui atlas.";
     if (!regularError.empty() && errorMessage != nullptr) *errorMessage = regularError;
     return true;
+#else
+    (void)atlas;
+    regularFont_ = nullptr;
+    monospaceFont_ = nullptr;
+    usingFallback_ = true;
+    if (errorMessage != nullptr) {
+        *errorMessage = "Editor font atlas is unavailable in the game-only Release build.";
+    }
+    return false;
+#endif
 }
 
 void EditorFontService::OnContextDestroyed() {

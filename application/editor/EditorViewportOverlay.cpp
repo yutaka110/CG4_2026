@@ -344,6 +344,7 @@ void EditorViewportOverlayService::Resolve() {
 }
 
 void EditorViewportOverlayService::Render(ImDrawList* drawList) {
+#if defined(GE3_BUILD_EDITOR) && GE3_BUILD_EDITOR
     Resolve();
     EditorViewportOverlayScope scope(
         frameContext_.viewport,
@@ -395,6 +396,9 @@ void EditorViewportOverlayService::Render(ImDrawList* drawList) {
         }
         }
     }
+#else
+    (void)drawList;
+#endif
 }
 
 bool EditorViewportOverlayService::Submit(EditorViewportOverlayCommand command) {
@@ -554,6 +558,7 @@ EditorViewportOverlayScope::EditorViewportOverlayScope(
     uint32_t fallbackWidth,
     uint32_t fallbackHeight,
     ImDrawList* drawList) {
+#if defined(GE3_BUILD_EDITOR) && GE3_BUILD_EDITOR
     drawList_ = drawList != nullptr ? drawList : ImGui::GetForegroundDrawList();
     if (drawList_ == nullptr) return;
 
@@ -580,10 +585,18 @@ EditorViewportOverlayScope::EditorViewportOverlayScope(
     scaleY_ = coordinates_.ScaleRenderToDisplayY(1.0f);
     drawList_->PushClipRect(displayMin_, displayMax_, true);
     clipPushed_ = true;
+#else
+    (void)viewport;
+    (void)fallbackWidth;
+    (void)fallbackHeight;
+    (void)drawList;
+#endif
 }
 
 EditorViewportOverlayScope::~EditorViewportOverlayScope() {
+#if defined(GE3_BUILD_EDITOR) && GE3_BUILD_EDITOR
     if (drawList_ != nullptr && clipPushed_) drawList_->PopClipRect();
+#endif
 }
 
 ImVec2 EditorViewportOverlayScope::DisplayCenter() const {

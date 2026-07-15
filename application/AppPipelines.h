@@ -79,6 +79,11 @@ public:
     ID3D12PipelineState* GetContactAOPSO() const { return contactAoPso_.Get(); }
     ID3D12PipelineState* GetToneMappingPSO() const { return toneMappingPso_.Get(); }
     ID3D12PipelineState* GetGlowCompositePSO() const { return glowCompositePso_.Get(); }
+    ID3D12PipelineState* GetWarpTunnelGeneratePSO() const { return warpTunnelGeneratePso_.Get(); }
+    ID3D12PipelineState* GetWarpTunnelCompositePSO() const { return warpTunnelCompositePso_.Get(); }
+    ID3D12PipelineState* GetDissolveMaskPSO() const { return dissolveMaskPso_.Get(); }
+    ID3D12PipelineState* GetDissolvePSO() const { return dissolvePso_.Get(); }
+    ID3D12PipelineState* GetRandomPSO() const { return randomPso_.Get(); }
     ID3D12PipelineState* GetPrewittOutlinePSO() const { return prewittOutlinePso_.Get(); }
     ID3D12PipelineState* GetGrayscalePSO() const { return grayscalePso_.Get(); }
     ID3D12PipelineState* GetVignettePSO() const { return vignettePso_.Get(); }
@@ -164,6 +169,11 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> contactAoPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> toneMappingPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> glowCompositePso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> warpTunnelGeneratePso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> warpTunnelCompositePso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> dissolveMaskPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> dissolvePso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> randomPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> prewittOutlinePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> grayscalePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> vignettePso_;
@@ -248,6 +258,11 @@ private:
     Microsoft::WRL::ComPtr<IDxcBlob> contactAoPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> toneMappingPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> glowCompositePs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> warpTunnelGeneratePs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> warpTunnelCompositePs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> dissolveMaskPs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> dissolvePs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> randomPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> prewittOutlinePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> grayscalePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> vignettePs_;

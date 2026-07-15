@@ -66,6 +66,51 @@ struct PostProcessPass {
         float contactAoFalloff = 9.0f;
         float contactAoNearPlane = 0.1f;
         float contactAoFarPlane = 5000.0f;
+        // WarpTunnel parameter layout is kept in the same order as the
+        // 16-float root constants consumed by both warp tunnel shaders.
+        float warpTime = 0.0f;
+        float warpTransition = 0.0f;
+        float warpCenterX = 0.5f;
+        float warpCenterY = 0.5f;
+        float warpRefractionStrength = 0.015f;
+        float warpSceneSwirl = 0.25f;
+        float warpRotationSpeed = 0.5f;
+        float warpFlowSpeed = 0.6f;
+        float warpArms = 14.0f;
+        float warpRings = -6.0f;
+        float warpTwistX = -5.0f;
+        float warpTwistY = 12.0f;
+        float warpTunnelExposure = 1.0f;
+        float warpFlash = 0.0f;
+        float warpAspectRatio = 16.0f / 9.0f;
+        // Dissolve root-constant layout (intensity is stored on PostProcessPass).
+        // The mask generator and composite share this layout so their noise,
+        // threshold, and edge controls remain synchronized.
+        float dissolveTime = 0.0f;
+        float dissolveThreshold = 0.5f;
+        float dissolveEdgeWidth = 0.08f;
+        float dissolveNoiseScale = 7.0f;
+        float dissolveNoiseSpeed = 0.12f;
+        float dissolveEdgeColorR = 0.1f;
+        float dissolveEdgeColorG = 0.7f;
+        float dissolveEdgeColorB = 1.0f;
+        float dissolveBurnStrength = 1.4f;
+        float dissolveCenterX = 0.5f;
+        float dissolveCenterY = 0.5f;
+        float dissolveAspectRatio = 16.0f / 9.0f;
+        float dissolveDirectionBlend = 0.25f;
+        float dissolveSoftness = 0.025f;
+        float dissolveSeed = 13.0f;
+        // GPU pseudo-random noise parameters. Time changes the seed at a
+        // controlled frame rate so the same frame remains deterministic.
+        float randomTime = 0.0f;
+        float randomSeed = 1.0f;
+        float randomScale = 420.0f;
+        float randomSpeed = 1.0f;
+        float randomFrameRate = 24.0f;
+        float randomContrast = 1.15f;
+        float randomBrightness = 0.0f;
+        float randomColorAmount = 0.0f;
     };
 
     std::string name;
@@ -89,6 +134,20 @@ struct PostProcessExecutionPlan {
     std::string finalOutputResource = "SceneColor";
 };
 
+enum class WarpTunnelPhase {
+    Idle,
+    Enter,
+    Cruise,
+    Exit,
+};
+
+enum class DissolvePhase {
+    Idle,
+    DissolveOut,
+    Switch,
+    DissolveIn,
+};
+
 class PostProcessStack {
 public:
     void ResetToVfxDefaults();
@@ -96,11 +155,47 @@ public:
     void SetIntensity(const std::string& name, float intensity);
     bool IsEnabled(const std::string& name) const;
     float Intensity(const std::string& name) const;
+    void StartWarpTunnel();
+    void StopWarpTunnel();
+    void UpdateWarpTunnel(float deltaTime);
+    void SetWarpTunnelDurations(float enterDuration, float exitDuration);
+    WarpTunnelPhase GetWarpTunnelPhase() const { return warpTunnelPhase_; }
+    float WarpTunnelTransition() const { return warpTunnelTransition_; }
+    float WarpTunnelFlash() const { return warpTunnelFlash_; }
+    float WarpTunnelEnterDuration() const { return warpTunnelEnterDuration_; }
+    float WarpTunnelExitDuration() const { return warpTunnelExitDuration_; }
+    void StartDissolveTransition();
+    void CancelDissolveTransition();
+    void UpdateDissolve(float deltaTime);
+    void SetDissolveDurations(float outDuration, float switchDuration, float inDuration);
+    bool ConsumeDissolveSwitchRequest();
+    DissolvePhase GetDissolvePhase() const { return dissolvePhase_; }
+    float DissolveThreshold() const { return dissolveThreshold_; }
+    float DissolveOutDuration() const { return dissolveOutDuration_; }
+    float DissolveSwitchDuration() const { return dissolveSwitchDuration_; }
+    float DissolveInDuration() const { return dissolveInDuration_; }
+    bool HasDissolveSwitchRequest() const { return dissolveSwitchRequested_; }
     std::string FinalOutputResource() const;
     PostProcessExecutionPlan BuildExecutionPlan() const;
     const std::vector<PostProcessPass>& Passes() const { return passes_; }
     std::vector<PostProcessPass>& MutablePasses() { return passes_; }
 
 private:
+    void SyncWarpTunnelPasses_();
+    void SyncDissolvePasses_();
+
     std::vector<PostProcessPass> passes_;
+    WarpTunnelPhase warpTunnelPhase_ = WarpTunnelPhase::Idle;
+    float warpTunnelTransition_ = 0.0f;
+    float warpTunnelFlash_ = 0.0f;
+    float warpTunnelPhaseElapsed_ = 0.0f;
+    float warpTunnelEnterDuration_ = 0.65f;
+    float warpTunnelExitDuration_ = 0.55f;
+    DissolvePhase dissolvePhase_ = DissolvePhase::Idle;
+    float dissolveThreshold_ = 0.0f;
+    float dissolvePhaseElapsed_ = 0.0f;
+    float dissolveOutDuration_ = 0.80f;
+    float dissolveSwitchDuration_ = 0.12f;
+    float dissolveInDuration_ = 0.70f;
+    bool dissolveSwitchRequested_ = false;
 };
