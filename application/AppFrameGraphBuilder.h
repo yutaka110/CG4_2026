@@ -31,6 +31,7 @@ class EditorProductionTexturePipeline;
 class EditorProductionShaderPipeline;
 class EditorProductionLightingPipeline;
 class EditorProductionGpuDrivenPipeline;
+class EditorWorldPartitionPipeline;
 }
 
 struct AppFrameGraphBuildContext {
@@ -66,6 +67,7 @@ struct AppFrameGraphBuildContext {
     const editor::EditorProductionShaderPipeline* productionShaderPipeline = nullptr;
     editor::EditorProductionLightingPipeline* productionLightingPipeline = nullptr;
     editor::EditorProductionGpuDrivenPipeline* productionGpuDrivenPipeline = nullptr;
+    editor::EditorWorldPartitionPipeline* worldPartitionPipeline = nullptr;
 };
 
 class AppFrameGraphBuilder {

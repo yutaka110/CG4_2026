@@ -7185,6 +7185,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     graphContext.productionShaderPipeline = &imguiLayer_.ProductionShaderPipeline();
     graphContext.productionLightingPipeline = &imguiLayer_.ProductionLightingPipeline();
     graphContext.productionGpuDrivenPipeline = &imguiLayer_.ProductionGpuDrivenPipeline();
+    graphContext.worldPartitionPipeline = &imguiLayer_.WorldPartitionPipeline();
     const auto registerPassesStart = RailPerfClock::now();
     const std::string railHudTargetResource =
         imguiLayer_.WantsDeveloperDiagnostics()

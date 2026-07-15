@@ -335,7 +335,8 @@ bool EditorProductionScenePipeline::Sync(
     ID3D12GraphicsCommandList* uploadCommandList,
     uint64_t completedFenceValue,
     uint64_t scheduledFenceValue,
-    std::string* errorMessage) {
+    std::string* errorMessage,
+    const std::unordered_set<std::string>* sourceResidentEntities) {
     CollectRetired(completedFenceValue);
     instances_.clear();
     renderPackets_.clear();
@@ -387,6 +388,8 @@ bool EditorProductionScenePipeline::Sync(
     std::unordered_set<std::string> activeEntities;
     std::unordered_set<std::string> activeAssets;
     for (const EditorSceneEntity& entity : scene.entities) {
+        if (sourceResidentEntities != nullptr &&
+            !sourceResidentEntities->contains(entity.guid)) continue;
         const EditorSceneComponent* component = scene.FindComponent(entity, kEditorMeshRendererComponentType);
         if (component == nullptr || !component->enabled) continue;
         ++stats_.meshEntities;

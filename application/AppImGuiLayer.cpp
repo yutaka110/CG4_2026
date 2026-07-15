@@ -1322,6 +1322,26 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
         ImGui::DestroyContext();
         return false;
     }
+    std::string worldPartitionError;
+    if (!editorWorldPartitionPipeline_.Initialize(device, {}, &worldPartitionError)) {
+        editorNotifications_.Push(
+            editor::EditorNotificationSeverity::Error,
+            "World Partition Pipeline",
+            worldPartitionError.empty()
+                ? "Failed to initialize the E-12 World Partition and HLOD pipeline."
+                : worldPartitionError);
+        editorProductionGpuDrivenPipeline_.Shutdown();
+        editorProductionLightingPipeline_.Shutdown();
+        editorProductionShaderPipeline_.Shutdown();
+        editorProductionTexturePipeline_.Shutdown();
+        editorProductionMaterialPipeline_.Shutdown();
+        editorProductionScenePipeline_.Shutdown();
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
     initialized_ = true;
     return true;
 }
@@ -1653,6 +1673,17 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         : "Production Mesh artifacts and runtime cache updated.");
             });
         if (context.frameState != nullptr) {
+            std::string worldPartitionError;
+            editorWorldPartitionPipeline_.Sync(
+                *geometryScene,
+                editorAssetRegistry_,
+                editorProductionMeshRuntimeCache_,
+                context.frameState->cameraWorldPosition,
+                context.frameState->viewProjectionMatrix,
+                context.editorUploadCommandList,
+                context.editorCompletedFenceValue,
+                context.editorScheduledFenceValue,
+                &worldPartitionError);
             std::string productionSceneError;
             editorProductionScenePipeline_.Sync(
                 *geometryScene,
@@ -1663,14 +1694,16 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 context.editorUploadCommandList,
                 context.editorCompletedFenceValue,
                 context.editorScheduledFenceValue,
-                &productionSceneError);
+                &productionSceneError,
+                &editorWorldPartitionPipeline_.SourceResidentEntities());
             std::string productionMaterialError;
             editorProductionMaterialPipeline_.Sync(
                 *geometryScene,
                 editorAssetRegistry_,
                 context.editorCompletedFenceValue,
                 context.editorScheduledFenceValue,
-                &productionMaterialError);
+                &productionMaterialError,
+                &editorWorldPartitionPipeline_.SourceResidentEntities());
             std::string productionLightingError;
             editorProductionLightingPipeline_.Sync(
                 *geometryScene,
@@ -1682,7 +1715,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 static_cast<uint32_t>((std::max)(1.0f, runtimeState.viewport.Height)),
                 runtimeState.camera.nearZ,
                 runtimeState.camera.farZ,
-                &productionLightingError);
+                &productionLightingError,
+                &editorWorldPartitionPipeline_.SourceResidentEntities());
             std::string productionTextureError;
             editorProductionTexturePipeline_.Sync(
                 editorProductionMaterialPipeline_,
@@ -1699,8 +1733,13 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 context.editorScheduledFenceValue,
                 &productionShaderError);
             std::string productionVisibilityError;
+            std::vector<editor::EditorProductionSceneRenderPacket> streamingCandidates =
+                editorProductionScenePipeline_.GpuDrivenCandidates();
+            const auto& hlodPackets = editorWorldPartitionPipeline_.HlodPackets();
+            streamingCandidates.insert(
+                streamingCandidates.end(), hlodPackets.begin(), hlodPackets.end());
             editorProductionGpuDrivenPipeline_.Sync(
-                editorProductionScenePipeline_.GpuDrivenCandidates(),
+                streamingCandidates,
                 editorProductionMaterialPipeline_,
                 editorProductionTexturePipeline_,
                 editorProductionShaderPipeline_,
@@ -2395,6 +2434,36 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
             "RenderGraph", "GPU Visibility / Indirect Draw",
             constrained ? "CPU Fallback" : "GPU Driven", detail.str(),
+            constrained ? editor::EditorRuntimeWatchSeverity::Warning
+                        : editor::EditorRuntimeWatchSeverity::Info,
+            editorDocumentServiceFrame_});
+    }
+    {
+        const editor::EditorWorldPartitionStats& partitionStats =
+            editorWorldPartitionPipeline_.Stats();
+        std::ostringstream detail;
+        detail << "cells=" << partitionStats.cells
+               << " source=" << partitionStats.sourceResidentCells
+               << "/" << partitionStats.sourceResidentEntities
+               << " loading=" << partitionStats.loadingCells
+               << " HLOD=" << partitionStats.hlodResidentCells
+               << " builds=" << partitionStats.queuedHlodBuilds
+               << "/" << partitionStats.completedHlodBuilds
+               << " refs/pulls=" << partitionStats.crossCellReferences
+               << "/" << partitionStats.hardReferencePulls
+               << " rejected(cell/entity/HLOD)=" << partitionStats.rejectedByCellBudget
+               << "/" << partitionStats.rejectedByEntityBudget
+               << "/" << partitionStats.rejectedByHlodBudget
+               << " HLOD MiB=" << std::fixed << std::setprecision(2)
+               << static_cast<double>(partitionStats.residentHlodGpuBytes) / (1024.0 * 1024.0)
+               << " pending=" << partitionStats.pendingGpuRetirements;
+        const bool constrained = partitionStats.rejectedByCellBudget != 0 ||
+            partitionStats.rejectedByEntityBudget != 0 ||
+            partitionStats.rejectedByHlodBudget != 0 ||
+            partitionStats.missingEntityReferences != 0;
+        editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
+            "RenderGraph", "World Partition / Cell Streaming / HLOD",
+            constrained ? "Budget Constrained" : "Streaming", detail.str(),
             constrained ? editor::EditorRuntimeWatchSeverity::Warning
                         : editor::EditorRuntimeWatchSeverity::Info,
             editorDocumentServiceFrame_});
@@ -3403,6 +3472,7 @@ void AppImGuiLayer::Shutdown() {
     editorMeshBakeExecution_.Clear();
     editorMeshBakePipeline_.Clear();
     editorProductionMeshRuntimeCache_.Clear();
+    editorWorldPartitionPipeline_.Shutdown();
     editorProductionGpuDrivenPipeline_.Shutdown();
     editorProductionLightingPipeline_.Shutdown();
     editorProductionShaderPipeline_.Shutdown();
@@ -3474,6 +3544,14 @@ editor::EditorProductionGpuDrivenPipeline& AppImGuiLayer::ProductionGpuDrivenPip
 
 const editor::EditorProductionGpuDrivenPipeline& AppImGuiLayer::ProductionGpuDrivenPipeline() const {
     return editorProductionGpuDrivenPipeline_;
+}
+
+editor::EditorWorldPartitionPipeline& AppImGuiLayer::WorldPartitionPipeline() {
+    return editorWorldPartitionPipeline_;
+}
+
+const editor::EditorWorldPartitionPipeline& AppImGuiLayer::WorldPartitionPipeline() const {
+    return editorWorldPartitionPipeline_;
 }
 
 #else
@@ -3569,6 +3647,14 @@ editor::EditorProductionGpuDrivenPipeline& AppImGuiLayer::ProductionGpuDrivenPip
 
 const editor::EditorProductionGpuDrivenPipeline& AppImGuiLayer::ProductionGpuDrivenPipeline() const {
     return editorProductionGpuDrivenPipeline_;
+}
+
+editor::EditorWorldPartitionPipeline& AppImGuiLayer::WorldPartitionPipeline() {
+    return editorWorldPartitionPipeline_;
+}
+
+const editor::EditorWorldPartitionPipeline& AppImGuiLayer::WorldPartitionPipeline() const {
+    return editorWorldPartitionPipeline_;
 }
 
 void AppImGuiLayer::Shutdown() {

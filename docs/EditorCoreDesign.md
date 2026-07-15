@@ -1686,6 +1686,24 @@ Current staged implementation:
   failed, blocked, attention, or performance-warning results. Debug and
   Development builds have zero warnings/errors, and the integrated Development
   editor remains responsive through an eight-second startup probe.
+- Phase 13-AC implements E-12 Production World Partition / Cell Streaming /
+  HLOD. Stable signed XZ Cell keys, Data Layer and Always Loaded overrides,
+  camera load/unload hysteresis, bounded Source/HLOD capacity, and transitive
+  hard cross-cell reference pulls form one transient residency owner without
+  persisting runtime state into the Scene document.
+- HLOD jobs asynchronously merge the farthest validated E-5 LOD in world space,
+  exclude hidden hierarchies, cap geometry, and rebuild when Mesh identity,
+  source timestamp, or world transform changes. Frame-thread uploads publish
+  real default-heap vertex/index buffers and Transform CBVs; the source set is
+  retained until its replacement proxy is ready, and inactive GPU resources
+  retire only after the scheduled fence.
+- The Source Resident Entity set filters E-6 render/physics instances, E-7
+  material requests, and E-10 Light/Shadow collection. HLOD packets enter E-11
+  GPU visibility and remain available to the direct-draw fallback. Runtime Watch
+  exposes Cell state, build, reference-pull, budget, and GPU residency telemetry.
+  E-12 validation passes 50/50 core cases; commercial completion v15 passes
+  22/22 gates and 274/274 checks with zero failed, blocked, attention, or
+  performance-warning results.
 
 ## Commercial Completion Scorecard
 

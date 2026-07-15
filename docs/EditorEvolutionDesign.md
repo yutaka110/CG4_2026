@@ -157,7 +157,7 @@ EV-A1 Transaction CoreのDomain非依存化は、既存のAsset MutationとRunti
 | A1-Foundation | 汎用Command API、失敗安全なUndo/Redo、履歴メモリ上限、Course/Detailsの移行 | A-2 File Transaction |
 | A1-Final | Asset MutationとRuntime Applyの移行、旧Domain payload/APIの削除 | A-2およびA-3完了後 |
 
-**A1-FoundationからE-11 Production GPU-Driven Visibility／Indirect Draw Pipelineまでは2026-07-14までに実装・検証済み**である。Transaction／File Safety／Play Isolation／Document／World／Asset／Graph／Interactive Tool基盤に加え、Mesh／Material／Texture／Shader／Multi-Light／ShadowからGPU visibility／ExecuteIndirectまでのProduction Scene経路が接続された。E-11完了判定は21/21 gate、266/266 check、blocked 0、attention 0、performance warning 0で`ready`である。次のActive MilestoneはE-12 Production World Partition／Cell Streaming／HLOD Pipelineとする。
+**A1-FoundationからE-12 Production World Partition／Cell Streaming／HLOD Pipelineまでは2026-07-15までに実装・検証済み**である。Transaction／File Safety／Play Isolation／Document／World／Asset／Graph／Interactive Tool基盤に加え、Mesh／Material／Texture／Shader／Multi-Light／Shadow／GPU visibilityと、camera駆動のCell residency／HLODまでProduction Scene経路が接続された。E-12完了判定は22/22 gate、274/274 check、blocked 0、attention 0、performance warning 0で`ready`である。次のActive MilestoneはE-13 Production Navigation Mesh／AI World Query／Dynamic Obstacle Pipelineとする。
 
 #### A1-Foundation実装結果
 
@@ -1342,7 +1342,16 @@ IEditorSequencerTrackProvider
 - instance／batch upload、argument／count UAV、readbackは3-frame ringで所有し、scheduled／completed fenceで再利用する。countと先頭command bytesはGPU完了後だけmapし、visible count、dispatch／readback、budget rejection、CPU fallback、Hi-Z状態、command layout validationをRuntime Watchへ公開する。
 - Editor Core Regressionは49/49である。E-11 Commercial Gateはdeterministic range、CBV＋DrawIndexed byte packing、WARP Main root contract、DXC compute／triple buffer生成、batch handoff、GPU dispatch、fence readback、command byte validation、budget fallbackを8項目で検証する。Commercial Completion schemaは`editor.commercialCompletion.v14`、全体は21/21 gate、266/266 check、blocked 0、attention 0、warning 0で`ready`である。Debug／Development v143 buildは警告0／エラー0であり、通常Development editorはE-11初期化とRenderGraph visibility passを含め8秒間応答状態を維持した。
 
-次のActive MilestoneはE-12 Production World Partition／Cell Streaming／HLOD Pipelineとする。E-11のbounded GPU visibilityへ、editor cell ownership、camera streaming source、async cell load／unload、cross-cell durable reference、HLOD proxy生成、streaming budget／telemetryを接続する。Nanite相当virtualized geometry、汎用Derived Data Cache／background build farm、Point cube shadow、Post Process Material domainは独立拡張として追跡する。
+### E-12 Production World Partition／Cell Streaming／HLOD Pipeline 実装結果
+
+- `EditorWorldPartitionPipeline`をProduction Sceneのtransient residency ownerとして追加した。Scene Entityのworld位置をsigned floorで安定したXZ Cellへ割り当て、`editor.world-partition` ComponentでCell座標、Data Layer、Always Loadedを上書きできる。Cell実行状態はScene Documentへ混入させず、authoring正本から毎frame決定的に再構築する。
+- camera Cellを中心にsource load／unload radiusとhysteresisを適用し、最大Source Cell／Entity、HLOD proxy、同時build数、proxy vertex／triangle数を明示的に制限する。Entity／親参照を跨ぐhard cross-cell referenceは推移閉包としてpullし、上限超過やmissing targetを診断へ出す。
+- HLODはE-5 runtime cacheの最遠LODを非表示階層を除いて非同期mergeし、world-space vertex／normal、index、boundsを生成する。asset GUID／source timestamp／world transformのfingerprint変更で再buildし、D3D12 default vertex／index bufferとTransform CBVへuploadする。新proxyのupload完了前はSource Entityを保持し、object popを防ぐ。
+- E-6 Renderer／Physics、E-7 Material要求、E-10 Light／Shadow収集を同じSource Resident Entity集合へ制限した。HLOD packetはE-11 GPU visibility candidateへ合流し、E-11が利用不能な場合も既存direct draw fallbackへ渡る。非活動proxyとupload resourceはscheduled／completed fenceで退役する。
+- Runtime WatchはCell数、Source／Loading／HLOD状態、queued／completed build、cross-cell reference／pull、各budget rejection、resident／pending GPU MiBを公開する。Commercial Completion schema `editor.commercialCompletion.v15`はsigned cell identity、durable E-5 handoff、WARP初期化、hard-reference pull、実HLOD merge／GPU upload、Fence、camera遷移、budget診断の8項目を追加した。
+- Editor Core Regressionは50/50である。Development Commercial Completionは22/22 gate、274/274 check、failed 0、blocked 0、attention 0、warning 0で`ready`である。Development性能実測はAsset Index 30.36 ms、Details 2.31 ms、10,000 Overlay Label 2.79 msで全budget内である。
+
+次のActive MilestoneはE-13 Production Navigation Mesh／AI World Query／Dynamic Obstacle Pipelineとする。E-12のCell residency境界をNavigation tile build／streaming、query snapshot、動的障害物更新へ共有する。Nanite相当virtualized geometry、汎用Derived Data Cache／background build farm、Point cube shadow、Post Process Material domain、Data Layer編集UI／One File Per Actorは独立拡張として追跡する。
 
 ## 13. 実装を後回しにする機能
 

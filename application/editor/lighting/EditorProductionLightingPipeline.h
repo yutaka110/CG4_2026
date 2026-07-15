@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -117,7 +118,8 @@ public:
         uint32_t viewportHeight,
         float nearPlane,
         float farPlane,
-        std::string* errorMessage = nullptr);
+        std::string* errorMessage = nullptr,
+        const std::unordered_set<std::string>* sourceResidentEntities = nullptr);
 
     void RenderShadowMaps(
         ID3D12GraphicsCommandList* commandList,

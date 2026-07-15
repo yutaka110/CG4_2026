@@ -5,6 +5,7 @@
 #include "editor/shader/EditorProductionShaderPipeline.h"
 #include "editor/lighting/EditorProductionLightingPipeline.h"
 #include "editor/visibility/EditorProductionGpuDrivenPipeline.h"
+#include "editor/streaming/EditorWorldPartitionPipeline.h"
 
 #include <Windows.h>
 
@@ -840,9 +841,16 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     }
                     ctx.productionGpuDrivenPipeline->RecordReadback(passContext.commandList);
                 }
-                const auto& directPackets = gpuDriven
-                    ? ctx.productionGpuDrivenPipeline->CpuFallbackPackets()
-                    : ctx.productionScenePipeline->RenderPackets();
+                std::vector<editor::EditorProductionSceneRenderPacket> directPackets;
+                if (gpuDriven) {
+                    directPackets = ctx.productionGpuDrivenPipeline->CpuFallbackPackets();
+                } else {
+                    directPackets = ctx.productionScenePipeline->RenderPackets();
+                    if (ctx.worldPartitionPipeline != nullptr) {
+                        const auto& hlodPackets = ctx.worldPartitionPipeline->HlodPackets();
+                        directPackets.insert(directPackets.end(), hlodPackets.begin(), hlodPackets.end());
+                    }
+                }
                 for (const editor::EditorProductionSceneRenderPacket& packet : directPackets) {
                     if (packet.indexCount == 0 || packet.transformAddress == 0 ||
                         packet.vertexBuffer.BufferLocation == 0 ||
