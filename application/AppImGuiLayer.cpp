@@ -1062,6 +1062,9 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
             editorDocumentRegistry_.Register(editorVfxGraphDocumentProvider_, &documentProviderError) &&
             editorDocumentRegistry_.Register(editorAnimationStateMachineDocumentProvider_, &documentProviderError) &&
             editorDocumentRegistry_.Register(editorGameplayVisualScriptDocumentProvider_, &documentProviderError) &&
+            editorDocumentRegistry_.Register(editorBehaviorTreeDocumentProvider_, &documentProviderError) &&
+            editorDocumentRegistry_.Register(editorEqsDocumentProvider_, &documentProviderError) &&
+            editorDocumentRegistry_.Register(editorNavigationDocumentProvider_, &documentProviderError) &&
             editorDocumentRegistry_.Register(editorEffectDocumentProvider_, &documentProviderError) &&
             editorDocumentRegistry_.Register(editorRenderPresetDocumentProvider_, &documentProviderError) &&
             editorDocumentRegistry_.Register(editorProjectSettingsDocumentProvider_, &documentProviderError);
@@ -1330,6 +1333,177 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
             worldPartitionError.empty()
                 ? "Failed to initialize the E-12 World Partition and HLOD pipeline."
                 : worldPartitionError);
+        editorProductionGpuDrivenPipeline_.Shutdown();
+        editorProductionLightingPipeline_.Shutdown();
+        editorProductionShaderPipeline_.Shutdown();
+        editorProductionTexturePipeline_.Shutdown();
+        editorProductionMaterialPipeline_.Shutdown();
+        editorProductionScenePipeline_.Shutdown();
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
+    std::string navigationError;
+    if (!editorProductionNavigationPipeline_.Initialize({}, &navigationError)) {
+        editorNotifications_.Push(
+            editor::EditorNotificationSeverity::Error,
+            "Production Navigation Pipeline",
+            navigationError.empty()
+                ? "Failed to initialize the E-13 Navigation and AI query pipeline."
+                : navigationError);
+        editorWorldPartitionPipeline_.Shutdown();
+        editorProductionGpuDrivenPipeline_.Shutdown();
+        editorProductionLightingPipeline_.Shutdown();
+        editorProductionShaderPipeline_.Shutdown();
+        editorProductionTexturePipeline_.Shutdown();
+        editorProductionMaterialPipeline_.Shutdown();
+        editorProductionScenePipeline_.Shutdown();
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
+    std::string productionAiError;
+    if (!editorProductionAiPipeline_.Initialize({}, &productionAiError)) {
+        editorNotifications_.Push(
+            editor::EditorNotificationSeverity::Error,
+            "Production AI Pipeline",
+            productionAiError.empty()
+                ? "Failed to initialize the E-14 Behavior Tree, Blackboard, and Perception pipeline."
+                : productionAiError);
+        editorProductionNavigationPipeline_.Shutdown();
+        editorWorldPartitionPipeline_.Shutdown();
+        editorProductionGpuDrivenPipeline_.Shutdown();
+        editorProductionLightingPipeline_.Shutdown();
+        editorProductionShaderPipeline_.Shutdown();
+        editorProductionTexturePipeline_.Shutdown();
+        editorProductionMaterialPipeline_.Shutdown();
+        editorProductionScenePipeline_.Shutdown();
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
+    std::string productionAiWorldError;
+    if (!editorProductionAiWorldPipeline_.Initialize({}, &productionAiWorldError)) {
+        editorNotifications_.Push(
+            editor::EditorNotificationSeverity::Error,
+            "Production AI World Pipeline",
+            productionAiWorldError.empty()
+                ? "Failed to initialize the E-15 EQS, Crowd, and Smart Object pipeline."
+                : productionAiWorldError);
+        editorProductionAiPipeline_.Shutdown();
+        editorProductionNavigationPipeline_.Shutdown();
+        editorWorldPartitionPipeline_.Shutdown();
+        editorProductionGpuDrivenPipeline_.Shutdown();
+        editorProductionLightingPipeline_.Shutdown();
+        editorProductionShaderPipeline_.Shutdown();
+        editorProductionTexturePipeline_.Shutdown();
+        editorProductionMaterialPipeline_.Shutdown();
+        editorProductionScenePipeline_.Shutdown();
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
+    std::string productionAiAuthoringError;
+    if (!editorProductionAiAuthoringPipeline_.Initialize({}, &productionAiAuthoringError) ||
+        !editorViewportOverlay_.RegisterProvider(editorProductionAiAuthoringPipeline_)) {
+        editorNotifications_.Push(
+            editor::EditorNotificationSeverity::Error,
+            "Production AI Authoring Pipeline",
+            productionAiAuthoringError.empty()
+                ? "Failed to initialize the E-16 AI Authoring, Debugger, and Simulation pipeline."
+                : productionAiAuthoringError);
+        editorProductionAiAuthoringPipeline_.Shutdown();
+        editorProductionAiWorldPipeline_.Shutdown();
+        editorProductionAiPipeline_.Shutdown();
+        editorProductionNavigationPipeline_.Shutdown();
+        editorWorldPartitionPipeline_.Shutdown();
+        editorProductionGpuDrivenPipeline_.Shutdown();
+        editorProductionLightingPipeline_.Shutdown();
+        editorProductionShaderPipeline_.Shutdown();
+        editorProductionTexturePipeline_.Shutdown();
+        editorProductionMaterialPipeline_.Shutdown();
+        editorProductionScenePipeline_.Shutdown();
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
+    if (editorPlaySessionSnapshot_.Registry().Find(
+            editor::EditorProductionAiAuthoringPipeline::kPlayIsolationId) == nullptr &&
+        !editorPlaySessionSnapshot_.RegisterProvider(
+            &editorProductionAiAuthoringPipeline_, &productionAiAuthoringError)) {
+        editorNotifications_.Push(editor::EditorNotificationSeverity::Error,
+            "Production AI Play Isolation", productionAiAuthoringError);
+        editorViewportOverlay_.UnregisterProvider(editorProductionAiAuthoringPipeline_.Id());
+        editorProductionAiAuthoringPipeline_.Shutdown();
+        editorProductionAiWorldPipeline_.Shutdown();
+        editorProductionAiPipeline_.Shutdown();
+        editorProductionNavigationPipeline_.Shutdown();
+        editorWorldPartitionPipeline_.Shutdown();
+        editorProductionGpuDrivenPipeline_.Shutdown();
+        editorProductionLightingPipeline_.Shutdown();
+        editorProductionShaderPipeline_.Shutdown();
+        editorProductionTexturePipeline_.Shutdown();
+        editorProductionMaterialPipeline_.Shutdown();
+        editorProductionScenePipeline_.Shutdown();
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
+    std::string productionAiValidationError;
+    if (!editorProductionAiValidationPipeline_.Initialize({}, &productionAiValidationError)) {
+        editorNotifications_.Push(
+            editor::EditorNotificationSeverity::Error,
+            "Production AI Validation Pipeline",
+            productionAiValidationError.empty()
+                ? "Failed to initialize the E-17 AI Validation, Batch Simulation, and Telemetry pipeline."
+                : productionAiValidationError);
+        editorViewportOverlay_.UnregisterProvider(editorProductionAiAuthoringPipeline_.Id());
+        editorProductionAiAuthoringPipeline_.Shutdown();
+        editorProductionAiWorldPipeline_.Shutdown();
+        editorProductionAiPipeline_.Shutdown();
+        editorProductionNavigationPipeline_.Shutdown();
+        editorWorldPartitionPipeline_.Shutdown();
+        editorProductionGpuDrivenPipeline_.Shutdown();
+        editorProductionLightingPipeline_.Shutdown();
+        editorProductionShaderPipeline_.Shutdown();
+        editorProductionTexturePipeline_.Shutdown();
+        editorProductionMaterialPipeline_.Shutdown();
+        editorProductionScenePipeline_.Shutdown();
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        editorFonts_.OnContextDestroyed();
+        ImGui::DestroyContext();
+        return false;
+    }
+    std::string navigationAuthoringError;
+    if (!editorProductionNavigationAuthoringPipeline_.Initialize({}, &navigationAuthoringError) ||
+        !editorViewportOverlay_.RegisterProvider(editorProductionNavigationAuthoringPipeline_)) {
+        editorNotifications_.Push(
+            editor::EditorNotificationSeverity::Error,
+            "Production Navigation Authoring Pipeline",
+            navigationAuthoringError.empty()
+                ? "Failed to initialize the E-18 Navigation Authoring, Off-Mesh Link, and Area Cost pipeline."
+                : navigationAuthoringError);
+        editorProductionNavigationAuthoringPipeline_.Shutdown();
+        editorProductionAiValidationPipeline_.Shutdown();
+        editorViewportOverlay_.UnregisterProvider(editorProductionAiAuthoringPipeline_.Id());
+        editorProductionAiAuthoringPipeline_.Shutdown();
+        editorProductionAiWorldPipeline_.Shutdown();
+        editorProductionAiPipeline_.Shutdown();
+        editorProductionNavigationPipeline_.Shutdown();
+        editorWorldPartitionPipeline_.Shutdown();
         editorProductionGpuDrivenPipeline_.Shutdown();
         editorProductionLightingPipeline_.Shutdown();
         editorProductionShaderPipeline_.Shutdown();
@@ -1696,6 +1870,33 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 context.editorScheduledFenceValue,
                 &productionSceneError,
                 &editorWorldPartitionPipeline_.SourceResidentEntities());
+            std::string productionNavigationError;
+            editorProductionNavigationPipeline_.Sync(
+                *geometryScene,
+                editorProductionScenePipeline_,
+                editorWorldPartitionPipeline_,
+                &productionNavigationError);
+            if (editorProductionAiAuthoringPipeline_.ConsumeRuntimeAdvance()) {
+                std::string productionAiError;
+                editorProductionAiPipeline_.Sync(
+                    *geometryScene,
+                    editorAssetRegistry_,
+                    editorProductionScenePipeline_,
+                    editorWorldPartitionPipeline_,
+                    editorProductionNavigationPipeline_,
+                    context.frameState->deltaTime,
+                    &productionAiError);
+                std::string productionAiWorldError;
+                editorProductionAiWorldPipeline_.Sync(
+                    *geometryScene,
+                    editorWorldPartitionPipeline_,
+                    editorProductionAiPipeline_,
+                    context.frameState->deltaTime,
+                    &productionAiWorldError);
+                editorProductionAiAuthoringPipeline_.CaptureRuntimeFrame(
+                    editorProductionAiPipeline_, editorProductionAiWorldPipeline_,
+                    context.frameState->deltaTime);
+            }
             std::string productionMaterialError;
             editorProductionMaterialPipeline_.Sync(
                 *geometryScene,
@@ -1862,6 +2063,43 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 "gameplay-visual-script:" + document.assetGuid,
                 "Gameplay Visual Script", std::string(reason),
                 editorDirtyState_.Revision() + 1);
+        });
+    editorProductionAiAuthoringPipeline_.Bind(
+        &editorBehaviorTreeDocumentProvider_, &editorEqsDocumentProvider_,
+        &editorTransactions, &editorDocumentManager_);
+    if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active();
+        activeDocument != nullptr &&
+        (activeDocument->id.type == editor::EditorDocumentTypes::BehaviorTree ||
+         activeDocument->id.type == editor::EditorDocumentTypes::EnvironmentQuery)) {
+        if (activeDocument->id != editorProductionAiAuthoringPipeline_.ActiveDocument())
+            editorProductionAiAuthoringPipeline_.SetActiveDocument(activeDocument->id);
+    } else if (editorProductionAiAuthoringPipeline_.ActiveDocument().IsValid()) {
+        editorProductionAiAuthoringPipeline_.SetActiveDocument({});
+    }
+    editorProductionAiAuthoringPipeline_.SetMutationCallback(
+        [this](const editor::EditorDocumentId& document, std::string_view reason) {
+            editorDirtyState_.MarkDirty(editor::EditorDirtyDomain::Unknown,
+                "ai-authoring:" + document.assetGuid,
+                document.type == editor::EditorDocumentTypes::BehaviorTree
+                    ? "Behavior Tree" : "Environment Query",
+                std::string(reason), editorDirtyState_.Revision() + 1);
+        });
+    editorProductionNavigationAuthoringPipeline_.Bind(
+        &editorNavigationDocumentProvider_, &editorTransactions, &editorDocumentManager_,
+        &editorProductionNavigationPipeline_);
+    if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active();
+        activeDocument != nullptr &&
+        activeDocument->id.type == editor::EditorDocumentTypes::NavigationData) {
+        if (activeDocument->id != editorProductionNavigationAuthoringPipeline_.ActiveDocument())
+            editorProductionNavigationAuthoringPipeline_.SetActiveDocument(activeDocument->id);
+    } else if (editorProductionNavigationAuthoringPipeline_.ActiveDocument().IsValid()) {
+        editorProductionNavigationAuthoringPipeline_.SetActiveDocument({});
+    }
+    editorProductionNavigationAuthoringPipeline_.SetMutationCallback(
+        [this](const editor::EditorDocumentId& document, std::string_view reason) {
+            editorDirtyState_.MarkDirty(editor::EditorDirtyDomain::Unknown,
+                "navigation-authoring:" + document.assetGuid,
+                "Navigation Data", std::string(reason), editorDirtyState_.Revision() + 1);
         });
     editorVfxWorldProvider_.Bind(
         context.effectRuntime,
@@ -2468,6 +2706,239 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         : editor::EditorRuntimeWatchSeverity::Info,
             editorDocumentServiceFrame_});
     }
+    {
+        const editor::EditorProductionNavigationStats& navigationStats =
+            editorProductionNavigationPipeline_.Stats();
+        std::ostringstream detail;
+        detail << "tiles=" << navigationStats.residentTiles
+               << "/" << navigationStats.submittedTiles
+               << " queued/completed=" << navigationStats.queuedTileBuilds
+               << "/" << navigationStats.completedTileBuilds
+               << " nodes=" << navigationStats.residentNodes
+               << " polygons=" << navigationStats.residentPolygons
+               << " areas/profiles/links=" << navigationStats.activeAreas
+               << "/" << navigationStats.activeAgentProfiles
+               << "/" << navigationStats.activeOffMeshLinks
+               << " linkTraversals/rejected=" << navigationStats.offMeshLinkTraversals
+               << "/" << navigationStats.rejectedOffMeshLinks
+               << " obstacles/updates=" << navigationStats.dynamicObstacles
+               << "/" << navigationStats.dynamicObstacleUpdates
+               << " dirty=" << navigationStats.dirtyObstacleTiles
+               << " paths(ok/fail)=" << navigationStats.successfulPaths
+               << "/" << navigationStats.failedPaths
+               << " visited=" << navigationStats.lastVisitedNodes
+               << " generation=" << navigationStats.snapshotGeneration
+               << " rejected(tile/node/obstacle/query)=" << navigationStats.rejectedByTileBudget
+               << "/" << navigationStats.rejectedByNodeBudget
+               << "/" << navigationStats.rejectedDynamicObstacles
+               << "/" << navigationStats.queryBudgetFailures;
+        const bool constrained = navigationStats.rejectedByTileBudget != 0 ||
+            navigationStats.rejectedByNodeBudget != 0 ||
+            navigationStats.rejectedDynamicObstacles != 0 ||
+            navigationStats.queryBudgetFailures != 0;
+        editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
+            "AI", "Navigation Mesh / World Query / Dynamic Obstacles",
+            constrained ? "Budget Constrained" : "Streaming", detail.str(),
+            constrained ? editor::EditorRuntimeWatchSeverity::Warning
+                        : editor::EditorRuntimeWatchSeverity::Info,
+            editorDocumentServiceFrame_});
+    }
+    {
+        const editor::EditorNavigationAuthoringStats& stats =
+            editorProductionNavigationAuthoringPipeline_.Stats();
+        std::ostringstream detail;
+        detail << "mutations/compileFailures=" << stats.mutations << "/"
+               << stats.compileFailures << " runtimePublishes=" << stats.runtimePublishes
+               << " overlay/rejected=" << stats.overlayCommands << "/"
+               << stats.overlayBudgetRejected;
+        editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
+            "AI", "Navigation Authoring / Off-Mesh Links / Area Costs",
+            stats.compileFailures == 0 ? "Published" : "Compile Failed",
+            detail.str(), stats.compileFailures == 0
+                ? editor::EditorRuntimeWatchSeverity::Info
+                : editor::EditorRuntimeWatchSeverity::Warning,
+            editorDocumentServiceFrame_});
+    }
+    {
+        const editor::EditorProductionAiStats& aiStats = editorProductionAiPipeline_.Stats();
+        std::ostringstream detail;
+        detail << "agents=" << aiStats.activeAgents << "/" << aiStats.submittedAgents
+               << " stimuli=" << aiStats.submittedStimuli
+               << " perception(sight/hearing)=" << aiStats.sightHits
+               << "/" << aiStats.hearingHits
+               << " ticks(ok/run/fail)=" << aiStats.successfulTicks
+               << "/" << aiStats.runningTicks << "/" << aiStats.failedTicks
+               << " nav(ok/fail)=" << (aiStats.navigationQueries - aiStats.navigationFailures)
+               << "/" << aiStats.navigationFailures
+               << " programs/reloads=" << aiStats.loadedPrograms
+               << "/" << aiStats.hotReloads
+               << " generation=" << aiStats.tickGeneration
+               << " rejected(agent/stimulus/budget)=" << aiStats.rejectedAgents
+               << "/" << aiStats.rejectedStimuli << "/" << aiStats.budgetFailures;
+        const bool constrained = aiStats.rejectedAgents != 0 || aiStats.rejectedStimuli != 0 ||
+            aiStats.budgetFailures != 0;
+        editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
+            "AI", "Behavior Tree / Blackboard / Perception",
+            constrained ? "Budget Constrained" : "Running", detail.str(),
+            constrained ? editor::EditorRuntimeWatchSeverity::Warning
+                        : editor::EditorRuntimeWatchSeverity::Info,
+            editorDocumentServiceFrame_});
+        constexpr std::size_t kMaximumAiDebuggerRecords = 64;
+        const auto& snapshots = editorProductionAiPipeline_.DebugSnapshots();
+        for (std::size_t index = 0;
+             index < (std::min)(snapshots.size(), kMaximumAiDebuggerRecords); ++index) {
+            const editor::EditorAiAgentDebugSnapshot& snapshot = snapshots[index];
+            std::ostringstream agentDetail;
+            agentDetail << "behavior=" << snapshot.behaviorAssetGuid
+                        << " tick/perception=" << snapshot.tickGeneration
+                        << "/" << snapshot.perceptionGeneration
+                        << " nodes=" << snapshot.executedNodes
+                        << " perceived=" << snapshot.perceived.size()
+                        << " pathPoints=" << snapshot.lastPath.size() << " trace=";
+            for (std::size_t traceIndex = 0;
+                 traceIndex < snapshot.activeNodeTrace.size(); ++traceIndex) {
+                if (traceIndex != 0) agentDetail << '>';
+                agentDetail << snapshot.activeNodeTrace[traceIndex];
+            }
+            agentDetail << " blackboard=";
+            for (std::size_t keyIndex = 0; keyIndex < snapshot.blackboard.size(); ++keyIndex) {
+                if (keyIndex != 0) agentDetail << ',';
+                const auto& key = snapshot.blackboard[keyIndex];
+                agentDetail << key.name << '=';
+                switch (key.defaultValue.type) {
+                case editor::EditorBlackboardValueType::Bool:
+                    agentDetail << (key.defaultValue.boolValue ? "true" : "false"); break;
+                case editor::EditorBlackboardValueType::Int:
+                    agentDetail << key.defaultValue.intValue; break;
+                case editor::EditorBlackboardValueType::Float:
+                    agentDetail << key.defaultValue.floatValue; break;
+                case editor::EditorBlackboardValueType::Vector3:
+                    agentDetail << '(' << key.defaultValue.vectorValue.x << ' '
+                                << key.defaultValue.vectorValue.y << ' '
+                                << key.defaultValue.vectorValue.z << ')'; break;
+                case editor::EditorBlackboardValueType::Entity:
+                case editor::EditorBlackboardValueType::String:
+                    agentDetail << key.defaultValue.textValue; break;
+                }
+            }
+            const bool unhealthy = snapshot.status == editor::EditorBehaviorStatus::BudgetExceeded ||
+                snapshot.status == editor::EditorBehaviorStatus::InvalidProgram;
+            editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
+                "AI Agent", snapshot.entityGuid, editor::ToString(snapshot.status),
+                agentDetail.str(), unhealthy ? editor::EditorRuntimeWatchSeverity::Warning
+                                             : editor::EditorRuntimeWatchSeverity::Info,
+                editorDocumentServiceFrame_});
+        }
+    }
+    {
+        const editor::EditorProductionAiWorldStats& aiWorldStats =
+            editorProductionAiWorldPipeline_.Stats();
+        std::ostringstream detail;
+        detail << "EQS queries/candidates/tested/rejected=" << aiWorldStats.eqsQueries
+               << "/" << aiWorldStats.eqsGeneratedCandidates
+               << "/" << aiWorldStats.eqsTestedCandidates
+               << "/" << aiWorldStats.eqsRejectedCandidates
+               << " nav/visibility=" << aiWorldStats.eqsNavigationQueries
+               << "/" << aiWorldStats.eqsVisibilityQueries
+               << " programs/reloads=" << aiWorldStats.loadedEqsPrograms
+               << "/" << aiWorldStats.eqsHotReloads
+               << " programEvict=" << aiWorldStats.evictedEqsPrograms
+               << " crowd=" << aiWorldStats.activeCrowdAgents
+               << "/" << aiWorldStats.submittedCrowdAgents
+               << " avoidance/neighborBudget=" << aiWorldStats.crowdAvoidanceAdjustments
+               << "/" << aiWorldStats.crowdNeighborBudgetHits
+               << " smartSlots=" << aiWorldStats.activeSmartObjectSlots
+               << "/" << aiWorldStats.submittedSmartObjectSlots
+               << " reservations(ok/reject/release/expire)="
+               << aiWorldStats.successfulReservations << "/"
+               << aiWorldStats.rejectedReservations << "/"
+               << aiWorldStats.releasedReservations << "/"
+               << aiWorldStats.expiredReservations
+               << " generation=" << aiWorldStats.worldGeneration;
+        const bool constrained = aiWorldStats.eqsBudgetFailures != 0 ||
+            aiWorldStats.rejectedCrowdAgents != 0 ||
+            aiWorldStats.crowdNeighborBudgetHits != 0 ||
+            aiWorldStats.rejectedSmartObjectSlots != 0;
+        editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
+            "AI", "EQS / Crowd Steering / Smart Objects",
+            constrained ? "Budget Constrained" : "Running", detail.str(),
+            constrained ? editor::EditorRuntimeWatchSeverity::Warning
+                        : editor::EditorRuntimeWatchSeverity::Info,
+            editorDocumentServiceFrame_});
+        constexpr std::size_t kMaximumCrowdDebuggerRecords = 64;
+        const auto& crowd = editorProductionAiWorldPipeline_.CrowdSnapshots();
+        for (std::size_t index = 0;
+             index < (std::min)(crowd.size(), kMaximumCrowdDebuggerRecords); ++index) {
+            const auto& agent = crowd[index];
+            std::ostringstream agentDetail;
+            agentDetail << "position=(" << agent.position.x << ' ' << agent.position.y
+                        << ' ' << agent.position.z << ") preferred=("
+                        << agent.preferredVelocity.x << ' ' << agent.preferredVelocity.y
+                        << ' ' << agent.preferredVelocity.z << ") steering=("
+                        << agent.steeringVelocity.x << ' ' << agent.steeringVelocity.y
+                        << ' ' << agent.steeringVelocity.z << ") neighbors="
+                        << agent.consideredNeighbors << " radius/speed="
+                        << agent.radius << "/" << agent.maximumSpeed;
+            editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
+                "AI Crowd", agent.entityGuid,
+                agent.constrained ? "Avoiding" : "Preferred Velocity",
+                agentDetail.str(), editor::EditorRuntimeWatchSeverity::Info,
+                editorDocumentServiceFrame_});
+        }
+    }
+    {
+        const editor::EditorAiAuthoringStats& stats =
+            editorProductionAiAuthoringPipeline_.Stats();
+        std::ostringstream detail;
+        detail << "state="
+               << (editorProductionAiAuthoringPipeline_.Replaying() ? "replay" :
+                   (editorProductionAiAuthoringPipeline_.Paused() ? "paused" : "running"))
+               << " breakpoints/hits="
+               << editorProductionAiAuthoringPipeline_.Breakpoints().size()
+               << "/" << stats.breakpointHits
+               << " live/recorded/dropped=" << stats.liveFrames << "/"
+               << stats.recordedFrames << "/" << stats.droppedRecordingFrames
+               << " mutations(behavior/eqs/fail)=" << stats.behaviorMutations << "/"
+               << stats.eqsMutations << "/" << stats.compileFailures
+               << " replaySteps=" << stats.replaySteps
+               << " overlay/rejected=" << stats.overlayCommands << "/"
+               << stats.overlayBudgetRejected;
+        editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
+            "AI", "Authoring / Debugger / Simulation",
+            editorProductionAiAuthoringPipeline_.Paused() ? "Paused" : "Active",
+            detail.str(), stats.overlayBudgetRejected != 0
+                ? editor::EditorRuntimeWatchSeverity::Warning
+                : editor::EditorRuntimeWatchSeverity::Info,
+            editorDocumentServiceFrame_});
+    }
+    {
+        const editor::EditorAiValidationStats& stats =
+            editorProductionAiValidationPipeline_.Stats();
+        const editor::EditorAiValidationReport& report =
+            editorProductionAiValidationPipeline_.Report();
+        std::ostringstream detail;
+        detail << "suites(started/completed/rejected)=" << stats.suitesStarted << "/"
+               << stats.suitesCompleted << "/" << stats.rejectedSuites
+               << " runs(pass/fail)=" << stats.runsPassed << "/" << stats.runsFailed
+               << " frames=" << stats.framesSimulated
+               << " budget/determinism=" << stats.budgetFailures << "/"
+               << stats.determinismFailures
+               << " reports/repro=" << stats.exportedReports << "/"
+               << stats.exportedReproductions
+               << " comparisons/regressions=" << stats.comparisons << "/"
+               << stats.regressions
+               << " last=" << (report.generation == 0 ? "none" :
+                   (report.passed ? "passed" : "failed"));
+        const bool constrained = stats.budgetFailures != 0 ||
+            stats.determinismFailures != 0 || stats.regressions != 0 ||
+            (report.generation != 0 && !report.passed);
+        editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
+            "AI", "Validation / Batch Simulation / Telemetry",
+            report.generation == 0 ? "Idle" : (report.passed ? "Passed" : "Failed"),
+            detail.str(), constrained ? editor::EditorRuntimeWatchSeverity::Warning
+                                      : editor::EditorRuntimeWatchSeverity::Info,
+            editorDocumentServiceFrame_});
+    }
     const editor::EditorCommandContext editorCommandContext =
         editor::BuildEditorCommandContext(
             editor::EditorCommandContextInput{
@@ -2533,6 +3004,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     editorContext.vfxGraphs = &editorVfxGraphs_;
     editorContext.animationStateMachines = &editorAnimationStateMachines_;
     editorContext.gameplayVisualScripts = &editorGameplayVisualScripts_;
+    editorContext.aiAuthoring = &editorProductionAiAuthoringPipeline_;
+    editorContext.navigationAuthoring = &editorProductionNavigationAuthoringPipeline_;
     editorContext.interactiveTools = &editorInteractiveTools_;
     editorContext.interactiveExecution = &editorInteractiveExecution_;
     editorContext.onWorldMutated = [&](const editor::EditorWorldMutationResult& result) {
@@ -3274,6 +3747,50 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             }});
     registerPanel(
         editor::EditorPanelDescriptor{
+            "navigation.productionAuthoring",
+            "Navigation Authoring",
+            "Navigation",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("navigation.productionAuthoring"),
+            [&]() {
+                editor::DrawEditorProductionNavigationAuthoringPanel(
+                    editor::EditorProductionNavigationAuthoringPanelContext{
+                        &editorProductionNavigationAuthoringPipeline_, &editorDocumentManager_,
+                        &editorAssetSelection_, &editorNotifications_,
+                        editorCommandContext.canMutateAuthoring});
+            },
+            editor::EditorBottomDockGroup::Authoring});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "ai.productionAuthoring",
+            "AI Authoring / Debugger",
+            "AI",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("ai.productionAuthoring"),
+            [&]() {
+                editor::DrawEditorProductionAiAuthoringPanel(
+                    editor::EditorProductionAiAuthoringPanelContext{
+                        &editorProductionAiAuthoringPipeline_, &editorDocumentManager_,
+                        &editorAssetSelection_, &editorNotifications_,
+                        editorCommandContext.canMutateAuthoring});
+            },
+            editor::EditorBottomDockGroup::Authoring});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "ai.productionValidation",
+            "AI Validation / Batch",
+            "AI",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("ai.productionValidation"),
+            [&]() {
+                editor::DrawEditorProductionAiValidationPanel(
+                    editor::EditorProductionAiValidationPanelContext{
+                        &editorProductionAiValidationPipeline_,
+                        &editorProductionAiAuthoringPipeline_, &editorNotifications_});
+            },
+            editor::EditorBottomDockGroup::Profiling});
+    registerPanel(
+        editor::EditorPanelDescriptor{
             "editor.fontSettings",
             "Editor Fonts",
             "Editor",
@@ -3472,6 +3989,14 @@ void AppImGuiLayer::Shutdown() {
     editorMeshBakeExecution_.Clear();
     editorMeshBakePipeline_.Clear();
     editorProductionMeshRuntimeCache_.Clear();
+    editorViewportOverlay_.UnregisterProvider(editorProductionNavigationAuthoringPipeline_.Id());
+    editorProductionNavigationAuthoringPipeline_.Shutdown();
+    editorProductionAiValidationPipeline_.Shutdown();
+    editorViewportOverlay_.UnregisterProvider(editorProductionAiAuthoringPipeline_.Id());
+    editorProductionAiAuthoringPipeline_.Shutdown();
+    editorProductionAiWorldPipeline_.Shutdown();
+    editorProductionAiPipeline_.Shutdown();
+    editorProductionNavigationPipeline_.Shutdown();
     editorWorldPartitionPipeline_.Shutdown();
     editorProductionGpuDrivenPipeline_.Shutdown();
     editorProductionLightingPipeline_.Shutdown();
@@ -3552,6 +4077,52 @@ editor::EditorWorldPartitionPipeline& AppImGuiLayer::WorldPartitionPipeline() {
 
 const editor::EditorWorldPartitionPipeline& AppImGuiLayer::WorldPartitionPipeline() const {
     return editorWorldPartitionPipeline_;
+}
+
+editor::EditorProductionNavigationPipeline& AppImGuiLayer::ProductionNavigationPipeline() {
+    return editorProductionNavigationPipeline_;
+}
+
+const editor::EditorProductionNavigationPipeline&
+AppImGuiLayer::ProductionNavigationPipeline() const {
+    return editorProductionNavigationPipeline_;
+}
+
+editor::EditorProductionAiPipeline& AppImGuiLayer::ProductionAiPipeline() {
+    return editorProductionAiPipeline_;
+}
+
+const editor::EditorProductionAiPipeline& AppImGuiLayer::ProductionAiPipeline() const {
+    return editorProductionAiPipeline_;
+}
+
+editor::EditorProductionAiWorldPipeline& AppImGuiLayer::ProductionAiWorldPipeline() {
+    return editorProductionAiWorldPipeline_;
+}
+
+const editor::EditorProductionAiWorldPipeline&
+AppImGuiLayer::ProductionAiWorldPipeline() const {
+    return editorProductionAiWorldPipeline_;
+}
+
+editor::EditorProductionAiAuthoringPipeline&
+AppImGuiLayer::ProductionAiAuthoringPipeline() {
+    return editorProductionAiAuthoringPipeline_;
+}
+
+const editor::EditorProductionAiAuthoringPipeline&
+AppImGuiLayer::ProductionAiAuthoringPipeline() const {
+    return editorProductionAiAuthoringPipeline_;
+}
+
+editor::EditorProductionAiValidationPipeline&
+AppImGuiLayer::ProductionAiValidationPipeline() {
+    return editorProductionAiValidationPipeline_;
+}
+
+const editor::EditorProductionAiValidationPipeline&
+AppImGuiLayer::ProductionAiValidationPipeline() const {
+    return editorProductionAiValidationPipeline_;
 }
 
 #else
@@ -3655,6 +4226,52 @@ editor::EditorWorldPartitionPipeline& AppImGuiLayer::WorldPartitionPipeline() {
 
 const editor::EditorWorldPartitionPipeline& AppImGuiLayer::WorldPartitionPipeline() const {
     return editorWorldPartitionPipeline_;
+}
+
+editor::EditorProductionNavigationPipeline& AppImGuiLayer::ProductionNavigationPipeline() {
+    return editorProductionNavigationPipeline_;
+}
+
+const editor::EditorProductionNavigationPipeline&
+AppImGuiLayer::ProductionNavigationPipeline() const {
+    return editorProductionNavigationPipeline_;
+}
+
+editor::EditorProductionAiPipeline& AppImGuiLayer::ProductionAiPipeline() {
+    return editorProductionAiPipeline_;
+}
+
+const editor::EditorProductionAiPipeline& AppImGuiLayer::ProductionAiPipeline() const {
+    return editorProductionAiPipeline_;
+}
+
+editor::EditorProductionAiWorldPipeline& AppImGuiLayer::ProductionAiWorldPipeline() {
+    return editorProductionAiWorldPipeline_;
+}
+
+const editor::EditorProductionAiWorldPipeline&
+AppImGuiLayer::ProductionAiWorldPipeline() const {
+    return editorProductionAiWorldPipeline_;
+}
+
+editor::EditorProductionAiAuthoringPipeline&
+AppImGuiLayer::ProductionAiAuthoringPipeline() {
+    return editorProductionAiAuthoringPipeline_;
+}
+
+const editor::EditorProductionAiAuthoringPipeline&
+AppImGuiLayer::ProductionAiAuthoringPipeline() const {
+    return editorProductionAiAuthoringPipeline_;
+}
+
+editor::EditorProductionAiValidationPipeline&
+AppImGuiLayer::ProductionAiValidationPipeline() {
+    return editorProductionAiValidationPipeline_;
+}
+
+const editor::EditorProductionAiValidationPipeline&
+AppImGuiLayer::ProductionAiValidationPipeline() const {
+    return editorProductionAiValidationPipeline_;
 }
 
 void AppImGuiLayer::Shutdown() {

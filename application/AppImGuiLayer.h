@@ -84,6 +84,15 @@ class AppPipelines;
 #include "editor/lighting/EditorProductionLightingPipeline.h"
 #include "editor/visibility/EditorProductionGpuDrivenPipeline.h"
 #include "editor/streaming/EditorWorldPartitionPipeline.h"
+#include "editor/navigation/EditorProductionNavigationPipeline.h"
+#include "editor/navigation/EditorProductionNavigationAuthoringPipeline.h"
+#include "editor/navigation/EditorProductionNavigationAuthoringPanel.h"
+#include "editor/ai/EditorProductionAiPipeline.h"
+#include "editor/ai/EditorProductionAiWorldPipeline.h"
+#include "editor/ai/EditorProductionAiAuthoringPipeline.h"
+#include "editor/ai/EditorProductionAiAuthoringPanel.h"
+#include "editor/ai/EditorProductionAiValidationPipeline.h"
+#include "editor/ai/EditorProductionAiValidationPanel.h"
 #include "editor/core/EditorExecutionContext.h"
 #include "editor/documents/EditorAutosaveService.h"
 #include "editor/documents/EditorCourseDocumentProvider.h"
@@ -93,6 +102,8 @@ class AppPipelines;
 #include "editor/documents/EditorVfxGraphDocumentProvider.h"
 #include "editor/documents/EditorAnimationStateMachineDocumentProvider.h"
 #include "editor/documents/EditorGameplayVisualScriptDocumentProvider.h"
+#include "editor/documents/EditorAiDocumentProviders.h"
+#include "editor/documents/EditorNavigationDocumentProvider.h"
 #include "editor/documents/EditorDocumentRecoveryService.h"
 #include "editor/documents/EditorDocumentSaveService.h"
 #include "editor/documents/EditorTextDocumentProvider.h"
@@ -198,6 +209,16 @@ public:
     const editor::EditorProductionGpuDrivenPipeline& ProductionGpuDrivenPipeline() const;
     editor::EditorWorldPartitionPipeline& WorldPartitionPipeline();
     const editor::EditorWorldPartitionPipeline& WorldPartitionPipeline() const;
+    editor::EditorProductionNavigationPipeline& ProductionNavigationPipeline();
+    const editor::EditorProductionNavigationPipeline& ProductionNavigationPipeline() const;
+    editor::EditorProductionAiPipeline& ProductionAiPipeline();
+    const editor::EditorProductionAiPipeline& ProductionAiPipeline() const;
+    editor::EditorProductionAiWorldPipeline& ProductionAiWorldPipeline();
+    const editor::EditorProductionAiWorldPipeline& ProductionAiWorldPipeline() const;
+    editor::EditorProductionAiAuthoringPipeline& ProductionAiAuthoringPipeline();
+    const editor::EditorProductionAiAuthoringPipeline& ProductionAiAuthoringPipeline() const;
+    editor::EditorProductionAiValidationPipeline& ProductionAiValidationPipeline();
+    const editor::EditorProductionAiValidationPipeline& ProductionAiValidationPipeline() const;
 
     void Shutdown();
 
@@ -244,6 +265,9 @@ private:
     editor::EditorVfxGraphDocumentProvider editorVfxGraphDocumentProvider_{};
     editor::EditorAnimationStateMachineDocumentProvider editorAnimationStateMachineDocumentProvider_{};
     editor::EditorGameplayVisualScriptDocumentProvider editorGameplayVisualScriptDocumentProvider_{};
+    editor::EditorBehaviorTreeDocumentProvider editorBehaviorTreeDocumentProvider_{};
+    editor::EditorEqsDocumentProvider editorEqsDocumentProvider_{};
+    editor::EditorNavigationDocumentProvider editorNavigationDocumentProvider_{};
     editor::EditorTextDocumentProvider editorEffectDocumentProvider_{
         std::string(editor::EditorDocumentTypes::Effect), "Effect/VFX", {".effect", ".vfx"}, 1};
     editor::EditorTextDocumentProvider editorRenderPresetDocumentProvider_{
@@ -306,6 +330,12 @@ private:
     editor::EditorProductionLightingPipeline editorProductionLightingPipeline_{};
     editor::EditorProductionGpuDrivenPipeline editorProductionGpuDrivenPipeline_{};
     editor::EditorWorldPartitionPipeline editorWorldPartitionPipeline_{};
+    editor::EditorProductionNavigationPipeline editorProductionNavigationPipeline_{};
+    editor::EditorProductionNavigationAuthoringPipeline editorProductionNavigationAuthoringPipeline_{};
+    editor::EditorProductionAiPipeline editorProductionAiPipeline_{};
+    editor::EditorProductionAiWorldPipeline editorProductionAiWorldPipeline_{};
+    editor::EditorProductionAiAuthoringPipeline editorProductionAiAuthoringPipeline_{};
+    editor::EditorProductionAiValidationPipeline editorProductionAiValidationPipeline_{};
     editor::EditorViewportOverlayService editorViewportOverlay_{};
     editor::EditorViewportSelectionBridge editorViewportSelectionBridge_{};
     editor::EditorViewportRenderTarget editorViewportRenderTarget_{};

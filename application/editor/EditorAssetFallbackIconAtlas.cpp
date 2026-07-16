@@ -200,6 +200,9 @@ bool BuildEditorAssetFallbackIconPixels(
     case EditorAssetKind::VfxGraph:
     case EditorAssetKind::AnimationStateMachine:
     case EditorAssetKind::GameplayVisualScript:
+    case EditorAssetKind::BehaviorTree:
+    case EditorAssetKind::EnvironmentQuery:
+    case EditorAssetKind::NavigationData:
         DrawDocumentIcon(outPixels, accent);
         break;
     default:

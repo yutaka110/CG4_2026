@@ -15,6 +15,13 @@ inline constexpr std::string_view kEditorAudioSourceComponentType = "engine.audi
 inline constexpr std::string_view kEditorDirectionalLightComponentType = "engine.directional-light";
 inline constexpr std::string_view kEditorPointLightComponentType = "engine.point-light";
 inline constexpr std::string_view kEditorSpotLightComponentType = "engine.spot-light";
+inline constexpr std::string_view kEditorNavigationSurfaceComponentType =
+    "editor.navigation-surface";
+inline constexpr std::string_view kEditorNavigationObstacleComponentType =
+    "editor.navigation-obstacle";
+inline constexpr std::string_view kEditorAiAgentComponentType = "editor.ai-agent";
+inline constexpr std::string_view kEditorAiStimulusComponentType = "editor.ai-stimulus";
+inline constexpr std::string_view kEditorSmartObjectComponentType = "editor.smart-object";
 
 struct EditorSceneObjectReference {
     std::string property;

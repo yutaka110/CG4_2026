@@ -16,6 +16,7 @@
 #include "editor/EditorAssetImportService.h"
 #include "editor/EditorCoreRegressionTests.h"
 #include "editor/EditorSmokeRun.h"
+#include "editor/ai/EditorProductionAiValidationPipeline.h"
 #endif
 #include "include/vfx/VfxRenderInputs.h"
 
@@ -71,6 +72,38 @@ int RunEditorAssetMetaMigration() {
     log << "duplicateGuids=" << duplicates.size() << '\n';
     log << "result=" << (ok ? "ok" : "failed") << '\n';
     return ok ? 0 : 1;
+}
+
+int RunEditorAiValidationBatch() {
+    const std::filesystem::path recordingPath = "logs/editor_ai_simulation.record";
+    std::ifstream input(recordingPath, std::ios::binary);
+    if (!input.is_open()) return 2;
+    const std::string encoded{std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>()};
+    editor::EditorAiAuthoringPolicy recordingPolicy{};
+    std::vector<editor::EditorAiSimulationFrame> frames;
+    std::string error;
+    if (!editor::DecodeEditorAiSimulationRecording(
+            encoded, frames, recordingPolicy, &error) || frames.empty()) return 2;
+
+    editor::EditorProductionAiValidationPipeline validation;
+    if (!validation.Initialize({}, &error)) return 2;
+    editor::EditorAiValidationSuite suite;
+    suite.id = "editor-ai-headless";
+    suite.name = "Command-line AI validation";
+    editor::EditorAiValidationScenario scenario;
+    scenario.id = "recording";
+    scenario.name = "Imported E-16 recording";
+    scenario.firstSeed = 1;
+    scenario.seedCount = 3;
+    scenario.repetitions = 2;
+    scenario.maximumFrames = static_cast<uint32_t>(frames.size());
+    scenario.requireAgents = true;
+    suite.scenarios.push_back(std::move(scenario));
+    editor::EditorAiRecordingBatchSimulationSource source(frames);
+    if (!validation.RunSuite(suite, source, &error) ||
+        !validation.ExportReport("logs/editor_ai_validation", &error)) return 2;
+    return validation.Report().passed ? 0 : 1;
 }
 #endif
 
@@ -183,6 +216,9 @@ AppCommandLineResult RunAppCommandLineTools() {
     }
     if (HasArgument(L"--editor-commercial-gates")) {
         return {true, editor::RunEditorCommercialAutomationGates(RunEffectAuthoringSmoke)};
+    }
+    if (HasArgument(L"--editor-ai-validation")) {
+        return {true, RunEditorAiValidationBatch()};
     }
     if (HasArgument(L"--editor-smoke-run")) {
         return {true, editor::RunEditorSmokeRun(RunEffectAuthoringSmoke)};

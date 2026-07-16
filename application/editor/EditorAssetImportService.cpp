@@ -792,6 +792,18 @@ EditorAssetKind EditorAssetKindForImportPath(
     if (options.includeGameplayVisualScripts && (ext == ".gameplay" || ext == ".visualscript")) {
         return EditorAssetKind::GameplayVisualScript;
     }
+    if (options.includeBehaviorTrees &&
+        (ext == ".behavior" || ext == ".behaviortree" || ext == ".btree")) {
+        return EditorAssetKind::BehaviorTree;
+    }
+    if (options.includeEnvironmentQueries &&
+        (ext == ".eqs" || ext == ".envquery")) {
+        return EditorAssetKind::EnvironmentQuery;
+    }
+    if (options.includeNavigationData &&
+        (ext == ".navdata" || ext == ".navigation")) {
+        return EditorAssetKind::NavigationData;
+    }
     if (options.includeTextures &&
         (ext == ".png" || ext == ".bmp" || ext == ".dds" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga")) {
         return EditorAssetKind::Texture;

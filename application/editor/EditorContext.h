@@ -26,6 +26,8 @@ class EditorMaterialGraphService;
 class EditorVfxGraphService;
 class EditorAnimationStateMachineService;
 class EditorGameplayVisualScriptService;
+class EditorProductionAiAuthoringPipeline;
+class EditorProductionNavigationAuthoringPipeline;
 class EditorPropertyAccessor;
 class EditorPropertyEditService;
 class EditorPropertyRegistry;
@@ -101,6 +103,8 @@ struct EditorContext {
     EditorVfxGraphService* vfxGraphs = nullptr;
     EditorAnimationStateMachineService* animationStateMachines = nullptr;
     EditorGameplayVisualScriptService* gameplayVisualScripts = nullptr;
+    EditorProductionAiAuthoringPipeline* aiAuthoring = nullptr;
+    EditorProductionNavigationAuthoringPipeline* navigationAuthoring = nullptr;
     EditorToolManager* interactiveTools = nullptr;
     EditorExecutionContext* interactiveExecution = nullptr;
 

@@ -31,6 +31,9 @@ struct EditorAssetImportOptions {
     bool includeVfxGraphs = true;
     bool includeAnimationStateMachines = true;
     bool includeGameplayVisualScripts = true;
+    bool includeBehaviorTrees = true;
+    bool includeEnvironmentQueries = true;
+    bool includeNavigationData = true;
     bool includeTextures = true;
     bool includeAudio = true;
 };

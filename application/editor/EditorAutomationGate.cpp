@@ -48,6 +48,8 @@
 #include "documents/EditorDocumentSaveService.h"
 #include "documents/EditorExternalChangeMonitor.h"
 #include "documents/EditorGameplayVisualScriptDocumentProvider.h"
+#include "documents/EditorAiDocumentProviders.h"
+#include "documents/EditorNavigationDocumentProvider.h"
 #include "documents/EditorMaterialGraphDocumentProvider.h"
 #include "documents/EditorSceneDocumentProvider.h"
 #include "documents/EditorVfxGraphDocumentProvider.h"
@@ -59,6 +61,12 @@
 #include "lighting/EditorProductionLightingPipeline.h"
 #include "visibility/EditorProductionGpuDrivenPipeline.h"
 #include "streaming/EditorWorldPartitionPipeline.h"
+#include "navigation/EditorProductionNavigationPipeline.h"
+#include "navigation/EditorProductionNavigationAuthoringPipeline.h"
+#include "ai/EditorProductionAiPipeline.h"
+#include "ai/EditorProductionAiWorldPipeline.h"
+#include "ai/EditorProductionAiAuthoringPipeline.h"
+#include "ai/EditorProductionAiValidationPipeline.h"
 #include "play/EditorRuntimeApplyExecutionService.h"
 #include "scene/EditorScene.h"
 #include "scene/EditorProductionScenePipeline.h"
@@ -3951,6 +3959,1296 @@ EditorAutomationGateResult RunProductionWorldPartitionGate() {
     return result;
 }
 
+EditorAutomationGateResult RunProductionNavigationGate() {
+    AutomationScenario scenario("logs/editor_production_navigation_report.log");
+    const std::filesystem::path root = std::filesystem::path{"generated"} /
+        "editor" / "tests" / "commercial_navigation";
+    std::error_code filesystemError;
+    std::filesystem::remove_all(root, filesystemError);
+    std::string error;
+
+    const EditorDocumentId document{
+        "commercial-navigation", std::string(EditorDocumentTypes::Scene)};
+    EditorScene scene;
+    scene.CreateEntity("Navigation Floor A", {}, "commercial-e13-floor-a");
+    scene.CreateEntity("Navigation Floor B", {}, "commercial-e13-floor-b");
+    scene.CreateEntity("Dynamic Navigation Obstacle", {}, "commercial-e13-obstacle");
+    EditorSceneEntity* floorA = scene.FindEntity("commercial-e13-floor-a");
+    EditorSceneEntity* floorB = scene.FindEntity("commercial-e13-floor-b");
+    EditorSceneEntity* obstacleEntity = scene.FindEntity("commercial-e13-obstacle");
+    const auto setTranslation = [&](EditorSceneEntity* entity, const char* value) {
+        if (entity == nullptr) return false;
+        EditorSceneComponent* transform = scene.FindComponent(
+            *entity, kEditorTransformComponentType);
+        if (transform == nullptr) return false;
+        const auto property = std::find_if(transform->properties.begin(),
+            transform->properties.end(), [](const EditorSceneProperty& candidate) {
+                return candidate.name == "translation";
+            });
+        if (property == transform->properties.end()) return false;
+        property->value = value;
+        return true;
+    };
+    const auto setProperty = [](EditorSceneComponent* component,
+                                std::string_view name, std::string value) {
+        if (component == nullptr) return false;
+        const auto property = std::find_if(component->properties.begin(),
+            component->properties.end(), [&](const EditorSceneProperty& candidate) {
+                return candidate.name == name;
+            });
+        if (property == component->properties.end()) return false;
+        property->value = std::move(value);
+        return true;
+    };
+    const bool transformsReady = setTranslation(floorA, "0 0 0") &&
+        setTranslation(floorB, "16 0 0") && setTranslation(obstacleEntity, "10 1 2");
+    const bool floorARendererAdded = floorA != nullptr && scene.AddComponent(
+        floorA->guid, std::string(kEditorMeshRendererComponentType));
+    EditorSceneComponent* floorARenderer = floorARendererAdded
+        ? scene.FindComponent(*floorA, kEditorMeshRendererComponentType) : nullptr;
+    EditorGeometryMesh geometry = EditorGeometryMesh::MakeBox({8.0f, 0.25f, 8.0f});
+    std::string geometryText;
+    geometry.Serialize(geometryText, &error);
+    if (floorARenderer != nullptr) floorARenderer->properties.push_back(
+        {std::string(kEditorEditableGeometryProperty), geometryText});
+
+    EditorAssetRegistry registry;
+    EditorMeshBakePipeline bakePipeline;
+    bakePipeline.Bind(document, &scene, &registry, root);
+    EditorMeshBuildSettings settings{};
+    settings.lodCount = 2;
+    settings.collisionMode = EditorMeshCollisionBuildMode::Box;
+    EditorMeshBakePrepared prepared{};
+    const EditorGeneratedCollision collision = GenerateEditorGeometryBoxCollision(geometry);
+    const bool preparedOk = floorARenderer != nullptr && bakePipeline.Prepare(
+        floorA->guid, geometry, &collision, "navigation_floor_mesh",
+        settings, prepared, &error);
+    EditorProductionMeshRuntimeCache runtimeCache;
+    EditorMeshBakeExecutionService bakeExecution;
+    bakeExecution.Bind(document, &scene, &registry, &runtimeCache, root, {});
+    EditorExecutionContext execution;
+    EditorError executionError{};
+    execution.Register(bakeExecution, &executionError);
+    EditorUndoResult applied = EditorUndoResult::Failure(
+        EditorErrorCode::ApplyFailed, "E-13 fixture bake failed.");
+    if (preparedOk) {
+        EditorMeshBakeUndoCommand command(prepared.change);
+        applied = command.Apply(EditorTransactionApplyMode::Redo, execution);
+    }
+    const EditorAssetRecord* record = registry.Find(
+        EditorAssetKind::Mesh, "navigation_floor_mesh");
+    const std::string meshGuid = record != nullptr ? record->guid : std::string{};
+    EditorSceneObjectReference assetReference{"asset", {}, meshGuid};
+    const bool authoringReady = floorB != nullptr && obstacleEntity != nullptr &&
+        scene.AddComponent(floorB->guid,
+            std::string(kEditorMeshRendererComponentType), &assetReference) &&
+        scene.AddComponent(floorA->guid,
+            std::string(kEditorNavigationSurfaceComponentType)) &&
+        scene.AddComponent(floorB->guid,
+            std::string(kEditorNavigationSurfaceComponentType)) &&
+        scene.AddComponent(obstacleEntity->guid,
+            std::string(kEditorNavigationObstacleComponentType));
+    EditorSceneComponent* obstacleComponent = obstacleEntity != nullptr
+        ? scene.FindComponent(*obstacleEntity, kEditorNavigationObstacleComponentType) : nullptr;
+    const bool obstacleConfigured = setProperty(
+        obstacleComponent, "halfExtents", "1 1 2") &&
+        setProperty(obstacleComponent, "dynamic", "true") &&
+        setProperty(obstacleComponent, "carve", "true");
+    scenario.Expect(
+        transformsReady && applied.succeeded && record != nullptr && authoringReady &&
+            obstacleConfigured && scene.Validate().Succeeded(),
+        "Scene persists validated Navigation Surface and Dynamic Obstacle Components beside durable E-5 collision identity");
+    scenario.Expect(
+        runtimeCache.ResolveForPhysics(meshGuid).Valid() &&
+            runtimeCache.ResolveForRenderer(meshGuid, 1).Valid(),
+        "E-13 consumes the same validated E-5 Renderer/Physics artifact used by the Production Scene");
+
+    Microsoft::WRL::ComPtr<IDXGIFactory6> factory;
+    Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+    Microsoft::WRL::ComPtr<ID3D12Device> device;
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList;
+    D3D12_COMMAND_QUEUE_DESC queueDescription{};
+    queueDescription.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    const bool warpReady =
+        SUCCEEDED(CreateDXGIFactory2(0, IID_PPV_ARGS(factory.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(adapter.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
+            IID_PPV_ARGS(device.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(device->CreateCommandQueue(&queueDescription,
+            IID_PPV_ARGS(queue.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+            IID_PPV_ARGS(allocator.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+            allocator.Get(), nullptr, IID_PPV_ARGS(commandList.ReleaseAndGetAddressOf())));
+    EditorWorldPartitionPolicy worldPolicy{};
+    worldPolicy.cellSize = 16.0f;
+    worldPolicy.sourceLoadRadiusCells = 1;
+    worldPolicy.sourceUnloadRadiusCells = 1;
+    worldPolicy.hlodRadiusCells = 1;
+    worldPolicy.maximumSourceCells = 4;
+    worldPolicy.maximumSourceEntities = 8;
+    EditorWorldPartitionPipeline worldPartition;
+    EditorProductionScenePipeline productionScene;
+    EditorNavigationPolicy navigationPolicy{};
+    navigationPolicy.voxelSize = 2.0f;
+    navigationPolicy.maximumResidentTiles = 4;
+    navigationPolicy.maximumNodesPerTile = 256;
+    navigationPolicy.maximumQueryNodes = 512;
+    EditorProductionNavigationPipeline navigation;
+    const bool initialized = warpReady &&
+        worldPartition.Initialize(device.Get(), worldPolicy, &error) &&
+        productionScene.Initialize(device.Get(), &error) &&
+        navigation.Initialize(navigationPolicy, &error);
+    scenario.Expect(initialized,
+        "WARP initializes E-12 Cell residency, E-6 Physics handoff, and bounded asynchronous Navigation tile workers");
+
+    bool tilesReady = false;
+    if (initialized) {
+        for (uint32_t attempt = 0; attempt < 120 && !tilesReady; ++attempt) {
+            worldPartition.Sync(scene, registry, runtimeCache, {8.0f, 2.0f, 2.0f},
+                MakeIdentity4x4(), commandList.Get(), 0, 1, &error);
+            productionScene.Sync(scene, registry, runtimeCache, {8.0f, 2.0f, 2.0f},
+                MakeIdentity4x4(), commandList.Get(), 0, 1, &error,
+                &worldPartition.SourceResidentEntities());
+            navigation.Sync(scene, productionScene, worldPartition, &error);
+            const auto snapshot = navigation.Snapshot();
+            tilesReady = navigation.Stats().residentTiles == 2 &&
+                snapshot != nullptr && snapshot->tiles.size() == 2 &&
+                navigation.Stats().residentNodes > 0;
+            if (!tilesReady) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    }
+    const auto carvedSnapshot = navigation.Snapshot();
+    scenario.Expect(
+        tilesReady && navigation.Stats().completedTileBuilds >= 2 &&
+            carvedSnapshot != nullptr && carvedSnapshot->dynamicObstacles.size() == 1,
+        "two Source Resident Cells publish deterministic asynchronously-built Nav tiles and one immutable query snapshot");
+
+    const EditorNavigationProjectionResult projection = navigation.ProjectPoint(
+        carvedSnapshot, {2.0f, 1.0f, 2.0f}, {3.0f, 4.0f, 3.0f});
+    scenario.Expect(
+        projection.succeeded && projection.snapshotGeneration ==
+            (carvedSnapshot != nullptr ? carvedSnapshot->generation : 0),
+        "AI World Query projects an arbitrary point onto a resident Cell tile using a stable snapshot generation");
+    const EditorNavigationPathResult detourPath = navigation.FindPath(
+        carvedSnapshot, {2.0f, 1.0f, 2.0f}, {22.0f, 1.0f, 2.0f});
+    const bool detoured = std::any_of(detourPath.points.begin(), detourPath.points.end(),
+        [](const Vector3& point) { return point.z > 4.0f; });
+    scenario.Expect(
+        detourPath.Succeeded() && detourPath.points.size() >= 2 && detoured &&
+            detourPath.visitedNodes <= navigationPolicy.maximumQueryNodes,
+        "bounded A* crosses the Cell seam and routes around the carved Dynamic Obstacle without diagonal corner cutting");
+
+    const EditorNavigationRaycastResult blockedRay = navigation.RaycastNavigation(
+        carvedSnapshot, {2.0f, 1.0f, 2.0f}, {22.0f, 1.0f, 2.0f});
+    const uint64_t oldGeneration = carvedSnapshot != nullptr ? carvedSnapshot->generation : 0;
+    setTranslation(obstacleEntity, "10 1 7");
+    navigation.Sync(scene, productionScene, worldPartition, &error);
+    const auto movedSnapshot = navigation.Snapshot();
+    const EditorNavigationRaycastResult clearedRay = navigation.RaycastNavigation(
+        movedSnapshot, {2.0f, 1.0f, 2.0f}, {22.0f, 1.0f, 2.0f});
+    const EditorNavigationRaycastResult retainedOldRay = navigation.RaycastNavigation(
+        carvedSnapshot, {2.0f, 1.0f, 2.0f}, {22.0f, 1.0f, 2.0f});
+    scenario.Expect(
+        blockedRay.hit && retainedOldRay.hit && !clearedRay.hit &&
+            movedSnapshot != nullptr && movedSnapshot->generation > oldGeneration &&
+            navigation.Stats().dynamicObstacleUpdates >= 2 &&
+            navigation.Stats().dirtyObstacleTiles > 0,
+        "moving an Obstacle atomically publishes a newer carve generation while in-flight AI queries retain the old immutable snapshot");
+
+    EditorNavigationPolicy queryBudgetPolicy = navigationPolicy;
+    queryBudgetPolicy.maximumQueryNodes = 2;
+    EditorProductionNavigationPipeline queryConstrained;
+    queryConstrained.Initialize(queryBudgetPolicy, &error);
+    const EditorNavigationPathResult budgetPath = queryConstrained.FindPath(
+        movedSnapshot, {2.0f, 1.0f, 2.0f}, {22.0f, 1.0f, 2.0f});
+    scenario.Expect(
+        budgetPath.status == EditorNavigationPathStatus::QueryBudgetExceeded &&
+            queryConstrained.Stats().queryBudgetFailures == 1,
+        "path expansion budget terminates an oversized AI query deterministically instead of stalling the frame");
+
+    EditorNavigationPolicy tileBudgetPolicy = navigationPolicy;
+    tileBudgetPolicy.maximumResidentTiles = 1;
+    EditorProductionNavigationPipeline tileConstrained;
+    tileConstrained.Initialize(tileBudgetPolicy, &error);
+    const bool constrainedSynced = tileConstrained.Sync(
+        scene, productionScene, worldPartition, &error);
+    scenario.Expect(
+        constrainedSynced && tileConstrained.Stats().submittedTiles == 1 &&
+            tileConstrained.Stats().rejectedByTileBudget == 1 &&
+            !tileConstrained.Diagnostics().empty(),
+        "resident tile capacity selects the nearest Cell and reports deterministic budget diagnostics");
+
+    bool submitted = false;
+    if (initialized && SUCCEEDED(commandList->Close())) {
+        ID3D12CommandList* lists[]{commandList.Get()};
+        queue->ExecuteCommandLists(1, lists);
+        submitted = device->GetDeviceRemovedReason() == S_OK;
+    }
+    scenario.Expect(submitted,
+        "E-6 collision uploads and E-13 Cell/AI handoff submit on WARP without device removal");
+
+    tileConstrained.Shutdown();
+    queryConstrained.Shutdown();
+    navigation.Shutdown();
+    productionScene.Shutdown();
+    worldPartition.Shutdown();
+    std::filesystem::remove_all(root, filesystemError);
+    EditorAutomationGateResult result = scenario.Finish(
+        "Production Navigation Mesh / AI World Query / Dynamic Obstacle Pipeline",
+        "Repair durable Navigation Components, Cell tile builds, immutable snapshots, bounded A*, projection/raycast, dynamic carve updates, or capacity diagnostics.");
+    result.sampleCount = 2;
+    result.budgetKind = "navigationTiles";
+    return result;
+}
+
+EditorAutomationGateResult RunProductionAiBehaviorGate() {
+    AutomationScenario scenario("logs/editor_production_ai_behavior_report.log");
+    const std::filesystem::path root = std::filesystem::path{"generated"} /
+        "editor" / "tests" / "commercial_ai_behavior";
+    std::error_code filesystemError;
+    std::filesystem::remove_all(root, filesystemError);
+    std::filesystem::create_directories(root, filesystemError);
+    std::string error;
+
+    const std::string behaviorGuid = "e1400000-0000-4000-8000-000000000014";
+    const std::filesystem::path behaviorPath = root / "guard.behavior";
+    EditorBehaviorTreeAsset behavior = MakeDefaultEditorBehaviorTree(
+        behaviorGuid, "Commercial Guard");
+    std::string behaviorText;
+    const bool encoded = EncodeEditorBehaviorTree(behavior, behaviorText, &error);
+    if (encoded) {
+        std::ofstream output(behaviorPath, std::ios::binary | std::ios::trunc);
+        output << behaviorText;
+    }
+    EditorAssetRegistry registry;
+    EditorAssetRecord behaviorRecord{};
+    behaviorRecord.kind = EditorAssetKind::BehaviorTree;
+    behaviorRecord.id = "commercial_guard";
+    behaviorRecord.guid = behaviorGuid;
+    behaviorRecord.logicalPath = "AI/CommercialGuard.behavior";
+    behaviorRecord.displayName = "Commercial Guard";
+    behaviorRecord.sourcePath = behaviorPath.string();
+    behaviorRecord.sourceTimestamp = 1;
+    behaviorRecord.referenceable = true;
+    behaviorRecord.hasMetadata = true;
+    scenario.Expect(encoded && registry.Register(behaviorRecord) &&
+            EditorAssetKindForImportPath(behaviorPath, {}) == EditorAssetKind::BehaviorTree,
+        "durable Behavior Tree Asset is compiled, registered by GUID, and classified by Content Browser import");
+
+    EditorScene scene;
+    scene.CreateEntity("AI Guard", {}, "commercial-e14-agent");
+    scene.CreateEntity("Player Stimulus", {}, "commercial-e14-stimulus");
+    EditorSceneEntity* agentEntity = scene.FindEntity("commercial-e14-agent");
+    EditorSceneEntity* stimulusEntity = scene.FindEntity("commercial-e14-stimulus");
+    const auto setTranslation = [&](EditorSceneEntity* entity, const char* value) {
+        if (entity == nullptr) return false;
+        EditorSceneComponent* transform = scene.FindComponent(
+            *entity, kEditorTransformComponentType);
+        if (transform == nullptr) return false;
+        const auto property = std::find_if(transform->properties.begin(),
+            transform->properties.end(), [](const EditorSceneProperty& candidate) {
+                return candidate.name == "translation";
+            });
+        if (property == transform->properties.end()) return false;
+        property->value = value;
+        return true;
+    };
+    EditorSceneObjectReference behaviorReference{"behaviorTree", {}, behaviorGuid};
+    const bool authoringReady = setTranslation(agentEntity, "0 1 0") &&
+        setTranslation(stimulusEntity, "0 1 6") && agentEntity != nullptr &&
+        stimulusEntity != nullptr && scene.AddComponent(agentEntity->guid,
+            std::string(kEditorAiAgentComponentType), &behaviorReference) &&
+        scene.AddComponent(stimulusEntity->guid,
+            std::string(kEditorAiStimulusComponentType));
+    scenario.Expect(authoringReady && scene.Validate().Succeeded(),
+        "Scene persists validated AI Agent and Perception Stimulus Components with a durable Behavior reference");
+
+    Microsoft::WRL::ComPtr<IDXGIFactory6> factory;
+    Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+    Microsoft::WRL::ComPtr<ID3D12Device> device;
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList;
+    D3D12_COMMAND_QUEUE_DESC queueDescription{};
+    queueDescription.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    const bool warpReady =
+        SUCCEEDED(CreateDXGIFactory2(0, IID_PPV_ARGS(factory.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(adapter.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
+            IID_PPV_ARGS(device.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(device->CreateCommandQueue(&queueDescription,
+            IID_PPV_ARGS(queue.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+            IID_PPV_ARGS(allocator.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+            allocator.Get(), nullptr, IID_PPV_ARGS(commandList.ReleaseAndGetAddressOf())));
+    EditorWorldPartitionPolicy worldPolicy{};
+    worldPolicy.cellSize = 16.0f;
+    worldPolicy.sourceLoadRadiusCells = 1;
+    worldPolicy.sourceUnloadRadiusCells = 1;
+    worldPolicy.maximumSourceCells = 4;
+    worldPolicy.maximumSourceEntities = 16;
+    EditorWorldPartitionPipeline worldPartition;
+    EditorProductionMeshRuntimeCache runtimeCache;
+    EditorProductionScenePipeline productionScene;
+    EditorProductionNavigationPipeline navigation;
+    EditorProductionAiPipeline ai;
+    const bool initialized = warpReady &&
+        worldPartition.Initialize(device.Get(), worldPolicy, &error) &&
+        productionScene.Initialize(device.Get(), &error) &&
+        navigation.Initialize({}, &error) && ai.Initialize({}, &error);
+    scenario.Expect(initialized,
+        "WARP initializes bounded E-12 residency, E-6 line-of-sight, E-13 navigation, and E-14 AI services");
+
+    bool synced = false;
+    if (initialized) {
+        synced = worldPartition.Sync(scene, registry, runtimeCache, {0.0f, 2.0f, 0.0f},
+                MakeIdentity4x4(), commandList.Get(), 0, 1, &error) &&
+            productionScene.Sync(scene, registry, runtimeCache, {0.0f, 2.0f, 0.0f},
+                MakeIdentity4x4(), commandList.Get(), 0, 1, &error,
+                &worldPartition.SourceResidentEntities()) &&
+            navigation.Sync(scene, productionScene, worldPartition, &error) &&
+            ai.Sync(scene, registry, productionScene, worldPartition, navigation, 0.1f, &error);
+    }
+    const EditorAiAgentDebugSnapshot* debug = ai.DebugSnapshot("commercial-e14-agent");
+    const auto blackboardValue = [&](std::string_view key) -> const EditorBlackboardValue* {
+        if (debug == nullptr) return nullptr;
+        const auto found = std::find_if(debug->blackboard.begin(), debug->blackboard.end(),
+            [&](const EditorBlackboardKeyDefinition& value) { return value.name == key; });
+        return found == debug->blackboard.end() ? nullptr : &found->defaultValue;
+    };
+    const EditorBlackboardValue* target = blackboardValue("TargetEntity");
+    const EditorBlackboardValue* sight = blackboardValue("HasLineOfSight");
+    const EditorBlackboardValue* heard = blackboardValue("HeardStimulus");
+    scenario.Expect(synced && debug != nullptr && debug->perceived.size() == 1 &&
+            debug->perceived.front().seen && debug->perceived.front().heard &&
+            target != nullptr && target->textValue == "commercial-e14-stimulus" &&
+            sight != nullptr && sight->boolValue && heard != nullptr && heard->boolValue,
+        "source-resident sight and hearing deterministically publish typed target Blackboard values");
+    scenario.Expect(ai.Stats().behaviorTicks == 1 && ai.Stats().navigationQueries == 1 &&
+            ai.Stats().navigationFailures == 1 && debug != nullptr &&
+            std::find(debug->activeNodeTrace.begin(), debug->activeNodeTrace.end(), "move") !=
+                debug->activeNodeTrace.end(),
+        "Behavior executor runs Selector/Sequence/Condition and delegates MoveTo to the E-13 immutable query service");
+
+    EditorBehaviorTreeAsset hotReload = behavior;
+    hotReload.nodes = {
+        {"root", EditorBehaviorNodeType::Root, {}, 0},
+        {"fail", EditorBehaviorNodeType::Fail, "root", 0},
+    };
+    behaviorText.clear();
+    const bool reloadEncoded = EncodeEditorBehaviorTree(hotReload, behaviorText, &error);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    if (reloadEncoded) {
+        std::ofstream output(behaviorPath, std::ios::binary | std::ios::trunc);
+        output << behaviorText;
+    }
+    const bool reloadSynced = ai.Sync(
+        scene, registry, productionScene, worldPartition, navigation, 0.1f, &error);
+    debug = ai.DebugSnapshot("commercial-e14-agent");
+    scenario.Expect(reloadEncoded && reloadSynced && ai.Stats().hotReloads == 1 &&
+            debug != nullptr && debug->status == EditorBehaviorStatus::Failed &&
+            debug->activeNodeTrace.size() == 2,
+        "durable Behavior Tree source hot reload atomically resets Blackboard execution state and publishes a new program");
+
+    EditorProductionAiPolicy boundedPolicy{};
+    boundedPolicy.maximumNodeExecutionsPerTick = 1;
+    EditorProductionAiPipeline bounded;
+    const bool boundedReady = bounded.Initialize(boundedPolicy, &error) && bounded.Sync(
+        scene, registry, productionScene, worldPartition, navigation, 0.1f, &error);
+    const EditorAiAgentDebugSnapshot* boundedDebug = bounded.DebugSnapshot("commercial-e14-agent");
+    scenario.Expect(boundedReady && boundedDebug != nullptr &&
+            boundedDebug->status == EditorBehaviorStatus::BudgetExceeded &&
+            bounded.Stats().budgetFailures == 1 && boundedDebug->executedNodes == 2,
+        "per-agent node execution budget terminates pathological Behavior evaluation without stalling the frame");
+
+    scene.CreateEntity("Second AI Guard", {}, "commercial-e14-agent-2");
+    EditorSceneEntity* secondAgent = scene.FindEntity("commercial-e14-agent-2");
+    const bool secondReady = setTranslation(secondAgent, "1 1 0") && secondAgent != nullptr &&
+        scene.AddComponent(secondAgent->guid, std::string(kEditorAiAgentComponentType),
+            &behaviorReference);
+    worldPartition.Sync(scene, registry, runtimeCache, {0.0f, 2.0f, 0.0f},
+        MakeIdentity4x4(), commandList.Get(), 0, 1, &error);
+    EditorProductionAiPolicy capacityPolicy{};
+    capacityPolicy.maximumAgents = 1;
+    EditorProductionAiPipeline capacity;
+    const bool capacityReady = capacity.Initialize(capacityPolicy, &error) && capacity.Sync(
+        scene, registry, productionScene, worldPartition, navigation, 0.1f, &error);
+    scenario.Expect(secondReady && capacityReady && capacity.Stats().submittedAgents == 2 &&
+            capacity.Stats().activeAgents == 1 && capacity.Stats().rejectedAgents == 1,
+        "deterministic GUID ordering and capacity budgets reject excess Agents with observable telemetry");
+
+    const bool unloaded = worldPartition.Sync(scene, registry, runtimeCache,
+            {1600.0f, 2.0f, 1600.0f}, MakeIdentity4x4(), commandList.Get(), 0, 1, &error) &&
+        ai.Sync(scene, registry, productionScene, worldPartition, navigation, 0.1f, &error);
+    scenario.Expect(unloaded && ai.Stats().activeAgents == 0 && ai.DebugSnapshots().empty(),
+        "World Partition Cell unload removes Agent runtime and perception state without stale cross-cell ownership");
+
+    bool submitted = false;
+    if (initialized && SUCCEEDED(commandList->Close())) {
+        ID3D12CommandList* lists[]{commandList.Get()};
+        queue->ExecuteCommandLists(1, lists);
+        submitted = device->GetDeviceRemovedReason() == S_OK;
+    }
+    scenario.Expect(submitted,
+        "E-12/E-6/E-13/E-14 integration submits on WARP without device removal");
+
+    capacity.Shutdown();
+    bounded.Shutdown();
+    ai.Shutdown();
+    navigation.Shutdown();
+    productionScene.Shutdown();
+    worldPartition.Shutdown();
+    std::filesystem::remove_all(root, filesystemError);
+    EditorAutomationGateResult result = scenario.Finish(
+        "Production AI Behavior Tree / Blackboard / Perception Pipeline",
+        "Repair durable Behavior compilation, typed Blackboard contracts, deterministic perception, E-13 tasks, hot reload, Cell lifetime, or capacity diagnostics.");
+    result.sampleCount = 2;
+    result.budgetKind = "aiAgentsAndNodeExecutions";
+    return result;
+}
+
+EditorAutomationGateResult RunProductionAiWorldGate() {
+    AutomationScenario scenario("logs/editor_production_ai_world_report.log");
+    const std::filesystem::path root = std::filesystem::path{"generated"} /
+        "editor" / "tests" / "commercial_ai_world";
+    std::error_code filesystemError;
+    std::filesystem::remove_all(root, filesystemError);
+    std::filesystem::create_directories(root, filesystemError);
+    std::string error;
+
+    const std::string behaviorGuid = "e1400000-0000-4000-8000-000000000114";
+    const std::string eqsGuid = "e1500000-0000-4000-8000-000000000015";
+    const std::filesystem::path behaviorPath = root / "crowd.behavior";
+    const std::filesystem::path eqsPath = root / "cover.eqs";
+    EditorBehaviorTreeAsset behavior = MakeDefaultEditorBehaviorTree(
+        behaviorGuid, "Crowd Behavior");
+    EditorEqsAsset eqs{};
+    eqs.assetGuid = eqsGuid;
+    eqs.name = "Cover Smart Objects";
+    eqs.generator = EditorEqsGeneratorType::SmartObjects;
+    eqs.radius = 20.0f;
+    eqs.spacing = 1.0f;
+    eqs.candidateCount = 2;
+    eqs.smartObjectType = "Cover";
+    eqs.tests = {
+        {"available", EditorEqsTestType::SmartObjectAvailable,
+            3.0f, 1.0f, 1.0f, true, true},
+        {"path", EditorEqsTestType::PathCost, 1.0f, 0.0f, 1.0f, false, false},
+        {"distance", EditorEqsTestType::Distance, 1.0f, 0.0f, 1.0f, false, false},
+        {"visibility", EditorEqsTestType::Visibility, 1.0f, 0.0f, 1.0f, false, true},
+        {"crowding", EditorEqsTestType::Crowding, 1.0f, 0.0f, 1.0f, false, false},
+    };
+    std::string behaviorText;
+    std::string eqsText;
+    const bool assetsEncoded = EncodeEditorBehaviorTree(behavior, behaviorText, &error) &&
+        EncodeEditorEqs(eqs, eqsText, &error);
+    if (assetsEncoded) {
+        std::ofstream behaviorOutput(behaviorPath, std::ios::binary | std::ios::trunc);
+        behaviorOutput << behaviorText;
+        std::ofstream eqsOutput(eqsPath, std::ios::binary | std::ios::trunc);
+        eqsOutput << eqsText;
+    }
+    EditorAssetRegistry registry;
+    EditorAssetRecord behaviorRecord{};
+    behaviorRecord.kind = EditorAssetKind::BehaviorTree;
+    behaviorRecord.id = "crowd_behavior";
+    behaviorRecord.guid = behaviorGuid;
+    behaviorRecord.logicalPath = "AI/Crowd.behavior";
+    behaviorRecord.sourcePath = behaviorPath.string();
+    behaviorRecord.referenceable = true;
+    behaviorRecord.hasMetadata = true;
+    EditorAssetRecord eqsRecord{};
+    eqsRecord.kind = EditorAssetKind::EnvironmentQuery;
+    eqsRecord.id = "cover_query";
+    eqsRecord.guid = eqsGuid;
+    eqsRecord.logicalPath = "AI/Cover.eqs";
+    eqsRecord.sourcePath = eqsPath.string();
+    eqsRecord.referenceable = true;
+    eqsRecord.hasMetadata = true;
+    scenario.Expect(assetsEncoded && registry.Register(behaviorRecord) &&
+            registry.Register(eqsRecord) &&
+            EditorAssetKindForImportPath(eqsPath, {}) == EditorAssetKind::EnvironmentQuery,
+        "durable EQS and Behavior Assets register by GUID and participate in Content Browser import");
+
+    EditorScene scene;
+    scene.CreateEntity("Crowd Agent A", {}, "commercial-e15-agent-a");
+    scene.CreateEntity("Crowd Agent B", {}, "commercial-e15-agent-b");
+    scene.CreateEntity("Target Stimulus", {}, "commercial-e15-target");
+    scene.CreateEntity("Cover A", {}, "commercial-e15-cover-a");
+    scene.CreateEntity("Cover B", {}, "commercial-e15-cover-b");
+    const auto setTranslation = [&](std::string_view guid, const char* value) {
+        EditorSceneEntity* entity = scene.FindEntity(guid);
+        if (entity == nullptr) return false;
+        EditorSceneComponent* transform = scene.FindComponent(*entity, kEditorTransformComponentType);
+        if (transform == nullptr) return false;
+        const auto property = std::find_if(transform->properties.begin(),
+            transform->properties.end(), [](const EditorSceneProperty& candidate) {
+                return candidate.name == "translation";
+            });
+        if (property == transform->properties.end()) return false;
+        property->value = value;
+        return true;
+    };
+    const auto setProperty = [](EditorSceneComponent* component,
+                                std::string_view name, std::string value) {
+        if (component == nullptr) return false;
+        const auto property = std::find_if(component->properties.begin(),
+            component->properties.end(), [&](const EditorSceneProperty& candidate) {
+                return candidate.name == name;
+            });
+        if (property == component->properties.end()) return false;
+        property->value = std::move(value);
+        return true;
+    };
+    EditorSceneObjectReference behaviorReference{"behaviorTree", {}, behaviorGuid};
+    const bool componentsAdded =
+        scene.AddComponent("commercial-e15-agent-a",
+            std::string(kEditorAiAgentComponentType), &behaviorReference) &&
+        scene.AddComponent("commercial-e15-agent-b",
+            std::string(kEditorAiAgentComponentType), &behaviorReference) &&
+        scene.AddComponent("commercial-e15-target",
+            std::string(kEditorAiStimulusComponentType)) &&
+        scene.AddComponent("commercial-e15-cover-a",
+            std::string(kEditorSmartObjectComponentType)) &&
+        scene.AddComponent("commercial-e15-cover-b",
+            std::string(kEditorSmartObjectComponentType));
+    EditorSceneEntity* coverA = scene.FindEntity("commercial-e15-cover-a");
+    EditorSceneEntity* coverB = scene.FindEntity("commercial-e15-cover-b");
+    EditorSceneComponent* coverAComponent = coverA == nullptr ? nullptr :
+        scene.FindComponent(*coverA, kEditorSmartObjectComponentType);
+    EditorSceneComponent* coverBComponent = coverB == nullptr ? nullptr :
+        scene.FindComponent(*coverB, kEditorSmartObjectComponentType);
+    const bool sceneReady = componentsAdded &&
+        setTranslation("commercial-e15-agent-a", "-0.2 1 0") &&
+        setTranslation("commercial-e15-agent-b", "0.2 1 0") &&
+        setTranslation("commercial-e15-target", "0 1 6") &&
+        setTranslation("commercial-e15-cover-a", "-3 1 4") &&
+        setTranslation("commercial-e15-cover-b", "3 1 4") &&
+        setProperty(coverAComponent, "type", "Cover") &&
+        setProperty(coverBComponent, "type", "Cover") &&
+        setProperty(coverAComponent, "priority", "2") &&
+        setProperty(coverBComponent, "priority", "1") &&
+        setProperty(coverAComponent, "leaseSeconds", "0.1") &&
+        setProperty(coverBComponent, "leaseSeconds", "0.1");
+    scenario.Expect(sceneReady && scene.Validate().Succeeded(),
+        "Scene persists two Crowd Agents and typed priority/lease Smart Object slots");
+
+    Microsoft::WRL::ComPtr<IDXGIFactory6> factory;
+    Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+    Microsoft::WRL::ComPtr<ID3D12Device> device;
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList;
+    D3D12_COMMAND_QUEUE_DESC queueDescription{};
+    queueDescription.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    const bool warpReady =
+        SUCCEEDED(CreateDXGIFactory2(0, IID_PPV_ARGS(factory.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(adapter.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
+            IID_PPV_ARGS(device.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(device->CreateCommandQueue(&queueDescription,
+            IID_PPV_ARGS(queue.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+            IID_PPV_ARGS(allocator.ReleaseAndGetAddressOf()))) &&
+        SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+            allocator.Get(), nullptr, IID_PPV_ARGS(commandList.ReleaseAndGetAddressOf())));
+    EditorWorldPartitionPolicy worldPolicy{};
+    worldPolicy.cellSize = 16.0f;
+    worldPolicy.sourceLoadRadiusCells = 1;
+    worldPolicy.sourceUnloadRadiusCells = 1;
+    worldPolicy.maximumSourceCells = 9;
+    worldPolicy.maximumSourceEntities = 32;
+    EditorWorldPartitionPipeline worldPartition;
+    EditorProductionMeshRuntimeCache runtimeCache;
+    EditorProductionScenePipeline productionScene;
+    EditorProductionNavigationPipeline navigation;
+    EditorProductionAiPipeline behaviorPipeline;
+    EditorProductionAiWorldPipeline aiWorld;
+    const bool initialized = warpReady &&
+        worldPartition.Initialize(device.Get(), worldPolicy, &error) &&
+        productionScene.Initialize(device.Get(), &error) &&
+        navigation.Initialize({}, &error) && behaviorPipeline.Initialize({}, &error) &&
+        aiWorld.Initialize({}, &error);
+    scenario.Expect(initialized,
+        "WARP initializes E-12/E-6/E-13/E-14 and bounded E-15 AI World services");
+
+    bool synced = false;
+    if (initialized) {
+        synced = worldPartition.Sync(scene, registry, runtimeCache, {0.0f, 2.0f, 0.0f},
+                MakeIdentity4x4(), commandList.Get(), 0, 1, &error) &&
+            productionScene.Sync(scene, registry, runtimeCache, {0.0f, 2.0f, 0.0f},
+                MakeIdentity4x4(), commandList.Get(), 0, 1, &error,
+                &worldPartition.SourceResidentEntities()) &&
+            navigation.Sync(scene, productionScene, worldPartition, &error) &&
+            behaviorPipeline.Sync(scene, registry, productionScene, worldPartition,
+                navigation, 0.1f, &error) &&
+            aiWorld.Sync(scene, worldPartition, behaviorPipeline, 0.1f, &error);
+    }
+    scenario.Expect(synced && aiWorld.Stats().activeCrowdAgents == 2 &&
+            aiWorld.Stats().activeSmartObjectSlots == 2 &&
+            worldPartition.SourceResidentEntities().size() == 5,
+        "Source Resident Cell ownership publishes exactly two Crowd Agents and two Smart Object slots");
+
+    const EditorCrowdAgentSnapshot* crowdA = aiWorld.CrowdSnapshot("commercial-e15-agent-a");
+    const EditorCrowdAgentSnapshot* crowdB = aiWorld.CrowdSnapshot("commercial-e15-agent-b");
+    const auto speed = [](Vector3 value) {
+        return std::sqrt(value.x * value.x + value.y * value.y + value.z * value.z);
+    };
+    scenario.Expect(crowdA != nullptr && crowdB != nullptr && crowdA->constrained &&
+            crowdB->constrained && crowdA->consideredNeighbors == 1 &&
+            crowdB->consideredNeighbors == 1 &&
+            speed(crowdA->steeringVelocity) <= crowdA->maximumSpeed + 0.001f &&
+            speed(crowdB->steeringVelocity) <= crowdB->maximumSpeed + 0.001f,
+        "deterministic local avoidance adjusts both preferred velocities without exceeding Agent speed");
+
+    EditorEqsQueryContext queryContext{};
+    queryContext.ownerEntityGuid = "commercial-e15-agent-a";
+    queryContext.origin = {-0.2f, 1.0f, 0.0f};
+    queryContext.target = {0.0f, 1.0f, 6.0f};
+    queryContext.smartObjectType = "Cover";
+    EditorEqsQueryResult query = aiWorld.QueryAsset(
+        eqsGuid, registry, queryContext, productionScene, navigation, &error);
+    scenario.Expect(query.Succeeded() && query.items.size() == 2 &&
+            query.generatedCandidates == 2 && query.testedCandidates == 2 &&
+            aiWorld.Stats().eqsNavigationQueries == 2 &&
+            aiWorld.Stats().eqsVisibilityQueries == 2 &&
+            query.items.front().score >= query.items.back().score,
+        "EQS evaluates availability, E-13 path cost, E-6 visibility, distance, and crowding in stable score order");
+
+    EditorSmartObjectReservationRequest reserveA{};
+    reserveA.requesterEntityGuid = "commercial-e15-agent-a";
+    reserveA.smartObjectEntityGuid = query.items.front().smartObjectEntityGuid;
+    reserveA.slotId = query.items.front().smartObjectSlotId;
+    reserveA.requesterPosition = queryContext.origin;
+    reserveA.maximumDistance = 20.0f;
+    const EditorSmartObjectReservation firstReservation = aiWorld.ReserveSmartObject(reserveA);
+    const EditorSmartObjectReservation idempotentReservation = aiWorld.ReserveSmartObject(reserveA);
+    EditorSmartObjectReservationRequest reserveB = reserveA;
+    reserveB.requesterEntityGuid = "commercial-e15-agent-b";
+    reserveB.requesterPosition = {0.2f, 1.0f, 0.0f};
+    const EditorSmartObjectReservation rejectedReservation = aiWorld.ReserveSmartObject(reserveB);
+    scenario.Expect(firstReservation.succeeded && idempotentReservation.succeeded &&
+            firstReservation.token == idempotentReservation.token &&
+            !rejectedReservation.succeeded,
+        "Smart Object reservation is exclusive, requester-idempotent, tokenized, and rejects contention");
+
+    queryContext.ownerEntityGuid = "commercial-e15-agent-b";
+    const EditorEqsQueryResult filteredQuery = aiWorld.QueryAsset(
+        eqsGuid, registry, queryContext, productionScene, navigation, &error);
+    scenario.Expect(filteredQuery.Succeeded() && filteredQuery.items.size() == 1 &&
+            filteredQuery.items.front().smartObjectEntityGuid !=
+                firstReservation.smartObjectEntityGuid,
+        "EQS availability filter removes a slot reserved by another Agent without mutating the query Asset");
+
+    const bool renewed = aiWorld.RenewSmartObjectReservation(firstReservation.token);
+    const bool released = aiWorld.ReleaseSmartObjectReservation(firstReservation.token);
+    const EditorSmartObjectReservation secondReservation = aiWorld.ReserveSmartObject(reserveB);
+    scenario.Expect(renewed && released && secondReservation.succeeded &&
+            secondReservation.token != firstReservation.token,
+        "Smart Object lease can renew and release before deterministic ownership transfer");
+
+    const bool expirySynced = aiWorld.Sync(
+        scene, worldPartition, behaviorPipeline, 0.25f, &error);
+    const EditorSmartObjectSlot* expiredSlot = aiWorld.FindSmartObjectSlot(
+        secondReservation.smartObjectEntityGuid, secondReservation.slotId);
+    scenario.Expect(expirySynced && expiredSlot != nullptr &&
+            expiredSlot->reservedByEntityGuid.empty() && expiredSlot->reservationToken == 0 &&
+            aiWorld.Stats().expiredReservations >= 1,
+        "expired Smart Object lease is reclaimed on the frame thread without stale ownership");
+
+    EditorEqsAsset reloadedEqs = eqs;
+    reloadedEqs.candidateCount = 1;
+    reloadedEqs.tests[2].weight = 4.0f;
+    std::string reloadedText;
+    const bool reloadEncoded = EncodeEditorEqs(reloadedEqs, reloadedText, &error);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    if (reloadEncoded) {
+        std::ofstream output(eqsPath, std::ios::binary | std::ios::trunc);
+        output << reloadedText;
+    }
+    const EditorEqsQueryResult reloadedQuery = aiWorld.QueryAsset(
+        eqsGuid, registry, queryContext, productionScene, navigation, &error);
+    scenario.Expect(reloadEncoded && reloadedQuery.Succeeded() &&
+            reloadedQuery.generatedCandidates == 1 && reloadedQuery.items.size() == 1 &&
+            aiWorld.Stats().eqsHotReloads == 1,
+        "durable EQS source hot reload atomically publishes a new bounded scoring program");
+
+    EditorProductionAiWorldPolicy boundedPolicy{};
+    boundedPolicy.maximumEqsCandidates = 1;
+    boundedPolicy.maximumCrowdAgents = 1;
+    boundedPolicy.maximumSmartObjectSlots = 1;
+    EditorProductionAiWorldPipeline bounded;
+    const bool boundedSynced = bounded.Initialize(boundedPolicy, &error) &&
+        bounded.Sync(scene, worldPartition, behaviorPipeline, 0.1f, &error);
+    const EditorEqsCompileResult eqsProgram = CompileEditorEqs(eqs);
+    const EditorEqsQueryResult budgetQuery = bounded.Query(
+        eqsProgram.program, queryContext, productionScene, navigation);
+    scenario.Expect(boundedSynced && bounded.Stats().activeCrowdAgents == 1 &&
+            bounded.Stats().rejectedCrowdAgents == 1 &&
+            bounded.Stats().activeSmartObjectSlots == 1 &&
+            bounded.Stats().rejectedSmartObjectSlots == 1 &&
+            budgetQuery.status == EditorEqsQueryStatus::BudgetExceeded,
+        "GUID-stable Crowd/slot capacity and EQS candidate budget reject excess work before frame stalls");
+
+    const bool unloaded = worldPartition.Sync(scene, registry, runtimeCache,
+            {1600.0f, 2.0f, 1600.0f}, MakeIdentity4x4(), commandList.Get(), 0, 1, &error) &&
+        aiWorld.Sync(scene, worldPartition, behaviorPipeline, 0.1f, &error);
+    scenario.Expect(unloaded && aiWorld.CrowdSnapshots().empty() &&
+            aiWorld.SmartObjectSlots().empty(),
+        "World Partition Cell unload removes Crowd, slot, and reservation state without cross-cell leaks");
+
+    bool submitted = false;
+    if (initialized && SUCCEEDED(commandList->Close())) {
+        ID3D12CommandList* lists[]{commandList.Get()};
+        queue->ExecuteCommandLists(1, lists);
+        submitted = device->GetDeviceRemovedReason() == S_OK;
+    }
+    scenario.Expect(submitted,
+        "E-12 through E-15 integration submits on WARP without device removal");
+
+    bounded.Shutdown();
+    aiWorld.Shutdown();
+    behaviorPipeline.Shutdown();
+    navigation.Shutdown();
+    productionScene.Shutdown();
+    worldPartition.Shutdown();
+    std::filesystem::remove_all(root, filesystemError);
+    EditorAutomationGateResult result = scenario.Finish(
+        "Production AI EQS / Crowd Steering / Smart Object Pipeline",
+        "Repair durable EQS compilation, bounded scoring, local avoidance, exclusive lease ownership, Cell lifetime, or Runtime Watch diagnostics.");
+    result.sampleCount = 4;
+    result.budgetKind = "eqsCandidatesCrowdAgentsSmartObjectSlots";
+    return result;
+}
+
+EditorAutomationGateResult RunProductionAiAuthoringGate() {
+    AutomationScenario scenario("logs/editor_production_ai_authoring_report.log");
+    const std::filesystem::path root = std::filesystem::path{"generated"} /
+        "editor" / "tests" / "commercial_ai_authoring";
+    std::error_code filesystemError;
+    std::filesystem::remove_all(root, filesystemError);
+    std::filesystem::create_directories(root, filesystemError);
+    const std::filesystem::path behaviorPath = root / "commercial.behavior";
+    const std::filesystem::path eqsPath = root / "commercial.eqs";
+    const std::filesystem::path recordingPath = root / "commercial.record";
+    std::string error;
+
+    EditorBehaviorTreeDocumentProvider behaviorProvider;
+    EditorEqsDocumentProvider eqsProvider;
+    EditorDocumentRegistry documentRegistry;
+    const bool providersReady = documentRegistry.Register(behaviorProvider, &error) &&
+        documentRegistry.Register(eqsProvider, &error) &&
+        behaviorProvider.SupportsPath("AI.behavior") && behaviorProvider.SupportsPath("AI.btree") &&
+        eqsProvider.SupportsPath("Cover.eqs") && eqsProvider.SupportsPath("Cover.envquery");
+    scenario.Expect(providersReady,
+        "Behavior Tree and EQS visual authoring register as typed common Document providers");
+
+    EditorDocumentManager documents(documentRegistry);
+    const EditorDocumentOpenResult behaviorOpen = documents.Open(
+        EditorDocumentTypes::BehaviorTree, behaviorPath);
+    const EditorDocumentOpenResult eqsOpen = documents.Open(
+        EditorDocumentTypes::EnvironmentQuery, eqsPath);
+    scenario.Expect(behaviorOpen.succeeded && eqsOpen.succeeded &&
+            behaviorProvider.Asset(behaviorOpen.id) != nullptr &&
+            eqsProvider.Asset(eqsOpen.id) != nullptr &&
+            CompileEditorBehaviorTree(*behaviorProvider.Asset(behaviorOpen.id)).succeeded &&
+            CompileEditorEqs(*eqsProvider.Asset(eqsOpen.id)).succeeded,
+        "default AI authoring Documents publish compiled durable models with stable identity");
+
+    EditorTransactionStack transactions;
+    EditorAiAuthoringPolicy policy{};
+    policy.maximumBreakpoints = 2;
+    policy.maximumRecordedFrames = 3;
+    policy.maximumOverlayCommands = 32;
+    EditorProductionAiAuthoringPipeline authoring;
+    const bool initialized = authoring.Initialize(policy, &error);
+    authoring.Bind(&behaviorProvider, &eqsProvider, &transactions, &documents);
+    authoring.SetActiveDocument(behaviorOpen.id);
+    EditorBlackboardKeyDefinition key;
+    key.name = "CommercialAlert";
+    key.defaultValue.type = EditorBlackboardValueType::Float;
+    const bool behaviorMutated = initialized && authoring.AddBlackboardKey(key, error);
+    EditorExecutionContext execution;
+    EditorError executionError;
+    execution.Register(authoring, &executionError);
+    const bool behaviorUndo = behaviorMutated && transactions.Undo(execution, &executionError) &&
+        transactions.Redo(execution, &executionError);
+    scenario.Expect(behaviorUndo && documents.Find(behaviorOpen.id) != nullptr &&
+            documents.Find(behaviorOpen.id)->dirty,
+        "Behavior Tree graph and Blackboard edits use generic snapshot Commands and global Undo/Redo");
+
+    authoring.SetActiveDocument(eqsOpen.id);
+    EditorEqsAsset* activeEqs = authoring.ActiveEqs();
+    EditorEqsTestDefinition test = activeEqs != nullptr && !activeEqs->tests.empty()
+        ? activeEqs->tests.front() : EditorEqsTestDefinition{};
+    test.weight += 1.0f;
+    const bool eqsMutated = activeEqs != nullptr && authoring.UpdateEqsTest(test, error);
+    scenario.Expect(eqsMutated && authoring.EqsCompileResult().succeeded &&
+            transactions.UndoDepth() == 2,
+        "EQS generator/test edits compile before publishing a common Transaction");
+
+    const EditorEqsAsset beforeInvalid = authoring.ActiveEqs() != nullptr
+        ? *authoring.ActiveEqs() : EditorEqsAsset{};
+    const bool invalidRejected = !authoring.SetEqsGenerator(
+        EditorEqsGeneratorType::SmartObjects, 12.0f, 2.0f, 8, {}, error);
+    scenario.Expect(invalidRejected && authoring.ActiveEqs()->generator == beforeInvalid.generator &&
+            authoring.Stats().compileFailures == 1,
+        "invalid AI visual edits are rejected atomically without corrupting the live Document");
+
+    EditorAiAgentDebugSnapshot debugAgent;
+    debugAgent.entityGuid = "commercial-e16-agent";
+    debugAgent.activeNodeTrace = {"root", "selector", "move"};
+    EditorAiBreakpoint globalBreakpoint{"move", {}};
+    EditorAiBreakpoint scopedBreakpoint{"move", "other-agent"};
+    scenario.Expect(globalBreakpoint.Matches(debugAgent) && !scopedBreakpoint.Matches(debugAgent) &&
+            authoring.SetBreakpoint(globalBreakpoint, true, &error) &&
+            authoring.SetBreakpoint({"idle", "commercial-e16-agent"}, true, &error) &&
+            !authoring.SetBreakpoint({"overflow", {}}, true, &error),
+        "Debugger supports bounded global and Agent-scoped active-node breakpoints");
+
+    authoring.Pause();
+    const bool pausedAdvance = authoring.ConsumeRuntimeAdvance();
+    authoring.RequestStep();
+    const bool firstStep = authoring.ConsumeRuntimeAdvance();
+    const bool secondStep = authoring.ConsumeRuntimeAdvance();
+    scenario.Expect(!pausedAdvance && firstStep && !secondStep,
+        "Pause and Step isolate E-14/E-15 advancement to exactly one deterministic frame");
+
+    EditorProductionAiPipeline behaviorRuntime;
+    EditorProductionAiWorldPipeline worldRuntime;
+    behaviorRuntime.Initialize({}, &error);
+    worldRuntime.Initialize({}, &error);
+    authoring.BeginRecording();
+    for (uint32_t frame = 0; frame < 5; ++frame)
+        authoring.CaptureRuntimeFrame(behaviorRuntime, worldRuntime, 1.0f / 60.0f);
+    authoring.StopRecording();
+    scenario.Expect(authoring.RecordingFrames().size() == 3 &&
+            authoring.Stats().droppedRecordingFrames == 2 && authoring.BeginReplay(&error) &&
+            authoring.StepReplay(1) && authoring.ReplayFrameIndex() == 1,
+        "Simulation capture uses a bounded ring and deterministic replay timeline");
+
+    std::string encoded;
+    std::vector<EditorAiSimulationFrame> decoded;
+    scenario.Expect(EncodeEditorAiSimulationRecording(authoring.RecordingFrames(), encoded, &error) &&
+            DecodeEditorAiSimulationRecording(encoded, decoded, policy, &error) &&
+            decoded.size() == 3 && decoded.front().fingerprint ==
+                authoring.RecordingFrames().front().fingerprint,
+        "versioned record codec preserves frame generation and deterministic fingerprints");
+
+    EditorProductionAiAuthoringPipeline imported;
+    imported.Initialize(policy, &error);
+    const bool durableRecording = authoring.ExportRecording(recordingPath, &error) &&
+        imported.ImportRecording(recordingPath, &error) && imported.BeginReplay(&error);
+    scenario.Expect(durableRecording && imported.RecordingFrames().size() == 3,
+        "recordings commit through crash-safe File Transaction and verify before replay import");
+
+    std::string corrupt = encoded;
+    if (!corrupt.empty()) corrupt[0] = 'X';
+    std::ofstream corruptOutput(recordingPath, std::ios::binary | std::ios::trunc);
+    corruptOutput << corrupt;
+    corruptOutput.close();
+    scenario.Expect(!imported.ImportRecording(recordingPath, &error),
+        "corrupt or incompatible recordings fail closed without replacing replay state");
+
+    EditorPlaySnapshot playSnapshot;
+    const bool captured = authoring.Capture(playSnapshot, &executionError);
+    authoring.Resume();
+    authoring.ClearBreakpoints();
+    authoring.BeginRecording();
+    const bool restored = authoring.Restore(playSnapshot, &executionError);
+    scenario.Expect(captured && restored && authoring.Paused() &&
+            authoring.Breakpoints().size() == 2 && authoring.RecordingFrames().size() == 3,
+        "Play Isolation restores debugger controls, breakpoints, and bounded recording state exactly");
+
+    EditorViewportOverlayService overlay;
+    overlay.SetCommandBudget(64);
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update({{0, 0, 1280, 720}, 1280, 720, MakeIdentity4x4()});
+    EditorViewportRenderTargetState target{};
+    target.enabled = true; target.displayRect = {0, 0, 1280, 720};
+    target.renderWidth = 1280; target.renderHeight = 720;
+    const bool overlayRegistered = overlay.RegisterProvider(authoring);
+    overlay.BeginFrame({target, 1280, 720, &coordinates, {}, 1.0f});
+    overlay.Resolve();
+    scenario.Expect(overlayRegistered && overlay.ProviderCount() == 1 &&
+            authoring.Policy().maximumOverlayCommands == 32,
+        "Perception, path, Crowd, and Smart Object debug rendering uses one bounded layered overlay provider");
+
+    std::ifstream appSource("application/AppImGuiLayer.cpp", std::ios::binary);
+    const std::string appText{std::istreambuf_iterator<char>(appSource),
+        std::istreambuf_iterator<char>()};
+    const std::size_t behaviorSync = appText.find("editorProductionAiPipeline_.Sync");
+    const std::size_t worldSync = appText.find("editorProductionAiWorldPipeline_.Sync");
+    const std::size_t authoringCapture = appText.find("editorProductionAiAuthoringPipeline_.CaptureRuntimeFrame");
+    scenario.Expect(behaviorSync != std::string::npos && worldSync > behaviorSync &&
+            authoringCapture > worldSync &&
+            appText.find("ConsumeRuntimeAdvance") != std::string::npos,
+        "App frame orders E-14 then E-15 then E-16 capture behind debugger advancement control");
+
+    std::ifstream projectSource("GE3.vcxproj", std::ios::binary);
+    const std::string projectText{std::istreambuf_iterator<char>(projectSource),
+        std::istreambuf_iterator<char>()};
+    scenario.Expect(projectText.find("EditorProductionAiAuthoringPipeline.cpp") != std::string::npos &&
+            projectText.find("EditorProductionAiAuthoringPanel.cpp") != std::string::npos &&
+            projectText.find("EditorAiDocumentProviders.cpp") != std::string::npos,
+        "E-16 authoring, debugger, simulation, and Document providers are part of every Editor build");
+
+    imported.Shutdown();
+    authoring.Shutdown();
+    worldRuntime.Shutdown();
+    behaviorRuntime.Shutdown();
+    std::filesystem::remove_all(root, filesystemError);
+    EditorAutomationGateResult result = scenario.Finish(
+        "Production AI Authoring / Debugger / Simulation Pipeline",
+        "Repair AI Documents, generic Transactions, debugger stepping, bounded record/replay, Play Isolation, or layered overlays.");
+    result.sampleCount = 3;
+    result.budgetKind = "breakpointsRecordedFramesOverlayCommands";
+    return result;
+}
+
+EditorAutomationGateResult RunProductionAiValidationGate() {
+    AutomationScenario scenario("logs/editor_production_ai_validation_report.log");
+    const std::filesystem::path root = std::filesystem::path{"generated"} /
+        "editor" / "tests" / "commercial_ai_validation";
+    std::error_code filesystemError;
+    std::filesystem::remove_all(root, filesystemError);
+    std::filesystem::create_directories(root, filesystemError);
+    std::string error;
+
+    EditorAiSimulationFrame first;
+    first.frameIndex = 1;
+    first.behaviorGeneration = 100;
+    first.worldGeneration = 200;
+    first.deltaTime = 1.0f / 60.0f;
+    first.fingerprint = 0xe1700001;
+    EditorAiAgentDebugSnapshot agent;
+    agent.entityGuid = "commercial-e17-agent";
+    agent.behaviorAssetGuid = "commercial-e17-behavior";
+    agent.status = EditorBehaviorStatus::Running;
+    agent.activeNodeTrace = {"root", "selector", "move"};
+    agent.lastPath = {{0, 0, 0}, {2, 0, 2}};
+    agent.perceived.push_back({"commercial-stimulus", {1, 0, 1}, 1.0f, true, false});
+    first.agents.push_back(agent);
+    first.crowd.push_back({"commercial-e17-agent", {0, 0, 0}, {1, 0, 0},
+        {0.8f, 0, 0.2f}, 0.5f, 3.0f, 3, true});
+    EditorAiSimulationFrame second = first;
+    second.frameIndex = 2;
+    second.behaviorGeneration = 101;
+    second.worldGeneration = 201;
+    second.fingerprint = 0xe1700002;
+    second.agents.front().status = EditorBehaviorStatus::Succeeded;
+
+    class CommercialSource final : public IEditorAiBatchSimulationSource {
+    public:
+        explicit CommercialSource(std::vector<EditorAiSimulationFrame> frames)
+            : frames_(std::move(frames)) {}
+        std::string_view Id() const noexcept override { return "commercial.e17.source"; }
+        bool BeginScenario(const EditorAiValidationScenario&, uint64_t,
+            std::string* errorMessage) override {
+            cursor_ = 0; active_ = true;
+            if (errorMessage != nullptr) errorMessage->clear();
+            return true;
+        }
+        bool Step(EditorAiSimulationFrame& frame, EditorAiFrameTelemetrySample& telemetry,
+            bool& hasFrame, bool& complete, std::string* errorMessage) override {
+            if (!active_) { if (errorMessage != nullptr) *errorMessage = "inactive"; return false; }
+            if (cursor_ >= frames_.size()) {
+                hasFrame = false; complete = true; return true;
+            }
+            frame = frames_[cursor_++];
+            telemetry = {};
+            telemetry.navigationQueries = 1;
+            telemetry.perceivedStimuli = 1;
+            telemetry.crowdNeighborTests = 3;
+            telemetry.eqsCandidateTests = 12;
+            telemetry.simulationMilliseconds = 0.25;
+            telemetry.executedEqsTests = {"distance", "visibility"};
+            hasFrame = true; complete = cursor_ >= frames_.size();
+            if (errorMessage != nullptr) errorMessage->clear();
+            return true;
+        }
+        void EndScenario() override { active_ = false; cursor_ = 0; }
+    private:
+        std::vector<EditorAiSimulationFrame> frames_;
+        std::size_t cursor_ = 0;
+        bool active_ = false;
+    };
+
+    EditorAiValidationPolicy policy{};
+    policy.maximumRuns = 8;
+    policy.maximumFramesPerRun = 8;
+    EditorProductionAiValidationPipeline validation;
+    scenario.Expect(validation.Initialize(policy, &error) && validation.Initialized() &&
+            validation.Policy().maximumRuns == 8,
+        "E-17 initializes explicit scenario, seed, repetition, frame, coverage, failure, and report budgets");
+    EditorAiValidationPolicy invalidPolicy = policy;
+    invalidPolicy.maximumRuns = 0;
+    EditorProductionAiValidationPipeline invalid;
+    scenario.Expect(!invalid.Initialize(invalidPolicy, &error),
+        "zero-capacity E-17 policies fail closed before a batch source can run");
+
+    EditorAiValidationSuite suite;
+    suite.id = "commercial-ai-validation";
+    suite.name = "Commercial AI Validation";
+    EditorAiValidationScenario validationScenario;
+    validationScenario.id = "combat-navigation";
+    validationScenario.firstSeed = 700;
+    validationScenario.seedCount = 2;
+    validationScenario.repetitions = 2;
+    validationScenario.maximumFrames = 2;
+    validationScenario.requiredBehaviorNodes = {"root", "selector", "move"};
+    validationScenario.requiredEqsTests = {"distance", "visibility"};
+    validationScenario.budget.maximumAgentsPerFrame = 1;
+    validationScenario.budget.maximumNavigationQueriesPerFrame = 1;
+    validationScenario.budget.maximumPerceivedStimuliPerFrame = 1;
+    validationScenario.budget.maximumCrowdNeighborTestsPerFrame = 3;
+    validationScenario.budget.maximumEqsCandidateTestsPerFrame = 12;
+    validationScenario.budget.maximumSimulationMillisecondsPerFrame = 0.25;
+    suite.scenarios.push_back(validationScenario);
+    CommercialSource source({first, second});
+    const bool ran = validation.RunSuite(suite, source, &error);
+    scenario.Expect(ran && validation.Report().passed &&
+            validation.Report().passedRuns == 4 && validation.Report().totalFrames == 8,
+        "headless batch expands bounded scenario/seed/repetition matrices without ImGui, D3D12, or wall-clock state");
+    scenario.Expect(validation.Report().runs[0].deterministicFingerprint ==
+            validation.Report().runs[1].deterministicFingerprint &&
+            validation.Report().runs[2].deterministicFingerprint ==
+            validation.Report().runs[3].deterministicFingerprint,
+        "repeated scenario seeds produce stable fingerprints while runner timing stays outside determinism state");
+    scenario.Expect(validation.Report().runs.front().behaviorNodeHits.size() == 3 &&
+            validation.Report().runs.front().eqsTestHits.size() == 2,
+        "Behavior active-node and EQS test coverage are aggregated by stable authoring IDs");
+    scenario.Expect(validation.Report().runs.front().navigationQueries == 2 &&
+            validation.Report().runs.front().perceivedStimuli == 2 &&
+            validation.Report().runs.front().crowdNeighborTests == 6 &&
+            validation.Report().runs.front().eqsCandidateTests == 24,
+        "navigation, perception, Crowd, EQS, Agent, and source-time telemetry aggregate per run");
+    const EditorAiValidationReport baseline = validation.Report();
+
+    suite.scenarios.front().seedCount = 1;
+    suite.scenarios.front().repetitions = 1;
+    suite.scenarios.front().budget.maximumEqsCandidateTestsPerFrame = 11;
+    CommercialSource budgetSource({first, second});
+    const bool budgetRan = validation.RunSuite(suite, budgetSource, &error);
+    scenario.Expect(budgetRan && !validation.Report().passed &&
+            validation.Report().runs.front().outcome == EditorAiValidationOutcome::BudgetExceeded,
+        "per-frame Agent/navigation/perception/Crowd/EQS/time budgets fail the run before unbounded work is accepted");
+    scenario.Expect(validation.Report().runs.front().reproductionFrame.frameIndex == 1 &&
+            validation.Report().runs.front().failures.front().code == "eqs-budget",
+        "the first failing frame and stable diagnostic code are retained for exact reproduction");
+    const EditorAiValidationComparison comparison = validation.CompareWith(baseline);
+    scenario.Expect(comparison.comparable && comparison.regression &&
+            comparison.failedRunDelta == 1 && comparison.passedRunDelta == -4,
+        "schema/suite-compatible reports identify pass-count, failure-count, frame, and peak-time regressions");
+
+    const std::filesystem::path reportBase = root / "commercial_ai_validation";
+    const bool exported = validation.ExportReport(reportBase, &error);
+    scenario.Expect(exported && std::filesystem::exists(root / "commercial_ai_validation.json") &&
+            std::filesystem::exists(root / "commercial_ai_validation.md"),
+        "JSON and Markdown telemetry reports commit together through crash-safe File Transaction");
+    scenario.Expect(std::filesystem::exists(root / "commercial_ai_validation_failures" /
+            "combat-navigation_seed700_repeat0.repro") &&
+            std::filesystem::exists(root / "commercial_ai_validation_failures" /
+                "combat-navigation_seed700_repeat0.record"),
+        "a versioned repro manifest and single-frame E-16 recording are exported for every failed run");
+    const std::string json = SerializeEditorAiValidationReportJson(validation.Report());
+    scenario.Expect(json.find("editor.aiValidation.v1") != std::string::npos &&
+            json.find("eqs-budget") != std::string::npos &&
+            json.find("fingerprint") != std::string::npos,
+        "machine telemetry is versioned, diagnostic-coded, and fingerprinted for CI comparison");
+
+    suite.scenarios.front().seedCount = policy.maximumSeedsPerScenario + 1;
+    CommercialSource rejectedSource({first, second});
+    scenario.Expect(!validation.RunSuite(suite, rejectedSource, &error) &&
+            validation.Stats().rejectedSuites == 1,
+        "over-capacity suites are rejected atomically before source execution or report replacement");
+
+    std::ifstream appSource("application/AppImGuiLayer.cpp", std::ios::binary);
+    const std::string appText{std::istreambuf_iterator<char>(appSource),
+        std::istreambuf_iterator<char>()};
+    scenario.Expect(appText.find("editorProductionAiValidationPipeline_.Initialize") != std::string::npos &&
+            appText.find("AI Validation / Batch") != std::string::npos &&
+            appText.find("Validation / Batch Simulation / Telemetry") != std::string::npos,
+        "App lifecycle, classified Bottom Dock panel, and Runtime Watch expose E-17 production state");
+    std::ifstream commandSource("application/AppCommandLineRunner.cpp", std::ios::binary);
+    const std::string commandText{std::istreambuf_iterator<char>(commandSource),
+        std::istreambuf_iterator<char>()};
+    scenario.Expect(commandText.find("--editor-ai-validation") != std::string::npos &&
+            commandText.find("RunEditorAiValidationBatch") != std::string::npos,
+        "a dedicated command-line path runs imported E-16 recordings without opening the Editor UI");
+    std::ifstream projectSource("GE3.vcxproj", std::ios::binary);
+    const std::string projectText{std::istreambuf_iterator<char>(projectSource),
+        std::istreambuf_iterator<char>()};
+    scenario.Expect(projectText.find("EditorProductionAiValidationPipeline.cpp") != std::string::npos &&
+            projectText.find("EditorProductionAiValidationPanel.cpp") != std::string::npos,
+        "E-17 validation, batch simulation, telemetry, and panel sources are included in every Editor build");
+
+    validation.Shutdown();
+    std::filesystem::remove_all(root, filesystemError);
+    EditorAutomationGateResult result = scenario.Finish(
+        "Production AI Validation / Batch Simulation / Telemetry Pipeline",
+        "Repair bounded scenario execution, deterministic coverage, performance budgets, baseline comparison, or reproduction artifacts.");
+    result.sampleCount = 8;
+    result.budgetKind = "scenarioRunsFramesCoverageTelemetryReportBytes";
+    return result;
+}
+
+EditorAutomationGateResult RunProductionNavigationAuthoringGate() {
+    const std::filesystem::path artifact =
+        "logs/editor_production_navigation_authoring_report.log";
+    AutomationScenario scenario(artifact);
+    const std::filesystem::path root = std::filesystem::path{"generated"} /
+        "editor" / "tests" / "production_navigation_authoring";
+    std::error_code filesystemError;
+    std::filesystem::remove_all(root, filesystemError);
+    std::filesystem::create_directories(root, filesystemError);
+    std::string error;
+
+    const std::string guid = "e1800000-0000-4000-8000-000000000018";
+    EditorNavigationAuthoringAsset asset =
+        MakeDefaultEditorNavigationAuthoringAsset(guid, "Commercial Navigation");
+    asset.areas.push_back({"Mud", 3.5f, {0.45f, 0.25f, 0.1f}, true});
+    asset.agentProfiles.push_back({"Heavy", 0.8f, 2.4f, 0.5f, 35.0f});
+    asset.offMeshLinks.push_back({"JumpGap", {1.5f, 0.0f, 0.5f},
+        {4.5f, 0.0f, 0.5f}, 0.75f, 1.25f, true, true, "Mud", "Heavy"});
+    const auto first = CompileEditorNavigationAuthoring(asset);
+    const auto second = CompileEditorNavigationAuthoring(asset);
+    scenario.Expect(first.succeeded && second.succeeded &&
+            first.program.sourceFingerprint == second.program.sourceFingerprint &&
+            first.program.areas.size() == 2 && first.program.agentProfiles.size() == 2,
+        "versioned Area, Agent Profile, and Off-Mesh Link data compiles to a stable immutable program");
+
+    std::string encoded;
+    EditorNavigationAuthoringAsset decoded;
+    scenario.Expect(EncodeEditorNavigationAuthoring(asset, encoded, &error) &&
+            DecodeEditorNavigationAuthoring(encoded, decoded, &error) &&
+            decoded.offMeshLinks.front().id == "JumpGap",
+        "Navigation Data round-trips without losing durable IDs, costs, filters, or endpoints");
+    EditorNavigationAuthoringAsset dangling = asset;
+    dangling.offMeshLinks.front().areaId = "Missing";
+    scenario.Expect(!CompileEditorNavigationAuthoring(dangling).succeeded,
+        "dangling Area and Agent Profile references fail before live publication");
+    EditorNavigationAuthoringAsset overCapacity = asset;
+    overCapacity.offMeshLinks.resize(kEditorNavigationMaximumOffMeshLinks + 1,
+        asset.offMeshLinks.front());
+    scenario.Expect(!CompileEditorNavigationAuthoring(overCapacity).succeeded,
+        "Off-Mesh Link capacity is rejected atomically before query state can grow unbounded");
+
+    EditorNavigationDocumentProvider provider;
+    const EditorDocumentId document{guid, std::string(EditorDocumentTypes::NavigationData)};
+    EditorDocumentContent content;
+    content.schemaVersion = kEditorNavigationAuthoringSchemaVersion;
+    content.bytes.assign(encoded.begin(), encoded.end());
+    scenario.Expect(provider.SupportsPath("Commercial.navdata") &&
+            provider.Deserialize(document, content, &error) &&
+            provider.Validate(content).Succeeded(),
+        "a dedicated Document Provider owns validated Navigation Data independently of transient query snapshots");
+    EditorDocumentContent defaultContent;
+    scenario.Expect(provider.ReadSource(root / "New.navigation", &defaultContent, &error) &&
+            provider.Validate(defaultContent).Succeeded(),
+        "creating a missing Navigation Data path yields a valid Default Area and Default Agent Profile");
+    scenario.Expect(EditorAssetKindForImportPath("Commercial.navdata", {}) ==
+            EditorAssetKind::NavigationData &&
+            std::string(ToString(EditorAssetKind::NavigationData)) == "NavigationData",
+        "Content Browser import, identity, preview, thumbnail, and dependency systems classify Navigation Data durably");
+
+    auto snapshot = std::make_shared<EditorNavigationQuerySnapshot>();
+    snapshot->generation = 18;
+    snapshot->voxelSize = 1.0f;
+    snapshot->agentRadius = 0.5f;
+    snapshot->maximumStepHeight = 1.0f;
+    snapshot->areas = first.program.areas;
+    snapshot->agentProfiles = first.program.agentProfiles;
+    snapshot->offMeshLinks = first.program.offMeshLinks;
+    EditorNavigationTile tile;
+    tile.key = {0, 0, "Default"};
+    tile.nodes = {
+        {0, 0, {0.5f, 0.0f, 0.5f}, 1.0f, "Default"},
+        {1, 0, {1.5f, 0.0f, 0.5f}, 1.0f, "Default"},
+        {4, 0, {4.5f, 0.0f, 0.5f}, 1.0f, "Default"},
+        {5, 0, {5.5f, 0.0f, 0.5f}, 1.0f, "Default"}};
+    snapshot->tiles.push_back(std::move(tile));
+    EditorProductionNavigationPipeline runtime;
+    EditorNavigationPolicy navigationPolicy;
+    navigationPolicy.voxelSize = 1.0f;
+    navigationPolicy.maximumQueryNodes = 32;
+    scenario.Expect(runtime.Initialize(navigationPolicy, &error) &&
+            runtime.ApplyAuthoringProgram(first.program, &error) &&
+            runtime.Stats().activeAreas == 2 && runtime.Stats().activeAgentProfiles == 2 &&
+            runtime.Stats().activeOffMeshLinks == 1,
+        "E-13 consumes only compiled E-18 programs and publishes Area/Profile/Link counts in Runtime Watch state");
+    const auto path = runtime.FindPathForProfile(snapshot,
+        {0.5f, 0.0f, 0.5f}, {5.5f, 0.0f, 0.5f}, "Heavy");
+    scenario.Expect(path.Succeeded() &&
+            path.traversedOffMeshLinks == std::vector<std::string>{"JumpGap"} &&
+            path.totalCost > 5.0f && runtime.Stats().offMeshLinkTraversals == 1,
+        "profile-filtered A* traverses a disconnected polygon island through the authored costed Off-Mesh Link");
+    const auto wrongProfile = runtime.FindPathForProfile(snapshot,
+        {0.5f, 0.0f, 0.5f}, {5.5f, 0.0f, 0.5f}, "Default");
+    scenario.Expect(!wrongProfile.Succeeded(),
+        "an Off-Mesh Link remains unavailable to non-matching Agent Profiles");
+
+    EditorTransactionStack transactions;
+    EditorProductionNavigationAuthoringPipeline authoring;
+    scenario.Expect(authoring.Initialize({256}, &error) &&
+            authoring.Policy().maximumOverlayCommands == 256,
+        "authoring and overlay work use explicit bounded production capacities");
+    authoring.Bind(&provider, &transactions, nullptr, &runtime);
+    authoring.SetActiveDocument(document);
+    scenario.Expect(authoring.AddArea(
+            {"Water", 6.0f, {0.1f, 0.3f, 0.8f}, true}, error) &&
+            transactions.NextUndoTransaction() != nullptr &&
+            transactions.NextUndoTransaction()->command->DomainId() == "navigation-authoring" &&
+            provider.Asset(document)->areas.size() == 3,
+        "each authoring edit compiles and enters the domain-independent Command transaction core");
+    scenario.Expect(!authoring.RemoveArea("Default", error) &&
+            !authoring.RemoveArea("Mud", error),
+        "Default definitions and referenced Areas cannot be deleted into an invalid asset");
+    EditorExecutionContext execution;
+    execution.Register(authoring, nullptr);
+    EditorError transactionError;
+    scenario.Expect(transactions.Undo(execution, &transactionError) &&
+            provider.Asset(document)->areas.size() == 2 &&
+            transactions.Redo(execution, &transactionError) &&
+            provider.Asset(document)->areas.size() == 3,
+        "Undo/Redo republishes both durable authoring state and the compiled runtime program");
+
+    std::ifstream appSource("application/AppImGuiLayer.cpp", std::ios::binary);
+    const std::string appText{std::istreambuf_iterator<char>(appSource),
+        std::istreambuf_iterator<char>()};
+    scenario.Expect(appText.find("editorProductionNavigationAuthoringPipeline_.Initialize") != std::string::npos &&
+            appText.find("Navigation Authoring") != std::string::npos &&
+            appText.find("activeOffMeshLinks") != std::string::npos,
+        "App lifecycle, classified Authoring panel, Viewport overlay, and Runtime Watch expose E-18 state");
+    std::ifstream commandSource("application/AppEditorToolModules.cpp", std::ios::binary);
+    const std::string commandText{std::istreambuf_iterator<char>(commandSource),
+        std::istreambuf_iterator<char>()};
+    scenario.Expect(commandText.find("navigation-authoring") != std::string::npos &&
+            commandText.find("navigationAuthoring") != std::string::npos,
+        "global Undo/Redo routes Navigation commands through the registered execution service");
+    std::ifstream projectSource("GE3.vcxproj", std::ios::binary);
+    const std::string projectText{std::istreambuf_iterator<char>(projectSource),
+        std::istreambuf_iterator<char>()};
+    scenario.Expect(projectText.find("EditorNavigationAuthoringTypes.cpp") != std::string::npos &&
+            projectText.find("EditorProductionNavigationAuthoringPanel.cpp") != std::string::npos &&
+            projectText.find("EditorNavigationDocumentProvider.cpp") != std::string::npos,
+        "E-18 model, provider, runtime binding, and panel sources are included in every Editor build");
+
+    authoring.Shutdown();
+    runtime.Shutdown();
+    std::filesystem::remove_all(root, filesystemError);
+    EditorAutomationGateResult result = scenario.Finish(
+        "Production Navigation Authoring / Off-Mesh Link / Area Cost Tooling",
+        "Repair Navigation Data validation, transaction publication, profile-filtered links, area costs, or Editor shell integration.");
+    result.sampleCount = 17;
+    result.budgetKind = "areasProfilesLinksOverlayCommandsQueryNodesDocumentBytes";
+    return result;
+}
+
 EditorAutomationGateResult RunNorthStarWorkflowGate() {
     const std::filesystem::path artifact = "logs/editor_north_star_workflow_report.log";
     AutomationScenario scenario(artifact);
@@ -4235,7 +5533,7 @@ bool WriteJsonReport(
     output << "{\n";
     const bool completionReady =
         failedCount == 0 && blockedChecks == 0 && attentionChecks == 0;
-    output << "  \"schema\": \"editor.commercialCompletion.v15\",\n";
+    output << "  \"schema\": \"editor.commercialCompletion.v21\",\n";
     output << "  \"generatedAtUtc\": \"" << JsonEscape(timestamp) << "\",\n";
     output << "  \"result\": \"" << (completionReady ? "ready" : "not-ready") << "\",\n";
     output << "  \"commercialCompletionReady\": "
@@ -4524,6 +5822,54 @@ int RunEditorCommercialAutomationGates(EditorSmokeExternalStep effectAuthoringSm
             "editor_production_world_partition_report.log",
             3000.0,
             RunProductionWorldPartitionGate));
+    records.push_back(
+        RunGate(
+            "editor.productionNavigation",
+            "Production Navigation Mesh / AI World Query / Dynamic Obstacles",
+            "navigation-ai",
+            "editor_production_navigation_report.log",
+            3000.0,
+            RunProductionNavigationGate));
+    records.push_back(
+        RunGate(
+            "editor.productionAiBehavior",
+            "Production AI Behavior Tree / Blackboard / Perception",
+            "navigation-ai",
+            "editor_production_ai_behavior_report.log",
+            3000.0,
+            RunProductionAiBehaviorGate));
+    records.push_back(
+        RunGate(
+            "editor.productionAiWorld",
+            "Production AI EQS / Crowd Steering / Smart Objects",
+            "navigation-ai",
+            "editor_production_ai_world_report.log",
+            3000.0,
+            RunProductionAiWorldGate));
+    records.push_back(
+        RunGate(
+            "editor.productionAiAuthoring",
+            "Production AI Authoring / Debugger / Simulation",
+            "navigation-ai",
+            "editor_production_ai_authoring_report.log",
+            3000.0,
+            RunProductionAiAuthoringGate));
+    records.push_back(
+        RunGate(
+            "editor.productionAiValidation",
+            "Production AI Validation / Batch Simulation / Telemetry",
+            "navigation-ai",
+            "editor_production_ai_validation_report.log",
+            3000.0,
+            RunProductionAiValidationGate));
+    records.push_back(
+        RunGate(
+            "editor.productionNavigationAuthoring",
+            "Production Navigation Authoring / Off-Mesh Link / Area Cost Tooling",
+            "navigation-ai",
+            "editor_production_navigation_authoring_report.log",
+            3000.0,
+            RunProductionNavigationAuthoringGate));
     records.push_back(
         RunGate(
             "editor.northStarWorkflow",
