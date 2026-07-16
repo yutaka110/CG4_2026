@@ -41,7 +41,7 @@ bool IsAssetInFolder(const EditorAssetRecord& record, std::string_view folder) {
 
 bool ParseKind(int value, EditorAssetKind& kind) {
     if (value < static_cast<int>(EditorAssetKind::Unknown) ||
-        value > static_cast<int>(EditorAssetKind::MaterialInstance)) return false;
+        value > static_cast<int>(EditorAssetKind::NavigationData)) return false;
     kind = static_cast<EditorAssetKind>(value);
     return true;
 }

@@ -1704,6 +1704,78 @@ Current staged implementation:
   E-12 validation passes 50/50 core cases; commercial completion v15 passes
   22/22 gates and 274/274 checks with zero failed, blocked, attention, or
   performance-warning results.
+- Phase 13-AD implements E-13 Production Navigation Mesh / AI World Query /
+  Dynamic Obstacles. Durable Navigation Surface and Obstacle Components remain
+  in Scene authoring state while E-12 Cell-aligned grid tiles, asynchronous
+  workers, and query data remain transient. Box surfaces use agent-radius edge
+  erosion; TriangleMesh collision uses world-space barycentric height and slope
+  rejection. Tile fingerprints cover collision geometry, walkable bounds,
+  static blockers, area costs, and build policy.
+- A generation-stamped immutable snapshot supports point projection,
+  Navigation line queries, and bounded eight-neighbor A* with step-height,
+  area-cost, diagonal-corner, and expansion-budget rules. AI workers may retain
+  an older snapshot safely while the frame thread publishes a newer generation.
+- Dynamic Obstacles resolve hierarchy world transform and scaled/rotated AABB,
+  update only from the Source Resident Entity set, identify dirty Cells, and
+  carve the next snapshot without waiting for a tile rebuild. Runtime Watch
+  reports tile/node/build, obstacle/dirty, path/query, generation, and capacity
+  telemetry. E-13 validation passes 51/51 core cases; commercial completion v16
+  passes 23/23 gates and 284/284 checks with zero failed, blocked, attention,
+  or performance-warning results.
+- Phase 13-AE implements E-14 Production AI Behavior Tree / Blackboard /
+  Perception. Durable Behavior Tree Assets compile typed Blackboard and
+  Root/Selector/Sequence/Condition/Set/Wait/MoveTo nodes into deterministic,
+  bounded programs. E-12 owns Agent/Stimulus residency, E-6 provides
+  raycast-backed Sight occlusion, and E-13 provides immutable MoveTo queries.
+  Per-agent debug snapshots expose perception, Blackboard, active trace, path,
+  execution budget, and hot reload state through Runtime Watch. E-14 validation
+  passes 52/52 core cases; commercial completion v17 passes 24/24 gates and
+  294/294 checks with zero failed, blocked, attention, or warning results.
+- Phase 13-AF implements E-15 Production AI EQS / Crowd Steering / Smart
+  Objects. Durable Environment Query Assets compile bounded spatial/Smart
+  Object generators and normalized Distance/Path/Visibility/Crowding/
+  Availability tests. Source Resident E-14 Agents derive preferred velocity
+  from Blackboard/path state and apply GUID-stable, prediction-horizon local
+  avoidance. Scene Smart Object slots use exclusive idempotent lease tokens,
+  renew/release/expiry, and E-12 Cell lifetime. Runtime Watch exposes query,
+  steering, reservation, hot reload, and all capacity telemetry. E-15
+  validation passes 53/53 core cases; commercial completion v18 passes 25/25
+  gates and 308/308 checks with zero failed, blocked, attention, or warning.
+- Phase 13-AG implements E-16 Production AI Authoring / Debugger / Simulation.
+  Behavior Tree and Environment Query assets are typed common Documents with
+  visual hierarchy/generator canvases, compile-before-publish mutation, and
+  domain-independent snapshot Commands. The live debugger provides bounded
+  global/agent breakpoints, pause, exact single-step, typed Blackboard and
+  active trace inspection. A 600-frame deterministic ring records E-14/E-15
+  agent, perception, path, Crowd, and Smart Object state; versioned recording
+  import verifies fingerprints and export commits through File Transaction.
+  Replay overlays share the bounded viewport layer and debugger state is fully
+  covered by Play Isolation. E-16 validation passes 54/54 core cases;
+  commercial completion v19 passes 26/26 gates and 323/323 checks with zero
+  failed, blocked, attention, or warning.
+- Phase 13-AH implements E-17 Production AI Validation / Batch Simulation /
+  Telemetry. A UI/D3D-independent simulation-source contract expands bounded
+  scenario, seed, and repetition matrices and fingerprints repeat results
+  without wall-clock noise. Run reports aggregate Behavior-node and EQS-test
+  coverage plus Agent, navigation, perception, Crowd, EQS, and source-time
+  telemetry. Per-frame budgets and required coverage fail closed with stable
+  diagnostic codes. JSON/Markdown reports, versioned repro manifests, and the
+  first failing E-16 frame recording commit atomically through File
+  Transaction; compatible reports expose baseline regressions. Bottom Dock,
+  Runtime Watch, and `--editor-ai-validation` share this core. E-17 validation
+  passes 55/55 core cases; commercial completion v20 passes 27/27 gates and
+  339/339 checks with zero failed, blocked, attention, or warning.
+- Phase 13-AI implements E-18 Production Navigation Authoring / Off-Mesh Link /
+  Area Cost Tooling. Versioned Navigation Data Documents compile bounded Area,
+  Agent Profile, and Off-Mesh Link definitions into deterministic immutable
+  programs. E-13 publishes stable walkable polygons, applies Area and Link
+  costs in profile-filtered A*, and exposes traversed Link identity. All edits
+  use generic snapshot Commands with compile-before-publish and rollback-safe
+  runtime republishing. The Bottom Dock authoring panel, shared Navigation
+  overlay layer, Content Browser, global Undo/Redo, and Runtime Watch use the
+  same service. E-18 validation passes 56/56 core cases; commercial completion
+  v21 passes 28/28 gates and 356/356 checks with zero failed, blocked,
+  attention, or warning.
 
 ## Commercial Completion Scorecard
 

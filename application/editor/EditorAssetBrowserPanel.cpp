@@ -33,6 +33,9 @@ constexpr EditorAssetKind kAssetKindFilters[] = {
     EditorAssetKind::VfxGraph,
     EditorAssetKind::AnimationStateMachine,
     EditorAssetKind::GameplayVisualScript,
+    EditorAssetKind::BehaviorTree,
+    EditorAssetKind::EnvironmentQuery,
+    EditorAssetKind::NavigationData,
     EditorAssetKind::Texture,
     EditorAssetKind::Audio,
 };

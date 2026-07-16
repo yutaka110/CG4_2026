@@ -147,6 +147,10 @@ const char* ToString(EditorDomainId domain) {
         return "Animation State Machine Node";
     case EditorDomainId::GameplayVisualScriptNode:
         return "Gameplay Visual Script Node";
+    case EditorDomainId::AiAuthoringNode:
+        return "AI Authoring Node";
+    case EditorDomainId::NavigationAuthoring:
+        return "Navigation Authoring";
     }
     return "Unknown";
 }

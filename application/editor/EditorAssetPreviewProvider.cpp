@@ -750,6 +750,12 @@ EditorAssetPreviewInfo EditorAssetPreviewProvider::BuildPreview(const EditorAsse
         return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "ASM");
     case EditorAssetKind::GameplayVisualScript:
         return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "GVS");
+    case EditorAssetKind::BehaviorTree:
+        return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "BT");
+    case EditorAssetKind::EnvironmentQuery:
+        return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "EQS");
+    case EditorAssetKind::NavigationData:
+        return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "NAV");
     case EditorAssetKind::Effect:
         return BuildTextPreview(record, extension, EditorAssetPreviewKind::Text, "FX");
     case EditorAssetKind::Audio:

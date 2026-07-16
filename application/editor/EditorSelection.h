@@ -30,6 +30,8 @@ enum class EditorDomainId : uint32_t {
     VfxGraphNode,
     AnimationStateMachineNode,
     GameplayVisualScriptNode,
+    AiAuthoringNode,
+    NavigationAuthoring,
 };
 
 struct EditorObjectHandle {

@@ -25,6 +25,8 @@
 #include "editor/vfx/EditorVfxGraph.h"
 #include "editor/animation/EditorAnimationStateMachine.h"
 #include "editor/gameplay/EditorGameplayVisualScript.h"
+#include "editor/ai/EditorProductionAiAuthoringPipeline.h"
+#include "editor/navigation/EditorProductionNavigationAuthoringPipeline.h"
 
 #include <string>
 #include <memory>
@@ -82,7 +84,9 @@ EditorCommandResult UndoEditorTransaction(
     EditorMaterialGraphService* materialGraphs,
     EditorVfxGraphService* vfxGraphs,
     EditorAnimationStateMachineService* animationStateMachines,
-    EditorGameplayVisualScriptService* gameplayVisualScripts) {
+    EditorGameplayVisualScriptService* gameplayVisualScripts,
+    EditorProductionAiAuthoringPipeline* aiAuthoring,
+    EditorProductionNavigationAuthoringPipeline* navigationAuthoring) {
     const EditorTransactionRecord* next =
         transactions != nullptr ? transactions->NextUndoTransaction() : nullptr;
     if (next != nullptr && next->command != nullptr &&
@@ -91,7 +95,9 @@ EditorCommandResult UndoEditorTransaction(
             next->command->DomainId() == "prefab" || next->command->DomainId() == "material-graph" ||
             next->command->DomainId() == "vfx-graph" ||
             next->command->DomainId() == "animation-state-machine" ||
-            next->command->DomainId() == "gameplay-visual-script")) {
+            next->command->DomainId() == "gameplay-visual-script" ||
+            next->command->DomainId() == "ai-authoring" ||
+            next->command->DomainId() == "navigation-authoring")) {
         const bool assetCommand = next->command->DomainId() == "asset";
         const bool worldCommand = next->command->DomainId() == "world";
         const bool sequencerCommand = next->command->DomainId() == "sequencer";
@@ -100,6 +106,8 @@ EditorCommandResult UndoEditorTransaction(
         const bool vfxGraphCommand = next->command->DomainId() == "vfx-graph";
         const bool animationStateMachineCommand = next->command->DomainId() == "animation-state-machine";
         const bool gameplayVisualScriptCommand = next->command->DomainId() == "gameplay-visual-script";
+        const bool aiAuthoringCommand = next->command->DomainId() == "ai-authoring";
+        const bool navigationAuthoringCommand = next->command->DomainId() == "navigation-authoring";
         const EditorDocumentId worldDocument = worldCommand
             ? WorldMutationDocument(next)
             : EditorDocumentId{};
@@ -119,7 +127,7 @@ EditorCommandResult UndoEditorTransaction(
                 dirtyState, notifications, "editor.command.runtimeApplyUndo"});
         if (!assetCommand && !worldCommand && !sequencerCommand && !prefabCommand &&
             !materialGraphCommand && !vfxGraphCommand && !animationStateMachineCommand &&
-            !gameplayVisualScriptCommand) {
+            !gameplayVisualScriptCommand && !aiAuthoringCommand && !navigationAuthoringCommand) {
             execution.Register(runtimeExecution, &registrationError);
         }
         if (worldCommand && worldExecution != nullptr) {
@@ -142,6 +150,12 @@ EditorCommandResult UndoEditorTransaction(
         }
         if (gameplayVisualScriptCommand && gameplayVisualScripts != nullptr) {
             execution.Register(*gameplayVisualScripts, &registrationError);
+        }
+        if (aiAuthoringCommand && aiAuthoring != nullptr) {
+            execution.Register(*aiAuthoring, &registrationError);
+        }
+        if (navigationAuthoringCommand && navigationAuthoring != nullptr) {
+            execution.Register(*navigationAuthoring, &registrationError);
         }
         EditorError error;
         const bool applied = transactions->Undo(execution, &error);
@@ -178,7 +192,9 @@ EditorCommandResult RedoEditorTransaction(
     EditorMaterialGraphService* materialGraphs,
     EditorVfxGraphService* vfxGraphs,
     EditorAnimationStateMachineService* animationStateMachines,
-    EditorGameplayVisualScriptService* gameplayVisualScripts) {
+    EditorGameplayVisualScriptService* gameplayVisualScripts,
+    EditorProductionAiAuthoringPipeline* aiAuthoring,
+    EditorProductionNavigationAuthoringPipeline* navigationAuthoring) {
     const EditorTransactionRecord* next =
         transactions != nullptr ? transactions->NextRedoTransaction() : nullptr;
     if (next != nullptr && next->command != nullptr &&
@@ -187,7 +203,9 @@ EditorCommandResult RedoEditorTransaction(
             next->command->DomainId() == "prefab" || next->command->DomainId() == "material-graph" ||
             next->command->DomainId() == "vfx-graph" ||
             next->command->DomainId() == "animation-state-machine" ||
-            next->command->DomainId() == "gameplay-visual-script")) {
+            next->command->DomainId() == "gameplay-visual-script" ||
+            next->command->DomainId() == "ai-authoring" ||
+            next->command->DomainId() == "navigation-authoring")) {
         const bool assetCommand = next->command->DomainId() == "asset";
         const bool worldCommand = next->command->DomainId() == "world";
         const bool sequencerCommand = next->command->DomainId() == "sequencer";
@@ -196,6 +214,8 @@ EditorCommandResult RedoEditorTransaction(
         const bool vfxGraphCommand = next->command->DomainId() == "vfx-graph";
         const bool animationStateMachineCommand = next->command->DomainId() == "animation-state-machine";
         const bool gameplayVisualScriptCommand = next->command->DomainId() == "gameplay-visual-script";
+        const bool aiAuthoringCommand = next->command->DomainId() == "ai-authoring";
+        const bool navigationAuthoringCommand = next->command->DomainId() == "navigation-authoring";
         const EditorDocumentId worldDocument = worldCommand
             ? WorldMutationDocument(next)
             : EditorDocumentId{};
@@ -215,7 +235,7 @@ EditorCommandResult RedoEditorTransaction(
                 dirtyState, notifications, "editor.command.runtimeApplyRedo"});
         if (!assetCommand && !worldCommand && !sequencerCommand && !prefabCommand &&
             !materialGraphCommand && !vfxGraphCommand && !animationStateMachineCommand &&
-            !gameplayVisualScriptCommand) {
+            !gameplayVisualScriptCommand && !aiAuthoringCommand && !navigationAuthoringCommand) {
             execution.Register(runtimeExecution, &registrationError);
         }
         if (worldCommand && worldExecution != nullptr) {
@@ -238,6 +258,12 @@ EditorCommandResult RedoEditorTransaction(
         }
         if (gameplayVisualScriptCommand && gameplayVisualScripts != nullptr) {
             execution.Register(*gameplayVisualScripts, &registrationError);
+        }
+        if (aiAuthoringCommand && aiAuthoring != nullptr) {
+            execution.Register(*aiAuthoring, &registrationError);
+        }
+        if (navigationAuthoringCommand && navigationAuthoring != nullptr) {
+            execution.Register(*navigationAuthoring, &registrationError);
         }
         EditorError error;
         const bool applied = transactions->Redo(execution, &error);
@@ -596,7 +622,9 @@ void RegisterAppEditorCommandToolModules(
                          materialGraphs = editorContext.materialGraphs,
                          vfxGraphs = editorContext.vfxGraphs,
                          animationStateMachines = editorContext.animationStateMachines,
-                         gameplayVisualScripts = editorContext.gameplayVisualScripts]() {
+                         gameplayVisualScripts = editorContext.gameplayVisualScripts,
+                         aiAuthoring = editorContext.aiAuthoring,
+                         navigationAuthoring = editorContext.navigationAuthoring]() {
                             return UndoEditorTransaction(
                                 context,
                                 runtimeState,
@@ -611,7 +639,9 @@ void RegisterAppEditorCommandToolModules(
                                 materialGraphs,
                                 vfxGraphs,
                                 animationStateMachines,
-                                gameplayVisualScripts);
+                                gameplayVisualScripts,
+                                aiAuthoring,
+                                navigationAuthoring);
                         },
                         [&context,
                          &runtimeState,
@@ -627,7 +657,9 @@ void RegisterAppEditorCommandToolModules(
                          materialGraphs = editorContext.materialGraphs,
                          vfxGraphs = editorContext.vfxGraphs,
                          animationStateMachines = editorContext.animationStateMachines,
-                         gameplayVisualScripts = editorContext.gameplayVisualScripts]() {
+                         gameplayVisualScripts = editorContext.gameplayVisualScripts,
+                         aiAuthoring = editorContext.aiAuthoring,
+                         navigationAuthoring = editorContext.navigationAuthoring]() {
                             return RedoEditorTransaction(
                                 context,
                                 runtimeState,
@@ -642,7 +674,9 @@ void RegisterAppEditorCommandToolModules(
                                 materialGraphs,
                                 vfxGraphs,
                                 animationStateMachines,
-                                gameplayVisualScripts);
+                                gameplayVisualScripts,
+                                aiAuthoring,
+                                navigationAuthoring);
                         },
                         [&context,
                          &runtimeState,

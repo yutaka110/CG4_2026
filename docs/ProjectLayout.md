@@ -404,6 +404,56 @@ This repository is organized around the following top-level areas:
   Source residency with hysteresis and hard cross-cell reference pulls,
   asynchronous bounded HLOD merge, frame-thread D3D12 upload, fence-safe proxy
   retirement, E-6/E-7/E-10/E-11 handoff, and Runtime Watch telemetry.
+- `application/editor/navigation/EditorProductionNavigationPipeline.*`: E-13
+  E-12 Cell-aligned asynchronous walkable tile builds from E-6 Physics bounds,
+  immutable generation-stamped AI query snapshots, point projection,
+  Navigation raycast, bounded A* pathfinding, hierarchy-aware Dynamic Obstacle
+  carve updates, residency/capacity diagnostics, and Runtime Watch telemetry.
+- `application/editor/ai/EditorProductionAiPipeline.*`: E-14 durable versioned
+  Behavior Tree codec/compiler, typed Blackboard, bounded deterministic
+  execution, E-6 raycast-backed Sight, radius/loudness Hearing, E-13 MoveTo
+  task delegation, source hot reload, E-12 Cell lifetime, per-agent debug
+  snapshots, capacity diagnostics, and Runtime Watch telemetry.
+- `application/editor/ai/EditorProductionAiWorldPipeline.*`: E-15 durable EQS
+  codec/compiler and bounded scoring service, E-13 path/E-6 visibility tests,
+  prediction-horizon Crowd steering from E-14 Agent state, exclusive
+  token/lease Smart Object reservations, E-12 Cell lifetime, hot reload,
+  capacity diagnostics, and Runtime Watch telemetry.
+- `application/editor/documents/EditorAiDocumentProviders.*`: E-16 common
+  Behavior Tree and Environment Query Document providers, including default
+  creation, durable deserialize/migrate/validate, compile-before-publish, and
+  live model release.
+- `application/editor/ai/EditorProductionAiAuthoringPipeline.*`: E-16 generic
+  Transaction-backed Behavior/EQS authoring, bounded global/Agent breakpoint
+  debugger, exact single-step control, deterministic simulation ring and
+  versioned record/replay codec, File Transaction export/import, Play
+  Isolation, layered viewport overlay, and Runtime Watch telemetry.
+- `application/editor/ai/EditorProductionAiAuthoringPanel.*`: E-16 Bottom Dock
+  visual hierarchy/generator canvases, node/schema/test property authoring,
+  live Blackboard/trace inspection, breakpoint controls, and replay transport.
+- `application/editor/ai/EditorProductionAiValidationPipeline.*`: E-17
+  UI/D3D-independent bounded scenario/seed/repetition runner, pluggable
+  simulation-source contract, Behavior/EQS coverage, subsystem performance
+  budgets, deterministic fingerprints, baseline comparison, atomic
+  JSON/Markdown telemetry, and versioned failure reproduction artifacts.
+- `application/editor/ai/EditorProductionAiValidationPanel.*`: E-17 Bottom Dock
+  recording-backed batch configuration, performance budgets, run/coverage/
+  failure inspection, baseline deltas, and report/repro export controls.
+- `application/editor/navigation/EditorNavigationAuthoringTypes.*`: E-18
+  versioned durable Navigation Data model, bounded compiler, stable program
+  fingerprint, Area Cost, Agent Profile, and Off-Mesh Link codec.
+- `application/editor/documents/EditorNavigationDocumentProvider.*`: E-18
+  common Document creation, deserialize/migrate/validate, compile-before-
+  publish live model, and release boundary for `.navdata` assets.
+- `application/editor/navigation/EditorProductionNavigationAuthoringPipeline.*`:
+  E-18 generic Transaction-backed Navigation editing, compiled E-13 runtime
+  publication, rollback-safe Undo/Redo, and bounded polygon/link overlay.
+- `application/editor/navigation/EditorProductionNavigationAuthoringPanel.*`:
+  E-18 Bottom Dock Area Cost, Agent Profile, Off-Mesh Link endpoint/direction/
+  cost authoring and compile diagnostics.
+- `application/AppCommandLineRunner.*`: includes the E-17
+  `--editor-ai-validation` headless recording validation entry point in
+  addition to commercial gates, regression, smoke, and Asset migration tools.
 - `application/AppEditorToolModules.*`: App-level built-in editor module
   pipeline that registers startup descriptors, Details sections, provider
   adapters, Runtime Watch providers, command providers, menus, and toolbar

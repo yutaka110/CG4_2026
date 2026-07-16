@@ -22,6 +22,9 @@ enum class EditorAssetKind {
     AnimationStateMachine,
     GameplayVisualScript,
     MaterialInstance,
+    BehaviorTree,
+    EnvironmentQuery,
+    NavigationData,
 };
 
 struct EditorAssetRecord {

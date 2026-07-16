@@ -32,7 +32,8 @@ bool IsTextScannableAssetKind(EditorAssetKind kind) {
         kind == EditorAssetKind::Prefab || kind == EditorAssetKind::MaterialGraph ||
         kind == EditorAssetKind::MaterialInstance ||
         kind == EditorAssetKind::VfxGraph || kind == EditorAssetKind::AnimationStateMachine ||
-        kind == EditorAssetKind::GameplayVisualScript;
+        kind == EditorAssetKind::GameplayVisualScript || kind == EditorAssetKind::BehaviorTree ||
+        kind == EditorAssetKind::EnvironmentQuery || kind == EditorAssetKind::NavigationData;
 }
 
 bool AppendUnique(std::vector<std::string>& values, const std::string& value) {
@@ -96,6 +97,9 @@ EditorAssetKind AssetKindFromText(std::string_view text) {
              EditorAssetKind::VfxGraph,
              EditorAssetKind::AnimationStateMachine,
              EditorAssetKind::GameplayVisualScript,
+             EditorAssetKind::BehaviorTree,
+             EditorAssetKind::EnvironmentQuery,
+             EditorAssetKind::NavigationData,
              EditorAssetKind::Texture, EditorAssetKind::Audio}) {
         if (text == ToString(kind)) return kind;
     }
@@ -700,6 +704,12 @@ const char* ToString(EditorAssetKind kind) {
         return "AnimationStateMachine";
     case EditorAssetKind::GameplayVisualScript:
         return "GameplayVisualScript";
+    case EditorAssetKind::BehaviorTree:
+        return "BehaviorTree";
+    case EditorAssetKind::EnvironmentQuery:
+        return "EnvironmentQuery";
+    case EditorAssetKind::NavigationData:
+        return "NavigationData";
     case EditorAssetKind::Texture:
         return "Texture";
     case EditorAssetKind::Audio:
@@ -746,6 +756,12 @@ bool ParseEditorAssetDependencyToken(
         outToken.kind = EditorAssetKind::AnimationStateMachine;
     } else if (kindText == ToString(EditorAssetKind::GameplayVisualScript)) {
         outToken.kind = EditorAssetKind::GameplayVisualScript;
+    } else if (kindText == ToString(EditorAssetKind::BehaviorTree)) {
+        outToken.kind = EditorAssetKind::BehaviorTree;
+    } else if (kindText == ToString(EditorAssetKind::EnvironmentQuery)) {
+        outToken.kind = EditorAssetKind::EnvironmentQuery;
+    } else if (kindText == ToString(EditorAssetKind::NavigationData)) {
+        outToken.kind = EditorAssetKind::NavigationData;
     } else if (kindText == ToString(EditorAssetKind::Texture)) {
         outToken.kind = EditorAssetKind::Texture;
     } else if (kindText == ToString(EditorAssetKind::Audio)) {

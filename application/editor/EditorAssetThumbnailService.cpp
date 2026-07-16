@@ -498,6 +498,9 @@ bool EditorAssetKindSupportsThumbnailPreview(EditorAssetKind kind) {
         kind == EditorAssetKind::VfxGraph ||
         kind == EditorAssetKind::AnimationStateMachine ||
         kind == EditorAssetKind::GameplayVisualScript ||
+        kind == EditorAssetKind::BehaviorTree ||
+        kind == EditorAssetKind::EnvironmentQuery ||
+        kind == EditorAssetKind::NavigationData ||
         kind == EditorAssetKind::Audio;
 }
 

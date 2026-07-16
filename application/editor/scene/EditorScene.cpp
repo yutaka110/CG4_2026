@@ -177,6 +177,26 @@ bool EditorScene::AddComponent(
             {"intensity", "1"}, {"distance", "10"}, {"decay", "2"},
             {"angle", "30"}, {"priority", "0"}, {"castsShadow", "true"},
             {"shadowPriority", "0"}};
+    } else if (component.typeId == kEditorNavigationSurfaceComponentType) {
+        component.properties = {{"walkable", "true"}, {"areaId", "Default"},
+            {"areaCost", "1"}};
+    } else if (component.typeId == kEditorNavigationObstacleComponentType) {
+        component.properties = {{"enabled", "true"}, {"dynamic", "true"},
+            {"carve", "true"}, {"halfExtents", "0.5 0.5 0.5"}};
+    } else if (component.typeId == kEditorAiAgentComponentType) {
+        component.properties = {{"enabled", "true"}, {"team", "0"},
+            {"tickInterval", "0.1"}, {"sightRadius", "30"},
+            {"sightFovDegrees", "90"}, {"hearingRadius", "20"},
+            {"detectSameTeam", "false"}, {"crowdEnabled", "true"},
+            {"agentRadius", "0.5"}, {"maximumSpeed", "3"},
+            {"neighborRadius", "4"}, {"avoidanceWeight", "1.5"}};
+    } else if (component.typeId == kEditorAiStimulusComponentType) {
+        component.properties = {{"enabled", "true"}, {"team", "1"},
+            {"visible", "true"}, {"audible", "true"}, {"loudness", "1"}};
+    } else if (component.typeId == kEditorSmartObjectComponentType) {
+        component.properties = {{"enabled", "true"}, {"slotId", "Primary"},
+            {"type", "Generic"}, {"interactionRadius", "1"},
+            {"priority", "0"}, {"leaseSeconds", "5"}};
     }
     if (initialReference != nullptr) component.references.push_back(*initialReference);
     entity->components.push_back(std::move(component));
@@ -366,6 +386,11 @@ const char* DisplayNameForEditorSceneComponent(std::string_view typeId) noexcept
     if (typeId == kEditorDirectionalLightComponentType) return "Directional Light";
     if (typeId == kEditorPointLightComponentType) return "Point Light";
     if (typeId == kEditorSpotLightComponentType) return "Spot Light";
+    if (typeId == kEditorNavigationSurfaceComponentType) return "Navigation Surface";
+    if (typeId == kEditorNavigationObstacleComponentType) return "Navigation Obstacle";
+    if (typeId == kEditorAiAgentComponentType) return "AI Agent";
+    if (typeId == kEditorAiStimulusComponentType) return "AI Perception Stimulus";
+    if (typeId == kEditorSmartObjectComponentType) return "Smart Object";
     return "Component";
 }
 
@@ -373,6 +398,7 @@ std::string EditorSceneComponentTypeForAssetKind(std::string_view assetKind) noe
     if (assetKind == "Mesh") return std::string(kEditorMeshRendererComponentType);
     if (assetKind == "Effect") return std::string(kEditorVfxComponentType);
     if (assetKind == "Audio") return std::string(kEditorAudioSourceComponentType);
+    if (assetKind == "BehaviorTree") return std::string(kEditorAiAgentComponentType);
     return {};
 }
 

@@ -73,6 +73,8 @@
 #include "documents/EditorVfxGraphDocumentProvider.h"
 #include "documents/EditorAnimationStateMachineDocumentProvider.h"
 #include "documents/EditorGameplayVisualScriptDocumentProvider.h"
+#include "documents/EditorAiDocumentProviders.h"
+#include "documents/EditorNavigationDocumentProvider.h"
 #include "documents/EditorTextDocumentProvider.h"
 #include "prefab/EditorPrefabService.h"
 #include "material/EditorMaterialGraph.h"
@@ -82,6 +84,12 @@
 #include "lighting/EditorProductionLightingPipeline.h"
 #include "visibility/EditorProductionGpuDrivenPipeline.h"
 #include "streaming/EditorWorldPartitionPipeline.h"
+#include "navigation/EditorProductionNavigationPipeline.h"
+#include "navigation/EditorProductionNavigationAuthoringPipeline.h"
+#include "ai/EditorProductionAiPipeline.h"
+#include "ai/EditorProductionAiWorldPipeline.h"
+#include "ai/EditorProductionAiAuthoringPipeline.h"
+#include "ai/EditorProductionAiValidationPipeline.h"
 #include "vfx/EditorVfxGraph.h"
 #include "animation/EditorAnimationStateMachine.h"
 #include "gameplay/EditorGameplayVisualScript.h"
@@ -5210,6 +5218,544 @@ void TestWorldPartitionCellPolicy(RegressionRunner& runner) {
         "E-12 should preserve durable data-layer identity independently of spatial coordinates");
 }
 
+void TestProductionNavigationPipeline(RegressionRunner& runner) {
+    EditorScene scene;
+    EditorSceneEntity* entity = scene.CreateEntity(
+        "Navigation Authoring", {}, "navigation-authoring-e13");
+    const bool componentsAdded = entity != nullptr &&
+        scene.AddComponent(entity->guid, std::string(kEditorNavigationSurfaceComponentType)) &&
+        scene.AddComponent(entity->guid, std::string(kEditorNavigationObstacleComponentType));
+    entity = scene.FindEntity("navigation-authoring-e13");
+    const EditorSceneComponent* surface = entity != nullptr
+        ? scene.FindComponent(*entity, kEditorNavigationSurfaceComponentType) : nullptr;
+    const EditorSceneComponent* obstacle = entity != nullptr
+        ? scene.FindComponent(*entity, kEditorNavigationObstacleComponentType) : nullptr;
+    runner.Expect(
+        componentsAdded && surface != nullptr && obstacle != nullptr &&
+            std::string(DisplayNameForEditorSceneComponent(surface->typeId)) ==
+                "Navigation Surface" && scene.Validate().Succeeded(),
+        "E-13 should persist validated Navigation Surface and Obstacle Components in Scene authoring state");
+
+    auto snapshot = std::make_shared<EditorNavigationQuerySnapshot>();
+    snapshot->generation = 7;
+    snapshot->voxelSize = 1.0f;
+    snapshot->agentRadius = 0.25f;
+    snapshot->maximumStepHeight = 1.0f;
+    EditorNavigationTile tile{};
+    tile.key = {0, 0, "Default"};
+    tile.sourceFingerprint = 42;
+    for (int32_t z = 0; z < 3; ++z)
+        for (int32_t x = 0; x < 5; ++x)
+            tile.nodes.push_back({x, z,
+                {static_cast<float>(x) + 0.5f, 0.0f,
+                 static_cast<float>(z) + 0.5f}, 1.0f});
+    snapshot->tiles.push_back(std::move(tile));
+    snapshot->dynamicObstacles.push_back(
+        {"navigation-obstacle-e13", {2.5f, 0.0f, 1.5f},
+            {0.4f, 1.0f, 0.4f}, true, 99});
+
+    EditorProductionNavigationPipeline pipeline;
+    EditorNavigationPolicy policy{};
+    policy.voxelSize = 1.0f;
+    policy.maximumQueryNodes = 64;
+    std::string error;
+    runner.Expect(pipeline.Initialize(policy, &error),
+        "E-13 query service should initialize a bounded production policy");
+    const EditorNavigationPathResult path = pipeline.FindPath(
+        snapshot, {0.5f, 0.0f, 1.5f}, {4.5f, 0.0f, 1.5f});
+    const bool detoured = std::any_of(path.points.begin(), path.points.end(),
+        [](const Vector3& point) { return std::abs(point.z - 1.5f) > 0.1f; });
+    runner.Expect(
+        path.Succeeded() && path.points.size() >= 5 && detoured && path.visitedNodes <= 64 &&
+            path.snapshotGeneration == 7,
+        "E-13 A* should route around a carved dynamic obstacle on an immutable snapshot");
+    const EditorNavigationProjectionResult projection = pipeline.ProjectPoint(
+        snapshot, {0.6f, 0.2f, 1.4f}, {1.0f, 1.0f, 1.0f});
+    const EditorNavigationRaycastResult raycast = pipeline.RaycastNavigation(
+        snapshot, {0.5f, 0.0f, 1.5f}, {4.5f, 0.0f, 1.5f});
+    runner.Expect(
+        projection.succeeded && projection.snapshotGeneration == 7 &&
+            raycast.hit && raycast.distance > 0.0f,
+        "E-13 World Query should project points and report carved navigation line hits against one snapshot generation");
+
+    EditorProductionNavigationPipeline constrained;
+    policy.maximumQueryNodes = 2;
+    constrained.Initialize(policy, &error);
+    const EditorNavigationPathResult rejected = constrained.FindPath(
+        snapshot, {0.5f, 0.0f, 1.5f}, {4.5f, 0.0f, 1.5f});
+    runner.Expect(
+        rejected.status == EditorNavigationPathStatus::QueryBudgetExceeded &&
+            constrained.Stats().queryBudgetFailures == 1,
+        "E-13 should terminate pathological AI queries at the configured expansion budget");
+}
+
+void TestProductionAiBehaviorPipeline(RegressionRunner& runner) {
+    const std::string guid = "e1400000-0000-4000-8000-000000000014";
+    const EditorBehaviorTreeAsset source = MakeDefaultEditorBehaviorTree(guid, "Guard Behavior");
+    const EditorBehaviorTreeCompileResult first = CompileEditorBehaviorTree(source);
+    const EditorBehaviorTreeCompileResult second = CompileEditorBehaviorTree(source);
+    runner.Expect(first.succeeded && second.succeeded &&
+            first.program.sourceFingerprint == second.program.sourceFingerprint &&
+            first.program.nodes.size() == 6,
+        "E-14 Behavior Tree compiler should produce a deterministic bounded program");
+
+    std::string encoded;
+    std::string error;
+    EditorBehaviorTreeAsset decoded{};
+    runner.Expect(EncodeEditorBehaviorTree(source, encoded, &error) &&
+            DecodeEditorBehaviorTree(encoded, decoded, &error) &&
+            decoded.assetGuid == guid && decoded.blackboard.size() == 4 &&
+            CompileEditorBehaviorTree(decoded).program.sourceFingerprint ==
+                first.program.sourceFingerprint,
+        "E-14 durable Behavior Tree codec should preserve typed Blackboard and execution topology");
+
+    EditorBehaviorTreeAsset invalid = source;
+    invalid.nodes.back().parentId = "idle";
+    const EditorBehaviorTreeCompileResult invalidResult = CompileEditorBehaviorTree(invalid);
+    runner.Expect(!invalidResult.succeeded && !invalidResult.diagnostics.empty(),
+        "E-14 compiler should reject malformed leaf ownership before runtime execution");
+
+    invalid = source;
+    const auto move = std::find_if(invalid.nodes.begin(), invalid.nodes.end(),
+        [](const auto& node) { return node.type == EditorBehaviorNodeType::MoveTo; });
+    invalid.blackboard[1].defaultValue.type = EditorBlackboardValueType::String;
+    const EditorBehaviorTreeCompileResult typeResult = CompileEditorBehaviorTree(invalid);
+    runner.Expect(move != invalid.nodes.end() && !typeResult.succeeded,
+        "E-14 compiler should enforce typed Blackboard contracts for navigation tasks");
+
+    EditorScene scene;
+    EditorSceneEntity* agent = scene.CreateEntity("Guard AI", {}, "e14-agent");
+    const std::string agentGuid = agent == nullptr ? std::string{} : agent->guid;
+    EditorSceneEntity* stimulus = scene.CreateEntity("Player Stimulus", {}, "e14-stimulus");
+    const std::string stimulusGuid = stimulus == nullptr ? std::string{} : stimulus->guid;
+    EditorSceneObjectReference behaviorReference{};
+    behaviorReference.property = "behaviorTree";
+    behaviorReference.assetGuid = guid;
+    const bool componentsAdded = !agentGuid.empty() && !stimulusGuid.empty() &&
+        scene.AddComponent(agentGuid, std::string(kEditorAiAgentComponentType),
+            &behaviorReference) &&
+        scene.AddComponent(stimulusGuid, std::string(kEditorAiStimulusComponentType));
+    const EditorSceneEntity* persistedAgent = scene.FindEntity(agentGuid);
+    const EditorSceneComponent* agentComponent = persistedAgent == nullptr ? nullptr :
+        scene.FindComponent(*persistedAgent, kEditorAiAgentComponentType);
+    runner.Expect(componentsAdded && agentComponent != nullptr &&
+            agentComponent->properties.size() >= 7 &&
+            agentComponent->references.front().assetGuid == guid &&
+            scene.Validate().errors.empty(),
+        "E-14 Scene should persist validated AI Agent, Behavior reference, and Perception Stimulus Components");
+
+    EditorAssetImportOptions importOptions{};
+    runner.Expect(EditorAssetKindForImportPath("Guard.behavior", importOptions) ==
+            EditorAssetKind::BehaviorTree &&
+            std::string(ToString(EditorAssetKind::BehaviorTree)) == "BehaviorTree" &&
+            static_cast<uint32_t>(EditorAssetKind::MaterialInstance) == 11,
+        "E-14 durable Behavior Tree Assets should join import/registry without renumbering persisted Asset filters");
+
+    EditorProductionAiPipeline runtime;
+    EditorProductionAiPolicy policy{};
+    policy.maximumNodeExecutionsPerTick = 2;
+    runner.Expect(runtime.Initialize(policy, &error) &&
+            runtime.Policy().maximumNodeExecutionsPerTick == 2,
+        "E-14 runtime should initialize explicit agent, perception, and node execution budgets");
+    runtime.Shutdown();
+}
+
+void TestProductionAiWorldPipeline(RegressionRunner& runner) {
+    const std::string guid = "e1500000-0000-4000-8000-000000000015";
+    const EditorEqsAsset source = MakeDefaultEditorEqsAsset(guid, "Cover Query");
+    const EditorEqsCompileResult first = CompileEditorEqs(source);
+    const EditorEqsCompileResult second = CompileEditorEqs(source);
+    runner.Expect(first.succeeded && second.succeeded &&
+            first.program.sourceFingerprint == second.program.sourceFingerprint &&
+            first.program.tests.size() == 4,
+        "E-15 EQS compiler should produce a deterministic bounded query program");
+
+    std::string encoded;
+    std::string error;
+    EditorEqsAsset decoded{};
+    runner.Expect(EncodeEditorEqs(source, encoded, &error) &&
+            DecodeEditorEqs(encoded, decoded, &error) && decoded.assetGuid == guid &&
+            CompileEditorEqs(decoded).program.sourceFingerprint ==
+                first.program.sourceFingerprint,
+        "E-15 durable EQS codec should preserve generator, normalized tests, and identity");
+
+    EditorEqsAsset invalid = source;
+    invalid.tests.push_back(invalid.tests.front());
+    runner.Expect(!CompileEditorEqs(invalid).succeeded,
+        "E-15 EQS compiler should reject duplicate test identity before evaluation");
+    invalid = source;
+    invalid.tests.front().type = EditorEqsTestType::SmartObjectAvailable;
+    runner.Expect(!CompileEditorEqs(invalid).succeeded,
+        "E-15 should reject Smart Object availability tests on a spatial generator");
+
+    EditorScene scene;
+    EditorSceneEntity* object = scene.CreateEntity("Cover Slot", {}, "e15-cover-slot");
+    const std::string objectGuid = object == nullptr ? std::string{} : object->guid;
+    const bool componentAdded = !objectGuid.empty() && scene.AddComponent(
+        objectGuid, std::string(kEditorSmartObjectComponentType));
+    const EditorSceneEntity* persisted = scene.FindEntity(objectGuid);
+    const EditorSceneComponent* component = persisted == nullptr ? nullptr :
+        scene.FindComponent(*persisted, kEditorSmartObjectComponentType);
+    runner.Expect(componentAdded && component != nullptr && component->properties.size() == 6 &&
+            scene.Validate().errors.empty(),
+        "E-15 Scene should persist validated Smart Object slot, type, priority, and lease policy");
+
+    EditorAssetImportOptions importOptions{};
+    runner.Expect(EditorAssetKindForImportPath("Cover.eqs", importOptions) ==
+            EditorAssetKind::EnvironmentQuery &&
+            static_cast<uint32_t>(EditorAssetKind::MaterialInstance) == 11 &&
+            static_cast<uint32_t>(EditorAssetKind::BehaviorTree) == 12 &&
+            static_cast<uint32_t>(EditorAssetKind::EnvironmentQuery) == 13,
+        "E-15 EQS Assets should join durable import without renumbering persisted Asset filters");
+
+    EditorProductionAiWorldPolicy policy{};
+    policy.maximumEqsCandidates = 4;
+    policy.maximumNeighborsPerAgent = 2;
+    EditorProductionAiWorldPipeline pipeline;
+    runner.Expect(pipeline.Initialize(policy, &error) &&
+            pipeline.Policy().maximumEqsCandidates == 4 &&
+            pipeline.Policy().maximumNeighborsPerAgent == 2,
+        "E-15 AI World service should initialize explicit EQS, Crowd, and Smart Object budgets");
+    EditorProductionScenePipeline productionScene;
+    EditorProductionNavigationPipeline navigation;
+    const EditorEqsQueryResult budgetResult = pipeline.Query(
+        first.program, {}, productionScene, navigation);
+    runner.Expect(budgetResult.status == EditorEqsQueryStatus::BudgetExceeded &&
+            pipeline.Stats().eqsBudgetFailures == 1,
+        "E-15 should terminate over-budget EQS before candidate generation or World access");
+    pipeline.Shutdown();
+}
+
+void TestProductionAiAuthoringPipeline(RegressionRunner& runner) {
+    const std::filesystem::path root = std::filesystem::path{"generated"} /
+        "editor" / "tests" / "production_ai_authoring";
+    RemoveTreeIfPresent(root);
+    std::filesystem::create_directories(root);
+    const std::filesystem::path behaviorPath = root / "Authoring.behavior";
+    const std::filesystem::path eqsPath = root / "Authoring.eqs";
+    const std::filesystem::path recordingPath = root / "simulation.record";
+
+    EditorBehaviorTreeDocumentProvider behaviorProvider;
+    EditorEqsDocumentProvider eqsProvider;
+    EditorDocumentRegistry registry;
+    std::string error;
+    runner.Expect(registry.Register(behaviorProvider, &error) &&
+            registry.Register(eqsProvider, &error) && registry.Count() == 2,
+        "E-16 should register Behavior Tree and EQS with the common Document model");
+    EditorDocumentManager documents(registry);
+    const EditorDocumentOpenResult behaviorOpen = documents.Open(
+        EditorDocumentTypes::BehaviorTree, behaviorPath);
+    EditorTransactionStack transactions;
+    EditorProductionAiAuthoringPipeline authoring;
+    EditorAiAuthoringPolicy policy{};
+    policy.maximumBreakpoints = 2;
+    policy.maximumRecordedFrames = 2;
+    runner.Expect(authoring.Initialize(policy, &error) && behaviorOpen.succeeded,
+        "E-16 Authoring service should initialize explicit debugger and recording budgets");
+    authoring.Bind(&behaviorProvider, &eqsProvider, &transactions, &documents);
+    authoring.SetActiveDocument(behaviorOpen.id);
+    EditorBehaviorTreeAsset* activeBehavior = authoring.ActiveBehaviorTree();
+    const std::size_t originalKeys = activeBehavior != nullptr ? activeBehavior->blackboard.size() : 0;
+    EditorBlackboardKeyDefinition alertKey;
+    alertKey.name = "AlertLevel";
+    alertKey.defaultValue.type = EditorBlackboardValueType::Int;
+    runner.Expect(activeBehavior != nullptr && authoring.AddBlackboardKey(alertKey, error) &&
+            transactions.UndoDepth() == 1 &&
+            authoring.ActiveBehaviorTree() != nullptr &&
+            authoring.ActiveBehaviorTree()->blackboard.size() == originalKeys + 1 &&
+            documents.Find(behaviorOpen.id) != nullptr && documents.Find(behaviorOpen.id)->dirty,
+        "E-16 Behavior authoring should publish through generic Transaction and mark its Document dirty");
+    EditorExecutionContext execution;
+    EditorError executionError;
+    execution.Register(authoring, &executionError);
+    runner.Expect(transactions.Undo(execution, &executionError) &&
+            authoring.ActiveBehaviorTree() != nullptr &&
+            authoring.ActiveBehaviorTree()->blackboard.size() == originalKeys &&
+            transactions.Redo(execution, &executionError) &&
+            authoring.ActiveBehaviorTree() != nullptr &&
+            authoring.ActiveBehaviorTree()->blackboard.size() == originalKeys + 1,
+        "E-16 Behavior authoring snapshots should round-trip through global Undo/Redo");
+
+    const EditorDocumentOpenResult eqsOpen = documents.Open(
+        EditorDocumentTypes::EnvironmentQuery, eqsPath);
+    authoring.SetActiveDocument(eqsOpen.id);
+    EditorEqsTestDefinition test{};
+    if (authoring.ActiveEqs() != nullptr && !authoring.ActiveEqs()->tests.empty())
+        test = authoring.ActiveEqs()->tests.front();
+    test.weight += 0.5f;
+    runner.Expect(eqsOpen.succeeded && authoring.ActiveEqs() != nullptr &&
+            authoring.UpdateEqsTest(test, error) &&
+            authoring.EqsCompileResult().succeeded && transactions.UndoDepth() == 2,
+        "E-16 EQS visual authoring should compile and register a generic Transaction");
+    runner.Expect(!authoring.SetEqsGenerator(EditorEqsGeneratorType::SmartObjects,
+            10.0f, 2.0f, 8, {}, error) && authoring.Stats().compileFailures == 1,
+        "E-16 should reject invalid visual edits before publishing authoring state");
+
+    runner.Expect(authoring.SetBreakpoint({"move", {}}, true, &error) &&
+            authoring.SetBreakpoint({"idle", "agent-a"}, true, &error) &&
+            !authoring.SetBreakpoint({"overflow", {}}, true, &error),
+        "E-16 debugger should enforce bounded global and Agent-specific breakpoints");
+    authoring.Pause();
+    runner.Expect(!authoring.ConsumeRuntimeAdvance(),
+        "E-16 paused debugger should stop E-14/E-15 runtime advancement");
+    authoring.RequestStep();
+    runner.Expect(authoring.ConsumeRuntimeAdvance() && !authoring.ConsumeRuntimeAdvance(),
+        "E-16 live Step should consume exactly one deterministic runtime frame");
+
+    EditorProductionAiPipeline behavior;
+    EditorProductionAiWorldPipeline world;
+    behavior.Initialize({}, &error);
+    world.Initialize({}, &error);
+    authoring.BeginRecording();
+    authoring.CaptureRuntimeFrame(behavior, world, 1.0f / 60.0f);
+    authoring.CaptureRuntimeFrame(behavior, world, 1.0f / 60.0f);
+    authoring.CaptureRuntimeFrame(behavior, world, 1.0f / 60.0f);
+    authoring.StopRecording();
+    runner.Expect(authoring.RecordingFrames().size() == 2 &&
+            authoring.Stats().droppedRecordingFrames == 1 &&
+            authoring.BeginReplay(&error) && authoring.StepReplay(1),
+        "E-16 simulation recorder should use a bounded deterministic ring and support replay stepping");
+
+    std::string encoded;
+    std::vector<EditorAiSimulationFrame> decodedFrames;
+    runner.Expect(EncodeEditorAiSimulationRecording(authoring.RecordingFrames(), encoded, &error) &&
+            DecodeEditorAiSimulationRecording(encoded, decodedFrames, policy, &error) &&
+            decodedFrames.size() == authoring.RecordingFrames().size() &&
+            decodedFrames.front().fingerprint == authoring.RecordingFrames().front().fingerprint,
+        "E-16 record codec should preserve deterministic frame fingerprints within capacity budgets");
+    runner.Expect(authoring.ExportRecording(recordingPath, &error),
+        "E-16 recording export should commit through the crash-safe File Transaction service");
+    EditorProductionAiAuthoringPipeline imported;
+    imported.Initialize(policy, &error);
+    runner.Expect(imported.ImportRecording(recordingPath, &error) &&
+            imported.RecordingFrames().size() == 2 && imported.BeginReplay(&error),
+        "E-16 durable simulation recording should verify fingerprints and replay after import");
+
+    EditorPlaySnapshot playSnapshot;
+    runner.Expect(authoring.Capture(playSnapshot, &executionError),
+        "E-16 debugger should capture bounded transient state through Play Isolation");
+    authoring.Resume();
+    authoring.ClearBreakpoints();
+    runner.Expect(authoring.Restore(playSnapshot, &executionError) && authoring.Paused() &&
+            authoring.Breakpoints().size() == 2 && authoring.RecordingFrames().size() == 2,
+        "E-16 Play Isolation restore should discard runtime debugger changes and restore recording state");
+
+    EditorViewportOverlayService overlay;
+    runner.Expect(overlay.RegisterProvider(authoring),
+        "E-16 should register one bounded layered Viewport overlay provider");
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update({{0, 0, 640, 360}, 640, 360, MakeIdentity4x4()});
+    EditorViewportRenderTargetState target{};
+    target.enabled = true; target.renderWidth = 640; target.renderHeight = 360;
+    target.displayRect = {0, 0, 640, 360};
+    overlay.BeginFrame({target, 640, 360, &coordinates, {}, 1.0f});
+    overlay.Resolve();
+    runner.Expect(overlay.Stats().commandBudgetRejected == 0,
+        "E-16 replay overlay should use the common layered command budget without direct drawing");
+
+    imported.Shutdown();
+    authoring.Shutdown();
+    world.Shutdown();
+    behavior.Shutdown();
+    RemoveTreeIfPresent(root);
+}
+
+void TestProductionAiValidationPipeline(RegressionRunner& runner) {
+    const std::filesystem::path root = std::filesystem::path{"generated"} /
+        "editor" / "tests" / "production_ai_validation";
+    RemoveTreeIfPresent(root);
+    std::filesystem::create_directories(root);
+    std::string error;
+
+    EditorAiSimulationFrame first;
+    first.frameIndex = 1;
+    first.behaviorGeneration = 10;
+    first.worldGeneration = 20;
+    first.deltaTime = 1.0f / 60.0f;
+    first.fingerprint = 0x1111;
+    EditorAiAgentDebugSnapshot agent;
+    agent.entityGuid = "validation-agent";
+    agent.behaviorAssetGuid = "validation-behavior";
+    agent.status = EditorBehaviorStatus::Running;
+    agent.activeNodeTrace = {"root", "move"};
+    agent.lastPath = {{0, 0, 0}, {1, 0, 1}};
+    agent.perceived.push_back({"stimulus", {2, 0, 2}, 1.0f, true, false});
+    first.agents.push_back(agent);
+    first.crowd.push_back({"validation-agent", {0, 0, 0}, {1, 0, 0},
+        {0.8f, 0, 0.2f}, 0.5f, 3.0f, 3, true});
+    EditorAiSimulationFrame second = first;
+    second.frameIndex = 2;
+    second.behaviorGeneration = 11;
+    second.worldGeneration = 21;
+    second.fingerprint = 0x2222;
+    second.agents.front().status = EditorBehaviorStatus::Succeeded;
+    const std::vector<EditorAiSimulationFrame> frames{first, second};
+
+    EditorAiValidationPolicy policy{};
+    policy.maximumRuns = 8;
+    policy.maximumFramesPerRun = 8;
+    EditorProductionAiValidationPipeline validation;
+    runner.Expect(validation.Initialize(policy, &error),
+        "E-17 validation should initialize explicit suite, run, frame, coverage, and report capacities");
+    EditorAiValidationSuite suite;
+    suite.id = "production-ai-regression";
+    suite.name = "Production AI Regression";
+    EditorAiValidationScenario scenario;
+    scenario.id = "recorded-combat";
+    scenario.firstSeed = 41;
+    scenario.seedCount = 2;
+    scenario.repetitions = 2;
+    scenario.maximumFrames = 2;
+    scenario.requiredBehaviorNodes = {"root", "move"};
+    scenario.budget.maximumAgentsPerFrame = 1;
+    scenario.budget.maximumNavigationQueriesPerFrame = 1;
+    scenario.budget.maximumPerceivedStimuliPerFrame = 1;
+    scenario.budget.maximumCrowdNeighborTestsPerFrame = 3;
+    suite.scenarios.push_back(scenario);
+    EditorAiRecordingBatchSimulationSource source(frames);
+    runner.Expect(validation.RunSuite(suite, source, &error) && validation.Report().passed &&
+            validation.Report().passedRuns == 4 && validation.Report().failedRuns == 0 &&
+            validation.Report().totalFrames == 8 &&
+            validation.Report().runs.front().behaviorNodeHits.at("move") == 2 &&
+            validation.Stats().framesSimulated == 8,
+        "E-17 should execute bounded scenario/seed/repeat matrices and aggregate deterministic Behavior coverage");
+    const EditorAiValidationReport baseline = validation.Report();
+    runner.Expect(baseline.runs[0].deterministicFingerprint ==
+            baseline.runs[1].deterministicFingerprint &&
+            baseline.runs[2].deterministicFingerprint ==
+            baseline.runs[3].deterministicFingerprint,
+        "E-17 repeated seeds should produce identical fingerprints independent of runner timing");
+
+    suite.scenarios.front().seedCount = 1;
+    suite.scenarios.front().repetitions = 1;
+    suite.scenarios.front().budget.maximumPerceivedStimuliPerFrame = 0;
+    EditorAiRecordingBatchSimulationSource failingSource(frames);
+    runner.Expect(validation.RunSuite(suite, failingSource, &error) &&
+            !validation.Report().passed && validation.Report().failedRuns == 1 &&
+            validation.Report().runs.front().outcome == EditorAiValidationOutcome::BudgetExceeded &&
+            !validation.Report().runs.front().failures.empty() &&
+            validation.Report().runs.front().reproductionFrame.frameIndex == 1,
+        "E-17 should fail closed on navigation/perception/crowd/EQS/time budgets and retain the first reproduction frame");
+    const EditorAiValidationComparison comparison = validation.CompareWith(baseline);
+    runner.Expect(comparison.comparable && comparison.regression &&
+            comparison.failedRunDelta == 1 && comparison.passedRunDelta == -4,
+        "E-17 should compare stable suite reports and surface pass/failure regressions");
+
+    const std::filesystem::path reportBase = root / "ai_validation";
+    runner.Expect(validation.ExportReport(reportBase, &error) &&
+            std::filesystem::exists(root / "ai_validation.json") &&
+            std::filesystem::exists(root / "ai_validation.md") &&
+            std::filesystem::exists(root / "ai_validation_failures" /
+                "recorded-combat_seed41_repeat0.repro") &&
+            std::filesystem::exists(root / "ai_validation_failures" /
+                "recorded-combat_seed41_repeat0.record") &&
+            validation.Stats().exportedReports == 1 &&
+            validation.Stats().exportedReproductions == 1,
+        "E-17 should atomically export JSON, Markdown, versioned repro metadata, and an E-16 failure frame recording");
+    const std::string json = SerializeEditorAiValidationReportJson(validation.Report());
+    runner.Expect(json.find("editor.aiValidation.v1") != std::string::npos &&
+            json.find("perception-budget") != std::string::npos,
+        "E-17 telemetry report should use a versioned machine-readable schema with diagnostic codes");
+
+    suite.scenarios.front().seedCount = policy.maximumSeedsPerScenario + 1;
+    EditorAiRecordingBatchSimulationSource rejectedSource(frames);
+    runner.Expect(!validation.RunSuite(suite, rejectedSource, &error) &&
+            validation.Stats().rejectedSuites == 1,
+        "E-17 should reject an over-capacity suite before invoking its simulation source");
+    validation.Shutdown();
+    RemoveTreeIfPresent(root);
+}
+
+void TestProductionNavigationAuthoringPipeline(RegressionRunner& runner) {
+    std::string error;
+    const std::string guid = "e1800000-0000-4000-8000-000000000018";
+    EditorNavigationAuthoringAsset asset =
+        MakeDefaultEditorNavigationAuthoringAsset(guid, "Production Navigation");
+    asset.areas.push_back({"Mud", 3.5f, {0.45f, 0.25f, 0.1f}, true});
+    asset.agentProfiles.push_back({"Heavy", 0.8f, 2.4f, 0.5f, 35.0f});
+    asset.offMeshLinks.push_back({"JumpGap", {1.5f, 0.0f, 0.5f},
+        {4.5f, 0.0f, 0.5f}, 0.75f, 1.25f, true, true, "Mud", "Heavy"});
+    const auto first = CompileEditorNavigationAuthoring(asset);
+    const auto second = CompileEditorNavigationAuthoring(asset);
+    std::string encoded;
+    EditorNavigationAuthoringAsset decoded;
+    runner.Expect(first.succeeded && second.succeeded &&
+            first.program.sourceFingerprint == second.program.sourceFingerprint &&
+            EncodeEditorNavigationAuthoring(asset, encoded, &error) &&
+            DecodeEditorNavigationAuthoring(encoded, decoded, &error) &&
+            decoded.offMeshLinks.size() == 1 && decoded.areas.size() == 2,
+        "E-18 should compile and round-trip versioned Navigation Data deterministically");
+
+    EditorNavigationAuthoringAsset invalid = asset;
+    invalid.offMeshLinks.front().areaId = "Missing";
+    runner.Expect(!CompileEditorNavigationAuthoring(invalid).succeeded,
+        "E-18 compiler should reject dangling Area/Profile references before runtime publication");
+    runner.Expect(EditorAssetKindForImportPath("World.navdata", {}) ==
+            EditorAssetKind::NavigationData,
+        "E-18 Navigation Data should participate in durable Content Browser classification");
+
+    auto snapshot = std::make_shared<EditorNavigationQuerySnapshot>();
+    snapshot->generation = 18;
+    snapshot->voxelSize = 1.0f;
+    snapshot->agentRadius = 0.5f;
+    snapshot->maximumStepHeight = 1.0f;
+    snapshot->areas = first.program.areas;
+    snapshot->agentProfiles = first.program.agentProfiles;
+    snapshot->offMeshLinks = first.program.offMeshLinks;
+    EditorNavigationTile tile;
+    tile.key = {0, 0, "Default"};
+    tile.nodes = {
+        {0, 0, {0.5f, 0.0f, 0.5f}, 1.0f, "Default"},
+        {1, 0, {1.5f, 0.0f, 0.5f}, 1.0f, "Default"},
+        {4, 0, {4.5f, 0.0f, 0.5f}, 1.0f, "Default"},
+        {5, 0, {5.5f, 0.0f, 0.5f}, 1.0f, "Default"}};
+    snapshot->tiles.push_back(std::move(tile));
+    EditorProductionNavigationPipeline runtime;
+    EditorNavigationPolicy policy;
+    policy.voxelSize = 1.0f;
+    policy.maximumQueryNodes = 32;
+    runner.Expect(runtime.Initialize(policy, &error),
+        "E-18 runtime consumer should initialize with bounded query capacities");
+    const auto path = runtime.FindPathForProfile(snapshot,
+        {0.5f, 0.0f, 0.5f}, {5.5f, 0.0f, 0.5f}, "Heavy");
+    runner.Expect(path.Succeeded() && path.agentProfileId == "Heavy" &&
+            path.traversedOffMeshLinks == std::vector<std::string>{"JumpGap"} &&
+            runtime.Stats().offMeshLinkTraversals == 1,
+        "E-18 A* should resolve an agent-filtered Off-Mesh Link across disconnected polygons");
+
+    const EditorDocumentId document{guid, std::string(EditorDocumentTypes::NavigationData)};
+    EditorNavigationDocumentProvider provider;
+    EditorDocumentContent content;
+    content.schemaVersion = kEditorNavigationAuthoringSchemaVersion;
+    content.bytes.assign(encoded.begin(), encoded.end());
+    runner.Expect(provider.SupportsPath("World.navdata") &&
+            provider.Deserialize(document, content, &error) &&
+            provider.Validate(content).Succeeded(),
+        "E-18 Document Provider should own validated live Navigation Data independently of the runtime snapshot");
+    EditorTransactionStack transactions;
+    EditorProductionNavigationAuthoringPipeline authoring;
+    runner.Expect(authoring.Initialize({}, &error),
+        "E-18 authoring service should initialize a bounded overlay policy");
+    authoring.Bind(&provider, &transactions, nullptr, &runtime);
+    authoring.SetActiveDocument(document);
+    runner.Expect(authoring.AddArea(
+            {"Water", 6.0f, {0.1f, 0.3f, 0.8f}, true}, error) &&
+            transactions.NextUndoTransaction() != nullptr &&
+            transactions.NextUndoTransaction()->command->DomainId() == "navigation-authoring" &&
+            provider.Asset(document)->areas.size() == 3,
+        "E-18 edits should compile, publish, and enter the generic Command transaction stack");
+    EditorExecutionContext execution;
+    execution.Register(authoring, nullptr);
+    EditorError transactionError;
+    runner.Expect(transactions.Undo(execution, &transactionError) &&
+            provider.Asset(document)->areas.size() == 2 &&
+            transactions.Redo(execution, &transactionError) &&
+            provider.Asset(document)->areas.size() == 3,
+        "E-18 Navigation Data snapshot commands should restore authoring and runtime state through Undo/Redo");
+    authoring.Shutdown();
+    runtime.Shutdown();
+}
+
 void TestProductionTextureResidencyPipeline(RegressionRunner& runner) {
     const std::filesystem::path root = std::filesystem::path{"generated"} /
         "editor" / "tests" / "production_texture_regression";
@@ -8445,6 +8991,12 @@ int RunEditorCoreRegressionTests() {
         {"production multi-light cluster shadow pipeline", [&]() { TestProductionMultiLightClusterPipeline(runner); }},
         {"production gpu-driven visibility indirect pipeline", [&]() { TestProductionGpuDrivenVisibilityPipeline(runner); }},
         {"production world partition cell streaming hlod", [&]() { TestWorldPartitionCellPolicy(runner); }},
+        {"production navigation mesh ai query dynamic obstacles", [&]() { TestProductionNavigationPipeline(runner); }},
+        {"production ai behavior tree blackboard perception", [&]() { TestProductionAiBehaviorPipeline(runner); }},
+        {"production ai eqs crowd smart objects", [&]() { TestProductionAiWorldPipeline(runner); }},
+        {"production ai authoring debugger simulation", [&]() { TestProductionAiAuthoringPipeline(runner); }},
+        {"production ai validation batch simulation telemetry", [&]() { TestProductionAiValidationPipeline(runner); }},
+        {"production navigation authoring offmesh area costs", [&]() { TestProductionNavigationAuthoringPipeline(runner); }},
         {"advanced vfx graph", [&]() { TestAdvancedVfxGraph(runner); }},
         {"animation state machine", [&]() { TestAnimationStateMachine(runner); }},
         {"gameplay visual scripting", [&]() { TestGameplayVisualScripting(runner); }},

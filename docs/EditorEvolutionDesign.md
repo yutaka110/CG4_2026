@@ -157,7 +157,7 @@ EV-A1 Transaction CoreのDomain非依存化は、既存のAsset MutationとRunti
 | A1-Foundation | 汎用Command API、失敗安全なUndo/Redo、履歴メモリ上限、Course/Detailsの移行 | A-2 File Transaction |
 | A1-Final | Asset MutationとRuntime Applyの移行、旧Domain payload/APIの削除 | A-2およびA-3完了後 |
 
-**A1-FoundationからE-12 Production World Partition／Cell Streaming／HLOD Pipelineまでは2026-07-15までに実装・検証済み**である。Transaction／File Safety／Play Isolation／Document／World／Asset／Graph／Interactive Tool基盤に加え、Mesh／Material／Texture／Shader／Multi-Light／Shadow／GPU visibilityと、camera駆動のCell residency／HLODまでProduction Scene経路が接続された。E-12完了判定は22/22 gate、274/274 check、blocked 0、attention 0、performance warning 0で`ready`である。次のActive MilestoneはE-13 Production Navigation Mesh／AI World Query／Dynamic Obstacle Pipelineとする。
+**A1-FoundationからE-18 Production Navigation Authoring／Off-Mesh Link／Area Cost Toolingまでは2026-07-16までに実装・検証済み**である。E-13のNavigation queryを、durable Navigation Data、polygon identity、Area Cost、Agent Profile、Off-Mesh Link、Transaction-backed authoring、Viewport overlayへ拡張した。E-18完了判定はEditor Core Regression 56/56、Commercial Completion v21 28/28 gate、356/356 check、blocked 0、attention 0、warning 0で`ready`である。次のActive MilestoneはE-19 Production Derived Data Cache／Background Build Pipelineとする。
 
 #### A1-Foundation実装結果
 
@@ -1351,7 +1351,16 @@ IEditorSequencerTrackProvider
 - Runtime WatchはCell数、Source／Loading／HLOD状態、queued／completed build、cross-cell reference／pull、各budget rejection、resident／pending GPU MiBを公開する。Commercial Completion schema `editor.commercialCompletion.v15`はsigned cell identity、durable E-5 handoff、WARP初期化、hard-reference pull、実HLOD merge／GPU upload、Fence、camera遷移、budget診断の8項目を追加した。
 - Editor Core Regressionは50/50である。Development Commercial Completionは22/22 gate、274/274 check、failed 0、blocked 0、attention 0、warning 0で`ready`である。Development性能実測はAsset Index 30.36 ms、Details 2.31 ms、10,000 Overlay Label 2.79 msで全budget内である。
 
-次のActive MilestoneはE-13 Production Navigation Mesh／AI World Query／Dynamic Obstacle Pipelineとする。E-12のCell residency境界をNavigation tile build／streaming、query snapshot、動的障害物更新へ共有する。Nanite相当virtualized geometry、汎用Derived Data Cache／background build farm、Point cube shadow、Post Process Material domain、Data Layer編集UI／One File Per Actorは独立拡張として追跡する。
+### E-13 Production Navigation Mesh／AI World Query／Dynamic Obstacle Pipeline 実装結果
+
+- Sceneへ永続`editor.navigation-surface`／`editor.navigation-obstacle` Componentを追加した。Surfaceはwalkable／area cost、Obstacleはenabled／dynamic／carve／half extentsを保持する。Tile、worker、query snapshotはtransient stateとしてScene Documentへ保存しない。
+- `EditorProductionNavigationPipeline`はE-12 Source Resident CellとE-6の検証済みPhysics instanceを共有し、Cell境界と一致するbounded grid tileを非同期buildする。Box上面にagent radius erosionを適用し、TriangleMeshはworld-space三角形のXZ barycentric heightと最大45度の傾斜制限からwalkable nodeを生成する。既定4 m voxel、最大64 resident tile、tile当たり4,096 node、同時2 buildを明示し、collision geometry hash／Surface／static obstacle／policy fingerprint変更で該当tileだけを再生成する。Surface消失またはCell unload時は旧tileを破棄する。
+- AI World Queryは世代付きimmutable snapshotを公開し、point projection、navigation line query、8近傍A*を提供する。A*はstep height、area cost、diagonal corner cutting、最大8,192 node expansionを検証し、上限超過を明示statusとして終了する。新snapshot公開後もworkerが保持する旧snapshotは変更されない。
+- Dynamic Obstacleは親子world transform、rotation／scaleをworld AABBへ反映し、Source Resident集合だけから安定GUID順で収集する。移動／追加／削除は影響Cellをdirty計上し、tile rebuildを待たず次snapshotでcarveを反映する。Obstacle／tile／node／query各budget超過はRuntime Watchとdiagnosticへ公開する。
+- App frameはE-12 Sync、E-6 Physics Syncの後にE-13を更新する。Runtime Watchはsubmitted／resident／queued／completed tile、node、Obstacle update／dirty Cell、path成功／失敗、visited node、snapshot generation、budget rejectionを表示する。
+- Editor Core Regressionは51/51である。Commercial Completion schema `editor.commercialCompletion.v16`はDurable Component、E-5 collision handoff、WARP＋E-12／E-6連携、2 Cell async tile、projection、Cell跨ぎA*、dynamic carve／snapshot isolation、query budget、tile budget、WARP submissionの10項目を追加した。全体は23/23 gate、284/284 check、failed 0、blocked 0、attention 0、warning 0で`ready`である。
+
+E-13の次工程はE-14で完了した。実装結果と新しいActive Milestoneは後続のE-14節を正とする。
 
 ## 13. 実装を後回しにする機能
 
@@ -1363,6 +1372,59 @@ IEditorSequencerTrackProvider
 - Full Sequencer
 - Animation Graph
 - Plugin Marketplace
+
+### E-14 Production AI Behavior Tree / Blackboard / Perception Pipeline 実装結果
+
+- `.behavior` / `.behaviortree` / `.btree` をDurable `BehaviorTree` AssetとしてAsset Registry、import、Content Browser filter、preview、thumbnailへ統合した。Versioned codecはAsset GUID、型付きBlackboard、node topologyを保存し、16 MiB、2,048 node、256 key上限を強制する。
+- compilerはRoot、Selector、Sequence、Condition、SetBlackboard、Wait、MoveTo、Succeed、Failを決定的programへ変換する。重複ID/key、missing parent、unreachable/cycle、Root/Composite/Leaf topology、unsupported condition、invalid typed value、MoveTo非Vector3 key、非有限Waitを実行前に診断する。
+- Sceneへ永続`editor.ai-agent`と`editor.ai-stimulus` Componentを追加した。AgentはBehavior Tree GUID、team、tick interval、Sight radius/FOV、Hearing radius、same-team policy、Stimulusはteam、visible、audible、loudnessを保持する。実行状態、知覚結果、path、program cacheはtransientである。
+- runtimeはE-12 Source Resident EntityだけをGUID順に収集し、Agent、Stimulus、per-agent perception、node executionの明示budgetを適用する。SightはFOVとE-6 Physics Raycast、Hearingはradius x loudnessで判定し、結果を強度/GUID順に安定化して`TargetEntity`、`TargetLocation`、`HasLineOfSight`、`HeardStimulus`へ型を壊さずpublishする。
+- Behavior executorはbounded tick、per-agent Blackboard、Wait state、active node traceを保持する。MoveToはE-13 immutable navigation snapshotへ委譲する。Asset timestamp変更はprogramをhot reloadし、fingerprint変更時だけBlackboardとWait stateをdefaultへ再初期化する。
+- App frameはE-12、E-6、E-13の後にE-14を更新する。Runtime WatchはAgent/Stimulus、Sight/Hearing hit、tick status、navigation、loaded program/hot reload、capacity/node budget rejectionを表示する。
+- Editor Core Regressionは52/52。Commercial Completion schema `editor.commercialCompletion.v17`は24/24 gate、294/294 check、failed 0、blocked 0、attention 0、warning 0で`ready`である。
+
+### E-15 Production AI EQS / Crowd Steering / Smart Object Pipeline 実装結果
+
+- `.eqs` / `.envquery`をDurable `EnvironmentQuery` AssetとしてRegistry、import、Content Browser filter、preview、thumbnailへ統合した。versioned codec/compilerはRing、Grid、SmartObjects generatorとDistance、PathCost、Visibility、Crowding、SmartObjectAvailable testを保存し、重複ID、非有限range、generator/test不整合、512 candidate、64 testのschema上限を実行前に拒否する。
+- `EditorProductionAiWorldPipeline`はEQS AssetをGUIDとtimestampで解決し、bounded resident program cache、決定的LRU eviction、hot reloadを管理する。queryはE-13 snapshotへの投影/path cost、E-6 Physics Raycast visibility、E-14 Crowd密度、Smart Object availabilityを0..1へ正規化し、filter後にweight scoreとstable tie-breakで順位付けする。candidate/test上限超過はWorld access前に明示statusで終了し、result数もpolicyで制限する。
+- E-14 AI Agentへcrowd enabled、radius、maximum speed、neighbor radius、avoidance weightを追加した。Source Resident AgentをGUID順に収集し、E-14 TargetLocation/pathからpreferred velocityを生成する。近傍は距離/GUID順に制限し、現在位置と予測時間内のclosest approachからseparation velocityを求め、maximum speed内へclampする。
+- Sceneへ永続`editor.smart-object` Componentを追加した。slot ID、type、interaction radius、priority、lease durationだけを保存し、requester、token、expiryはtransientである。予約はpriority、distance、Entity GUID、slot ID順に決定し、排他的、同一requester idempotent、renew/release可能、期限切れ即時再利用可能とした。Cell unloadはslot、reservation、Crowd stateを同時に破棄する。
+- App frameはE-14の後にE-15を更新する。Runtime WatchはEQS query/candidate/test/rejection、navigation/visibility、program/hot reload、Crowd neighbor/avoidance、Smart Object slot/reservation/expiry、全capacity rejectionを表示し、Agent別preferred/steering velocityも公開する。
+- Editor Core Regressionは53/53。Commercial Completion schema `editor.commercialCompletion.v18`はDurable Asset、Scene Component、WARP初期化、Cell ownership、予測局所回避、複合EQS、排他/idempotent予約、availability再評価、renew/release、expiry、hot reload、全capacity budget、Cell unload、WARP submissionの14項目を追加した。全体は25/25 gate、308/308 check、failed 0、blocked 0、attention 0、warning 0で`ready`である。
+
+### E-16 Production AI Authoring / Debugger / Simulation Pipeline 実装結果
+
+- `BehaviorTree`と`EnvironmentQuery`を共通`IEditorDocumentProvider`へ登録し、既存Durable codecのDeserialize／Migrate／Validate／Publish／ReleaseをDocument lifecycleへ統合した。新規Documentは安定Asset GUIDを持つ有効な既定graphとして生成され、compile成功後だけlive modelへpublishされる。
+- Bottom Dockへ`AI Authoring / Debugger`を追加した。Behavior Treeは階層canvas、node type／parent／order／Blackboard binding／operation／value／wait編集、node追加・削除、Blackboard schema追加を提供する。EQSはgenerator-to-test canvas、Ring／Grid／Smart Object generator設定、test追加・更新・削除を提供する。
+- すべてのgraph／schema変更はDomain非依存のsnapshot Commandを`EditorTransactionStack`へ積み、共通Undo／Redo、Dirty、Document mutation通知を通る。compile失敗、cycle、重複、上限超過などの不正編集はlive Documentを変更せずatomicに拒否する。
+- debuggerはglobalまたはAgent-scoped active-node breakpoint、Pause／Resume、exact one-frame Step、active node trace、型付きlive Blackboard、知覚stimulus、path、Crowd、Smart Object状態を公開する。App frameはE-14、E-15、E-16 captureの順序を固定し、Pause中はE-14／E-15を進めない。
+- simulation captureは最大600 frameのbounded ringを使用する。versioned `AI_SIM_RECORDING 1` codecはframe／world／behavior generation、Agent trace、Blackboard、perception、path、Crowd、Smart Objectを保存し、frame fingerprintをimport時に再検証する。Exportは`EditorFileTransaction`でatomic commitし、破損／非互換recordingは現在のreplay stateを置換せずfail closedとする。
+- Replayはseek／前後step／live復帰に対応する。Perception、path、Crowd velocity、Smart Object slotは共通`IEditorViewportOverlayProvider`のbounded layerへ描画し、専用viewport経路を増やさない。Runtime Watchはrecording、replay、breakpoint hit、overlay command／budget rejectionを表示する。
+- debugger control、breakpoint、recording ring、live frame、次frame indexを`IEditorPlayIsolationProvider`でcapture／restoreするため、Play／Simulate終了時にAuthoring sessionへ正確に復帰する。
+- Editor Core Regressionは54/54。Commercial Completion schema `editor.commercialCompletion.v19`はtyped Document、compile-before-publish、generic Transaction、invalid edit atomicity、bounded breakpoint、exact Step、bounded replay、versioned codec／fingerprint、File Transaction、corruption safety、Play Isolation、layered overlay、App order、全Editor build integrationの15項目を追加した。全体は26/26 gate、323/323 check、failed 0、blocked 0、attention 0、warning 0で`ready`である。
+
+### E-17 Production AI Validation / Batch Simulation / Telemetry Pipeline 実装結果
+
+- `IEditorAiBatchSimulationSource`をEditor UI、D3D12、実時間から独立したheadless simulation契約として追加した。sourceはscenario／seedでresetし、決定的frameとnavigation／perception／Crowd／EQS／simulation-time telemetryをstep単位で返す。E-16 recording adapterを標準実装とし、将来のWorld clone backendも同じrunnerへ差し替えられる。
+- suiteは最大64 scenario、scenarioごとに最大32 seed x 8 repetition、全体256 run、runごと3,600 frameまでに制限する。重複scenario ID、zero capacity、非有限budget、coverage／run／frame上限超過はsource実行前にatomic rejectし、直前reportを保持する。
+- 各runはBehavior active-node IDとEQS test IDのhit count、Agent frame／failure、navigation query／failure、perceived stimulus、Crowd neighbor test、EQS candidate test、source simulation timeを集約する。同一scenario／seedのrepeatはwall-clockをfingerprintから除外して比較し、異なる決定的fingerprintを`NonDeterministic`として失敗させる。
+- scenarioはAgent、navigation、perception、Crowd、EQS、simulation millisecondsのper-frame性能budgetと、必須Behavior／EQS coverageを宣言できる。Agent failure、missing coverage、frame budget、source contract違反、各性能budget超過はstable diagnostic codeでfail closedに記録する。
+- 失敗runは最初のoffending frameを保持する。Exportはversioned `editor.aiValidation.v1` JSON、Markdown summary、`AI_FAILURE_REPRO 1` manifest、単一frameのE-16 `.record`を1つの`EditorFileTransaction`でatomic commitする。suite/schema一致reportはpass／failure／frame／peak source-time deltaを比較し、回帰をRuntime Watchへ公開する。
+- Bottom Dock `AI Validation / Batch`はrecording、seed、repeat、frame、coverage、性能budgetを設定し、run別coverage／telemetry／failureを表示する。`--editor-ai-validation`は`logs/editor_ai_simulation.record`を読み、Editorを開かず3 seed x 2 repeatを実行してJSON／Markdown／reproを生成する。
+- Editor Core Regressionは55/55。Commercial Completion schema `editor.commercialCompletion.v20`はpolicy fail-closed、headless matrix、determinism、Behavior／EQS coverage、全subsystem telemetry、性能budget、reproduction frame、baseline comparison、atomic report、versioned repro、machine schema、capacity rejection、App UI／Runtime Watch、CLI、全build integrationの16項目を追加した。全体は27/27 gate、339/339 check、failed 0、blocked 0、attention 0、warning 0で`ready`である。
+
+次のActive MilestoneはE-18 Production Navigation Authoring / Off-Mesh Link / Area Cost Toolingとする。E-13の点接続query基盤をpolygonized NavMesh、jump／door／ladder等のdurable off-mesh link、area cost／agent profile、viewport authoring、tile validationへ拡張し、E-17のbatch gateで到達性と性能を継続検証する。汎用Derived Data Cache／build farmは独立拡張として追跡する。
+
+### E-18 Production Navigation Authoring / Off-Mesh Link / Area Cost Tooling 実装結果
+
+- `.navdata`／`.navigation`をdurable `NavigationData` AssetとしてRegistry、Import、Content Browser filter、Preview、Thumbnail、dependency tokenへ統合した。versioned `NAVIGATION_DATA 1` codecと専用Document Providerは、Area、Agent Profile、Off-Mesh Linkのlive authoring modelを保持し、8 MiB上限とschema validationを適用する。
+- compilerはDefault Area／Default Agent Profile、重複ID、非有限値、Area／Profile参照、Link endpoint、64 Area／16 Profile／256 Link上限をpublish前に検証する。stable ID順に正規化したimmutable programとsource fingerprintだけをE-13 runtimeへ渡し、不正Assetで現在のruntime snapshotを置換しない。
+- E-13 tile buildはwalkable cellごとにstable polygon referenceとArea IDを生成する。query snapshotはArea／Profile／enabled Off-Mesh Linkをgeneration単位で保持し、profile寸法とstep heightを投影／隣接判定へ適用する。A*はArea CostとLink cost multiplierを積算し、片方向／双方向およびAgent Profile filterを守り、通過Link IDを結果とtelemetryへ残す。
+- `EditorProductionNavigationAuthoringPipeline`はArea、Profile、Linkの追加／更新／削除をcompile-before-publishし、`navigation-authoring`のdomain-independent snapshot Commandとして共通Transactionへ積む。push失敗時はDocumentとruntimeをrollbackし、Undo／Redoは両者を同じcompiled stateへ再公開する。Default定義と参照中定義の削除はatomic rejectする。
+- Bottom Dock `Navigation Authoring`はArea Cost／debug color／enabled、Agent寸法／step／slope、Off-Mesh Link endpoint／radius／cost／direction／enabledを編集する。共通Viewport OverlayのNavigation layerはpolygon edgeとLink endpoint／labelを描画し、4,096 command上限とrejection telemetryを持つ。Runtime Watchはpolygon、Area／Profile／Link、Link traversal／reject、compile／publish／overlay状態を公開する。
+- Editor Core Regressionは56/56。Commercial Completion schema `editor.commercialCompletion.v21`はdeterministic compile、versioned round-trip、dangling reference、capacity、Document、default creation、Asset classification、runtime publish、profile-filtered Link、Area cost、bounded authoring、generic Transaction、delete invariant、Undo／Redo、App／Viewport／Runtime Watch、global command routing、全build integrationの17項目を追加した。全体は28/28 gate、356/356 check、failed 0、blocked 0、attention 0、warning 0で`ready`である。
+
+次のActive MilestoneはE-19 Production Derived Data Cache / Background Build Pipelineとする。E-5 Mesh bake、E-8 Texture、E-9 Shader／PSO、E-10 Shadow、E-12 HLOD、E-13／E-18 Navigation tileの高コスト派生物を共通content hash、toolchain version、platform keyで再利用し、優先度付きbackground build、cancel、atomic promotion、size budget／LRU、corruption recovery、Runtime Watch、headless cookへ接続する。
 
 これらを先に実装すると、独自Transaction、独自Document、独自Asset referenceが増え、後の統合コストが大きくなる。
 
