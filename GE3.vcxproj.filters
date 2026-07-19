@@ -1325,6 +1325,9 @@
     <ClInclude Include="application\AppRuntimeUtils.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
+    <ClInclude Include="application\AppLogFile.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
     <ClInclude Include="application\AppRuntimeConfig.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>

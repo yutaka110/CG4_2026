@@ -464,14 +464,6 @@ void PrepareAutomationPropertyWorld(
     EditorPropertyRegistry& registry,
     AutomationPropertyAccessor& accessor,
     const EditorObjectHandle& target) {
-    RegisterBuiltInCourseObjectProperties(registry);
-    RegisterBuiltInVfxProperties(registry);
-    RegisterBuiltInTerrainProperties(registry);
-    RegisterBuiltInPostProcessProperties(registry);
-    RegisterBuiltInRenderProperties(registry);
-    RegisterBuiltInCameraProperties(registry);
-    RegisterBuiltInCourseEventProperties(registry);
-    RegisterBuiltInGameplayProperties(registry);
     RegisterBuiltInEditorProperties(registry);
 
     const std::vector<const EditorPropertyDescriptor*> descriptors =
@@ -1072,14 +1064,12 @@ EditorAutomationGateResult RunPerformanceBudgetGate() {
         MeasureMs(
             [&]() {
                 for (int iteration = 0; iteration < 128; ++iteration) {
-                    for (const EditorPropertyDescriptor& descriptor : propertyRegistry.Descriptors()) {
-                        if (descriptor.domain != target.domain ||
-                            !propertyAccessor.CanAccess(target, descriptor)) {
-                            continue;
-                        }
+                    for (const EditorPropertyDescriptor* descriptor :
+                             propertyRegistry.FindByDomainCached(target.domain)) {
+                        if (descriptor == nullptr) continue;
                         EditorPropertyValue value{};
-                        if (propertyAccessor.Get(target, descriptor, value)) {
-                            (void)FormatEditorPropertyValue(descriptor, value);
+                        if (propertyAccessor.Get(target, *descriptor, value)) {
+                            (void)FormatEditorPropertyValue(*descriptor, value);
                             ++propertyTraversalCount;
                         }
                     }
@@ -5536,8 +5526,9 @@ bool WriteJsonReport(
 
     output << "{\n";
     const bool completionReady =
-        failedCount == 0 && blockedChecks == 0 && attentionChecks == 0;
-    output << "  \"schema\": \"editor.commercialCompletion.v21\",\n";
+        failedCount == 0 && warningCount == 0 &&
+        blockedChecks == 0 && attentionChecks == 0;
+    output << "  \"schema\": \"editor.commercialCompletion.v22\",\n";
     output << "  \"generatedAtUtc\": \"" << JsonEscape(timestamp) << "\",\n";
     output << "  \"result\": \"" << (completionReady ? "ready" : "not-ready") << "\",\n";
     output << "  \"commercialCompletionReady\": "
@@ -5621,11 +5612,12 @@ bool WriteMarkdownReport(
     }
 
     const bool completionReady =
-        failedCount == 0 && blockedChecks == 0 && attentionChecks == 0;
+        failedCount == 0 && warningCount == 0 &&
+        blockedChecks == 0 && attentionChecks == 0;
     output << "# Editor Commercial Completion Report\n\n";
     output << "- Generated: `" << timestamp << "`\n";
     output << "- Result: **" << (completionReady ? "ready" : "not-ready") << "**\n";
-    output << "- Completion policy: every gate passes, blocked = 0, attention = 0\n";
+    output << "- Completion policy: every gate passes, warnings = 0, blocked = 0, attention = 0\n";
     output << "- Gates: " << records.size() << "\n";
     output << "- Failed: " << failedCount << "\n";
     output << "- Warnings: " << warningCount << "\n";
@@ -5915,7 +5907,7 @@ int RunEditorCommercialAutomationGates(EditorSmokeExternalStep effectAuthoringSm
 
     bool failed = !jsonWritten || !markdownWritten;
     for (const EditorAutomationGateRecord& record : records) {
-        failed = failed || !record.passed ||
+        failed = failed || !record.passed || record.performanceWarning ||
             record.blockedChecks != 0 || record.attentionChecks != 0;
     }
     return failed ? 1 : 0;

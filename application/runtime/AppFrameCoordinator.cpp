@@ -1,4 +1,5 @@
 #include "AppFrameCoordinator.h"
+#include "../AppLogFile.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -66,7 +67,7 @@ void LogFenceFailure(
         WaitResultName(waitResult),
         static_cast<unsigned int>(removedReason));
     OutputDebugStringA(message);
-    std::ofstream log("logs/gpu_fence_wait.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/gpu_fence_wait.log");
     if (log) {
         log << message;
     }
@@ -239,7 +240,7 @@ void AppFrameCoordinator::LogPresentPolicy() const {
          << " maxFrameLatency=" << presentMaxFrameLatency_
          << "\n";
     OutputDebugStringA(line.str().c_str());
-    std::ofstream log("logs/rail_present_policy.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/rail_present_policy.log");
     if (log) {
         log << line.str();
     }

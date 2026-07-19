@@ -2,6 +2,8 @@
 
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
 
+#include "AppLogFile.h"
+
 #include "AppDebugViewsPanel.h"
 #include "AppCourseTimelineDebugPanel.h"
 #include "AppEditorToolModules.h"
@@ -266,7 +268,7 @@ void LogEditorImguiBreakdown(const EditorImguiFrameTiming& timing) {
         return;
     }
 
-    std::ofstream log("logs/editor_imgui_breakdown.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/editor_imgui_breakdown.log");
     if (!log.is_open()) {
         return;
     }
@@ -309,7 +311,7 @@ void LogEditorImguiRenderTiming(double renderMs) {
     if ((frameCounter % 30u) != 1u) {
         return;
     }
-    std::ofstream log("logs/editor_imgui_breakdown.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/editor_imgui_breakdown.log");
     if (!log.is_open()) {
         return;
     }

@@ -406,8 +406,9 @@ bool EditorViewportOverlayService::Submit(EditorViewportOverlayCommand command) 
     ++stats_.submitted;
     if (command.type == EditorViewportOverlayCommandType::Label && !command.options.selected) {
         const size_t layerIndex = LayerIndex(command.layer);
-        const uint32_t maxCandidates =
-            (std::max)(LayerSettings(command.layer).maxLabels, 1u) * 4u;
+        const uint32_t maxLabels =
+            (std::max)(LayerSettings(command.layer).maxLabels, 1u);
+        const uint32_t maxCandidates = maxLabels + (std::min)(maxLabels, 32u);
         if (labelCandidateCounts_[layerIndex] >= maxCandidates) {
             ++preResolveLabelsSuppressed_;
             return true;

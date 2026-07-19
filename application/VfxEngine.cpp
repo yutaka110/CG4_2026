@@ -1,4 +1,5 @@
 #include "VfxEngine.h"
+#include "AppLogFile.h"
 
 #include "AppRuntimeState.h"
 #include "AppSceneResources.h"
@@ -41,7 +42,7 @@ double VfxPrepareElapsedMs(
 
 void WriteVfxPrepareWatchdogLine(const char* message) {
     OutputDebugStringA(message);
-    std::ofstream log("logs/vfx_prepare_watchdog.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/vfx_prepare_watchdog.log");
     if (log) {
         log << message;
     }
@@ -50,7 +51,7 @@ void WriteVfxPrepareWatchdogLine(const char* message) {
 void WriteVfxPrepareSpikeLine(const std::string& message) {
     OutputDebugStringA(message.c_str());
     std::filesystem::create_directories("logs");
-    std::ofstream log("logs/vfx_prepare_spikes.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/vfx_prepare_spikes.log");
     if (log) {
         log << message;
     }

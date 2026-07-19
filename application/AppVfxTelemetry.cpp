@@ -1,4 +1,5 @@
 #include "AppVfxTelemetry.h"
+#include "AppLogFile.h"
 
 #include "../../externals/imgui/imgui.h"
 
@@ -556,9 +557,8 @@ void WriteTrailMeshStreamStartupTelemetry(
     const TrailMeshStreamTelemetrySummary& toggleSummary,
     const TrailMeshStreamTelemetrySummary& probeSummary,
     bool resetFile) {
-    std::ofstream stream(
-        "trail_mesh_stream_startup_telemetry.log",
-        resetFile ? std::ios::trunc : std::ios::app);
+    std::ofstream stream = app::OpenRotatingLog(
+        "trail_mesh_stream_startup_telemetry.log", resetFile);
     if (!stream) {
         return;
     }
@@ -1589,9 +1589,8 @@ void WriteParticleDedicatedProbeTelemetry(
     bool defaultOnCandidate,
     const char* defaultOnHealth,
     bool resetFile) {
-    std::ofstream stream(
-        "particle_dedicated_probe_telemetry.log",
-        resetFile ? std::ios::trunc : std::ios::app);
+    std::ofstream stream = app::OpenRotatingLog(
+        "particle_dedicated_probe_telemetry.log", resetFile);
     if (!stream) {
         return;
     }
@@ -1689,9 +1688,8 @@ void WriteDistortionDedicatedTelemetry(
     const char* defaultOnHealth,
     bool warmup,
     bool resetFile) {
-    std::ofstream stream(
-        "distortion_dedicated_telemetry.log",
-        resetFile ? std::ios::trunc : std::ios::app);
+    std::ofstream stream = app::OpenRotatingLog(
+        "distortion_dedicated_telemetry.log", resetFile);
     if (!stream) {
         return;
     }
@@ -1760,9 +1758,8 @@ void WriteBeamDedicatedTelemetry(
     bool defaultOnReady,
     const char* defaultOnHealth,
     bool resetFile) {
-    std::ofstream stream(
-        "beam_dedicated_telemetry.log",
-        resetFile ? std::ios::trunc : std::ios::app);
+    std::ofstream stream = app::OpenRotatingLog(
+        "beam_dedicated_telemetry.log", resetFile);
     if (!stream) {
         return;
     }

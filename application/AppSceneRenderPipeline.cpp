@@ -1,4 +1,5 @@
 #include "AppSceneRenderPipeline.h"
+#include "AppLogFile.h"
 #include "editor/scene/EditorProductionScenePipeline.h"
 #include "editor/geometry/EditorTransientMeshRenderPath.h"
 #include "editor/material/EditorProductionMaterialPipeline.h"
@@ -172,7 +173,7 @@ private:
             return;
         }
 
-        std::ofstream log(logPath_, std::ios::out | std::ios::app);
+        std::ofstream log = app::OpenRotatingLog(logPath_);
         if (!log) {
             pending_ = false;
             currentRuntimeState_ = nullptr;

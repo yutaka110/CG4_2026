@@ -1,4 +1,5 @@
 #include "AppRunLoop.h"
+#include "AppLogFile.h"
 
 #include <DirectXMath.h>
 #include <algorithm>
@@ -134,7 +135,7 @@ void ResetRailPerfFrame(uint32_t frameIndex, float distance) {
 
 void WriteRailWatchdogLine(const char* message) {
     OutputDebugStringA(message);
-    std::ofstream log("logs/rail_watchdog.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/rail_watchdog.log");
     if (log) {
         log << message;
     }
@@ -257,7 +258,7 @@ void LogRailFrameStage(uint32_t frameIndex, float distance, const char* stage) {
          << " stage=" << (stage != nullptr ? stage : "unknown")
          << "\n";
     OutputDebugStringA(line.str().c_str());
-    std::ofstream log("logs/rail_frame_trace.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/rail_frame_trace.log");
     if (log) {
         log << line.str();
     }
@@ -1189,7 +1190,7 @@ void AppendCourseObjectSelectionDebugDraw(
 
 void WriteGpuDiagnosticLine(const char* message) {
     OutputDebugStringA(message);
-    std::ofstream log("logs/gpu_fence_wait.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/gpu_fence_wait.log");
     if (log) {
         log << message;
     }
@@ -1198,7 +1199,7 @@ void WriteGpuDiagnosticLine(const char* message) {
 void WriteRailGpuTimingLine(const std::string& message) {
     OutputDebugStringA(message.c_str());
     std::filesystem::create_directories("logs");
-    std::ofstream log("logs/rail_gpu_timing.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/rail_gpu_timing.log");
     if (log) {
         log << message;
     }
@@ -1632,7 +1633,7 @@ void AppRunLoop::LogCourseEvents(const std::vector<CourseEventMarker>& events) {
         return;
     }
 
-    std::ofstream log("logs/course_events.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/course_events.log");
     for (const CourseEventMarker& event : events) {
         std::ostringstream line;
         line << "[CourseEvent] distance=" << event.distance
@@ -3687,7 +3688,7 @@ void AppRunLoop::LogRailShooterRuntimeDiagnostics(const char* reason) {
     const CourseCinematicShotSet* shotSet = railShooterCourse_.FindCinematicShotSet(railShooterDistance_);
     const EffectRuntimeFrame vfxFrame = vfxEngine_.Runtime().BuildFrame();
     const TerrainDebrisCullingStats& debrisStats = terrainChunkManager_.LastDebrisCullingStats();
-    std::ofstream log("logs/course_runtime_heartbeat.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/course_runtime_heartbeat.log");
     std::ostringstream line;
     line << "[RailShooterRuntime] reason=" << (reason != nullptr ? reason : "unknown")
          << " frame=" << railShooterFrameIndex_
@@ -3802,7 +3803,7 @@ void AppRunLoop::LogRailShooterPerfSpike() {
          << " terrainDebrisCullDispatches=" << debrisStats.debrisCullDispatchCount
          << "\n";
     OutputDebugStringA(line.str().c_str());
-    std::ofstream log("logs/rail_perf_spikes.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/rail_perf_spikes.log");
     if (log) {
         log << line.str();
     }

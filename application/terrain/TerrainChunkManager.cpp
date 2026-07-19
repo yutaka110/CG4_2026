@@ -1,4 +1,5 @@
 #include "TerrainChunkManager.h"
+#include "../AppLogFile.h"
 
 #include <algorithm>
 #include <chrono>
@@ -156,7 +157,7 @@ void LogTerrainStreamingEvent(
         uploadedDebris);
     OutputDebugStringA(message);
 
-    std::ofstream log("logs/terrain_streaming.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/terrain_streaming.log");
     if (log) {
         log << message;
     }

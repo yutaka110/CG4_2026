@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="GE3Common">
+    <OutDir>$(GE3OutputRoot)\$(Configuration)\</OutDir>
+    <IntDir>$(GE3IntermediateRoot)\$(ProjectName)\$(Configuration)\</IntDir>
+    <TargetName>GE3</TargetName>
+    <VcpkgApplocalDeps>false</VcpkgApplocalDeps>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>$(GE3WarningLevel)</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>$(GE3LanguageStandard)</LanguageStandard>
+      <AdditionalOptions>/utf-8 /D_WIN32_WINNT=0x0602 %(AdditionalOptions)</AdditionalOptions>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <TreatWarningAsError>$(GE3TreatWarningsAsErrors)</TreatWarningAsError>
+      <AdditionalIncludeDirectories>$(ProjectDir)engine\include;$(ProjectDir)application\include;$(ProjectDir)externals\assimp\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <TreatLinkerWarningAsErrors>$(GE3TreatWarningsAsErrors)</TreatLinkerWarningAsErrors>
+      <AdditionalDependencies>dinput8.lib;dxguid.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;mf.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxcompiler.dll" "$(TargetDir)dxcompiler.dll"
+copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dxil.dll"
+xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+</Project>

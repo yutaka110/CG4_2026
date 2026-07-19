@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "EditorAssetRegistry.h"
@@ -64,6 +65,8 @@ public:
         EditorDomainId domain,
         std::string_view name) const;
     std::vector<const EditorPropertyDescriptor*> FindByDomain(EditorDomainId domain) const;
+    const std::vector<const EditorPropertyDescriptor*>& FindByDomainCached(
+        EditorDomainId domain) const;
 
     std::size_t Count() const { return descriptors_.size(); }
     uint32_t Revision() const { return revision_; }
@@ -73,6 +76,7 @@ private:
     void Touch();
 
     std::vector<EditorPropertyDescriptor> descriptors_;
+    mutable std::unordered_map<uint32_t, std::vector<const EditorPropertyDescriptor*>> domainCache_;
     uint32_t revision_ = 0;
 };
 
