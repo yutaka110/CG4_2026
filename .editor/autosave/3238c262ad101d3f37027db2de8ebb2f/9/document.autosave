@@ -1,0 +1,552 @@
+# Rail shooter course DSL
+# editor-schema:3
+# row format:
+# course|name
+# rail|x|y|z|corridorRadius|speed
+# camera|distance|backDistance|verticalOffset|lateralOffset|lookAheadDistance|lookUpOffset|lookForwardOffset|fovDeg|rollDeg|editorGuid|editorVisible|editorLocked
+# section|start|end|name|category
+# terrain|distance|layer|id|meshId|lateralOffset|verticalOffset|forwardOffset|scaleX|scaleY|scaleZ|pitchDeg|yawDeg|rollDeg|collisionMode|renderPriority|cullBehind|cullAhead|editorGuid|editorVisible|editorLocked
+# terrain_brush|strokeGuid|stampGuid|operation|distance|angleRad|radius|surfaceRadius|strength|hardness|materialLayer
+# rock_cluster|distance|id|meshId|anchor|type|count|minScale|maxScale|spreadX|spreadY|spreadZ|clearLaneRadius|cullBehind|cullAhead|rotX|rotY|rotZ|instanceOverrides|editorGuid|editorVisible|editorLocked
+# lighting|distance|id|blendDistance|sunR|sunG|sunB|sunIntensity|sunDirX|sunDirY|sunDirZ|clearR|clearG|clearB|fogR|fogG|fogB|fogIntensity|fogStart|fogEnd|fogDensity|backlitFogLift|openingGlow|silhouette|lowFog|coolHaze
+# camera_shot_preset|id|mode|backOffset|upOffset|sideOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake
+# camera_blend_asset|id|blendIn|blendOut|curve|weightScale
+# camera_shot|start|end|id|mode|blendIn|blendOut|backOffset|upOffset|sideOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake|presetId|blendAssetId|weightScale
+# terrain_material|distance|id|blendDistance|baseR|baseG|baseB|brightness|noise|strata|breakup|specular|rim|backlight|floorShadow|detailNormal|microDetail|cavityAo|skyFill
+# cinematic_shot_set|start|end|id|label|heroLandmarksCsv|vistaLandmarksCsv|lightingId|cameraShotId|terrainMaterialId|fogMood|compositionNotes
+# event|distance|type|id|payload|editorGuid|editorVisible|editorLocked
+
+course|Canyon Assault Route 01
+
+# Main camera/terrain rail. Distances are arc-length evaluated by RailPath.
+rail|-18.000|4.000|-120.000|20.000|12.000
+rail|-8.000|7.000|-40.000|18.000|12.000
+rail|20.000|12.000|45.000|16.000|13.000
+rail|5.000|5.000|130.000|15.000|13.000
+rail|-34.000|16.000|220.000|17.000|14.000
+rail|-6.000|28.000|320.000|21.000|15.000
+rail|40.000|18.000|430.000|18.000|16.000
+rail|18.000|8.000|540.000|16.000|16.000
+rail|-22.000|14.000|650.000|19.000|17.000
+rail|0.000|18.000|760.000|22.000|18.000
+rail|36.000|26.000|910.000|20.000|18.000
+rail|-18.000|10.000|1060.000|14.000|19.000
+rail|-54.000|8.000|1210.000|15.000|18.000
+rail|-10.000|34.000|1390.000|24.000|16.000
+rail|48.000|20.000|1560.000|21.000|17.000
+rail|8.000|12.000|1740.000|16.000|22.000
+rail|-26.000|18.000|1940.000|18.000|24.000
+rail|18.000|30.000|2160.000|24.000|18.000
+rail|0.000|22.000|2380.000|28.000|14.000
+
+# Camera keys define the cinematic rail rig.
+camera|0.000|24.000|7.000|0.000|64.000|2.000|8.000|54.000|0.000|7fce5ae5378e24cb05ee19ede15a779b|1|0
+camera|120.000|22.000|6.000|0.000|60.000|2.000|10.000|52.000|0.000|6f1e600a2629957909493b5c0c450b89|1|0
+camera|240.000|20.000|6.000|-2.000|58.000|2.000|10.000|50.000|-3.000|9281a8c28b4d367ddc1cd98c5faed60d|1|0
+camera|420.000|18.000|5.000|4.000|54.000|1.000|12.000|49.000|4.000|cd6fdacb7583235a1c689ca662bb7cea|1|0
+camera|610.000|17.000|5.000|-4.000|56.000|1.000|12.000|51.000|-5.000|3e44fbc6cb7049088b3902cd16916598|1|0
+camera|720.000|14.000|3.000|0.000|44.000|0.000|14.000|58.000|0.000|583b3602f15b04ef4fc2629f36de2cff|1|0
+camera|980.000|26.000|9.000|-5.000|78.000|5.000|18.000|62.000|-7.000|1e58c1f3868f14aa61ce0c31e2b6caba|1|0
+camera|1280.000|24.000|7.000|4.000|64.000|3.000|10.000|50.000|5.000|83ff51a13afd34db4cc8d454443513ab|1|0
+camera|1680.000|16.000|4.000|0.000|48.000|1.000|16.000|66.000|0.000|5f3d7917922ffbc67b6336a1ae9b4416|1|0
+camera|2100.000|30.000|11.000|0.000|86.000|6.000|20.000|56.000|0.000|dbb02ede85ed9fa3f7d5ec68a258e7f3|1|0
+camera|2380.000|34.000|12.000|0.000|96.000|8.000|24.000|48.000|0.000|99a554e404afc9cf8289969736fa1e5f|1|0
+
+section|0.000|180.000|Intro|Establishing
+section|180.000|420.000|First Contact|Tutorial Combat
+section|420.000|720.000|Crossfire|Lateral Pressure
+section|720.000|980.000|Tunnel Dive|Obstacle Run
+section|980.000|1280.000|Falling Spire|Setpiece
+section|1280.000|1680.000|Mid Boss Gatekeeper|Boss
+section|1680.000|2100.000|Escape Run|High Speed
+section|2100.000|2380.000|Final Gate|Finale
+
+# Layered course terrain: gameplay collision, hero landmarks, and vista background.
+terrain|15.000|hero_landmark|intro_left_silhouette_wall|curved_canyon_wall|-48.000|11.000|72.000|9.000|26.000|30.000|0.000|16.000|-7.000|none|12|80.000|260.000|2d6369e9ab380c5bc13a6d34986319ab|1|0
+terrain|40.000|vista_background|intro_far_hole_wall_left|vista_hole_wall|46.000|58.000|980.000|58.000|46.000|5.000|0.000|10.000|2.000|none|0|260.000|820.000|53bd9fee62bafe1cf7c1476ec85b902c|1|0
+terrain|55.000|hero_landmark|intro_right_silhouette_wall|curved_canyon_wall|50.000|12.000|105.000|8.000|24.000|32.000|0.000|-14.000|6.000|none|12|90.000|280.000|7c050a2de61385168f6a8e7c8eca8926|1|0
+terrain|115.000|hero_landmark|intro_organic_arch_gate|organic_arch_large|0.000|38.000|330.000|34.000|52.000|7.000|0.000|0.000|0.000|none|20|220.000|640.000|8407fb57ea6855d6fd60fa56c7809ae6|1|0
+terrain|155.000|vista_background|intro_mist_spire_stack|root_spire_column|12.000|62.000|1060.000|36.000|72.000|6.000|0.000|-8.000|-3.000|none|0|260.000|860.000|cc90d58f752a9d15e051d803661391c5|1|0
+terrain|430.000|hero_landmark|crossfire_left_curved_wall|curved_canyon_wall|-32.000|10.000|70.000|7.000|18.000|18.000|0.000|12.000|-8.000|none|10|140.000|180.000|33a013dc651040981b20a20928b24148|1|0
+terrain|520.000|hero_landmark|crossfire_right_curved_wall|curved_canyon_wall|34.000|12.000|80.000|7.000|20.000|20.000|0.000|-10.000|8.000|none|10|140.000|180.000|3a6ac3292e7b5ac2b7b0f65079310272|1|0
+terrain|735.000|hero_landmark|tunnel_mouth_rib_crown|rib_tunnel_wall|0.000|13.000|84.000|16.000|12.000|6.000|0.000|0.000|0.000|none|20|180.000|300.000|6d4cde1b48870c23c4abb338557dfa93|1|0
+terrain|776.000|gameplay_collision|tunnel_left_collision_wall|animated_cube|-12.000|2.000|18.000|2.000|7.000|8.000|0.000|6.000|0.000|proxy|30|80.000|220.000|45d9c591e19c63670f47682858231397|1|0
+terrain|828.000|gameplay_collision|tunnel_right_collision_wall|animated_cube|12.000|2.000|18.000|2.000|7.000|8.000|0.000|-6.000|0.000|proxy|30|80.000|220.000|c0348c6de6f14c994984eb9a37c8a0c9|1|0
+terrain|875.000|hero_landmark|rib_tunnel_interior_sweep|rib_tunnel_wall|0.000|4.000|130.000|22.000|7.000|12.000|0.000|0.000|0.000|none|20|180.000|300.000|efb07c65f83feb8e7f9fd8bebf7fc29e|1|0
+terrain|980.000|vista_background|spire_far_hole_wall|vista_hole_wall|64.000|42.000|760.000|32.000|34.000|5.000|0.000|-18.000|0.000|none|0|420.000|220.000|fb97314af78e7d0949f3fe90c6eda019|1|0
+terrain|1010.000|hero_landmark|falling_spire_root_column|root_spire_column|-6.000|30.000|160.000|13.000|42.000|8.000|0.000|4.000|0.000|none|20|220.000|220.000|dc754a6307251c41fca0302421687a71|1|0
+terrain|1085.000|gameplay_collision|spire_debris_collision_lane|animated_cube|0.000|4.000|30.000|5.000|3.000|8.000|0.000|0.000|0.000|proxy|30|90.000|240.000|8e236597c8e324c0fa59d399bcde7170|1|0
+terrain|1160.000|hero_landmark|spire_broken_bridge_arc|spire_broken_bridge_arc|20.000|18.000|120.000|18.000|5.000|5.000|0.000|-28.000|10.000|none|20|220.000|420.000|31ca95c29e6d8cbe2975b58caaaace6e|1|0
+terrain|1265.000|vista_background|gatekeeper_shadow_wall|vista_hole_wall|0.000|36.000|520.000|40.000|32.000|5.000|0.000|0.000|0.000|none|0|480.000|300.000|9e55defd28bbbac0621028296320abb0|1|0
+
+# Rock clusters compose debris as attached, hero, falling, or vista groups instead of loose floating rocks.
+rock_cluster|430.000|crossfire_left_wall_chips|curved_canyon_wall|left_wall|attached_debris|3|0.180|0.380|7.000|1.800|6.000|34.000|90.000|150.000|0.000|0.000|0.000|-|02bf0b2b517b0d81554c7c86b4c21651|1|0
+rock_cluster|520.000|crossfire_right_wall_chips|curved_canyon_wall|right_wall|attached_debris|3|0.180|0.360|7.000|1.800|6.000|34.000|90.000|150.000|0.000|0.000|0.000|-|afb49c9b9fb591a3e5c7a9ef1d985bf3|1|0
+rock_cluster|780.000|tunnel_floor_contact_stones|rib_tunnel_wall|floor|attached_debris|4|0.160|0.340|10.000|1.400|7.000|24.000|70.000|160.000|0.000|0.000|0.000|-|bcefa077c299d66f3cc45affc2f89fff|1|0
+rock_cluster|1015.000|falling_spire_break_mass|root_spire_column|ceiling_break|hero_fracture|3|0.620|1.280|14.000|6.000|10.000|34.000|120.000|240.000|0.000|0.000|0.000|-|37da14737bf3c45b97b528c1d14756cb|1|0
+rock_cluster|1085.000|spire_falling_event_debris|spire_broken_bridge_arc|ceiling_break|falling_debris|5|0.240|0.680|16.000|9.000|12.000|38.000|50.000|150.000|0.000|0.000|0.000|-|8626cbe5bc410227134b73a445ccc277|1|0
+rock_cluster|1265.000|gatekeeper_far_silhouette_rocks|vista_hole_wall|vista_wall|vista_silhouette|4|1.100|2.400|72.000|20.000|64.000|54.000|300.000|360.000|0.000|0.000|0.000|-|9e4ceda2dc25a77bd735d07a144d3b4b|1|0
+
+# Distance-driven cinematic lighting and fog presets.
+lighting|0.000|intro_backlit_mist|0.000|1.000|0.680|0.500|2.550|-0.500|-0.420|0.760|0.080|0.070|0.070|0.400|0.360|0.340|0.320|260.000|1850.000|0.110|0.460|0.740|1.020|0.120|0.080
+lighting|180.000|first_contact_readability|80.000|1.000|0.680|0.460|2.650|-0.420|-0.500|0.740|0.200|0.180|0.170|0.450|0.390|0.360|0.420|170.000|1320.000|0.200|0.420|0.720|0.680|0.200|0.160
+lighting|420.000|crossfire_side_rim|120.000|1.000|0.620|0.400|3.100|-0.680|-0.360|0.620|0.160|0.140|0.140|0.440|0.340|0.300|0.440|150.000|1080.000|0.230|0.500|0.820|0.820|0.200|0.160
+lighting|720.000|tunnel_compression|90.000|0.740|0.840|1.000|1.700|-0.220|-0.700|0.480|0.060|0.070|0.090|0.260|0.300|0.360|0.320|65.000|720.000|0.340|0.220|0.340|0.880|0.360|0.300
+lighting|980.000|falling_spire_dust_wall|120.000|1.000|0.660|0.460|2.550|-0.580|-0.320|0.770|0.140|0.120|0.110|0.480|0.390|0.340|0.420|185.000|1220.000|0.200|0.420|0.640|1.000|0.240|0.120
+lighting|1280.000|gatekeeper_shadow|110.000|0.900|0.480|0.360|2.450|-0.540|-0.420|0.720|0.100|0.080|0.080|0.340|0.280|0.280|0.480|135.000|1050.000|0.300|0.380|0.620|0.940|0.320|0.160
+lighting|1680.000|escape_blooming_exit|120.000|1.000|0.760|0.560|3.000|-0.380|-0.400|0.840|0.180|0.160|0.140|0.460|0.380|0.340|0.360|210.000|1380.000|0.160|0.440|0.880|0.780|0.120|0.100
+lighting|2100.000|final_gate_silhouette|160.000|1.000|0.660|0.460|2.450|-0.500|-0.340|0.800|0.070|0.060|0.055|0.360|0.300|0.280|0.380|240.000|1120.000|0.180|0.420|0.680|1.000|0.140|0.100
+
+# Camera shot presets are reusable additive shot shapes.
+camera_shot_preset|crossfire_wall_scrape_preset|Wall Scrape|-2.000|-1.000|5.000|2.000|-1.000|7.000|3.000|5.000|0.080
+camera_shot_preset|escape_speed_widen_preset|Escape Speed|-6.000|-2.000|0.000|20.000|-1.000|8.000|9.000|0.000|0.160
+camera_shot_preset|falling_spire_reveal_preset|Falling Spire Reveal|8.000|5.000|-6.000|22.000|4.000|8.000|3.000|-4.000|0.180
+camera_shot_preset|final_gate_silhouette_hold_preset|Final Gate Silhouette|4.000|2.000|5.000|12.000|2.000|8.000|-4.000|2.000|0.100
+camera_shot_preset|first_contact_readable_lane_preset|Combat Readability|2.000|1.000|1.000|10.000|0.000|3.000|-3.000|1.000|0.040
+camera_shot_preset|gatekeeper_shadow_pass_preset|Boss Shadow Pass|6.000|2.000|4.000|18.000|3.000|6.000|-5.000|4.000|0.220
+camera_shot_preset|intro_arch_reveal_preset|Arch Reveal|10.000|8.000|0.000|28.000|4.000|14.000|7.000|-1.000|0.040
+camera_shot_preset|tunnel_dive_compression_preset|Tunnel Compression|-4.000|-2.000|0.000|-10.000|-1.000|6.000|7.000|0.000|0.180
+
+# Camera blend assets define distance blends and easing for shot presets.
+camera_blend_asset|boss_linear_36_44|36.000|44.000|linear|1.000
+camera_blend_asset|combat_linear_30_34|30.000|34.000|linear|1.000
+camera_blend_asset|escape_linear_24_38|24.000|38.000|linear|1.000
+camera_blend_asset|finale_linear_36_48|36.000|48.000|linear|1.000
+camera_blend_asset|reveal_linear_34_42|34.000|42.000|linear|1.000
+camera_blend_asset|scrape_linear_32_42|32.000|42.000|linear|1.000
+camera_blend_asset|spire_linear_35_52|35.000|52.000|linear|1.000
+camera_blend_asset|tunnel_linear_28_36|28.000|36.000|linear|1.000
+
+# Cinematic shot accents are additive over the base camera rail.
+camera_shot|25.000|170.000|intro_arch_reveal|-|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|intro_arch_reveal_preset|reveal_linear_34_42|1.000
+camera_shot|205.000|350.000|first_contact_readable_lane|-|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|first_contact_readable_lane_preset|combat_linear_30_34|1.000
+camera_shot|430.000|650.000|crossfire_wall_scrape|-|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|crossfire_wall_scrape_preset|scrape_linear_32_42|1.000
+camera_shot|735.000|930.000|tunnel_dive_compression|-|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|tunnel_dive_compression_preset|tunnel_linear_28_36|1.000
+camera_shot|990.000|1235.000|falling_spire_reveal|-|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|falling_spire_reveal_preset|spire_linear_35_52|1.000
+camera_shot|1265.000|1460.000|gatekeeper_shadow_pass|-|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|gatekeeper_shadow_pass_preset|boss_linear_36_44|1.000
+camera_shot|1690.000|1880.000|escape_speed_widen|-|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|escape_speed_widen_preset|escape_linear_24_38|1.000
+camera_shot|2110.000|2380.000|final_gate_silhouette_hold|-|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|final_gate_silhouette_hold_preset|finale_linear_36_48|1.000
+
+# Terrain material presets drive authored rock color and detail by distance.
+terrain_material|0.000|intro_wet_organic_rock|0.000|0.460|0.390|0.350|0.540|1.220|1.280|1.160|0.120|1.480|1.180|0.720|1.480|1.340|1.280|0.050
+terrain_material|180.000|first_contact_readable_strata|80.000|0.860|0.740|0.620|0.860|0.980|1.020|0.920|0.090|1.020|0.820|0.420|1.120|1.020|0.920|0.200
+terrain_material|420.000|crossfire_dark_wall_rim|120.000|0.680|0.560|0.500|0.780|1.180|1.260|1.120|0.090|1.420|1.020|0.600|1.280|1.160|1.060|0.140
+terrain_material|720.000|tunnel_cold_ribs|90.000|0.480|0.520|0.620|0.620|1.320|1.420|1.180|0.070|1.580|1.180|0.620|1.460|1.300|1.100|0.100
+terrain_material|980.000|spire_dust_chalk|120.000|0.720|0.580|0.480|0.720|1.180|1.100|0.960|0.070|1.180|0.960|0.580|1.140|1.080|1.080|0.080
+terrain_material|1280.000|gatekeeper_soot_wall|110.000|0.520|0.440|0.420|0.660|1.300|1.280|1.100|0.070|1.520|1.020|0.620|1.340|1.200|1.120|0.100
+terrain_material|1680.000|escape_sunlit_floor|120.000|0.780|0.640|0.500|0.780|0.940|0.940|0.860|0.080|0.980|0.780|0.440|1.040|1.000|0.960|0.120
+terrain_material|2100.000|final_gate_obsidian_rim|120.000|0.420|0.340|0.300|0.540|1.200|1.240|1.080|0.060|1.380|0.840|0.680|1.280|1.160|1.180|0.060
+
+# Cinematic shot sets bind landmarks, camera, lighting, fog, and material into authored distance shots.
+cinematic_shot_set|0.000|180.000|intro_arch_reveal_set|Intro Arch Reveal|intro_organic_arch_gate,intro_left_silhouette_wall,intro_right_silhouette_wall|intro_far_hole_wall_left,intro_mist_spire_stack|intro_backlit_mist|intro_arch_reveal|intro_wet_organic_rock|backlit mist|hold two dark canyon walls at the frame edge while the huge arch, distant root column, and hole wall create scale beyond the player lane
+cinematic_shot_set|180.000|420.000|first_contact_readability_set|First Contact Readability|intro_organic_arch_gate|intro_mist_spire_stack|first_contact_readability|first_contact_readable_lane|first_contact_readable_strata|readable haze|keep the combat lane clean while root columns and far mist frame the first lock-on lesson
+cinematic_shot_set|420.000|720.000|crossfire_wall_scrape_set|Crossfire Wall Scrape|crossfire_left_curved_wall,crossfire_right_curved_wall|-|crossfire_side_rim|crossfire_wall_scrape|crossfire_dark_wall_rim|side rim dust|walls scrape the frame edges while rim light separates enemies from dark organic rock
+cinematic_shot_set|720.000|980.000|tunnel_dive_set|Tunnel Dive Compression|tunnel_mouth_rib_crown,rib_tunnel_interior_sweep|-|tunnel_compression|tunnel_dive_compression|tunnel_cold_ribs|cold tunnel haze|rib tunnel compresses the frame with cooler fog and roll selling speed and claustrophobia
+cinematic_shot_set|980.000|1280.000|falling_spire_set|Falling Spire Reveal|falling_spire_root_column,spire_broken_bridge_arc|spire_far_hole_wall|falling_spire_dust_wall|falling_spire_reveal|spire_dust_chalk|dust wall silhouette|vertical reveal with falling debris silhouettes and warm dust catching the backlight
+cinematic_shot_set|1280.000|1680.000|gatekeeper_shadow_set|Gatekeeper Shadow Pass|-|gatekeeper_shadow_wall|gatekeeper_shadow|gatekeeper_shadow_pass|gatekeeper_soot_wall|boss shadow haze|dark boss approach where the shadow wall and low fog make the gatekeeper read before pressure rises
+cinematic_shot_set|1680.000|2100.000|escape_speed_set|Escape Speed Widen|-|-|escape_blooming_exit|escape_speed_widen|escape_sunlit_floor|blooming exit haze|wide fast exit with sunlit floor streaks and reduced foreground clutter for speed
+cinematic_shot_set|2100.000|2380.000|final_gate_silhouette_set|Final Gate Silhouette|-|-|final_gate_silhouette|final_gate_silhouette_hold|final_gate_obsidian_rim|dark gate haze|hold a dark gate silhouette against a controlled pale opening instead of washing the frame out
+
+event|35.000|vfx|sun_glint_intro|wide canyon reveal and first dust glints|82146211c3b564d0dcd17dfdcdd0cb40|1|0
+event|75.000|enemy_wave|intro_scout_pair|two slow scouts teach lock-on magnetism|4810fcaa0aba29eb0115f484ab28fe1b|1|0
+event|125.000|enemy_wave|intro_lockon_line|three drones line up for first combo|456ad6cf4e606154e8e89424567e2944|1|0
+event|205.000|enemy_wave|drone_intro_v|five drones fan from center|730f3d9ff7394f8466c2f7c1af9c8734|1|0
+event|270.000|enemy_wave|first_contact_split|front split wave asks for left-right tracking|8ce5485410b510c1ee1c5841673cdd31|1|0
+event|350.000|enemy_wave|first_contact_combo_ladder|staggered ladder keeps the combo alive|41dbe5b33af86c2e6043d2fc176a945e|1|0
+event|430.000|vfx|crossfire_warning_flare|left cliff muzzle flashes announce pressure shift|dbbdd6549395a00bae671ba92dbcca3b|1|0
+event|465.000|enemy_wave|cliff_crossfire_left|left cliff turrets and crossing drones|321c806f8b0b1d55481c230f31c4a7c5|1|0
+event|535.000|enemy_wave|crossfire_low_high_mix|low drones pull aim while high drones punish tunnel vision|1c335ccf0f9db77a27c2311066a6202a|1|0
+event|615.000|enemy_wave|cliff_crossfire_right|right cliff mirror wave|0b9d27ed5de0d3a7e7c73165f12f6b97|1|0
+event|680.000|enemy_wave|crossfire_pincer|final first-minute pincer before tunnel compression|a3601956b375d119f8c6a528422c8ec9|1|0
+event|735.000|setpiece|tunnel_entry|camera compresses and tunnel light drops|0121639caf4ca4b21a08b459df5e2ba2|1|0
+event|758.000|vfx|tunnel_light_drop|blue daylight cuts to warm slit lights|f60defadaf959530e689df781bef8320|1|0
+event|776.000|obstacle|tunnel_left_rib_01|left wall rib teaches narrow clearance|1edd746262af2c2351bb497d7fff9b53|1|0
+event|805.000|enemy_wave|tunnel_probe_slalom|slow probes mark the safe weave path|dd43912acbcf7314301186fd0c149d64|1|0
+event|828.000|obstacle|tunnel_right_rib_01|right wall rib forces lateral correction|2634d9528b5958b2931d605374ec25e2|1|0
+event|860.000|obstacle|tunnel_ceiling_teeth_01|ceiling teeth press the player low|336804a8a3250a7552a017778edd2e85|1|0
+event|895.000|enemy_wave|tunnel_exit_pinwheel|exit drones rotate around the tunnel mouth|01eb85b876d43cc442dfc8c4e88c1a14|1|0
+event|925.000|obstacle|tunnel_split_pillars_01|center pillars split the aiming lane|cdb1abab560c98cfec16002bf7c44d1f|1|0
+event|955.000|vfx|tunnel_exit_haze|controlled sunlight haze before the canyon opens|1e38fcc336fe31f14cfb31d0415de801|1|0
+event|990.000|setpiece|spire_collapse_start|large silhouette collapse begins|fb58e07cac37c1b2ab146cace5fe7542|1|0
+event|1015.000|vfx|spire_dust_wall|dust wall reveals falling debris silhouettes|eadaca569834887116f0b5c86e9ee7e1|1|0
+event|1045.000|obstacle|spire_falling_slab_left|foreground slab drops across left lane|cd9e5e02ae702925d0e5809a89c91155|1|0
+event|1075.000|enemy_wave|spire_guard_line|spire guards appear between debris beats|7e505b3df218380e77d12bd0789de8be|1|0
+event|1108.000|obstacle|spire_falling_slab_right|right slab falls after guard line|b35e6b448722cd4e69858c905e7db03e|1|0
+event|1130.000|vfx|spire_shockwave|shockwave dust and falling shards|6e9c2990c5b49711298720b6ac44b4c1|1|0
+event|1160.000|enemy_wave|spire_shard_crossfire|turrets and drones fire through the dust|530cdab48e6eeb3b2c2e9d5b910f098b|1|0
+event|1195.000|obstacle|spire_core_fragment|large core fragment blocks center briefly|1a17ad5dfed65fccdeaf5fb678b7867c|1|0
+event|1235.000|enemy_wave|spire_escape_chasers|fast chasers bridge into the boss approach|d25aa81d99023504b08026ac9cf80254|1|0
+event|1265.000|setpiece|gatekeeper_shadow_pass|boss shadow crosses the canyon wall|809bdaf41a056a8366c26f1ad0d1b673|1|0
+event|1290.000|boss|gatekeeper_intro|mid boss enters from upper canyon|eff60581a67049b67b3ca66724c5df46|1|0
+event|1470.000|boss_phase|gatekeeper_weakpoints|side pods open|2b4f20e2634a016c7a4ff6739fba11bc|1|0
+event|1690.000|setpiece|escape_alarm|speed ramp and rear explosions|c7dbea0a28854ff0424524c0c2d04320|1|0
+event|1870.000|enemy_wave|pursuit_swarm|fast weak enemies from behind|d69579ac7230cacdea241b8cb57e387d|1|0
+event|2110.000|setpiece|final_gate_open|large gate reveal|9f32f86777b146964ac100a9d2754966|1|0
+event|2320.000|checkpoint|stage_clear|score tally and next route preload|0ae54da591050c37557f393356b400a7|1|0
+
+# Non-destructive procedural Terrain sculpt and paint strokes.
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|1a6207bb86cf817796f126ce2f4702a7|Paint|335.506897|0.053132|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|acab6eb4092fec1dae8105161f24144d|Paint|332.965210|0.019918|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|69b62817a6b34d0349bb2db0e52aabb3|Paint|332.117950|6.221662|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|afe608d86cfe8045ddc7a3bd897b8c75|Paint|328.729004|6.159637|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|d4dd90eb1c4dde7a5416abd2a9e7172a|Paint|327.034546|6.068865|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|e24c4c9c20e9aa56c247b8ce10cdbe06|Paint|324.492798|6.027264|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|04a738fceeaaad8de3733cd6f62d143d|Paint|322.798340|5.950544|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|333ee1cbf071800584d786a444b17e35|Paint|319.409363|5.908377|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|25b58e92aaea9b8e38b87c81887e1e7e|Paint|316.867676|5.871540|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|028b9323f3b860287f87166625e3d018|Paint|319.409363|5.869596|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|eb0ca8280bd92263382473ef5e070953|Paint|322.798340|5.877732|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|6d527f9f417b76e8dcc39e8147592e58|Paint|326.187317|5.872581|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|5dee89973852a870ed6276eb212243e0|Paint|329.576233|5.821504|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|7db0413edc17152ef480486b9123ae1e|Paint|332.117950|5.774365|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|280951ea3ac00324d2da373d32b3c214|Paint|335.506897|5.731447|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|4a523cd9bc70d90d6baed562e4a271fd|Paint|338.048645|5.682534|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|d437146b601d19fd74d7523299ea256d|Paint|337.201416|5.624148|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|3b0cfb2c097b4863057c961ea3094a53|Paint|334.659668|5.575872|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|ce7f41c344a09b7ee5772deb9225286e|Paint|332.117950|5.558657|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|367ff4b83b510b0aa110801d418b8efa|Paint|330.423462|5.515381|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|8953df042eac350cf31dffacc32900fc|Paint|327.881775|5.472956|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|452ed0b368d38ba612e956235dcdab16|Paint|326.187317|5.418363|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|ae433835a4d3271d9b5f1d6f0673eb0d|Paint|323.645569|5.371227|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|aba2ecffda3ce63b2118448b336433ab|Paint|321.951111|5.322680|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|17e75aed96413270e01577a6c1509860|Paint|320.256592|5.288289|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|183fb53db250772a630a4d7165bacc9a|Paint|317.714905|5.254251|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|3f89be085d9c16c4b4ca90be9a3c3234|Paint|315.173218|5.212474|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|7d214268daa2c96bf0e399f43258825b|Paint|312.631470|5.180814|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|66641c133f8517968bee8a16c9fc2f86|Paint|310.937012|5.151033|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|7ee9ca7a1712bedcc8c74d6a3ac85e4c|Paint|308.395264|5.133632|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|320b053a642d93fe4902f162b1b220ee|Paint|305.853577|5.106494|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|007241cb42223063ff5b66206b0aca53|Paint|303.311829|5.084179|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|35455685e249d6290cf792d89a7c0919|Paint|300.770142|5.066424|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|0f603ccafeb9e5a23731dbdb33321152|8d081f2468e8b071dd36dca2bc66cb61|Paint|298.228394|5.046329|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|e33b49b4d47addb10498623dfcad5021|Paint|306.700806|3.740453|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|ba6b454be8a1b29a8298e20513b03f0a|Paint|305.853577|3.816979|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|692befbc6a13dc6087dd0bbc387abbd0|Paint|306.700806|3.760459|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|a642f16315392781c682c1d95c0baaf1|Paint|307.548035|3.718813|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|2a28bc714dd88079528faa6a654ea669|Paint|308.395264|3.698904|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|d5c9683a2b308dbefb491f825f6fbeae|Paint|305.853577|3.653930|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|30687be58397de72044ead40f3760de2|Paint|308.395264|3.663480|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|d5020f9271b5c224c7f3938ae0d4d914|Paint|310.089722|3.676624|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|78ccefb7186c6c639f393c42dc5f79d3|Paint|311.784241|3.698871|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|440d49eae85fb16450e4bbc448d45d54|Paint|310.089722|3.722425|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|1156044686554c537cd324ef1c43acc3|Paint|306.700806|3.727748|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|9119660ad0696e670843b4c457297857|Paint|305.006317|3.754553|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|40074089524773c68c6973105d70b1b6|Paint|302.464600|3.752081|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|c4c6648e3a57dc45e506b504812b3935|Paint|300.770142|3.760353|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|69d2245b84798b1c3587964406cdd20c|Paint|297.381165|3.750502|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|818834d410c9c2d04b4d6be0939737c0|Paint|294.839417|3.746885|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|a0b9fd6b66d1e6896a754de695a3ee79|Paint|293.144958|3.754968|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|f9d5a7c9291a585a20417454ed0c8c4a|Paint|296.533936|3.778684|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|75cb6a17c399233bf2bcb69e9f8d85ab|Paint|299.922913|3.793863|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|3a03c4895e3a15946009a4176c206f04|Paint|296.533936|3.782119|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|8914b45e6a16dce7a7c75112ad26be57|691211563d5df87837a65ba5a38f2068|Paint|293.992188|3.775557|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|03e085bbd0929cf3deb44bd2e595d9e3|Sculpt|309.242493|3.809181|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|7a44c8697034ff82f25392bdbe63f8f2|Sculpt|310.937012|3.822425|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|6379861dd15445a18bcc993f7dfe3091|Sculpt|312.631470|3.833680|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|b34e9dda29700de65bf0f8e2bfb156d6|Sculpt|314.325989|3.843166|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|d65d426444aedf175d56045526d27e87|Sculpt|316.020447|3.900917|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|bb24554a8fff03b9d57a86133868fea9|Sculpt|316.867676|3.941088|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|ab54775e7d1d64a0dadba410b78bd290|Sculpt|316.867676|3.988711|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|bee6f887c9cb62b2e4ecd815d7b1bc22|Sculpt|317.714905|4.031821|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|64aea644544b379f5776f81b0b72d80f|Sculpt|317.714905|4.085371|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|b48dd86ecce8ea4d640704c6aa8fb6bd|Sculpt|317.714905|4.145015|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|9ed3fd8755447f336e54dd1a4b2983a3|Sculpt|317.714905|4.199329|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|ee6189224f8d94bd44b09d453bd2f6ad|Sculpt|316.867676|4.250160|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|928462514ebb6a6846b65eba022f4fd8|Sculpt|318.562164|4.270804|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|0f3b8b41dcd8bbb6874a55962b07b526|Sculpt|318.562164|4.331943|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|d4be9f83c05732dac682cbc207ab044a|Sculpt|318.562164|4.377851|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|1d05470c1efdc1ca45b5226f1205d2ba|Sculpt|317.714905|4.433954|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|c8e0f28f434aee4b13431d10cbfeb43b|Sculpt|317.714905|4.492198|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|7d194071f7675c71d32b19b8e59780e1|Sculpt|317.714905|4.560508|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|212a86641c7b1de3473065f22a617753|Sculpt|317.714905|4.644083|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|07799f5a5156086a3456d037a6a2beda|Sculpt|316.867676|4.723267|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|32495c3ed5476387584f3bcce32dbcf7|Sculpt|316.867676|4.778343|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|d061250c43a4d9fdeab755d4ec0ed4ed|Sculpt|316.867676|4.827422|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|70a810583f2827fbebe56e298b8a736b|Sculpt|316.867676|4.885409|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|6971b5586684691444457b6f7b87a604|Sculpt|316.867676|4.928927|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|849a279ed2815d3b83febd7e7ed938ab|Sculpt|316.867676|4.970625|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|6414e9a9431913dd8867c9374f8dd8cd|Sculpt|318.562164|5.003760|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|385700648cd1b5dc52b717be89371dcc|Sculpt|319.409363|5.041423|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|0608405a406f90fe2c0e1fe84e55ea6e|Sculpt|320.256653|5.082867|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|f1c2a7d473b1b249c53805a0d986e739|Sculpt|322.798340|5.115655|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|693f45c111620c140a26703db2172704|Sculpt|325.340057|5.157384|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|b4da6c69540fdd662f36ea51410341d6|Sculpt|327.034546|5.184221|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|e52b521c1fb9a955b5a32d83f94ed0c5|Sculpt|331.270752|5.240133|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|64213a24626221343cba69400e2b4524|Sculpt|333.812439|5.322791|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|81e654a1ae28655481732ded845734c4|Sculpt|337.201355|5.369345|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|c3ba30a138ba3326e9c0102f46a08c96|Sculpt|339.743103|5.423791|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|078651f99d2d2bebb065e7de3183b25b|Sculpt|345.673798|5.489113|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|f1ac7201c741efc9c12d5194bd26f439|Sculpt|364.313110|5.465717|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|a532e7e8ac81b1f31d42323cfab184e3|Sculpt|371.938232|5.494465|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|5a17f668aee0552ecaf3272c6f4ba51e|Sculpt|383.799561|5.512830|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|b31455a4ed2d2e10900a80957f899e00|Sculpt|401.591614|5.443275|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|ae91301cbfd8b75c303fe0f52bb454cc|Sculpt|443.106384|5.032651|8.000000|31.923609|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|28ab917c79045820a94cffde15fcf350|Sculpt|1624.158447|2.779367|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|ad12de4ba77409ed2a1355037b9aca9d|Sculpt|1669.909668|2.222327|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|2ff344a0a716360e25a78806421cadbe|Sculpt|1179.357666|1.711198|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|5b919bba07810d2432b3b7beefbae8d4|Sculpt|318.562134|0.475747|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|34514f021bf5e25e0f57bb9f9e4f980e|Sculpt|316.867676|0.543317|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|4f6303187b2bde72cc6379d04f529f22|Sculpt|315.173218|0.585599|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|c4e1c69b20370d6deb71bd507eece41d|Sculpt|309.242493|0.664816|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|cafa3af15367014a4cf1e111ab730afa|Sculpt|306.700806|0.705283|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|c22ab2514afba786440c89b0242e9736|Sculpt|305.006317|0.739486|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|1135d5e726a1262e8fc38060fe8a88de|Sculpt|299.922913|0.795485|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|3d40a73f913c0090a06f40ee50e3edc0|Sculpt|298.228394|0.825101|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|c74d8df5801ff64a5240cd9f09f2827a|Sculpt|299.922913|0.815956|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|b3a7e5eeae0359e46d66b653dbe55c94|Sculpt|304.159058|0.787224|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|d7acef5169a3a64cadd24871ec594efc|Sculpt|305.853577|0.754494|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|d2a2a06e02332181f4db1adc67c66c31|Sculpt|308.395264|0.728356|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|934ef555e4a4f30f607834ed35933fbf|Sculpt|310.089783|0.690027|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|d3743f8f9c229b33f46ee9e5d15d3a63|Sculpt|312.631470|0.639281|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|7a8d12f50d0b45e3aa50ff9503645113|Sculpt|314.325989|0.593674|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|19e6aba08f15efc147f7184083fc8cf1|Sculpt|316.867676|0.545183|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|b941d8765a19e89c885fb9ed1119b44c|Sculpt|318.562164|0.504844|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|deec3caeaa74fe63afd22efd3fbed313|Sculpt|319.409363|0.454865|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|67c8ff08afa887028bb4797716ad6632|Sculpt|320.256653|0.403266|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|0a1acc0f7d084d4d35fe3a6ea600b97d|Sculpt|322.798340|0.370433|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|79b199ab1b289a735b27d89b4852a023|Sculpt|325.340057|0.332116|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|759b68166a5069b155d13e095b401ae1|Sculpt|392.271973|0.178448|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|f58004a68c1c90e1815522d84f6b1291|Sculpt|394.813660|0.164035|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|c9b41c8752cfa645f5b1453f82a7e475|Sculpt|1219.177979|1.356883|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|b638c16950ec501396cb5f9d883a2743|Sculpt|1295.429443|1.245562|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|737b226e07c30e4bfc3f632250fd8dfb|Sculpt|1306.443726|1.264694|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|3592bde1698e173010c656ff30e001e0|Sculpt|1657.200928|1.839037|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|1842c96539c95e4d938fc01d0c7db0fd|Sculpt|1657.200928|1.931635|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|b51818fd1cc351ccfd3c92d575915ffc|Sculpt|1657.200928|2.040982|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|2c3f85f9f269c38a2748410957b483ba|Sculpt|1644.492188|2.101309|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|208ad23e1109d1314e21c09d3b74ab61|Sculpt|1617.380615|2.113020|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|b5b35864ac9a9364017a95a1d4b32994|Sculpt|1587.727173|2.131888|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|0f19cf3db5526c9d3afdbd9cde4bb24d|Sculpt|1579.254883|2.178960|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|91b9cdb583f29be738ed18d83d991717|Sculpt|1053.966309|2.490649|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|62b17f741d47c593e505edd5bbb1f543|Sculpt|1014.993164|2.457524|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|a058c0622cf6b9728009800e2ac89b22|Sculpt|1004.826294|2.457530|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|fa042a69ad77b03e2bd287aa88bb546e|Sculpt|998.895569|2.462227|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|906ad615efd523aeac26199a37a3eede|Sculpt|995.506653|2.464950|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|f3454530c6990087ce4bb1ce48f2b637|Sculpt|997.201111|2.467154|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|ec6c57210f417910184fc5803839e540|Sculpt|998.048340|2.469534|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|b85a0a843ba502ba582f6d5c461e4f6a|Sculpt|998.895569|2.471609|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|e313a6e570b5980f3dadfa727ea893bf|Sculpt|1004.826294|2.464858|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|a3c556eaf08fc319d562427ce9cc0b49|Sculpt|1508.086670|2.027124|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|d9e4a5ff5430eea7c274dc47209a3757|Sculpt|1619.922363|2.169151|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|ebaadee2898e28c0bc609d6bded22070|Sculpt|1666.520752|2.116333|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|24451275fdebf985567aae72bf769635|Sculpt|1696.173950|2.013828|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|333ad2803f2a22d31930a749886b3d03|Sculpt|397.355408|0.050633|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|803356b99fbeabe55b48cb2254d19d95|Sculpt|1736.841431|1.908124|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|df13be2bdfdb6e79caf8542ea826fba9|Sculpt|399.049866|0.045358|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|3395edf91c3f7697ca45e37ec99dc1c7|Sculpt|1737.688721|1.867919|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|de2a750e11a279715af28f73359f6561|090adae7a66ff7514e4c8d4007fb1f01|Sculpt|1734.299805|1.818131|8.000000|38.658764|1.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|6591bd86bd253b20907496a9b3da3950|Smooth|318.562134|4.057815|8.000000|31.923609|-1.167604|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|0611912aa621b966dd753a635930e716|Smooth|318.562164|4.091510|8.000000|31.923609|-1.351740|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|f3b3d6cee59c8138198f94a21a7b2d68|Smooth|316.867676|4.103944|8.000000|31.923609|-1.014631|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|faed2a82b203f92531602505c5ec6d55|Smooth|314.325989|4.125463|8.000000|31.923609|0.128763|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|55cbd5e86389c5005568c81ac00b7530|Smooth|310.089783|4.129939|8.000000|31.923609|1.468142|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|a7f4607b9326fd134ae0569d5a87a7c3|Smooth|316.020447|4.193968|8.000000|31.923609|0.121256|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|7610b88dd7b702a7a7de95ceb2f9cd57|Smooth|317.714905|4.252033|8.000000|31.923609|0.291718|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|c6618b2693045bfd440d57183171c92d|Smooth|319.409363|4.286096|8.000000|31.923609|-1.334155|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|adbf2f67bbf5656cb25351029c5c5e9c|Smooth|319.409363|4.331388|8.000000|31.923609|-2.105962|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|5fc6513f00c860706994496a5fd99a20|Smooth|316.867676|4.340816|8.000000|31.923609|-1.377026|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|91d060a52385e0234324a616ca3d15d3|Smooth|315.173218|4.349088|8.000000|31.923609|-0.691616|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|5a3c5cf3af4ca47687d2cb52d9b6a526|Smooth|315.173218|4.393837|8.000000|31.923609|-0.390746|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|1df79dc96fdeb0694b8e0c289a48b119|Smooth|315.173218|4.441413|8.000000|31.923609|-0.042392|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|5e7b91ba2ab7fb6e10dbf9d4a96bf61e|Smooth|316.020447|4.492846|8.000000|31.923609|0.213711|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|247e494d765a55cdec53913afd05337d|Smooth|317.714905|4.523713|8.000000|31.923609|-0.147639|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|27b533ef61cafd71b045cc0753253421|Smooth|319.409363|4.557359|8.000000|31.923609|-1.879254|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|215cccc3605974454c3fa5e6570e7275|Smooth|317.714905|4.582087|8.000000|31.923609|-1.562715|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|933ca000afe3658f103c96b884094cbf|Smooth|317.714905|4.615806|8.000000|31.923609|-1.176131|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|5d529df678599e63da5314ae4c805f13|Smooth|316.020447|4.636677|8.000000|31.923609|-0.061777|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|7bb8d8b39a3f60483577a918c82162f8|Smooth|317.714905|4.695534|8.000000|31.923609|1.021653|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|05c3e9d754e5f5784a476c05e4e22928|Smooth|320.256653|4.730841|8.000000|31.923609|0.629826|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|d5e66cefcebf6e36fe28e3a52ee5ffe6|Smooth|322.798340|4.759806|8.000000|31.923609|-0.724382|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|0f25993bf01a60039179879d8e83b633|Smooth|321.951111|4.828894|8.000000|31.923609|-0.731107|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|014c323804e6dd8482f1463211b26e34|Smooth|322.798340|4.901267|8.000000|31.923609|0.721515|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|b906fffcee625c7a07af745d0c404e2a|Smooth|324.492798|4.935933|8.000000|31.923609|1.829495|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|3d129aaf73913f298f570ed6b96e54d9|Smooth|327.881775|4.974599|8.000000|31.923609|-0.122132|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|6b3125d0f05ddc5341d07d323d902183|Smooth|329.576233|5.011853|8.000000|31.923609|0.606162|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|5c3eb0299974cded8481a6def99c391d|Smooth|331.270752|5.047052|8.000000|31.923609|0.994931|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|1984b29eae016e55a477f24837d3fa85|Smooth|332.117950|5.075043|8.000000|31.923609|0.329893|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|4f095c17c8b5a103862b31026e3bdab3|Smooth|333.812439|5.111810|8.000000|31.923609|-0.374836|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|485950ec3a8823676dfc433d43d07417|Smooth|335.506897|5.151315|8.000000|31.923609|-0.086093|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|7024025c2b8cbcdb9c0770bb5485290b|Smooth|336.354126|5.200233|8.000000|31.923609|-0.138637|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|33d39b85921ec61f639788258877d14f|Smooth|338.048645|5.252567|8.000000|31.923609|-0.800439|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|dc7b0714f102b6fb4c4470341b3238ab|Smooth|338.895874|5.321141|8.000000|31.923609|-0.424826|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|8a4a8457f57cf5863f0717e7f9c131b6|Smooth|340.590393|5.382669|8.000000|31.923609|0.081726|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|0a2a3a96aff8bbbc88d2a3e1dfd8936c|Smooth|343.979309|5.426276|8.000000|31.923609|-0.791612|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|8aa1fde2f879ad5d651356bd08dfbb0d|Smooth|346.521057|5.491719|8.000000|31.923609|0.486391|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|854a9e63de3fae4f024a951bb265957f|Smooth|363.465820|5.449055|8.000000|31.923609|0.183197|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|d23f8b8d0b27c2782052c69ee30043a8|Smooth|368.549316|5.483402|8.000000|31.923609|-0.878364|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|fcee456c8c9315cafe50b6e3186ce9fa|Smooth|369.396545|5.549801|8.000000|31.923609|-0.294461|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|404b2bb0f5f185054b3903b2fce79235|Smooth|375.327209|5.581571|8.000000|31.923609|-0.422998|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|a9a8ff7ec8cf17092836a9f8a0b879b9|Smooth|382.105103|5.597153|8.000000|31.923609|-0.332930|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|4a38462cb2dc80dcf7914e8c343ca28c|Smooth|385.494080|5.681651|8.000000|31.923609|-0.102958|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|404aa87213f4791f6bb297dbfdc746cf|Smooth|389.730225|5.739998|8.000000|31.923609|0.063079|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|e9f6193af994eee2c534bfc5669f5712|Smooth|397.355408|5.797337|8.000000|31.923609|0.015486|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|e5ae2b2380b6f08ff0f84b66ce0a4a3f|Smooth|399.049866|5.985129|8.000000|31.923609|-0.001212|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|0503dc868bfe3093612bfe8b7ff1f3c3|Smooth|399.897125|6.199130|8.000000|31.923609|-0.503601|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|0541bbec2d3b178e64c450847e58acbe|Smooth|397.355408|0.037026|8.000000|38.658764|0.168176|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|9ce4c0b8265e926cc28833092fa7bc9c|Smooth|400.744385|0.100881|8.000000|38.658764|-0.520962|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|5a4554806111fd712b16b5f719843721|Smooth|1197.149658|1.376831|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|dffb4e1277b20b89e4ec37ee9e772ab9|Smooth|399.897125|0.191886|8.000000|38.658764|-0.361711|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|33231c1d245090415f068a7c4d48fc71|Smooth|326.187317|0.368364|8.000000|38.658764|-0.076454|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|36f56e8d4a49d328026bae2499c68b58|Smooth|324.492798|0.420012|8.000000|38.658764|-1.041396|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|bb91fa3a5223a15ce16d380d8701740c|Smooth|325.340057|0.453635|8.000000|38.658764|-0.771093|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|269378a5a9537c2bf29f718b3ed67e5b|Smooth|322.798340|0.497129|8.000000|38.658764|-1.224033|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|2bd4243fc2a9811dff96d5ceace6d44d|Smooth|321.951111|0.535313|8.000000|38.658764|-1.034672|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|6aeb6e898bbe597d3e5157d72f9d86ad|Smooth|321.103882|0.576734|8.000000|38.658764|-1.455764|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|b9e44defebd3a2be36e4c4a7bffa636e|Smooth|318.562134|0.597475|8.000000|38.658764|-1.247058|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|0571f20c6f7d46792c01e8c1ce331d29|Smooth|318.562164|0.621404|8.000000|38.658764|-1.260221|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|e107f9fc676647f40e9e685b91d048a4|Smooth|318.562164|0.665067|8.000000|38.658764|-0.094943|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|83ffda4cc56a5b2b2538d06e8b59715b|Smooth|319.409363|0.690146|8.000000|38.658764|2.154791|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|d5401158f68548e40022ea7bed3a4714|Smooth|803.183228|1.787456|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|bfe34e48ce4e152e79a21eadfc3017de|Smooth|804.877808|1.820471|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|7ad6a6b67357779ae5faf29364e14fca|Smooth|811.655640|1.849930|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|1b58f6d87bed834b3e809f6f7d16537b|Smooth|857.406616|1.940642|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|8a8578c8b14a265cb44593574bc04a0c|Smooth|859.101074|2.004008|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|bd2fcf2f816c2ef13a3045e75592efa1|Smooth|541.386169|2.459713|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|ac921c6d682c17db0294013594655b0b|Smooth|531.219299|2.495764|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|bdf58c4056d403fde865813682e9a02d|Smooth|521.052551|2.518516|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|340b842dc6ee68875fef728cefe7ae37|Smooth|512.580017|2.544069|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|005c5bb80b46c1f1d8aeb31959ea9ba1|Smooth|509.191101|2.567387|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|f14ab64ac8ce5d017a8a75f4512e7b31|Smooth|506.649353|2.588579|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|c39b41a2b3f1aa09668737c47b5254b9|Smooth|503.260437|2.609385|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|056f94b5185a4a46d1ee71c7787cae76|Smooth|502.413147|2.629247|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|1ffc1963ada1409f8577680732008a4f|Smooth|499.871460|2.647868|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|07fa68666a7a00f70e9344d5ecf83727|Smooth|495.635254|2.658235|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|8002a56d5d55b023fd031c25317c70d3|Smooth|494.787994|2.676455|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|9d9c3c5e138d5b9018e93315e641ae40|Smooth|492.246277|2.696235|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|b650ddd8c1fc86bee3e7cc37ec6760ee|Smooth|490.551819|2.717889|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|1871fc9ea329082c5a72a434828dac5c|Smooth|490.551819|2.763664|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|318e682d315b1b156ca33e7b26c8f745|Smooth|491.399048|2.793977|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|743321e225d4c6e4af47f8301b42a314|Smooth|492.246277|2.822956|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|b6fb1de973fe8f6117fb73a15ca65591|Smooth|493.940796|2.829814|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|f221c0d737c2afcad6c61722b7bfa1fa|Smooth|495.635254|2.848439|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|059b70f8536cecaf5ee09624468884df|Smooth|511.732788|2.866435|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|04f1b45cf757ca0483d4e436d3959934|Smooth|524.441467|2.858392|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|949a7c084b9c66a0211d95838cdd6650|Smooth|532.913879|2.858288|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|e5a844c52657ea5b20bc9b131bc4ed0b|Smooth|540.538940|2.845567|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|0f0bd91ddb9c0a95189a99971c8e9f45|Smooth|926.880249|2.506838|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|e92bdb42fd01f642765e1c4fd548dd72|Smooth|985.339783|2.564297|8.000000|38.658764|0.022220|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|a249ab873b270604dd5e81d53094e234|Smooth|1013.298706|2.546841|8.000000|38.658764|-0.100041|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|3a762d88b248223874dba96f16175f68|Smooth|1606.366699|2.315174|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|f3fabbdf15aeb4fa8eea9c8cd7181caa|Smooth|1673.298584|2.263099|8.000000|38.658764|-0.279905|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|1bf289e80fb8b0dbfb426889c5715a8b|Smooth|1740.230347|2.064424|8.000000|38.658764|0.437117|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|4ac4ce793460d1b108762041b2299d61|Smooth|397.355408|0.072480|8.000000|38.658764|-0.123604|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|6642813f7fd1fe594c99d78b01408509|Smooth|395.660950|0.093753|8.000000|38.658764|-1.268968|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|d1825811f6e73f2024c42b2c8e20c950|Smooth|393.119202|0.123898|8.000000|38.658764|-0.468385|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|50ddacaebb2765858603c1c3318aceb5|Smooth|322.798340|0.313113|8.000000|38.658764|-0.262062|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|e5e8dc621543dd60f5087157dedfcc90|Smooth|319.409363|0.354381|8.000000|38.658764|-2.085931|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|f346f4a09ed9fad8d6ea35afec92a588|Smooth|318.562164|0.379657|8.000000|38.658764|-2.248325|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|5d185129dd222b269071f6ebdd03d956|Smooth|310.937012|0.425033|8.000000|38.658764|1.569203|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|24d4efa884472efbbd461740d91cbd2b|Smooth|313.478699|0.425260|8.000000|38.658764|-0.845825|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|260f2e255094930bbe0d7190dacabf3b|Smooth|315.173218|0.456117|8.000000|38.658764|-3.516173|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|06ad4dc1eccc1ede3c6e2c6617f68c0e|Smooth|310.089783|0.492285|8.000000|38.658764|2.247437|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|a1583d2c211375080c1c44f1b06cf638|Smooth|314.325989|0.495002|8.000000|38.658764|-4.938681|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|b96be67e771d456f56f0a5b47374371f|Smooth|310.089722|0.526565|8.000000|38.658764|1.618903|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|ec667edf4f5d7fa0dc7bbfd6f3c595d0|Smooth|312.631470|0.534957|8.000000|38.658764|-1.357790|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|95ff1f222c0f577dcd4d31885afc66ad|Smooth|311.784241|0.586553|8.000000|38.658764|-0.321451|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|0b114a6251ed351ef8353b41c48a31ce|Smooth|312.631470|0.601508|8.000000|38.658764|0.900486|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|7c2bfa7480d5020490604b83a1f54734|Smooth|314.325989|0.632185|8.000000|38.658764|1.941123|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|efc6af970c7d28a8d97fce1eaf760e58|Smooth|318.562164|0.641041|8.000000|38.658764|-5.116433|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|68b01de61b0b422f48d97767aab03cdf|Smooth|317.714905|0.678341|8.000000|38.658764|-3.074275|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|979181ed126e38185b01c08d01ff13c8|Smooth|316.020447|0.748092|8.000000|38.658764|1.431721|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|ab2097b0ec62560de634edfee1cf58bd|Smooth|316.867676|0.783268|8.000000|38.658764|2.898185|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|4933c5774441065a84481bc539ae090a|Smooth|771.835388|1.917565|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|34d1ccfa012c4c7d6fe6a347f69a28ad|Smooth|546.469666|2.339042|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|e939bde4a4febc737d00926e7e5c1ea3|Smooth|532.913879|2.380552|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|d8a8db83f7af6a0dbf79b0104399b3bd|Smooth|508.343842|2.388501|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|7ab97cfb034d00f5f7c3132cfa696da5|Smooth|473.607056|2.315666|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|a97537383f68c7b312e3073f13aeda63|Smooth|468.523621|2.330957|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|9e87c26e91696aa3e52cba1ca40abcd3|Smooth|454.120483|2.309540|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|2b904af4985f759964f221428c5bbd49|Smooth|442.259155|2.276651|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|6aa2b1d33814d4956dd55d279e1f27c5|Smooth|434.633972|2.265610|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|e0dd710b2b4f708b4bfe4112010717bb|Smooth|422.772644|2.194425|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|065e756229052c7cf845ed0dc7a7292c|Smooth|416.841919|2.187515|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|72230d1b7fc09a77a7e3ebbfaaeb07a7|Smooth|413.452972|2.194555|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|10ad7744935f3d5d4b658551426ef38d|Smooth|409.216797|2.200399|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|ade59e2bdedace0318ae046c066c0133|Smooth|407.522339|2.214081|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|f99a582695b9268934af2e748b2702b9|Smooth|405.827820|2.246399|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|8c191ce7c2e979b6106aff78e4f2b266|Smooth|403.286072|2.281727|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|b4721b924ca1e01cf67243282c05aacc|Smooth|399.897125|2.308174|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|75cba00c9717c7d2f4aecfe673559702|Smooth|397.355408|2.325218|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|4320e62909be463c29783c748b2cccec|Smooth|392.271973|2.313639|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|2d7286388cb3a7d0be27fd44ebfc2e80|Smooth|386.341278|2.303610|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|cdbdd2e36ad592f2037eb18796000022|Smooth|383.799561|2.324055|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|c614f0a2254213355931a090afd358e5|Smooth|384.646851|2.396680|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|e56891902107dc9f207d67de1675b8cf|Smooth|382.952332|2.427284|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|ed78112ca334a3aeccc86fce58ee26de|Smooth|370.243774|2.361032|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|8c2dc953d93ee5ea69e24929a7ed1d9a|Smooth|368.549316|2.403005|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|e5ced0dec32402669a11f21b49ef0b96|Smooth|365.160339|2.422278|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|8895a35eff1df13845979abfeb481de8|Smooth|360.076904|2.429807|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|7b0c565ebf8a65995a5cb5007543e8c9|Smooth|353.298950|2.406466|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|cb0de56207867b54d750bb177c2eec04|Smooth|349.062744|2.415309|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|890221ec29b14a3a4a886488cf215dea|Smooth|345.673798|2.438354|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|9a2f1deeb7801a4d23c06751c6f526fd|Smooth|343.132080|2.462654|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|4e95a74b528828e90ec0313a297f6999|Smooth|340.590332|2.471861|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|e9bccd5b39d03e9c7bff78299cdb674c|Smooth|337.201355|2.482561|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|fdc2f7479c15c71f19031e7b21239b4f|Smooth|335.506897|2.488233|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|cd7944799a93c1c465aa0c05cca74474|Smooth|333.812439|2.498984|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|c91fcd5497711ecd174039fe2cdeac7d|Smooth|311.784241|2.449293|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|de75ef4abb7940804a20b4131c8742b0|Smooth|310.937012|2.399323|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|308368e715bebb496b983f350b2c9779|Smooth|311.784241|2.323446|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|f2ec642b4900f9bddb70b8b7965db16d|Smooth|333.812439|2.330242|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|fc3c6f1bea96481dd9f0eef1b9447fcd|Smooth|333.812439|2.274954|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|1e1241a64270a52da9e59a21faac575d|Smooth|333.812439|2.182635|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|aee23528ea5cc30641ff651774eee236|Smooth|334.659668|2.105338|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|0c09afcd1c17c834b8cb5b1f0cb057e4|Smooth|338.048645|2.030843|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|b08f3eba456bdab9f442e65026421369|Smooth|339.743103|1.948451|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|c197a962b84621e7a8687def04306b97|Smooth|338.048645|1.868582|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|0ad129af752b5cba38d6d7c7aac99bea|Smooth|329.576233|1.755354|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|1872609ae6536744ef1b0a4c51140ff4|Smooth|327.034546|1.651502|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|8144b84f2016d8ecc35e9a3e065a759c|Smooth|326.187317|1.557498|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|c0a28962729e2adeacbe8251a8a81d8e|Smooth|326.187317|1.488111|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|c7038d45ad381a685b021bbc71455598|Smooth|320.256653|1.414281|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|00bc4fe399b1d0b8a2ae274c136bb0e8|Smooth|319.409363|1.358180|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|9ce61d8e492382093516e51a7b3704b9|Smooth|317.714905|1.315613|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|78f90c3af81b5fa91098925b84fa7559|Smooth|316.867676|1.267906|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|d8448a32c1fed8b79c65ae4dea97f467|Smooth|316.020447|1.192524|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|492f9d1ffb5e34862d57f4763c34aeb6|Smooth|315.173218|1.133340|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|bcc847d03521e774f3eca814ac16a6a4|Smooth|314.325989|1.082050|8.000000|38.658764|0.000148|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|03ef7e783555a8d74ef5e8e7e1018007|Smooth|314.325989|1.032814|8.000000|38.658764|0.346493|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|d9b32d57d966becb47cac3026d6dc6fb|Smooth|316.867676|0.994838|8.000000|38.658764|0.842234|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|fd63957a778bd65792c6a59187651687|Smooth|319.409363|0.952380|8.000000|38.658764|0.519091|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|990613fd22233c9b82b38d13e0c3b8cb|Smooth|539.691711|2.278725|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|867e7fdb0e0c6511ce33acc11ce22ec1|Smooth|543.080688|2.295362|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|d27684a6f8f8903d1e5ecd9ede205ced|Smooth|546.469666|2.312449|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|79d6ad576be62d0e900949968d97c83e|Smooth|598.998474|2.278815|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|95eb88ac369899a7a59ea246340c2e57|Smooth|775.224304|1.950830|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|0272c3222b33419543ebc651e7190445|Smooth|790.474792|1.880384|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|71c9a592383640ce100c9424fe4c55fe|Smooth|320.256592|0.701190|8.000000|38.658764|3.816740|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|f7f7bc062275b44f1b39807b03f6ec7f|Smooth|870.115173|1.806916|8.000000|38.658764|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|332c844ff36a84982bef37c2be8d84c8|Smooth|320.256592|0.599532|8.000000|38.658764|-3.477702|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|03e3d36184af53753ac8f81588e4f9a5|Smooth|314.325989|0.556851|8.000000|38.658764|3.916289|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|618f8689768b89fd5f1ebca1647afc2d|Smooth|315.173218|0.482353|8.000000|38.658764|-7.591821|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|ec4cbb1bbf122f6f926a5bf5054c701f|Smooth|309.242493|0.453800|8.000000|38.658764|6.605513|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|871a84df8222a8e7a8a9495462324c97|Smooth|310.937012|0.380152|8.000000|38.658764|0.545505|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|185707cabf32979ab34a52f065b5cc4a|Smooth|311.784241|0.333470|8.000000|38.658764|-2.651393|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|7f2f226ec9dc7249bdcff7aec39f1ff9|Smooth|309.242493|0.294864|8.000000|38.658764|-2.331506|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|a4e709a8ab3a4818e8dbd6926f4064c8|Smooth|303.311829|0.277998|8.000000|38.658764|0.816003|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|a0a96de775ee281be15d870f34bf34cb|Smooth|302.464600|0.242983|8.000000|38.658764|-0.652346|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|b0095850b9a68bd142d2ab64f659b681|Smooth|297.381165|0.228550|8.000000|38.658764|0.205351|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|c43a8a476f123be0893e9ee9b7b0a610|Smooth|294.839417|0.199747|8.000000|38.658764|-0.069730|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|4d64c28dac3be3cf577719b917e3bbff|Smooth|292.297729|0.182883|8.000000|38.658764|-0.091865|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|3acf9706679b16a9f768a0b5290dda59|Smooth|290.603210|0.144721|8.000000|38.658764|0.101549|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|c6fda4fd83b703228ba4f15e85f74752|Smooth|288.908752|0.127639|8.000000|38.658764|0.050070|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|618f8dede08a392f023556e839b15b5f|Smooth|291.450470|0.111116|8.000000|38.658764|0.091499|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|367d44726c43ec10ec1ee6602b74bc40|Smooth|294.839417|0.098171|8.000000|38.658764|-0.094188|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|51fd33f5fd387eea38a055717dc7a09a|Smooth|298.228394|0.088758|8.000000|38.658764|-0.073528|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|822769ccc39e24f9fa4664f811e7de29|Smooth|300.770142|0.077269|8.000000|38.658764|0.231665|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|0239efd5312be2690932c45b7b78dd19|Smooth|305.006317|0.062938|8.000000|38.658764|-0.250160|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|b332380ccc859f7d6b9a08a61ff3cead|Smooth|308.395264|0.059649|8.000000|38.658764|-0.375580|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|63a84dc9425a0b1c4f9ee6ee8d2bc24c|Smooth|327.034546|6.280523|8.000000|31.923609|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|943c57d6e496083c1c254a8a8d1b0a6c|Smooth|377.868896|5.975867|8.000000|31.923609|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|9868a2edf5cafa057f02e0c116c99db5|Smooth|385.494080|5.884298|8.000000|31.923609|-0.024631|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|3703b9981106cb9abb6012a3d2f8d6ca|Smooth|449.884338|5.037418|8.000000|31.923609|0.029606|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|2bb4d9e7ba98e6e6f0b8ee8a03375116|Smooth|445.648071|4.832382|8.000000|31.923609|0.141147|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|9c67c9d2b4c9d9022aac51ab38364332|Smooth|510.885559|3.575023|8.000000|31.923609|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|4a28668311c1cf6e30cb87fe9250f11e|Smooth|479.537720|3.730776|8.000000|31.923609|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|1897cd44e233bb014e62a263ad462131|Smooth|433.786743|3.880648|8.000000|31.923609|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|6a956b059f58809058ea5964b5e278c0|Smooth|425.314331|3.758707|8.000000|31.923609|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|adbba7ccf8b5294cb791bb9397f67bfc|Smooth|419.383667|3.603067|8.000000|31.923609|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|57388df220d1c1bc99a02719e1153c6c|Smooth|409.216797|3.518654|8.000000|31.923609|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|d90d01e55e04a4b56a059efa1526eae5|Smooth|404.133301|3.448274|8.000000|31.923609|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|16a6b64e460fa1abbb4bb43d655edb5b|Smooth|395.660950|3.383494|8.000000|31.923609|0.000000|0.500000|0
+terrain_brush|00cee63b78cc683b7dcf5cf34cf328eb|2f2f09bd856af0e89dc21e5d58979798|Smooth|388.035767|3.322040|8.000000|31.923609|0.000000|0.500000|0

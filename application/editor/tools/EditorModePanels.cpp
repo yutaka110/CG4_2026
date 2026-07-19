@@ -25,11 +25,11 @@ EditorInteractiveToolEnvironment BuildEnvironment(const EditorContext& context) 
     environment.execution = context.interactiveExecution;
     environment.selectionRevision = context.selection != nullptr
         ? context.selection->Revision() : 0;
-    environment.documentRevision = context.documentManager != nullptr
-        ? context.documentManager->Revision() : 0;
     if (context.documentManager != nullptr) {
         if (const EditorDocumentRecord* document = context.documentManager->Active()) {
             environment.activeDocumentKey = document->id.Key();
+            environment.documentEditRevision = document->editRevision;
+            environment.documentGeneration = document->contentGeneration;
         }
     }
     environment.playSessionActive = context.playSession != nullptr &&
@@ -142,7 +142,7 @@ void DrawEditorToolPropertiesPanel(EditorContext& context) {
             ImGui::SameLine();
             bool changed = false;
             std::string serialized = property.value;
-            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::SetNextItemWidth(property.previewColor != 0 ? -30.0f : -1.0f);
             switch (property.editKind) {
             case EditorInteractiveToolPropertyEditKind::ReadOnly:
                 ImGui::TextUnformatted(property.value.c_str());
@@ -181,6 +181,38 @@ void DrawEditorToolPropertiesPanel(EditorContext& context) {
                 serialized = buffer.data();
                 break;
             }
+            case EditorInteractiveToolPropertyEditKind::Choice: {
+                int selected = 0;
+                try { selected = std::stoi(property.value); } catch (...) {}
+                selected = (std::clamp)(
+                    selected, 0, (std::max)(0, static_cast<int>(property.choices.size()) - 1));
+                const char* preview = property.choices.empty()
+                    ? property.value.c_str() : property.choices[selected].c_str();
+                if (ImGui::BeginCombo("##value", preview)) {
+                    for (int index = 0; index < static_cast<int>(property.choices.size()); ++index) {
+                        const bool active = index == selected;
+                        if (ImGui::Selectable(property.choices[index].c_str(), active)) {
+                            selected = index;
+                            serialized = std::to_string(index);
+                            changed = true;
+                        }
+                        if (active) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                break;
+            }
+            }
+            if (property.previewColor != 0) {
+                ImGui::SameLine();
+                ImGui::ColorButton(
+                    "##previewColor",
+                    ImGui::ColorConvertU32ToFloat4(property.previewColor),
+                    ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop,
+                    ImVec2(22.0f, 22.0f));
+                if (ImGui::IsItemHovered() && !property.detail.empty()) {
+                    ImGui::SetTooltip("%s", property.detail.c_str());
+                }
             }
             if (changed) {
                 std::string error;

@@ -23,9 +23,12 @@ const char* ToString(EditorInteractiveToolEndReason reason) {
     case EditorInteractiveToolEndReason::ModeChanged: return "Mode Changed";
     case EditorInteractiveToolEndReason::RegistryChanged: return "Registry Changed";
     case EditorInteractiveToolEndReason::SelectionChanged: return "Selection Changed";
-    case EditorInteractiveToolEndReason::DocumentChanged: return "Document Changed";
+    case EditorInteractiveToolEndReason::DocumentSwitched: return "Document Switched";
+    case EditorInteractiveToolEndReason::DocumentEdited: return "Document Edited";
+    case EditorInteractiveToolEndReason::DocumentReloaded: return "Document Reloaded";
     case EditorInteractiveToolEndReason::PlaySessionStarted: return "Play Session Started";
     case EditorInteractiveToolEndReason::ViewportUnavailable: return "Viewport Unavailable";
+    case EditorInteractiveToolEndReason::PointerCaptureLost: return "Pointer Capture Lost";
     case EditorInteractiveToolEndReason::AuthoringLocked: return "Authoring Locked";
     case EditorInteractiveToolEndReason::ExternalTransaction: return "External Transaction";
     case EditorInteractiveToolEndReason::Shutdown: return "Shutdown";
@@ -132,7 +135,8 @@ bool EditorToolManager::StartTool(
     activeToolId_ = descriptor->id;
     activeTool_ = std::move(tool);
     activationDocumentKey_ = environment.activeDocumentKey;
-    activationDocumentRevision_ = environment.documentRevision;
+    activationDocumentEditRevision_ = environment.documentEditRevision;
+    activationDocumentGeneration_ = environment.documentGeneration;
     activationSelectionRevision_ = environment.selectionRevision;
     activationTransactionRevision_ = transactions.Revision();
     activationRegistryRevision_ = registry_.Revision();
@@ -152,9 +156,14 @@ EditorInteractiveToolEndReason EditorToolManager::BoundaryViolation(
         return EditorInteractiveToolEndReason::RegistryChanged;
     }
     const EditorInteractiveToolDescriptor& descriptor = *ActiveToolDescriptor();
-    if (environment.activeDocumentKey != activationDocumentKey_ ||
-        environment.documentRevision != activationDocumentRevision_) {
-        return EditorInteractiveToolEndReason::DocumentChanged;
+    if (environment.activeDocumentKey != activationDocumentKey_) {
+        return EditorInteractiveToolEndReason::DocumentSwitched;
+    }
+    if (environment.documentGeneration != activationDocumentGeneration_) {
+        return EditorInteractiveToolEndReason::DocumentReloaded;
+    }
+    if (environment.documentEditRevision != activationDocumentEditRevision_) {
+        return EditorInteractiveToolEndReason::DocumentEdited;
     }
     if (environment.playSessionActive) {
         return EditorInteractiveToolEndReason::PlaySessionStarted;
@@ -185,6 +194,10 @@ void EditorToolManager::Tick(
     const EditorInteractiveToolEndReason boundary = BoundaryViolation(environment, transactions);
     if (boundary != EditorInteractiveToolEndReason::Accepted) {
         CancelActiveTool(boundary);
+        return;
+    }
+    if (input.viewportPrimaryCancelled) {
+        CancelActiveTool(EditorInteractiveToolEndReason::PointerCaptureLost);
         return;
     }
     activeTool_->Tick(environment, input);

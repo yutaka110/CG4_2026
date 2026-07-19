@@ -29,9 +29,12 @@ enum class EditorInteractiveToolEndReason {
     ModeChanged,
     RegistryChanged,
     SelectionChanged,
-    DocumentChanged,
+    DocumentSwitched,
+    DocumentEdited,
+    DocumentReloaded,
     PlaySessionStarted,
     ViewportUnavailable,
+    PointerCaptureLost,
     AuthoringLocked,
     ExternalTransaction,
     Shutdown,
@@ -43,7 +46,8 @@ struct EditorInteractiveToolEnvironment {
     const EditorViewportCoordinateService* coordinates = nullptr;
     EditorExecutionContext* execution = nullptr;
     std::string activeDocumentKey;
-    uint64_t documentRevision = 0;
+    uint64_t documentEditRevision = 0;
+    uint64_t documentGeneration = 0;
     uint32_t selectionRevision = 0;
     bool playSessionActive = false;
     bool canMutateAuthoring = false;
@@ -56,6 +60,7 @@ struct EditorInteractiveToolFrameInput {
     bool viewportPrimaryPressed = false;
     bool viewportPrimaryDown = false;
     bool viewportPrimaryReleased = false;
+    bool viewportPrimaryCancelled = false;
 };
 
 enum class EditorInteractiveToolPropertyEditKind {
@@ -64,6 +69,7 @@ enum class EditorInteractiveToolPropertyEditKind {
     Float,
     Integer,
     Boolean,
+    Choice,
 };
 
 struct EditorInteractiveToolProperty {
@@ -74,6 +80,8 @@ struct EditorInteractiveToolProperty {
         EditorInteractiveToolPropertyEditKind::ReadOnly;
     float minimum = 0.0f;
     float maximum = 0.0f;
+    std::vector<std::string> choices;
+    uint32_t previewColor = 0;
 };
 
 struct EditorInteractiveToolCommit {

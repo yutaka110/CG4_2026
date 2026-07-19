@@ -336,7 +336,8 @@ bool EditorProductionScenePipeline::Sync(
     uint64_t completedFenceValue,
     uint64_t scheduledFenceValue,
     std::string* errorMessage,
-    const std::unordered_set<std::string>* sourceResidentEntities) {
+    const std::unordered_set<std::string>* sourceResidentEntities,
+    const std::unordered_set<std::string>* editorTransientOverrides) {
     CollectRetired(completedFenceValue);
     instances_.clear();
     renderPackets_.clear();
@@ -393,6 +394,8 @@ bool EditorProductionScenePipeline::Sync(
         const EditorSceneComponent* component = scene.FindComponent(entity, kEditorMeshRendererComponentType);
         if (component == nullptr || !component->enabled) continue;
         ++stats_.meshEntities;
+        if (editorTransientOverrides != nullptr &&
+            editorTransientOverrides->contains(entity.guid)) continue;
         const std::string assetGuid = AssetReference(*component);
         const EditorAssetRecord* record = registry.FindByGuid(assetGuid);
         if (assetGuid.empty() || record == nullptr || record->kind != EditorAssetKind::Mesh || record->missing) {

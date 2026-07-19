@@ -24,6 +24,7 @@ struct EditorDocumentRecord {
     std::string displayName;
     uint32_t schemaVersion = 0;
     uint64_t editRevision = 0;
+    uint64_t contentGeneration = 1;
     uint64_t savedRevision = 0;
     uint64_t autosaveRevision = 0;
     uint64_t sourceContentHash = 0;

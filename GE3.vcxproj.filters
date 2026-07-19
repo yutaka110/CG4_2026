@@ -82,6 +82,9 @@
     <Filter Include="ソース ファイル\application\editor">
       <UniqueIdentifier>{059ce520-5980-463e-a525-4e9d63a8c10b}</UniqueIdentifier>
     </Filter>
+    <Filter Include="ソース ファイル\application\runtime">
+      <UniqueIdentifier>{69b5a8b5-c09a-4a78-b88c-f5d98d8741f6}</UniqueIdentifier>
+    </Filter>
     <Filter Include="ヘッダー ファイル\application\diagnostics">
       <UniqueIdentifier>{a35ef5d2-5188-4f91-9f73-3b332d19c465}</UniqueIdentifier>
     </Filter>
@@ -93,6 +96,9 @@
     </Filter>
     <Filter Include="ヘッダー ファイル\application\editor">
       <UniqueIdentifier>{05c4e902-ee68-4a5a-9d86-fb02d0dd72f1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ヘッダー ファイル\application\runtime">
+      <UniqueIdentifier>{70d26cbf-8335-420d-9244-a1575356f7e6}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -122,12 +128,6 @@
     </ClCompile>
     <ClCompile Include="externals\imgui\imgui_widgets.cpp">
       <Filter>imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="KeyInput.cpp">
-      <Filter>ソース ファイル</Filter>
-    </ClCompile>
-    <ClCompile Include="WinApp.cpp">
-      <Filter>ソース ファイル</Filter>
     </ClCompile>
     <ClCompile Include="application\streaming\NetworkManager.cpp">
       <Filter>ソース ファイル\Streaming</Filter>
@@ -420,6 +420,9 @@
     <ClCompile Include="application\editor\EditorViewportInteractionService.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
+    <ClCompile Include="application\editor\EditorViewportCameraController.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
     <ClCompile Include="application\editor\EditorViewportCoordinateService.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
@@ -615,6 +618,7 @@
     <ClCompile Include="application\editor\geometry\EditorGeometryTools.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\mesh\EditorProductionMeshAsset.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\scene\EditorProductionScenePipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\geometry\EditorTransientMeshRenderPath.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\mesh\EditorMeshBakePipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\mesh\EditorMeshBakeTools.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\EditorTransactionPanel.cpp">
@@ -718,6 +722,9 @@
     </ClCompile>
     <ClCompile Include="application\AppFrameGraphBuilder.cpp">
       <Filter>ソース ファイル</Filter>
+    </ClCompile>
+    <ClCompile Include="application\runtime\AppFrameCoordinator.cpp">
+      <Filter>ソース ファイル\application\runtime</Filter>
     </ClCompile>
     <ClCompile Include="application\AppPostProcessPipeline.cpp">
       <Filter>ソース ファイル</Filter>
@@ -1003,12 +1010,6 @@
     <ClInclude Include="Vertex.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
-    <ClInclude Include="KeyInput.h">
-      <Filter>ヘッダー ファイル</Filter>
-    </ClInclude>
-    <ClInclude Include="WinApp.h">
-      <Filter>ヘッダー ファイル</Filter>
-    </ClInclude>
     <ClInclude Include="application\streaming\NetworkManager.h">
       <Filter>ヘッダー ファイル\Streaming</Filter>
     </ClInclude>
@@ -1141,9 +1142,6 @@
     <ClInclude Include="engine\include\particle\ParticleSystemCpu.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
-    <ClInclude Include="engine\include\media\CpuTransferCtx.h">
-      <Filter>ヘッダー ファイル</Filter>
-    </ClInclude>
     <ClInclude Include="engine\include\graphics\DxHelpers.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
@@ -1191,6 +1189,9 @@
     </ClInclude>
     <ClInclude Include="application\AppFrameGraphBuilder.h">
       <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\runtime\AppFrameCoordinator.h">
+      <Filter>ヘッダー ファイル\application\runtime</Filter>
     </ClInclude>
     <ClInclude Include="application\AppPostProcessPipeline.h">
       <Filter>ヘッダー ファイル</Filter>
@@ -1585,6 +1586,12 @@
     <ClInclude Include="application\editor\EditorViewportInteractionService.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
+    <ClInclude Include="application\editor\EditorViewportCameraInput.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\EditorViewportCameraController.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
     <ClInclude Include="application\editor\EditorViewportCoordinateService.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
@@ -1720,6 +1727,7 @@
     <ClInclude Include="application\editor\geometry\EditorGeometryTools.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\mesh\EditorProductionMeshAsset.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\scene\EditorProductionScenePipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\geometry\EditorTransientMeshRenderPath.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\mesh\EditorMeshBakePipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\mesh\EditorMeshBakeTools.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\AnimationStateMachine.h"><Filter>ヘッダー ファイル\application</Filter></ClInclude>

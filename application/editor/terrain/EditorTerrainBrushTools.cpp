@@ -8,6 +8,7 @@
 #include "../../terrain/TerrainGenerationSettings.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
@@ -15,6 +16,29 @@
 
 namespace editor {
 namespace {
+
+constexpr uint32_t PackOverlayColor(
+    uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha) {
+    return static_cast<uint32_t>(red) |
+        (static_cast<uint32_t>(green) << 8u) |
+        (static_cast<uint32_t>(blue) << 16u) |
+        (static_cast<uint32_t>(alpha) << 24u);
+}
+
+constexpr uint32_t WithAlpha(uint32_t color, uint8_t alpha) {
+    return (color & 0x00ffffffu) | (static_cast<uint32_t>(alpha) << 24u);
+}
+
+constexpr std::array<TerrainPaintLayerVisual, 4> kTerrainPaintLayerVisuals{{
+    {0u, "Layer 0 - Cool Rock", PackOverlayColor(105, 145, 188, 255),
+        PackOverlayColor(105, 145, 188, 52)},
+    {1u, "Layer 1 - Neutral Rock", PackOverlayColor(174, 160, 139, 255),
+        PackOverlayColor(174, 160, 139, 52)},
+    {2u, "Layer 2 - Warm Rock", PackOverlayColor(221, 145, 68, 255),
+        PackOverlayColor(221, 145, 68, 52)},
+    {3u, "Layer 3 - Bright Accent", PackOverlayColor(246, 202, 94, 255),
+        PackOverlayColor(246, 202, 94, 52)},
+}};
 
 std::string FormatFloat(float value) {
     std::ostringstream stream;
@@ -124,7 +148,7 @@ public:
                 std::string(ToString(operation_)) + " Terrain Stroke",
                 binding_->transactionTarget,
                 std::move(command)},
-            std::string(ToString(operation_)) + " Terrain stroke committed as one Transaction.");
+            CommitMessage());
     }
 
     void Cancel(EditorInteractiveToolEndReason) override {
@@ -139,7 +163,10 @@ public:
         const TerrainEditDirtyRegion dirty =
             binding_->course->terrainEditLayer.DirtyRegionFor(stamps_);
         ClearPreview();
-        if (binding_->onCommitted) binding_->onCommitted(dirty, ToString(operation_));
+        if (binding_->onCommitted) {
+            binding_->onCommitted(EditorTerrainCommitSummary{
+                dirty, operation_, stamps_.size(), materialLayer_});
+        }
         stamps_.clear();
         sampledHits_.clear();
         acceptRequested_ = false;
@@ -176,22 +203,82 @@ public:
     void BuildViewportOverlay(EditorViewportOverlayService& overlay) const override {
         if (coordinates_ == nullptr) return;
         auto sink = overlay.Sink(EditorViewportOverlayLayerId::AuthoringHelpers);
+        const TerrainPaintLayerVisual& layer = GetTerrainPaintLayerVisual(materialLayer_);
         const uint32_t color = operation_ == TerrainEditOperation::Paint
-            ? 0xffffb74du : 0xff54e8ffu;
+            ? layer.outlineColor : 0xff54e8ffu;
+        const auto projectedBrushRadius = [&](const EditorTerrainSurfaceHit& hit) {
+            const EditorViewportProjectedPoint center = coordinates_->ProjectWorld(hit.position);
+            const RailPathSample rail = railPath_.Evaluate(hit.railDistance);
+            const Vector3 edge{
+                hit.position.x + rail.tangent.x * radius_,
+                hit.position.y + rail.tangent.y * radius_,
+                hit.position.z + rail.tangent.z * radius_};
+            const EditorViewportProjectedPoint projectedEdge = coordinates_->ProjectWorld(edge);
+            if (!center.valid || !projectedEdge.valid ||
+                !center.render.valid || !projectedEdge.render.valid) {
+                return 20.0f;
+            }
+            return (std::clamp)(
+                std::hypot(
+                    projectedEdge.render.x - center.render.x,
+                    projectedEdge.render.y - center.render.y),
+                8.0f,
+                180.0f);
+        };
         const auto drawHit = [&](const EditorTerrainSurfaceHit& hit, float radius, uint32_t value) {
             const EditorViewportProjectedPoint center = coordinates_->ProjectWorld(hit.position);
             if (!center.valid || !center.render.valid || !center.inDepth) return;
             sink.Circle(center.render.x, center.render.y, radius, value, 2.0f);
         };
-        if (hit_.valid) drawHit(hit_, 20.0f, color);
+        if (hit_.valid) {
+            const EditorViewportProjectedPoint center = coordinates_->ProjectWorld(hit_.position);
+            const float footprintRadius = projectedBrushRadius(hit_);
+            if (operation_ == TerrainEditOperation::Paint &&
+                center.valid && center.render.valid && center.inDepth) {
+                sink.CircleFilled(
+                    center.render.x, center.render.y, footprintRadius, layer.fillColor);
+                sink.Circle(
+                    center.render.x, center.render.y,
+                    footprintRadius * hardness_, WithAlpha(layer.outlineColor, 180), 1.25f);
+                EditorViewportOverlayItemOptions labelOptions{};
+                labelOptions.background = true;
+                labelOptions.priority = 200;
+                sink.Label(
+                    center.render.x + footprintRadius + 8.0f,
+                    center.render.y - 10.0f,
+                    layer.label,
+                    layer.outlineColor,
+                    labelOptions);
+            }
+            drawHit(hit_, footprintRadius, color);
+        }
         for (const EditorTerrainSurfaceHit& sample : sampledHits_) {
-            drawHit(sample, 5.0f, 0xff7cff91u);
+            if (operation_ == TerrainEditOperation::Paint) {
+                const EditorViewportProjectedPoint point = coordinates_->ProjectWorld(sample.position);
+                if (point.valid && point.render.valid && point.inDepth) {
+                    sink.CircleFilled(
+                        point.render.x, point.render.y, 4.5f,
+                        WithAlpha(layer.outlineColor, 210));
+                }
+            } else {
+                drawHit(sample, 5.0f, 0xff7cff91u);
+            }
         }
     }
 
     std::string ViewportHint() const override {
-        return std::string(ToString(operation_)) +
-            " Terrain: drag on a procedural surface; release commits one Transaction; Esc cancels";
+        if (coordinates_ != nullptr && !hit_.valid) {
+            return std::string(ToString(operation_)) +
+                " Terrain: " + ToString(hit_.failure);
+        }
+        std::string hint = std::string(ToString(operation_)) + " Terrain";
+        if (operation_ == TerrainEditOperation::Paint) {
+            hint += " [";
+            hint += GetTerrainPaintLayerVisual(materialLayer_).label;
+            hint += "]";
+        }
+        return hint +
+            ": drag on a procedural surface; release commits one Transaction; Esc cancels";
     }
 
     std::vector<EditorInteractiveToolProperty> Properties() const override {
@@ -205,6 +292,10 @@ public:
                 EditorInteractiveToolPropertyEditKind::Float, 0.0f, 0.95f},
             {"Spacing", FormatFloat(spacing_), "Minimum world distance between samples.",
                 EditorInteractiveToolPropertyEditKind::Float, 0.05f, 64.0f},
+            {"Surface Hit", hit_.valid ? "Valid" : ToString(hit_.failure),
+                "Current procedural Terrain ray-query result."},
+            {"Stroke Active", brushSampler_.Active() ? "true" : "false",
+                "Primary pointer capture and stroke sampling state."},
             {"Stroke Samples", std::to_string(stamps_.size()),
                 "One bounded stroke creates one Transaction."}};
         if (operation_ == TerrainEditOperation::Sculpt) {
@@ -213,14 +304,35 @@ public:
                 EditorInteractiveToolPropertyEditKind::Boolean});
         }
         if (operation_ == TerrainEditOperation::Paint) {
-            properties.push_back({"Material Layer", std::to_string(materialLayer_),
-                "Procedural material layer index [0, 3].",
-                EditorInteractiveToolPropertyEditKind::Integer, 0.0f, 3.0f});
+            const TerrainPaintLayerVisual& layer = GetTerrainPaintLayerVisual(materialLayer_);
+            EditorInteractiveToolProperty property{
+                "Material Layer",
+                std::to_string(materialLayer_),
+                "Procedural material variation layer. The color matches the viewport brush preview.",
+                EditorInteractiveToolPropertyEditKind::Choice,
+                0.0f,
+                3.0f};
+            for (const TerrainPaintLayerVisual& choice : kTerrainPaintLayerVisuals) {
+                property.choices.emplace_back(choice.label);
+            }
+            property.previewColor = layer.outlineColor;
+            properties.push_back(std::move(property));
         }
         return properties;
     }
 
 private:
+    std::string CommitMessage() const {
+        std::ostringstream message;
+        message << ToString(operation_) << " Terrain stroke committed: "
+                << stamps_.size() << " sample" << (stamps_.size() == 1 ? "" : "s");
+        if (operation_ == TerrainEditOperation::Paint) {
+            message << ", " << GetTerrainPaintLayerVisual(materialLayer_).label;
+        }
+        message << ". Undo available.";
+        return message.str();
+    }
+
     EditorBrushStrokeSettings BrushSettings() const {
         return EditorBrushStrokeSettings{spacing_, TerrainEditLayer::kMaxStrokeStamps};
     }
@@ -336,6 +448,11 @@ EditorInteractiveToolDescriptor MakeDescriptor(
     return descriptor;
 }
 } // namespace
+
+const TerrainPaintLayerVisual& GetTerrainPaintLayerVisual(uint32_t layer) noexcept {
+    return kTerrainPaintLayerVisuals[(std::min)(
+        layer, static_cast<uint32_t>(kTerrainPaintLayerVisuals.size() - 1u))];
+}
 
 void RegisterProductionTerrainBrushTools(
     EditorModeRegistry& registry,

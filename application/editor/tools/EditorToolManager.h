@@ -83,7 +83,8 @@ private:
     std::string activeToolId_;
     std::unique_ptr<IEditorInteractiveTool> activeTool_;
     std::string activationDocumentKey_;
-    uint64_t activationDocumentRevision_ = 0;
+    uint64_t activationDocumentEditRevision_ = 0;
+    uint64_t activationDocumentGeneration_ = 0;
     uint32_t activationSelectionRevision_ = 0;
     uint32_t activationTransactionRevision_ = 0;
     uint32_t activationRegistryRevision_ = 0;

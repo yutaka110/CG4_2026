@@ -48,7 +48,6 @@ using namespace DirectX;
 using namespace Microsoft::WRL;
 
 namespace {
-constexpr DWORD kGpuFenceWaitTimeoutMs = 2000;
 constexpr uint32_t kRailWatchdogStartFrame = 400;
 constexpr DWORD kRailWatchdogStallMs = 3000;
 constexpr double kRailGpuTimingLogThresholdMs = 10.0;
@@ -431,18 +430,6 @@ uint32_t ReadEnvironmentUInt(const char* name, uint32_t fallback) {
         return fallback;
     }
     return static_cast<uint32_t>(parsed);
-}
-
-bool ReadEnvironmentFlag(const char* name, bool fallback) {
-    char value[16]{};
-    const DWORD length = GetEnvironmentVariableA(name, value, static_cast<DWORD>(sizeof(value)));
-    if (length == 0 || length >= sizeof(value)) {
-        return fallback;
-    }
-    if (value[0] == '0' || value[0] == 'f' || value[0] == 'F' || value[0] == 'n' || value[0] == 'N') {
-        return false;
-    }
-    return true;
 }
 
 Vector3 RailLocalPoint(
@@ -1200,19 +1187,6 @@ void AppendCourseObjectSelectionDebugDraw(
     }
 }
 
-const char* WaitResultName(DWORD waitResult) {
-    switch (waitResult) {
-    case WAIT_OBJECT_0:
-        return "WAIT_OBJECT_0";
-    case WAIT_TIMEOUT:
-        return "WAIT_TIMEOUT";
-    case WAIT_FAILED:
-        return "WAIT_FAILED";
-    default:
-        return "WAIT_ABANDONED_OR_UNKNOWN";
-    }
-}
-
 void WriteGpuDiagnosticLine(const char* message) {
     OutputDebugStringA(message);
     std::ofstream log("logs/gpu_fence_wait.log", std::ios::app);
@@ -1228,27 +1202,6 @@ void WriteRailGpuTimingLine(const std::string& message) {
     if (log) {
         log << message;
     }
-}
-
-void LogFenceWaitFailure(
-    const char* context,
-    uint32_t slot,
-    uint64_t fenceValue,
-    uint64_t completedValue,
-    HRESULT deviceRemovedReason,
-    DWORD waitResult) {
-    char message[512]{};
-    std::snprintf(
-        message,
-        sizeof(message),
-        "[AppRunLoop] %s fence wait failed: slot=%u target=%llu completed=%llu wait=%s deviceRemoved=0x%08X\n",
-        context,
-        slot,
-        static_cast<unsigned long long>(fenceValue),
-        static_cast<unsigned long long>(completedValue),
-        WaitResultName(waitResult),
-        static_cast<unsigned int>(deviceRemovedReason));
-    WriteGpuDiagnosticLine(message);
 }
 
 void LogGpuFailure(const char* context, HRESULT hr, HRESULT deviceRemovedReason) {
@@ -1519,8 +1472,7 @@ AppRunLoop::AppRunLoop(
       windowHeight_(windowHeight),
       frameState_(frameState),
       commandQueue_(commandQueue),
-      fence_(fence),
-      fenceEvent_(fenceEvent) {
+      frameCoordinator_(swapChain, engineContext, dev, commandQueue, fence, fenceEvent) {
     const editor::EditorFileRecoveryReport recovery =
         editor::EditorFileRecoveryService(std::filesystem::current_path()).Recover();
     if (!recovery.succeeded || recovery.recoveredPreparedCount > 0) {
@@ -1538,56 +1490,7 @@ AppRunLoop::AppRunLoop(
     terrainPresetStore_.Load(runtimeState_.terrain, &presetError);
     LoadRailShooterCourse();
     ApplyRailShooterCourse();
-    frameFenceValues_.assign((std::max)(1u, swapChain_.BufferCount()), engineContext_.GetFenceValue());
-    nextFrameFenceValue_ = engineContext_.GetFenceValue() + 1;
-    ConfigureEditorPresentPolicy();
-    LogEditorPresentPolicy();
-}
-
-void AppRunLoop::ConfigureEditorPresentPolicy() {
-#if defined(_DEBUG) || defined(DEVELOP)
-    constexpr bool kDefaultLowLatencyPresent = true;
-#else
-    constexpr bool kDefaultLowLatencyPresent = false;
-#endif
-    editorLowLatencyPresent_ =
-        ReadEnvironmentFlag("GE3_EDITOR_LOW_LATENCY_PRESENT", kDefaultLowLatencyPresent);
-    presentSyncInterval_ =
-        ReadEnvironmentUInt("GE3_EDITOR_PRESENT_SYNC_INTERVAL", editorLowLatencyPresent_ ? 0u : 1u);
-    presentSyncInterval_ = (std::min)(presentSyncInterval_, 4u);
-    editorLowLatencyPresent_ = presentSyncInterval_ == 0;
-    presentTearingAllowed_ = editorLowLatencyPresent_ && swapChain_.AllowsTearing();
-
-    const uint32_t defaultMaxFrameLatency =
-        editorLowLatencyPresent_
-            ? (std::min)(2u, (std::max)(1u, swapChain_.BufferCount()))
-            : 0u;
-    presentMaxFrameLatency_ =
-        ReadEnvironmentUInt("GE3_EDITOR_MAX_FRAME_LATENCY", defaultMaxFrameLatency);
-    if (presentMaxFrameLatency_ > 0) {
-        presentMaxFrameLatency_ =
-            (std::clamp)(presentMaxFrameLatency_, 1u, (std::max)(1u, swapChain_.BufferCount()));
-        if (!swapChain_.SetMaximumFrameLatency(presentMaxFrameLatency_)) {
-            presentMaxFrameLatency_ = 0;
-        }
-    }
-}
-
-void AppRunLoop::LogEditorPresentPolicy() const {
-    std::ostringstream line;
-    line << "[EditorPresentPolicy]"
-         << " lowLatency=" << (editorLowLatencyPresent_ ? 1 : 0)
-         << " syncInterval=" << presentSyncInterval_
-         << " tearingSupported=" << (swapChain_.AllowsTearing() ? 1 : 0)
-         << " tearingAllowed=" << (presentTearingAllowed_ ? 1 : 0)
-         << " bufferCount=" << swapChain_.BufferCount()
-         << " maxFrameLatency=" << presentMaxFrameLatency_
-         << "\n";
-    OutputDebugStringA(line.str().c_str());
-    std::ofstream log("logs/rail_present_policy.log", std::ios::app);
-    if (log) {
-        log << line.str();
-    }
+    frameCoordinator_.Initialize();
 }
 
 void AppRunLoop::InitializeBeam(
@@ -3859,9 +3762,9 @@ void AppRunLoop::LogRailShooterPerfSpike() {
          << " updateMs=" << gRailPerfFrame.updateMs
          << " renderMs=" << gRailPerfFrame.renderMs
          << " presentMs=" << gRailPerfFrame.presentMs
-         << " presentSyncInterval=" << presentSyncInterval_
-         << " presentTearingAllowed=" << (presentTearingAllowed_ ? 1 : 0)
-         << " presentMaxFrameLatency=" << presentMaxFrameLatency_
+         << " presentSyncInterval=" << frameCoordinator_.PresentSyncInterval()
+         << " presentTearingAllowed=" << (frameCoordinator_.PresentTearingAllowed() ? 1 : 0)
+         << " presentMaxFrameLatency=" << frameCoordinator_.PresentMaxFrameLatency()
          << " swapBufferCount=" << swapChain_.BufferCount()
          << " collisionMs=" << gRailPerfFrame.collisionMs
          << " visualPresetMs=" << gRailPerfFrame.visualPresetMs
@@ -3906,7 +3809,7 @@ void AppRunLoop::LogRailShooterPerfSpike() {
 }
 
 void AppRunLoop::Shutdown() {
-    FlushGpu();
+    frameCoordinator_.FlushGpu();
     sceneStateManager_.Shutdown(*this);
     vfxEngine_.Shutdown();
 }
@@ -4342,25 +4245,68 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
     ConfigureViewportAndScissor(runtimeState_, metrics.width, metrics.height);
 
     const float aspectRatio = metrics.AspectRatio();
-    debugCamera_.SetInputEnabled(runtimeState_.camera.enableDebugInput);
-    debugCamera_.SetMoveSpeed(runtimeState_.camera.debugMoveSpeed);
-    debugCamera_.SetRotateSpeed(runtimeState_.camera.debugRotateSpeed);
-    debugCamera_.SetSpeedMultipliers(
-        runtimeState_.camera.debugSlowMoveMultiplier,
-        runtimeState_.camera.debugFastMoveMultiplier);
-    debugCamera_.SetTransform(runtimeState_.camera.transform);
-    debugCamera_.SetLens(
-        runtimeState_.camera.fovY,
-        aspectRatio,
-        runtimeState_.camera.nearZ,
-        runtimeState_.camera.farZ);
-    debugCamera_.Update();
-    runtimeState_.camera.transform = debugCamera_.GetTransform();
-    runtimeState_.cameraWorldPosition = debugCamera_.GetWorldPosition();
+    const bool useEditorViewportCamera = imguiLayer_.IsEnabled();
+    if (useEditorViewportCamera) {
+        editor::EditorViewportCameraSettings cameraSettings{};
+        // Preserve the previous debug-camera tuning while converting its
+        // per-frame values to frame-rate independent editor navigation.
+        cameraSettings.moveSpeed =
+            (std::max)(0.0f, runtimeState_.camera.debugMoveSpeed) * 60.0f;
+        cameraSettings.rotationSensitivity =
+            (std::max)(0.0f, runtimeState_.camera.debugRotateSpeed) * 0.15f;
+        cameraSettings.fastMoveMultiplier =
+            runtimeState_.camera.debugFastMoveMultiplier;
+        cameraSettings.slowMoveMultiplier =
+            runtimeState_.camera.debugSlowMoveMultiplier;
+        editorViewportCamera_.SetSettings(cameraSettings);
+        if (!editorViewportCamera_.Initialized()) {
+            editorViewportCamera_.Initialize(
+                runtimeState_.camera.transform,
+                runtimeState_.camera.fovY,
+                aspectRatio,
+                runtimeState_.camera.nearZ,
+                runtimeState_.camera.farZ);
+        } else {
+            editorViewportCamera_.SetTransform(runtimeState_.camera.transform);
+            editorViewportCamera_.SetLens(
+                runtimeState_.camera.fovY,
+                aspectRatio,
+                runtimeState_.camera.nearZ,
+                runtimeState_.camera.farZ);
+        }
+        editor::EditorViewportCameraInput cameraInput =
+            imguiLayer_.EditorViewportCameraFrameInput();
+        if (!runtimeState_.camera.enableDebugInput) {
+            cameraInput = {};
+        }
+        editorViewportCamera_.Update(cameraInput);
+        runtimeState_.camera.transform = editorViewportCamera_.CameraTransform();
+        runtimeState_.cameraWorldPosition = editorViewportCamera_.WorldPosition();
+        frameState_.viewMatrix = editorViewportCamera_.ViewMatrix();
+        frameState_.projMatrix = editorViewportCamera_.ProjectionMatrix();
+        frameState_.viewProjectionMatrix = editorViewportCamera_.ViewProjectionMatrix();
+    } else {
+        debugCamera_.SetInputEnabled(runtimeState_.camera.enableDebugInput);
+        debugCamera_.SetMoveSpeed(runtimeState_.camera.debugMoveSpeed);
+        debugCamera_.SetRotateSpeed(runtimeState_.camera.debugRotateSpeed);
+        debugCamera_.SetSpeedMultipliers(
+            runtimeState_.camera.debugSlowMoveMultiplier,
+            runtimeState_.camera.debugFastMoveMultiplier);
+        debugCamera_.SetTransform(runtimeState_.camera.transform);
+        debugCamera_.SetLens(
+            runtimeState_.camera.fovY,
+            aspectRatio,
+            runtimeState_.camera.nearZ,
+            runtimeState_.camera.farZ);
+        debugCamera_.Update();
+        runtimeState_.camera.transform = debugCamera_.GetTransform();
+        runtimeState_.cameraWorldPosition = debugCamera_.GetWorldPosition();
+        frameState_.viewMatrix = debugCamera_.GetViewMatrix();
+        frameState_.projMatrix = debugCamera_.GetProjectionMatrix();
+        frameState_.viewProjectionMatrix = debugCamera_.GetViewProjectionMatrix();
+    }
     frameState_.cameraWorldPosition = runtimeState_.cameraWorldPosition;
     scene_.UpdateCameraWorldPosition(runtimeState_.cameraWorldPosition);
-    frameState_.viewMatrix = debugCamera_.GetViewMatrix();
-    frameState_.projMatrix = debugCamera_.GetProjectionMatrix();
 
     constexpr float kFixedPreviewDeltaTime = 0.016f;
     const bool editorRuntimeAdvance = imguiLayer_.ShouldAdvanceEditorRuntimeFrame();
@@ -4372,7 +4318,6 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
     BYTE key[256] = {};
     (void)key;
 
-    frameState_.viewProjectionMatrix = debugCamera_.GetViewProjectionMatrix();
     frameState_.deltaTime = previewDeltaTime;
     frameState_.drawCount = particleSystem_.UpdateInstances(
         frameState_.viewProjectionMatrix,
@@ -4461,103 +4406,6 @@ bool AppRunLoop::ResolveEditorViewportClientPoint(
     outViewportWidth = windowWidth_;
     outViewportHeight = windowHeight_;
     return outViewportWidth != 0 && outViewportHeight != 0;
-}
-
-bool AppRunLoop::WaitForFrameSlot(uint32_t frameIndex) {
-    if (fence_ == nullptr || fenceEvent_ == nullptr || frameFenceValues_.empty()) {
-        return true;
-    }
-
-    const uint32_t slot = frameIndex % static_cast<uint32_t>(frameFenceValues_.size());
-    const uint64_t fenceValue = frameFenceValues_[slot];
-    if (fenceValue == 0 || fence_->GetCompletedValue() >= fenceValue) {
-        return true;
-    }
-
-    if (FAILED(fence_->SetEventOnCompletion(fenceValue, fenceEvent_))) {
-        LogFenceWaitFailure(
-            "SetEventOnCompletion",
-            slot,
-            fenceValue,
-            fence_->GetCompletedValue(),
-            dev_.GetDevice() != nullptr ? dev_.GetDevice()->GetDeviceRemovedReason() : E_FAIL,
-            WAIT_FAILED);
-        return false;
-    }
-
-    const DWORD waitResult = WaitForSingleObject(fenceEvent_, kGpuFenceWaitTimeoutMs);
-    if (waitResult == WAIT_OBJECT_0) {
-        return true;
-    }
-
-    LogFenceWaitFailure(
-        "WaitForFrameSlot",
-        slot,
-        fenceValue,
-        fence_->GetCompletedValue(),
-        dev_.GetDevice() != nullptr ? dev_.GetDevice()->GetDeviceRemovedReason() : E_FAIL,
-        waitResult);
-    return false;
-}
-
-bool AppRunLoop::SignalFrame(uint32_t frameIndex) {
-    if (commandQueue_ == nullptr || fence_ == nullptr || frameFenceValues_.empty()) {
-        return false;
-    }
-
-    const uint32_t slot = frameIndex % static_cast<uint32_t>(frameFenceValues_.size());
-    const uint64_t fenceValue = nextFrameFenceValue_++;
-    const HRESULT signalHr = commandQueue_->Signal(fence_, fenceValue);
-    if (FAILED(signalHr)) {
-        LogFenceWaitFailure(
-            "SignalFrame",
-            slot,
-            fenceValue,
-            fence_->GetCompletedValue(),
-            dev_.GetDevice() != nullptr ? dev_.GetDevice()->GetDeviceRemovedReason() : signalHr,
-            WAIT_FAILED);
-        return false;
-    }
-
-    frameFenceValues_[slot] = fenceValue;
-    engineContext_.SetFenceValue(fenceValue);
-    return true;
-}
-
-bool AppRunLoop::FlushGpu() {
-    if (commandQueue_ == nullptr || fence_ == nullptr || fenceEvent_ == nullptr) {
-        return true;
-    }
-
-    const uint64_t fenceValue = nextFrameFenceValue_++;
-    if (FAILED(commandQueue_->Signal(fence_, fenceValue))) {
-        LogFenceWaitFailure(
-            "FlushGpu.Signal",
-            0,
-            fenceValue,
-            fence_->GetCompletedValue(),
-            dev_.GetDevice() != nullptr ? dev_.GetDevice()->GetDeviceRemovedReason() : E_FAIL,
-            WAIT_FAILED);
-        return false;
-    }
-
-    engineContext_.SetFenceValue(fenceValue);
-    if (fence_->GetCompletedValue() < fenceValue &&
-        SUCCEEDED(fence_->SetEventOnCompletion(fenceValue, fenceEvent_))) {
-        const DWORD waitResult = WaitForSingleObject(fenceEvent_, kGpuFenceWaitTimeoutMs);
-        if (waitResult != WAIT_OBJECT_0) {
-            LogFenceWaitFailure(
-                "FlushGpu.Wait",
-                0,
-                fenceValue,
-                fence_->GetCompletedValue(),
-                dev_.GetDevice() != nullptr ? dev_.GetDevice()->GetDeviceRemovedReason() : E_FAIL,
-                waitResult);
-            return false;
-        }
-    }
-    std::fill(frameFenceValues_.begin(), frameFenceValues_.end(), fenceValue);
-    return true;
 }
 
 bool AppRunLoop::EnsureRailGpuTimingResources() {
@@ -4674,9 +4522,9 @@ void AppRunLoop::ResolveCompletedRailGpuTiming(uint32_t backBufferIndex) {
              << " pacingWaitMs=" << pacingWaitMs
              << " waitFrameSlotMs=" << timingSlot.waitFrameSlotMs
              << " presentMs=" << timingSlot.presentMs
-             << " presentSyncInterval=" << presentSyncInterval_
-             << " presentTearingAllowed=" << (presentTearingAllowed_ ? 1 : 0)
-             << " presentMaxFrameLatency=" << presentMaxFrameLatency_
+             << " presentSyncInterval=" << frameCoordinator_.PresentSyncInterval()
+             << " presentTearingAllowed=" << (frameCoordinator_.PresentTearingAllowed() ? 1 : 0)
+             << " presentMaxFrameLatency=" << frameCoordinator_.PresentMaxFrameLatency()
              << " swapBufferCount=" << swapChain_.BufferCount()
              << " renderGraphExecuteMs=" << timingSlot.renderGraphExecuteMs
              << " endAndExecuteMs=" << timingSlot.endAndExecuteMs
@@ -7077,7 +6925,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     UINT backBufferIndex = swapChain_.CurrentIndex();
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.beforeWaitForFrameSlot");
     const auto waitStart = RailPerfClock::now();
-    if (!WaitForFrameSlot(backBufferIndex)) {
+    if (!frameCoordinator_.WaitForFrameSlot(backBufferIndex)) {
         gRailPerfFrame.waitFrameSlotMs = ElapsedMs(waitStart, RailPerfClock::now());
         LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.waitForFrameSlotFailed");
         closeImguiFrameOnAbort();
@@ -7166,8 +7014,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             &frameState_,
             srvDescriptorHeap_.Get(),
             commandList.Get(),
-            fence_ != nullptr ? fence_->GetCompletedValue() : 0,
-            nextFrameFenceValue_,
+            frameCoordinator_.CompletedFenceValue(),
+            frameCoordinator_.NextFenceValue(),
             spriteTextureHandle,
             engineContext_.GetDepthSrvGpuHandle(),
             &railShooterCourse_,
@@ -7263,6 +7111,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     graphContext.depthTextureHandle = engineContext_.GetDepthSrvGpuHandle();
     graphContext.terrainChunkManager = &terrainChunkManager_;
     graphContext.productionScenePipeline = &imguiLayer_.ProductionScenePipeline();
+    graphContext.transientMeshRenderPath = &imguiLayer_.TransientMeshRenderPath();
     graphContext.productionMaterialPipeline = &imguiLayer_.ProductionMaterialPipeline();
     graphContext.productionTexturePipeline = &imguiLayer_.ProductionTexturePipeline();
     graphContext.productionShaderPipeline = &imguiLayer_.ProductionShaderPipeline();
@@ -7402,7 +7251,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     gRailPerfFrame.endAndExecuteMs = ElapsedMs(endAndExecuteStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterEndAndExecute");
     const auto signalStart = RailPerfClock::now();
-    if (!SignalFrame(backBufferIndex)) {
+    if (!frameCoordinator_.SignalFrame(backBufferIndex)) {
         gRailPerfFrame.signalMs = ElapsedMs(signalStart, RailPerfClock::now());
         LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.signalFrameFailed");
         return;
@@ -7411,7 +7260,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterSignalFrame");
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.beforePresent");
     const auto presentStart = RailPerfClock::now();
-    const HRESULT presentHr = swapChain_.Present(dev_, presentSyncInterval_);
+    const HRESULT presentHr = swapChain_.Present(dev_, frameCoordinator_.PresentSyncInterval());
     gRailPerfFrame.presentMs = ElapsedMs(presentStart, RailPerfClock::now());
     gRailPerfFrame.renderMs = ElapsedMs(renderStart, RailPerfClock::now());
     RecordRailCameraTuningSample(
@@ -7439,7 +7288,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     }
 
     if (vfxTelemetryOptions.AnyEnabled()) {
-        if (!WaitForFrameSlot(backBufferIndex)) {
+        if (!frameCoordinator_.WaitForFrameSlot(backBufferIndex)) {
             return;
         }
     }

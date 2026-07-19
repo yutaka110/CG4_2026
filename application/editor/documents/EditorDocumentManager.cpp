@@ -44,6 +44,11 @@ uint64_t HashFile(const std::filesystem::path& path) {
     return hash;
 }
 
+void AdvanceContentGeneration(EditorDocumentRecord& record) noexcept {
+    ++record.contentGeneration;
+    if (record.contentGeneration == 0) ++record.contentGeneration;
+}
+
 } // namespace
 
 EditorDocumentManager::EditorDocumentManager(
@@ -163,6 +168,7 @@ bool EditorDocumentManager::Reload(const EditorDocumentId& id, std::string* erro
     record->conflict = EditorDocumentConflictState::None;
     record->migration = std::move(migration);
     ++record->editRevision;
+    AdvanceContentGeneration(*record);
     record->savedRevision = record->dirty ? record->savedRevision : record->editRevision;
     CaptureSourceState(*record);
     Touch();
@@ -274,6 +280,7 @@ bool EditorDocumentManager::Duplicate(
     record.dirty = true;
     record.recovered = false;
     record.conflict = EditorDocumentConflictState::None;
+    record.contentGeneration = 1;
     ++record.editRevision;
     record.savedRevision = 0;
     record.autosaveRevision = 0;
@@ -346,6 +353,7 @@ bool EditorDocumentManager::RestoreFromContent(
         record->conflict = EditorDocumentConflictState::None;
         record->migration = std::move(migration);
         ++record->editRevision;
+        AdvanceContentGeneration(*record);
     }
     activeId_ = id;
     Touch();
@@ -414,6 +422,7 @@ bool EditorDocumentManager::SetConflict(
 bool EditorDocumentManager::SetActive(const EditorDocumentId& id) {
     const EditorDocumentRecord* record = Find(id);
     if (record == nullptr || !record->open) return false;
+    if (activeId_ == id) return true;
     activeId_ = id;
     Touch();
     return true;

@@ -89,7 +89,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
       <AdditionalLibraryDirectories>$(ProjectDir)externals\assimp\lib\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>assimp-vc143-mtd.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;mf.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>assimp-vc143-mtd.lib;dinput8.lib;dxguid.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;mf.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxcompiler.dll" "$(TargetDir)dxcompiler.dll"
@@ -119,7 +119,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(ProjectDir)externals\assimp\lib\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>assimp-vc143-mt.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;mf.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>assimp-vc143-mt.lib;dinput8.lib;dxguid.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;mf.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxcompiler.dll" "$(TargetDir)dxcompiler.dll"
@@ -151,7 +151,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <LinkTimeCodeGeneration />
       <AdditionalLibraryDirectories>$(ProjectDir)externals\assimp\lib\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>assimp-vc143-mt.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;mf.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>assimp-vc143-mt.lib;dinput8.lib;dxguid.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;mf.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxcompiler.dll" "$(TargetDir)dxcompiler.dll"
@@ -242,11 +242,13 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\editor\geometry\EditorGeometryTools.cpp" />
     <ClCompile Include="application\editor\mesh\EditorProductionMeshAsset.cpp" />
     <ClCompile Include="application\editor\scene\EditorProductionScenePipeline.cpp" />
+    <ClCompile Include="application\editor\geometry\EditorTransientMeshRenderPath.cpp" />
     <ClCompile Include="application\editor\mesh\EditorMeshBakePipeline.cpp" />
     <ClCompile Include="application\editor\mesh\EditorMeshBakeTools.cpp" />
       <ClCompile Include="application\editor\EditorTransformGizmoService.cpp" />
       <ClCompile Include="application\editor\EditorTransformGizmoMath.cpp" />
       <ClCompile Include="application\editor\EditorViewportInteractionService.cpp" />
+      <ClCompile Include="application\editor\EditorViewportCameraController.cpp" />
       <ClCompile Include="application\editor\EditorViewportCoordinateService.cpp" />
       <ClCompile Include="application\editor\EditorViewportOverlay.cpp" />
       <ClCompile Include="application\editor\EditorViewportPanel.cpp" />
@@ -365,6 +367,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\editor\ExistingFeatureProtection.cpp" />
     <ClCompile Include="application\editor\ExistingFeatureProtectionPanel.cpp" />
     <ClCompile Include="application\AppFrameGraphBuilder.cpp" />
+    <ClCompile Include="application\runtime\AppFrameCoordinator.cpp" />
     <ClCompile Include="application\AppPostProcessPipeline.cpp" />
     <ClCompile Include="application\AppSceneRenderPipeline.cpp" />
     <ClCompile Include="application\AppVfxRenderPipeline.cpp" />
@@ -517,7 +520,6 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="application\streaming\H264Encoder.cpp" />
-    <ClCompile Include="KeyInput.cpp" />
     <ClCompile Include="lib\Receiver\startTcpReciverRgb32.cpp" />
     <ClCompile Include="main.cpp">
       <Optimization Condition="'$(Configuration)|$(Platform)'=='Development|x64'">MaxSpeed</Optimization>
@@ -531,7 +533,6 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="TextureHelper.cpp" />
     <ClCompile Include="TextureUploader.cpp" />
     <ClCompile Include="application\streaming\UdpByteStream.cpp" />
-    <ClCompile Include="WinApp.cpp" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="Object3D.PS.hlsl">
@@ -994,11 +995,14 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\editor\geometry\EditorGeometryTools.h" />
     <ClInclude Include="application\editor\mesh\EditorProductionMeshAsset.h" />
     <ClInclude Include="application\editor\scene\EditorProductionScenePipeline.h" />
+    <ClInclude Include="application\editor\geometry\EditorTransientMeshRenderPath.h" />
     <ClInclude Include="application\editor\mesh\EditorMeshBakePipeline.h" />
     <ClInclude Include="application\editor\mesh\EditorMeshBakeTools.h" />
       <ClInclude Include="application\editor\EditorTransformGizmoService.h" />
       <ClInclude Include="application\editor\EditorTransformGizmoMath.h" />
       <ClInclude Include="application\editor\EditorViewportInteractionService.h" />
+      <ClInclude Include="application\editor\EditorViewportCameraInput.h" />
+      <ClInclude Include="application\editor\EditorViewportCameraController.h" />
       <ClInclude Include="application\editor\EditorViewportCoordinateService.h" />
       <ClInclude Include="application\editor\EditorViewportOverlay.h" />
       <ClInclude Include="application\editor\EditorViewportPanel.h" />
@@ -1135,6 +1139,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\editor\ExistingFeatureProtectionPanel.h" />
     <ClInclude Include="application\AppFrameState.h" />
     <ClInclude Include="application\AppFrameGraphBuilder.h" />
+    <ClInclude Include="application\runtime\AppFrameCoordinator.h" />
     <ClInclude Include="application\AppPostProcessPipeline.h" />
     <ClInclude Include="application\AppSceneRenderPipeline.h" />
     <ClInclude Include="application\AppVfxRenderPipeline.h" />
@@ -1242,7 +1247,6 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="engine\include\graphics\SpriteRenderer.h" />
     <ClInclude Include="engine\include\graphics\SwapChain.h" />
     <ClInclude Include="engine\include\input\Input.h" />
-    <ClInclude Include="engine\include\media\CpuTransferCtx.h" />
     <ClInclude Include="engine\include\particle\ParticleSystemCpu.h" />
     <ClInclude Include="engine\include\resources\ResourceRegistry.h" />
     <ClInclude Include="engine\include\platform\Win32App.h" />
@@ -1265,7 +1269,6 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="externals\imgui\imstb_textedit.h" />
     <ClInclude Include="externals\imgui\imstb_truetype.h" />
     <ClInclude Include="application\streaming\H264Encoder.h" />
-    <ClInclude Include="KeyInput.h" />
     <ClInclude Include="lib\Receiver\FrameProto.h" />
     <ClInclude Include="lib\Receiver\startTcpReceiverRgb32.h" />
     <ClInclude Include="Matrix4x4.h" />
@@ -1277,7 +1280,6 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="TextureUploader.h" />
     <ClInclude Include="application\streaming\UdpByteStream.h" />
     <ClInclude Include="Vertex.h" />
-    <ClInclude Include="WinApp.h" />
   </ItemGroup>
   <ItemGroup>
     <Text Include="externals\imgui\LICENSE.txt" />

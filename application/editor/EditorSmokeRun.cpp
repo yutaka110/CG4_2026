@@ -198,12 +198,13 @@ void RunViewportCoordinateGate(SmokeRun& smoke, std::ostream& log) {
             500.0f,
             275.0f,
             true,
+            true,
+            true,
+            true,
+            true,
+            true,
             false,
-            true,
-            true,
-            true,
-            true,
-            false});
+            true});
     smoke.Expect(interaction.MouseInsideViewport(), "mouse should be inside viewport");
     smoke.Expect(interaction.CanUseViewportInput(), "viewport input should be usable");
     smoke.Expect(Near(interaction.State().mouseViewportX, 400.0f), "mouse viewport X should map to render space");

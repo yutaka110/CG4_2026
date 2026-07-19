@@ -93,6 +93,17 @@ LocalPoint FindNearestRailPoint(
 }
 } // namespace
 
+const char* ToString(EditorTerrainHitFailure failure) {
+    switch (failure) {
+    case EditorTerrainHitFailure::None: return "None";
+    case EditorTerrainHitFailure::OutsideViewport: return "Outside Viewport";
+    case EditorTerrainHitFailure::InvalidWorldRay: return "Invalid World Ray";
+    case EditorTerrainHitFailure::MissingRail: return "Missing Course Rail";
+    case EditorTerrainHitFailure::NoSurfaceIntersection: return "No Terrain Surface Intersection";
+    }
+    return "Unknown";
+}
+
 EditorTerrainSurfaceHit EditorTerrainSurfaceQueryService::Query(
     const EditorViewportCoordinateService& coordinates,
     float displayX,
@@ -102,11 +113,19 @@ EditorTerrainSurfaceHit EditorTerrainSurfaceQueryService::Query(
     const TerrainEditLayer* edits,
     const TerrainEditLayer* preview) const {
     EditorTerrainSurfaceHit result{};
-    if (railPath.Length() <= 0.0f || !coordinates.DisplayPointInside(displayX, displayY)) {
+    if (railPath.Length() <= 0.0f) {
+        result.failure = EditorTerrainHitFailure::MissingRail;
+        return result;
+    }
+    if (!coordinates.DisplayPointInside(displayX, displayY)) {
+        result.failure = EditorTerrainHitFailure::OutsideViewport;
         return result;
     }
     const EditorViewportWorldRay ray = coordinates.DisplayToWorldRay(displayX, displayY);
-    if (!ray.valid) return result;
+    if (!ray.valid) {
+        result.failure = EditorTerrainHitFailure::InvalidWorldRay;
+        return result;
+    }
 
     TerrainVolumeField field(railPath, settings, edits, preview);
     constexpr uint32_t kSteps = 160;
@@ -163,6 +182,7 @@ EditorTerrainSurfaceHit EditorTerrainSurfaceQueryService::Query(
     result.position = field.SurfacePoint(
         result.railDistance, result.angle, &result.normal);
     result.valid = true;
+    result.failure = EditorTerrainHitFailure::None;
     return result;
 }
 

@@ -1959,7 +1959,8 @@ EditorAutomationGateResult RunProductionPlacementGate() {
     environment.coordinates = &coordinates;
     environment.execution = &execution;
     environment.activeDocumentKey = document.Key();
-    environment.documentRevision = 1;
+    environment.documentEditRevision = 1;
+    environment.documentGeneration = 1;
     environment.selectionRevision = selection.Revision();
     environment.canMutateAuthoring = true;
     environment.viewportAvailable = true;
@@ -2106,8 +2107,8 @@ EditorAutomationGateResult RunProductionTerrainGate() {
     TerrainEditDirtyRegion committedDirty{};
     EditorTerrainToolBinding binding{
         &course, &runtimeTerrain, document, target, &query,
-        [&](const TerrainEditDirtyRegion& dirty, std::string_view) {
-            committedDirty = dirty;
+        [&](const EditorTerrainCommitSummary& summary) {
+            committedDirty = summary.dirty;
             ++committedTools;
         }};
     EditorTerrainEditExecutionService terrainExecution;
@@ -2133,7 +2134,8 @@ EditorAutomationGateResult RunProductionTerrainGate() {
     environment.coordinates = &coordinates;
     environment.execution = &execution;
     environment.activeDocumentKey = document.Key();
-    environment.documentRevision = 1;
+    environment.documentEditRevision = 1;
+    environment.documentGeneration = 1;
     environment.selectionRevision = 1;
     environment.canMutateAuthoring = true;
     environment.viewportAvailable = true;
@@ -2330,7 +2332,8 @@ EditorAutomationGateResult RunProductionGeometryGate() {
     environment.coordinates = &coordinates;
     environment.execution = &execution;
     environment.activeDocumentKey = document.Key();
-    environment.documentRevision = 1;
+    environment.documentEditRevision = 1;
+    environment.documentGeneration = 1;
     environment.selectionRevision = selection.Revision();
     environment.canMutateAuthoring = true;
     environment.viewportAvailable = true;
@@ -2602,7 +2605,8 @@ EditorAutomationGateResult RunProductionMeshBakeGate() {
     environment.selection = &selection;
     environment.execution = &execution;
     environment.activeDocumentKey = document.Key();
-    environment.documentRevision = scene.revision;
+    environment.documentEditRevision = scene.revision;
+    environment.documentGeneration = 1;
     environment.selectionRevision = selection.Revision();
     environment.canMutateAuthoring = true;
     environment.viewportAvailable = false;

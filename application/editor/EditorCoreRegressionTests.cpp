@@ -19,6 +19,7 @@
 #include "EditorDirtyStateService.h"
 #include "EditorDocumentLifecycleService.h"
 #include "EditorModalConfirmService.h"
+#include "EditorNotificationsPanel.h"
 #include "EditorDetailsEditController.h"
 #include "EditorCompositePropertyAccessor.h"
 #include "EditorContentBrowserState.h"
@@ -49,9 +50,11 @@
 #include "EditorTransactionStack.h"
 #include "EditorTransformGizmoMath.h"
 #include "EditorTransformGizmoService.h"
+#include "EditorViewportCameraController.h"
 #include "EditorViewportCoordinateService.h"
 #include "EditorViewportInteractionService.h"
 #include "EditorViewportOverlay.h"
+#include "EditorViewportPanel.h"
 #include "EditorValidationService.h"
 #include "ExistingFeatureProtection.h"
 #include "core/EditorExecutionContext.h"
@@ -135,6 +138,7 @@
 #include "../course/CourseSpawnRuntime.h"
 #include "../course/PlayerCombatFeelSystem.h"
 #include "../course/SectionCheckpointSystem.h"
+#include "../terrain/TerrainChunkManager.h"
 #include "../terrain/TerrainVolumeField.h"
 
 #include <chrono>
@@ -7018,6 +7022,22 @@ void TestGenericDocumentModel(RegressionRunner& runner) {
             presetOpen.succeeded && settingsOpen.succeeded,
         "all initial document types should open concurrently");
     runner.Expect(manager.OpenCount() == 5, "manager should expose five simultaneous documents");
+    const uint64_t revisionBeforeSameActivation = manager.Revision();
+    runner.Expect(manager.SetActive(settingsOpen.id),
+        "setting the already-active document should succeed");
+    runner.Expect(manager.Revision() == revisionBeforeSameActivation,
+        "setting the already-active document must not change manager revision");
+    runner.Expect(manager.SetActive(sceneOpen.id),
+        "switching to another open document should succeed");
+    const uint64_t revisionAfterDocumentSwitch = manager.Revision();
+    runner.Expect(
+        revisionAfterDocumentSwitch == revisionBeforeSameActivation + 1 &&
+            manager.Active() != nullptr && manager.Active()->id == sceneOpen.id,
+        "switching active documents should change manager revision exactly once");
+    runner.Expect(manager.SetActive(sceneOpen.id),
+        "repeating the active document selection should remain successful");
+    runner.Expect(manager.Revision() == revisionAfterDocumentSwitch,
+        "repeated document tab activation must remain revision-stable");
     runner.Expect(sceneOpen.migration.migrated, "old scene schema should migrate on open");
     runner.Expect(
         std::filesystem::is_regular_file(projectRoot / sceneOpen.migration.backupPath) &&
@@ -7062,7 +7082,11 @@ void TestGenericDocumentModel(RegressionRunner& runner) {
         externalChanges.Compare(*manager.Find(sceneOpen.id));
     runner.Expect(comparison.succeeded && !comparison.identical,
         "external conflict should provide explicit editor-versus-disk comparison data");
+    const uint64_t generationBeforeReload = manager.Find(sceneOpen.id)->contentGeneration;
     runner.Expect(manager.Reload(sceneOpen.id, &error), "explicit reload should accept external version");
+    runner.Expect(
+        manager.Find(sceneOpen.id)->contentGeneration == generationBeforeReload + 1,
+        "explicit reload should advance the document content generation");
 
     runner.Expect(
         sceneProvider.SetText(sceneOpen.id, "# editor-schema:2\nscene=autosaved\n") &&
@@ -8127,7 +8151,8 @@ void TestEditorModeInteractiveToolFramework(RegressionRunner& runner) {
     EditorInteractiveToolEnvironment environment{};
     environment.selection = &selection;
     environment.activeDocumentKey = "scene:test-document";
-    environment.documentRevision = 10;
+    environment.documentEditRevision = 10;
+    environment.documentGeneration = 3;
     environment.selectionRevision = selection.Revision();
     environment.canMutateAuthoring = true;
     environment.viewportAvailable = true;
@@ -8171,12 +8196,50 @@ void TestEditorModeInteractiveToolFramework(RegressionRunner& runner) {
 
     runner.Expect(
         manager.StartTool("test.tool.singleCommit", environment, transactions, &error),
+        "tool should start for active document edit boundary test");
+    EditorInteractiveToolEnvironment editedDocument = environment;
+    ++editedDocument.documentEditRevision;
+    manager.Tick(editedDocument, {}, transactions);
+    runner.Expect(state->cancelReason == EditorInteractiveToolEndReason::DocumentEdited,
+        "active document authoring edits should cancel preview explicitly");
+
+    runner.Expect(
+        manager.StartTool("test.tool.singleCommit", environment, transactions, &error),
+        "tool should start for document reload boundary test");
+    EditorInteractiveToolEnvironment reloadedDocument = environment;
+    ++reloadedDocument.documentGeneration;
+    manager.Tick(reloadedDocument, {}, transactions);
+    runner.Expect(state->cancelReason == EditorInteractiveToolEndReason::DocumentReloaded,
+        "active document replacement should cancel preview as a reload");
+
+    runner.Expect(
+        manager.StartTool("test.tool.singleCommit", environment, transactions, &error),
+        "tool should start for active document switch boundary test");
+    EditorInteractiveToolEnvironment switchedDocument = environment;
+    switchedDocument.activeDocumentKey = "scene:another-document";
+    manager.Tick(switchedDocument, {}, transactions);
+    runner.Expect(state->cancelReason == EditorInteractiveToolEndReason::DocumentSwitched,
+        "active document identity changes should cancel preview explicitly");
+
+    runner.Expect(
+        manager.StartTool("test.tool.singleCommit", environment, transactions, &error),
         "tool should start for play boundary test");
     EditorInteractiveToolEnvironment playEnvironment = environment;
     playEnvironment.playSessionActive = true;
     manager.Tick(playEnvironment, {}, transactions);
     runner.Expect(state->cancelReason == EditorInteractiveToolEndReason::PlaySessionStarted,
         "Play transition should cancel interactive authoring safely");
+
+    runner.Expect(
+        manager.StartTool("test.tool.singleCommit", environment, transactions, &error),
+        "tool should start for pointer capture loss boundary test");
+    EditorInteractiveToolFrameInput captureLost{};
+    captureLost.viewportPrimaryCancelled = true;
+    manager.Tick(environment, captureLost, transactions);
+    runner.Expect(
+        !manager.HasActiveTool() &&
+            state->cancelReason == EditorInteractiveToolEndReason::PointerCaptureLost,
+        "pointer capture loss should cancel interactive preview without committing a transaction");
 
     runner.Expect(
         manager.StartTool("test.tool.singleCommit", environment, transactions, &error),
@@ -8329,7 +8392,8 @@ void TestProductionPlacementBrushToolPack(RegressionRunner& runner) {
     environment.coordinates = &coordinates;
     environment.execution = &executionContext;
     environment.activeDocumentKey = document.Key();
-    environment.documentRevision = 1;
+    environment.documentEditRevision = 1;
+    environment.documentGeneration = 1;
     environment.selectionRevision = selection.Revision();
     environment.canMutateAuthoring = true;
     environment.viewportAvailable = true;
@@ -8459,9 +8523,13 @@ void TestProductionTerrainSculptPaintToolPack(RegressionRunner& runner) {
     toolCourse.BuildFallbackCanyon(18.0f);
     TerrainAuthoringState runtimeTerrain{};
     uint32_t commitNotifications = 0;
+    EditorTerrainCommitSummary committedSummary{};
     EditorTerrainToolBinding binding{
         &toolCourse, &runtimeTerrain, document, terrainTarget, &query,
-        [&](const TerrainEditDirtyRegion&, std::string_view) { ++commitNotifications; }};
+        [&](const EditorTerrainCommitSummary& summary) {
+            committedSummary = summary;
+            ++commitNotifications;
+        }};
     EditorTerrainEditExecutionService toolExecution;
     toolExecution.Bind(document.Key(), &toolCourse.terrainEditLayer);
     EditorExecutionContext toolExecutionContext;
@@ -8481,7 +8549,8 @@ void TestProductionTerrainSculptPaintToolPack(RegressionRunner& runner) {
     environment.coordinates = &coordinates;
     environment.execution = &toolExecutionContext;
     environment.activeDocumentKey = document.Key();
-    environment.documentRevision = 1;
+    environment.documentEditRevision = 1;
+    environment.documentGeneration = 1;
     environment.selectionRevision = 1;
     environment.canMutateAuthoring = true;
     environment.viewportAvailable = true;
@@ -8490,29 +8559,132 @@ void TestProductionTerrainSculptPaintToolPack(RegressionRunner& runner) {
     runner.Expect(manager.Initialize("editor.mode.terrain", &error) &&
             manager.StartTool("editor.tool.terrainSculpt", environment, toolTransactions, &error),
         "production Terrain mode should activate on an authorable Course viewport");
-    manager.Tick(environment, {10.0f, 50.0f, true, true, false}, toolTransactions);
-    manager.Tick(environment, {20.0f, 50.0f, false, true, false}, toolTransactions);
+    EditorViewportInteractionService terrainInputRouter;
+    EditorViewportInteractionInput terrainPointer{};
+    terrainPointer.viewportRect = {0.0f, 0.0f, 100.0f, 100.0f};
+    terrainPointer.renderWidth = 100;
+    terrainPointer.renderHeight = 100;
+    terrainPointer.mouseY = 50.0f;
+    terrainPointer.mouseAvailable = true;
+    terrainPointer.imguiWantsMouse = true;
+    terrainPointer.documentEditable = true;
+    terrainPointer.authoringMutationAllowed = true;
+    terrainPointer.viewportOwnsMouse = true;
+    terrainPointer.interactiveToolActive = true;
+    const auto routeTerrainPointer = [&](float mouseX, bool pressed, bool down, bool released) {
+        terrainPointer.mouseX = mouseX;
+        terrainPointer.primaryPressed = pressed;
+        terrainPointer.primaryDown = down;
+        terrainPointer.primaryReleased = released;
+        terrainInputRouter.Update(terrainPointer);
+        const EditorViewportInteractionState& routed = terrainInputRouter.State();
+        return EditorInteractiveToolFrameInput{
+            mouseX,
+            terrainPointer.mouseY,
+            terrainInputRouter.CanUseInteractiveToolInput() && routed.viewportPrimaryPressed,
+            terrainInputRouter.CanUseInteractiveToolInput() && routed.viewportPrimaryDown,
+            terrainInputRouter.CanUseInteractiveToolInput() && routed.viewportPrimaryReleased,
+            routed.primaryCaptureCancelled};
+    };
+    manager.Tick(environment, routeTerrainPointer(10.0f, true, true, false), toolTransactions);
+    manager.Tick(environment, routeTerrainPointer(20.0f, false, true, false), toolTransactions);
     runner.Expect(toolCourse.terrainEditLayer.Stamps().empty() &&
             !runtimeTerrain.previewEditLayer.Stamps().empty() &&
             toolTransactions.UndoDepth() == 0,
         "Terrain drag preview should remain transient and never dirty Authoring data");
-    manager.Tick(environment, {20.0f, 50.0f, false, false, true}, toolTransactions);
+    manager.Tick(environment, routeTerrainPointer(20.0f, false, false, true), toolTransactions);
     runner.Expect(!manager.HasActiveTool() &&
             runtimeTerrain.previewEditLayer.Stamps().empty() &&
             toolCourse.terrainEditLayer.Stamps().size() == 2 &&
-            toolTransactions.UndoDepth() == 1 && commitNotifications == 1,
+            toolTransactions.UndoDepth() == 1 && commitNotifications == 1 &&
+            committedSummary.operation == TerrainEditOperation::Sculpt &&
+            committedSummary.sampleCount == 2,
         "Terrain release should atomically Accept one bounded stroke as one Transaction");
 
     const std::size_t committedStampCount = toolCourse.terrainEditLayer.Stamps().size();
     runner.Expect(manager.StartTool("editor.tool.terrainPaint", environment, toolTransactions, &error),
         "Paint tool should activate through the same Terrain framework");
-    manager.Tick(environment, {32.0f, 50.0f, true, true, false}, toolTransactions);
+    runner.Expect(
+        manager.ActiveTool() != nullptr &&
+            manager.ActiveTool()->SetProperty("Material Layer", "2", error),
+        "Paint should select a named material layer through the common property contract");
+    const std::vector<EditorInteractiveToolProperty> paintProperties =
+        manager.ActiveTool()->Properties();
+    const auto materialLayerProperty = std::find_if(
+        paintProperties.begin(),
+        paintProperties.end(),
+        [](const EditorInteractiveToolProperty& property) {
+            return property.name == "Material Layer";
+        });
+    runner.Expect(
+        materialLayerProperty != paintProperties.end() &&
+            materialLayerProperty->editKind == EditorInteractiveToolPropertyEditKind::Choice &&
+            materialLayerProperty->choices.size() == 4 &&
+            materialLayerProperty->previewColor ==
+            GetTerrainPaintLayerVisual(2).outlineColor,
+        "Paint layer property should expose four named choices and the viewport-matched swatch");
+    coordinates.Update(EditorViewportCoordinateContext{
+        {0.0f, 0.0f, 800.0f, 600.0f}, 800, 600, MakeIdentity4x4()});
+    manager.Tick(environment, {0.2f, 50.0f, true, true, false}, toolTransactions);
+    EditorViewportOverlayService paintOverlay;
+    EditorViewportRenderTargetState paintViewport{};
+    paintViewport.enabled = true;
+    paintViewport.displayRect = {0.0f, 0.0f, 800.0f, 600.0f};
+    paintViewport.renderWidth = 800;
+    paintViewport.renderHeight = 600;
+    paintViewport.aspectRatio = 4.0f / 3.0f;
+    paintOverlay.BeginFrame(EditorViewportOverlayFrameContext{
+        paintViewport, 800, 600, &coordinates, {0.0f, 0.0f, -1.0f}, 1.0f});
+    manager.ActiveTool()->BuildViewportOverlay(paintOverlay);
+    paintOverlay.Resolve();
+    const bool hasPaintFill = std::any_of(
+        paintOverlay.ResolvedCommands().begin(),
+        paintOverlay.ResolvedCommands().end(),
+        [](const EditorViewportOverlayCommand& command) {
+            return command.type == EditorViewportOverlayCommandType::CircleFilled;
+        });
+    const bool hasPaintLayerLabel = std::any_of(
+        paintOverlay.ResolvedCommands().begin(),
+        paintOverlay.ResolvedCommands().end(),
+        [](const EditorViewportOverlayCommand& command) {
+            return command.type == EditorViewportOverlayCommandType::Label &&
+                command.text.find("Layer 2") != std::string::npos;
+        });
+    runner.Expect(hasPaintFill && hasPaintLayerLabel,
+        "Paint viewport preview should expose a tinted footprint and selected layer label");
     manager.RequestCancel();
     manager.Tick(environment, {}, toolTransactions);
     runner.Expect(runtimeTerrain.previewEditLayer.Stamps().empty() &&
             toolCourse.terrainEditLayer.Stamps().size() == committedStampCount &&
             toolTransactions.UndoDepth() == 1 && commitNotifications == 1,
         "Terrain Cancel should discard preview without changing Authoring data or history");
+}
+
+void TestEditorNotificationToastLifecycle(RegressionRunner& runner) {
+    EditorNotificationCenter notifications;
+    EditorNotificationToastState toast{};
+    notifications.Push(
+        EditorNotificationSeverity::Info,
+        "Terrain Brush",
+        "Paint stroke committed. Undo available.");
+    runner.Expect(
+        UpdateEditorNotificationToastState(notifications, toast, 10.0, 4.0) &&
+            toast.activeNotificationId == notifications.Latest()->id &&
+            std::abs(toast.expiresAtSeconds - 14.0) < 0.001,
+        "a new commit notification should open a bounded four-second toast");
+    runner.Expect(
+        !UpdateEditorNotificationToastState(notifications, toast, 14.1, 4.0),
+        "a commit toast should expire without clearing durable notification history");
+    const uint64_t firstId = toast.activeNotificationId;
+    notifications.Push(
+        EditorNotificationSeverity::Info,
+        "Terrain Brush",
+        "Sculpt stroke committed. Undo available.");
+    runner.Expect(
+        UpdateEditorNotificationToastState(notifications, toast, 15.0, 4.0) &&
+            toast.activeNotificationId != firstId &&
+            std::abs(toast.expiresAtSeconds - 19.0) < 0.001,
+        "a newer commit should replace and restart the visible toast deterministically");
 }
 
 void TestProductionModelingGeometryFramework(RegressionRunner& runner) {
@@ -8636,7 +8808,8 @@ void TestProductionModelingGeometryFramework(RegressionRunner& runner) {
     environment.coordinates = &coordinates;
     environment.execution = &toolExecutionContext;
     environment.activeDocumentKey = document.Key();
-    environment.documentRevision = 1;
+    environment.documentEditRevision = 1;
+    environment.documentGeneration = 1;
     environment.selectionRevision = toolSelection.Revision();
     environment.canMutateAuthoring = true;
     environment.viewportAvailable = true;
@@ -8895,7 +9068,8 @@ void TestProductionMeshBakeAssetPipeline(RegressionRunner& runner) {
     environment.selection = &selection;
     environment.execution = &execution;
     environment.activeDocumentKey = document.Key();
-    environment.documentRevision = scene.revision;
+    environment.documentEditRevision = scene.revision;
+    environment.documentGeneration = 1;
     environment.selectionRevision = selection.Revision();
     environment.canMutateAuthoring = true;
     environment.viewportAvailable = false;
@@ -8940,6 +9114,407 @@ void TestPanelLayoutGeometry(RegressionRunner& runner) {
     runner.Expect(
         layout.BottomDockRect().y >= layout.ViewportRect().y + layout.ViewportRect().height,
         "bottom dock should be below viewport");
+
+    const EditorPanelRect squarePanel{100.0f, 50.0f, 800.0f, 800.0f};
+    const EditorPanelRect widescreenSurface = ResolveEditorViewportRenderSurfaceRect(
+        squarePanel, EditorViewportPanelRenderInput{0, 1600.0f, 900.0f, true, {}});
+    runner.Expect(
+        std::abs(widescreenSurface.x - 100.0f) < 0.001f &&
+            std::abs(widescreenSurface.y - 225.0f) < 0.001f &&
+            std::abs(widescreenSurface.width - 800.0f) < 0.001f &&
+            std::abs(widescreenSurface.height - 450.0f) < 0.001f,
+        "viewport input coordinates should use the fitted render surface instead of letterbox bars");
+}
+
+void TestTerrainChunkPresentationContinuityPolicy(RegressionRunner& runner) {
+    TerrainChunkDebugInfo requested{};
+    requested.startDistance = 128.0f;
+    requested.endDistance = 192.0f;
+    requested.seed = 42u;
+    requested.lodTier = 1u;
+    requested.editHash = 200u;
+
+    TerrainRenderChunk resident{};
+    resident.startDistance = requested.startDistance;
+    resident.endDistance = requested.endDistance;
+    resident.seed = requested.seed;
+    resident.lodTier = requested.lodTier;
+    resident.editHash = requested.editHash;
+    runner.Expect(
+        ClassifyTerrainChunkPresentationMatch(resident, requested) ==
+            TerrainChunkPresentationMatch::Exact,
+        "an uploaded chunk with current content and LOD should replace its fallback");
+
+    resident.editHash = 100u;
+    const TerrainChunkPresentationMatch staleContentCurrentLod =
+        ClassifyTerrainChunkPresentationMatch(resident, requested);
+    runner.Expect(
+        staleContentCurrentLod == TerrainChunkPresentationMatch::StaleContentSameLod,
+        "an old completed chunk should remain presentation-compatible during edit rebuild");
+
+    resident.lodTier = 2u;
+    const TerrainChunkPresentationMatch staleContentAndLod =
+        ClassifyTerrainChunkPresentationMatch(resident, requested);
+    runner.Expect(
+        staleContentAndLod == TerrainChunkPresentationMatch::StaleContentDifferentLod,
+        "the last completed chunk should remain a final fallback when content and LOD are stale");
+
+    resident.editHash = requested.editHash;
+    const TerrainChunkPresentationMatch currentContentStaleLod =
+        ClassifyTerrainChunkPresentationMatch(resident, requested);
+    runner.Expect(
+        currentContentStaleLod == TerrainChunkPresentationMatch::CurrentContentDifferentLod &&
+            static_cast<uint8_t>(currentContentStaleLod) >
+                static_cast<uint8_t>(staleContentCurrentLod) &&
+            static_cast<uint8_t>(staleContentCurrentLod) >
+                static_cast<uint8_t>(staleContentAndLod),
+        "fallback ranking should prefer current content before matching only the requested LOD");
+
+    resident.seed = requested.seed + 1u;
+    runner.Expect(
+        ClassifyTerrainChunkPresentationMatch(resident, requested) ==
+            TerrainChunkPresentationMatch::None,
+        "a chunk from another spatial identity must never be used as a presentation fallback");
+}
+
+void TestTerrainChunkLatestWinsBuildPolicy(RegressionRunner& runner) {
+    TerrainChunkDebugInfo latest{};
+    latest.startDistance = 128.0f;
+    latest.endDistance = 192.0f;
+    latest.seed = 42u;
+    latest.lodTier = 1u;
+    latest.editHash = 300u;
+    constexpr uint32_t settingsHash = 17u;
+
+    std::deque<TerrainChunkBuildJob> jobs;
+    jobs.emplace_back();
+    jobs.emplace_back();
+    const auto initializeJob = [&](TerrainChunkBuildJob& job, uint64_t editHash) {
+        job.startDistance = latest.startDistance;
+        job.endDistance = latest.endDistance;
+        job.seed = latest.seed;
+        job.lodTier = latest.lodTier;
+        job.settingsHash = settingsHash;
+        job.editHash = editHash;
+    };
+    initializeJob(jobs[0], 200u);
+    initializeJob(jobs[1], latest.editHash);
+
+    const uint32_t firstStopCount =
+        RequestStopForSupersededTerrainChunkBuildJobs(
+            jobs, {latest}, settingsHash);
+    runner.Expect(
+        firstStopCount == 1u &&
+            jobs[0].stopSource.stop_requested() &&
+            !jobs[1].stopSource.stop_requested(),
+        "latest-wins should cancel an older edit build without cancelling the current request");
+    runner.Expect(
+        RequestStopForSupersededTerrainChunkBuildJobs(
+            jobs, {latest}, settingsHash) == 0u,
+        "superseded build cancellation should be idempotent across render frames");
+
+    const uint32_t settingsStopCount =
+        RequestStopForSupersededTerrainChunkBuildJobs(
+            jobs, {latest}, settingsHash + 1u);
+    runner.Expect(
+        settingsStopCount == 1u && jobs[1].stopSource.stop_requested(),
+        "a settings generation change should supersede an otherwise identical pending build");
+}
+
+void TestViewportInputOwnershipRouting(RegressionRunner& runner) {
+    EditorViewportInteractionService interaction;
+    EditorViewportInteractionInput input{};
+    input.viewportRect = {100.0f, 50.0f, 800.0f, 450.0f};
+    input.renderWidth = 800;
+    input.renderHeight = 450;
+    input.mouseX = 500.0f;
+    input.mouseY = 275.0f;
+    input.mouseAvailable = true;
+    input.imguiWantsMouse = true;
+    input.documentEditable = true;
+    input.authoringMutationAllowed = true;
+    input.viewportOwnsMouse = true;
+    input.interactiveToolActive = true;
+    input.primaryPressed = true;
+    input.primaryDown = true;
+    interaction.Update(input);
+    runner.Expect(
+        interaction.CanUseInteractiveToolInput() &&
+            !interaction.CanUseSceneInput() &&
+            interaction.State().viewportPrimaryPressed &&
+            interaction.State().viewportPrimaryDown &&
+            interaction.HasPrimaryCapture(),
+        "viewport-owned ImGui image input should route exclusively to the active interactive tool");
+
+    input.mouseX = 950.0f;
+    input.primaryPressed = false;
+    interaction.Update(input);
+    runner.Expect(
+        !interaction.MouseInsideViewport() &&
+            interaction.CanUseInteractiveToolInput() &&
+            interaction.State().viewportPrimaryDown,
+        "interactive tool pointer capture should continue while dragging outside the viewport");
+
+    input.primaryDown = false;
+    input.primaryReleased = true;
+    interaction.Update(input);
+    runner.Expect(
+        interaction.CanUseInteractiveToolInput() &&
+            interaction.State().viewportPrimaryReleased &&
+            !interaction.HasPrimaryCapture(),
+        "captured pointer release should be delivered outside the viewport before capture is released");
+
+    input.mouseX = 500.0f;
+    input.primaryReleased = false;
+    input.interactiveToolActive = false;
+    interaction.Update(input);
+    runner.Expect(
+        interaction.CanUseSceneInput() && !interaction.CanUseInteractiveToolInput(),
+        "scene selection should receive viewport-owned input when no viewport tool is active");
+
+    input.viewportUiBlocked = true;
+    input.primaryPressed = true;
+    input.primaryDown = true;
+    interaction.Update(input);
+    runner.Expect(
+        !interaction.CanUseViewportInput() &&
+            interaction.State().pointerOwner == EditorViewportPointerOwner::EditorUi &&
+            !interaction.State().viewportPrimaryPressed,
+        "viewport overlay controls should outrank scene and tool input");
+
+    input.viewportUiBlocked = false;
+    input.interactiveToolActive = true;
+    interaction.Update(input);
+    runner.Expect(interaction.HasPrimaryCapture(),
+        "interactive tool should acquire capture for popup interruption test");
+    input.primaryPressed = false;
+    input.popupOrModalActive = true;
+    interaction.Update(input);
+    runner.Expect(
+        interaction.State().primaryCaptureCancelled &&
+            !interaction.HasPrimaryCapture() &&
+            interaction.State().pointerOwner == EditorViewportPointerOwner::PopupOrModal,
+        "popup or modal activation should cancel a captured viewport stroke deterministically");
+
+    runner.Expect(
+        std::string(ToString(EditorViewportPointerOwner::ViewportCamera)) ==
+            "Viewport Camera",
+        "viewport camera ownership should expose a stable diagnostic label");
+
+    EditorViewportInteractionService cameraInteraction;
+    EditorViewportInteractionInput cameraInput{};
+    cameraInput.viewportRect = {100.0f, 50.0f, 800.0f, 450.0f};
+    cameraInput.renderWidth = 800;
+    cameraInput.renderHeight = 450;
+    cameraInput.mouseX = 500.0f;
+    cameraInput.mouseY = 275.0f;
+    cameraInput.mouseAvailable = true;
+    cameraInput.imguiWantsMouse = true;
+    cameraInput.viewportOwnsMouse = true;
+    cameraInput.documentEditable = false;
+    cameraInput.authoringMutationAllowed = false;
+    cameraInput.cameraCapturePressed = true;
+    cameraInput.cameraCaptureDown = true;
+    cameraInteraction.Update(cameraInput);
+    runner.Expect(
+        cameraInteraction.CanUseViewportCameraInput() &&
+            cameraInteraction.CanUseViewportInput() &&
+            !cameraInteraction.CanUseInteractiveToolInput() &&
+            !cameraInteraction.CanUseSceneInput() &&
+            cameraInteraction.HasViewportCameraCapture() &&
+            cameraInteraction.State().captureOwner ==
+                EditorViewportPointerOwner::ViewportCamera &&
+            cameraInteraction.State().viewportCameraCaptureStarted &&
+            cameraInteraction.State().viewportCameraCaptureDown,
+        "right-button camera capture should start inside the viewport without requiring authoring access");
+
+    cameraInput.mouseX = 950.0f;
+    cameraInput.cameraCapturePressed = false;
+    cameraInteraction.Update(cameraInput);
+    runner.Expect(
+        !cameraInteraction.MouseInsideViewport() &&
+            cameraInteraction.CanUseViewportCameraInput() &&
+            cameraInteraction.HasViewportCameraCapture() &&
+            cameraInteraction.State().viewportCameraCaptureDown,
+        "viewport camera capture should remain owned while the pointer moves outside the viewport");
+
+    cameraInput.cameraCaptureDown = false;
+    cameraInput.cameraCaptureReleased = true;
+    cameraInteraction.Update(cameraInput);
+    runner.Expect(
+        cameraInteraction.CanUseViewportCameraInput() &&
+            cameraInteraction.State().viewportCameraCaptureReleased &&
+            !cameraInteraction.HasViewportCameraCapture(),
+        "viewport camera release should be delivered before right-button capture is cleared");
+
+    cameraInput.mouseX = 500.0f;
+    cameraInput.cameraCapturePressed = true;
+    cameraInput.cameraCaptureDown = true;
+    cameraInput.cameraCaptureReleased = false;
+    cameraInteraction.Update(cameraInput);
+    runner.Expect(cameraInteraction.HasViewportCameraCapture(),
+        "viewport camera should reacquire capture for interruption tests");
+    cameraInput.cameraCapturePressed = false;
+    cameraInput.popupOrModalActive = true;
+    cameraInteraction.Update(cameraInput);
+    runner.Expect(
+        cameraInteraction.State().viewportCameraCaptureCancelled &&
+            !cameraInteraction.HasViewportCameraCapture() &&
+            cameraInteraction.State().pointerOwner ==
+                EditorViewportPointerOwner::PopupOrModal,
+        "popup or modal activation should cancel viewport camera capture deterministically");
+
+    cameraInput.popupOrModalActive = false;
+    cameraInput.cameraCapturePressed = true;
+    cameraInteraction.Update(cameraInput);
+    runner.Expect(cameraInteraction.HasViewportCameraCapture(),
+        "viewport camera should reacquire capture after a modal closes");
+    cameraInput.cameraCapturePressed = false;
+    cameraInput.applicationFocused = false;
+    cameraInteraction.Update(cameraInput);
+    runner.Expect(
+        cameraInteraction.State().viewportCameraCaptureCancelled &&
+            !cameraInteraction.HasViewportCameraCapture(),
+        "application focus loss should cancel viewport camera capture");
+
+    EditorViewportInteractionService priorityInteraction;
+    EditorViewportInteractionInput priorityInput{};
+    priorityInput.viewportRect = {100.0f, 50.0f, 800.0f, 450.0f};
+    priorityInput.renderWidth = 800;
+    priorityInput.renderHeight = 450;
+    priorityInput.mouseX = 500.0f;
+    priorityInput.mouseY = 275.0f;
+    priorityInput.mouseAvailable = true;
+    priorityInput.viewportOwnsMouse = true;
+    priorityInput.documentEditable = true;
+    priorityInput.authoringMutationAllowed = true;
+    priorityInput.interactiveToolActive = true;
+    priorityInput.primaryPressed = true;
+    priorityInput.primaryDown = true;
+    priorityInput.cameraCapturePressed = true;
+    priorityInput.cameraCaptureDown = true;
+    priorityInteraction.Update(priorityInput);
+    runner.Expect(
+        priorityInteraction.CanUseInteractiveToolInput() &&
+            priorityInteraction.HasPrimaryCapture() &&
+            !priorityInteraction.HasViewportCameraCapture(),
+        "an interactive tool primary press should outrank a simultaneous camera capture request");
+
+    EditorViewportInteractionService cameraPriorityInteraction;
+    priorityInput.primaryPressed = false;
+    priorityInput.primaryDown = false;
+    cameraPriorityInteraction.Update(priorityInput);
+    priorityInput.cameraCapturePressed = false;
+    priorityInput.primaryPressed = true;
+    priorityInput.primaryDown = true;
+    cameraPriorityInteraction.Update(priorityInput);
+    runner.Expect(
+        cameraPriorityInteraction.CanUseViewportCameraInput() &&
+            cameraPriorityInteraction.HasViewportCameraCapture() &&
+            !cameraPriorityInteraction.HasPrimaryCapture() &&
+            !cameraPriorityInteraction.State().viewportPrimaryPressed,
+        "an active camera capture should prevent a primary tool capture from starting mid-drag");
+}
+
+void TestEditorViewportFlyCamera(RegressionRunner& runner) {
+    const Transform initial{
+        {1.0f, 1.0f, 1.0f},
+        {0.0f, 0.0f, 0.0f},
+        {0.0f, 0.0f, -8.0f}};
+    EditorViewportCameraSettings settings{};
+    settings.moveSpeed = 10.0f;
+    settings.rotationSensitivity = 0.01f;
+    settings.fastMoveMultiplier = 4.0f;
+    settings.slowMoveMultiplier = 0.25f;
+    settings.maximumDeltaTime = 0.1f;
+
+    EditorViewportCameraController camera;
+    camera.SetSettings(settings);
+    camera.Initialize(initial, 0.785398163f, 16.0f / 9.0f, 0.1f, 1000.0f);
+    EditorViewportCameraInput input{};
+    input.deltaTime = 0.1f;
+    input.mouseDeltaX = 50.0f;
+    input.mouseDeltaY = -25.0f;
+    input.moveForward = true;
+    camera.Update(input);
+    runner.Expect(
+        camera.Revision() == 0 &&
+            std::abs(camera.CameraTransform().translate.z + 8.0f) < 1.0e-6f &&
+            std::abs(camera.CameraTransform().rotate.y) < 1.0e-6f,
+        "editor fly camera must ignore movement and rotation without viewport camera capture");
+
+    input.captureActive = true;
+    input.deltaTime = 0.0f;
+    input.moveForward = false;
+    camera.Update(input);
+    runner.Expect(
+        std::abs(camera.CameraTransform().rotate.y - 0.5f) < 1.0e-5f &&
+            std::abs(camera.CameraTransform().rotate.x + 0.25f) < 1.0e-5f &&
+            camera.Forward().x > 0.4f && camera.Forward().y > 0.2f,
+        "right-drag input should update bounded yaw and pitch with a normalized forward basis");
+
+    EditorViewportCameraController singleStep;
+    singleStep.SetSettings(settings);
+    singleStep.Initialize(initial, 0.785398163f, 1.0f, 0.1f, 1000.0f);
+    EditorViewportCameraInput move{};
+    move.captureActive = true;
+    move.moveForward = true;
+    move.deltaTime = 0.1f;
+    singleStep.Update(move);
+
+    EditorViewportCameraController splitStep;
+    splitStep.SetSettings(settings);
+    splitStep.Initialize(initial, 0.785398163f, 1.0f, 0.1f, 1000.0f);
+    move.deltaTime = 0.01f;
+    for (int frame = 0; frame < 10; ++frame) splitStep.Update(move);
+    runner.Expect(
+        std::abs(singleStep.WorldPosition().x - splitStep.WorldPosition().x) < 1.0e-5f &&
+            std::abs(singleStep.WorldPosition().y - splitStep.WorldPosition().y) < 1.0e-5f &&
+            std::abs(singleStep.WorldPosition().z - splitStep.WorldPosition().z) < 1.0e-5f &&
+            std::abs(singleStep.WorldPosition().z + 7.0f) < 1.0e-5f,
+        "editor fly movement should remain frame-rate independent");
+
+    EditorViewportCameraController diagonal;
+    diagonal.SetSettings(settings);
+    diagonal.Initialize(initial, 0.785398163f, 1.0f, 0.1f, 1000.0f);
+    move.deltaTime = 0.1f;
+    move.moveRight = true;
+    diagonal.Update(move);
+    const Vector3 diagonalDelta{
+        diagonal.WorldPosition().x - initial.translate.x,
+        diagonal.WorldPosition().y - initial.translate.y,
+        diagonal.WorldPosition().z - initial.translate.z};
+    const float diagonalDistance = std::sqrt(
+        diagonalDelta.x * diagonalDelta.x +
+        diagonalDelta.y * diagonalDelta.y +
+        diagonalDelta.z * diagonalDelta.z);
+    runner.Expect(std::abs(diagonalDistance - 1.0f) < 1.0e-5f,
+        "diagonal WASD movement should be normalized to the configured move speed");
+
+    EditorViewportCameraController fast;
+    fast.SetSettings(settings);
+    fast.Initialize(initial, 0.785398163f, 1.0f, 0.1f, 1000.0f);
+    move.moveRight = false;
+    move.fastModifier = true;
+    fast.Update(move);
+    EditorViewportCameraController slow;
+    slow.SetSettings(settings);
+    slow.Initialize(initial, 0.785398163f, 1.0f, 0.1f, 1000.0f);
+    move.fastModifier = false;
+    move.slowModifier = true;
+    slow.Update(move);
+    runner.Expect(
+        std::abs(fast.WorldPosition().z + 4.0f) < 1.0e-5f &&
+            std::abs(slow.WorldPosition().z + 7.75f) < 1.0e-5f,
+        "fly camera should apply deterministic fast and slow movement modifiers");
+
+    input.mouseDeltaX = 0.0f;
+    input.mouseDeltaY = 100000.0f;
+    camera.Update(input);
+    runner.Expect(
+        camera.CameraTransform().rotate.x <= settings.maximumPitch + 1.0e-6f &&
+            std::isfinite(camera.ViewProjectionMatrix().m[0][0]),
+        "fly camera pitch and matrices should remain finite under extreme mouse input");
 }
 
 void TestFeatureGuardTripwire(RegressionRunner& runner) {
@@ -9012,9 +9587,14 @@ int RunEditorCoreRegressionTests() {
         {"editor mode interactive tool framework", [&]() { TestEditorModeInteractiveToolFramework(runner); }},
         {"production placement brush tool pack", [&]() { TestProductionPlacementBrushToolPack(runner); }},
         {"production terrain sculpt paint tool pack", [&]() { TestProductionTerrainSculptPaintToolPack(runner); }},
+        {"terrain chunk presentation continuity", [&]() { TestTerrainChunkPresentationContinuityPolicy(runner); }},
+        {"terrain chunk latest-wins build policy", [&]() { TestTerrainChunkLatestWinsBuildPolicy(runner); }},
+        {"editor notification toast lifecycle", [&]() { TestEditorNotificationToastLifecycle(runner); }},
         {"production modeling geometry framework", [&]() { TestProductionModelingGeometryFramework(runner); }},
         {"production mesh bake asset pipeline", [&]() { TestProductionMeshBakeAssetPipeline(runner); }},
         {"panel layout geometry", [&]() { TestPanelLayoutGeometry(runner); }},
+        {"viewport input ownership routing", [&]() { TestViewportInputOwnershipRouting(runner); }},
+        {"editor viewport fly camera", [&]() { TestEditorViewportFlyCamera(runner); }},
         {"feature guard tripwire", [&]() { TestFeatureGuardTripwire(runner); }},
     };
 

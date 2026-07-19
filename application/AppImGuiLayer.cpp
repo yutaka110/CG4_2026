@@ -1720,12 +1720,20 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         "Procedural Terrain"};
     editorTerrainToolBinding_.surfaceQuery = &editorTerrainSurfaceQuery_;
     editorTerrainToolBinding_.onCommitted = [this](
-        const TerrainEditDirtyRegion&,
-        std::string_view operation) {
+        const editor::EditorTerrainCommitSummary& summary) {
+        std::ostringstream message;
+        message << ToString(summary.operation) << " stroke committed: "
+                << summary.sampleCount << " sample"
+                << (summary.sampleCount == 1 ? "" : "s");
+        if (summary.operation == TerrainEditOperation::Paint) {
+            message << ", "
+                    << editor::GetTerrainPaintLayerVisual(summary.materialLayer).label;
+        }
+        message << ". Undo available.";
         editorNotifications_.Push(
             editor::EditorNotificationSeverity::Info,
             "Terrain Brush",
-            std::string(operation) + " stroke committed.");
+            message.str());
     };
     if (editableCourse != nullptr && courseWorldDocument.IsValid()) {
         AppRuntimeState* terrainRuntime = &runtimeState;
@@ -1858,6 +1866,16 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 context.editorCompletedFenceValue,
                 context.editorScheduledFenceValue,
                 &worldPartitionError);
+            std::string transientMeshError;
+            editorTransientMeshRenderPath_.Sync(
+                *geometryScene,
+                &editorGeometryWorkspace_,
+                context.frameState->viewProjectionMatrix,
+                context.editorUploadCommandList,
+                context.editorCompletedFenceValue,
+                context.editorScheduledFenceValue,
+                &transientMeshError,
+                &editorWorldPartitionPipeline_.SourceResidentEntities());
             std::string productionSceneError;
             editorProductionScenePipeline_.Sync(
                 *geometryScene,
@@ -1869,7 +1887,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 context.editorCompletedFenceValue,
                 context.editorScheduledFenceValue,
                 &productionSceneError,
-                &editorWorldPartitionPipeline_.SourceResidentEntities());
+                &editorWorldPartitionPipeline_.SourceResidentEntities(),
+                &editorTransientMeshRenderPath_.OverriddenEntities());
             std::string productionNavigationError;
             editorProductionNavigationPipeline_.Sync(
                 *geometryScene,
@@ -2325,9 +2344,18 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     const ImGuiIO& imguiIO = ImGui::GetIO();
     const editor::EditorViewportRenderTargetState& editorViewportTarget =
         editorViewportRenderTarget_.State();
+    const editor::EditorViewportPanelRenderInput viewportSurfaceInput{
+        0,
+        static_cast<float>(editorViewportTarget.renderWidth),
+        static_cast<float>(editorViewportTarget.renderHeight),
+        true,
+        {}};
+    const editor::EditorPanelRect viewportSurfaceRect =
+        editor::ResolveEditorViewportRenderSurfaceRect(
+            editorPanelLayout_.ViewportRect(), viewportSurfaceInput);
     editorViewportCoordinates_.Update(
         editor::EditorViewportCoordinateContext{
-            editorPanelLayout_.ViewportRect(),
+            viewportSurfaceRect,
             editorViewportTarget.renderWidth,
             editorViewportTarget.renderHeight,
             context.frameState != nullptr
@@ -2351,9 +2379,11 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             settings.selectedOnly);
         editorViewportOverlay_.SetLayerSettings(layer, settings);
     }
+    editor::EditorViewportRenderTargetState editorViewportOverlayTarget = editorViewportTarget;
+    editorViewportOverlayTarget.displayRect = viewportSurfaceRect;
     editorViewportOverlay_.BeginFrame(
         editor::EditorViewportOverlayFrameContext{
-            editorViewportTarget,
+            editorViewportOverlayTarget,
             static_cast<uint32_t>((std::max)(1.0f, editorWorkSize.x)),
             static_cast<uint32_t>((std::max)(1.0f, editorWorkSize.y)),
             &editorViewportCoordinates_,
@@ -2402,25 +2432,95 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 selected ? 0xffb8efffu : 0xff9fc9ffu, options);
         }
     }
-    editorViewportInteraction_.Update(
-        editor::EditorViewportInteractionInput{
+    const editor::EditorInteractiveToolDescriptor* activeInteractiveDescriptor =
+        editorInteractiveTools_.ActiveToolDescriptor();
+    const bool interactiveToolConsumesViewport =
+        activeInteractiveDescriptor != nullptr &&
+        activeInteractiveDescriptor->requiresViewport;
+    const bool viewportOverlayUiBlocked =
+        editor::EditorViewportOverlayUiContains(
             editorPanelLayout_.ViewportRect(),
-            editorViewportTarget.renderWidth,
-            editorViewportTarget.renderHeight,
             imguiIO.MousePos.x,
             imguiIO.MousePos.y,
-            imguiIO.MousePos.x > -FLT_MAX && imguiIO.MousePos.y > -FLT_MAX,
-            imguiIO.WantCaptureMouse,
-            showDeveloperTools_,
-            viewportFocusMode_,
-            editableCourse != nullptr,
-            !editorPlaySession_.IsActive(),
-            editorPlaySession_.IsActive()});
+            ImGui::GetFrameHeight()) ||
+        (ImGui::IsAnyItemActive() && !editorViewportInteraction_.HasAnyCapture());
+    const bool popupOrModalActive = ImGui::IsPopupOpen(
+        nullptr,
+        ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    const bool cameraCancelRequested =
+        editorViewportInteraction_.HasViewportCameraCapture() &&
+        !imguiIO.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Escape);
+    editor::EditorViewportInteractionInput viewportInteractionInput{};
+    viewportInteractionInput.viewportRect = viewportSurfaceRect;
+    viewportInteractionInput.renderWidth = editorViewportTarget.renderWidth;
+    viewportInteractionInput.renderHeight = editorViewportTarget.renderHeight;
+    viewportInteractionInput.mouseX = imguiIO.MousePos.x;
+    viewportInteractionInput.mouseY = imguiIO.MousePos.y;
+    viewportInteractionInput.mouseAvailable =
+        imguiIO.MousePos.x > -FLT_MAX && imguiIO.MousePos.y > -FLT_MAX;
+    viewportInteractionInput.imguiWantsMouse = imguiIO.WantCaptureMouse;
+    viewportInteractionInput.developerToolsVisible = showDeveloperTools_;
+    viewportInteractionInput.viewportFocusMode = viewportFocusMode_;
+    viewportInteractionInput.documentEditable = editableCourse != nullptr;
+    viewportInteractionInput.authoringMutationAllowed = !editorPlaySession_.IsActive();
+    viewportInteractionInput.playSessionActive = editorPlaySession_.IsActive();
+    viewportInteractionInput.viewportOwnsMouse = true;
+    viewportInteractionInput.viewportUiBlocked = viewportOverlayUiBlocked;
+    viewportInteractionInput.popupOrModalActive = popupOrModalActive;
+    viewportInteractionInput.interactiveToolActive = interactiveToolConsumesViewport;
+    viewportInteractionInput.primaryPressed = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    viewportInteractionInput.primaryDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    viewportInteractionInput.primaryReleased = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+    viewportInteractionInput.cameraCapturePressed =
+        ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+    viewportInteractionInput.cameraCaptureDown =
+        ImGui::IsMouseDown(ImGuiMouseButton_Right);
+    viewportInteractionInput.cameraCaptureReleased =
+        ImGui::IsMouseReleased(ImGuiMouseButton_Right);
+    viewportInteractionInput.cameraCaptureCancelRequested = cameraCancelRequested;
+    viewportInteractionInput.applicationFocused = hwnd_ != nullptr && GetForegroundWindow() == hwnd_;
+    editorViewportInteraction_.Update(viewportInteractionInput);
+
+    const editor::EditorViewportInteractionState& viewportInteractionState =
+        editorViewportInteraction_.State();
+    const bool cameraOwnsInput = editorViewportInteraction_.CanUseViewportCameraInput();
+    editorViewportCameraInput_ = {};
+    editorViewportCameraInput_.deltaTime = imguiIO.DeltaTime;
+    editorViewportCameraInput_.mouseX = imguiIO.MousePos.x;
+    editorViewportCameraInput_.mouseY = imguiIO.MousePos.y;
+    editorViewportCameraInput_.captureStarted =
+        viewportInteractionState.viewportCameraCaptureStarted;
+    editorViewportCameraInput_.captureActive =
+        editorViewportInteraction_.HasViewportCameraCapture();
+    editorViewportCameraInput_.captureReleased =
+        viewportInteractionState.viewportCameraCaptureReleased;
+    editorViewportCameraInput_.captureCancelled =
+        viewportInteractionState.viewportCameraCaptureCancelled;
+    editorViewportCameraInput_.cancelPressed = cameraCancelRequested;
+    if (cameraOwnsInput) {
+        editorViewportCameraInput_.mouseDeltaX = imguiIO.MouseDelta.x;
+        editorViewportCameraInput_.mouseDeltaY = imguiIO.MouseDelta.y;
+        editorViewportCameraInput_.wheelDelta = imguiIO.MouseWheel;
+        editorViewportCameraInput_.orbitModifier = imguiIO.KeyAlt;
+        editorViewportCameraInput_.fastModifier = imguiIO.KeyShift;
+        editorViewportCameraInput_.slowModifier = imguiIO.KeyCtrl;
+        if (!imguiIO.WantTextInput) {
+            editorViewportCameraInput_.moveForward = ImGui::IsKeyDown(ImGuiKey_W);
+            editorViewportCameraInput_.moveBackward = ImGui::IsKeyDown(ImGuiKey_S);
+            editorViewportCameraInput_.moveLeft = ImGui::IsKeyDown(ImGuiKey_A);
+            editorViewportCameraInput_.moveRight = ImGui::IsKeyDown(ImGuiKey_D);
+            editorViewportCameraInput_.moveUp = ImGui::IsKeyDown(ImGuiKey_E);
+            editorViewportCameraInput_.moveDown = ImGui::IsKeyDown(ImGuiKey_Q);
+        }
+    }
+    editorViewportCameraInput_.focusSelectionPressed =
+        editorViewportInteraction_.MouseInsideViewport() &&
+        !imguiIO.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F);
     runtimeState.terrain.courseObjectAuthoringInputLocked =
         editorViewportInteraction_.AuthoringInputLocked();
     std::vector<editor::EditorViewportPickResult> viewportPickResults;
-    const bool scenePickRequested = editorViewportInteraction_.CanUseViewportInput() &&
-        ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    const bool scenePickRequested = editorViewportInteraction_.CanUseSceneInput() &&
+        editorViewportInteraction_.State().viewportPrimaryPressed;
     if (scenePickRequested) {
         const editor::EditorViewportWorldRay ray = editorViewportCoordinates_.DisplayToWorldRay(
             imguiIO.MousePos.x, imguiIO.MousePos.y);
@@ -3032,9 +3132,10 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     interactiveEnvironment.coordinates = &editorViewportCoordinates_;
     interactiveEnvironment.execution = &editorInteractiveExecution_;
     interactiveEnvironment.selectionRevision = editorSelection_.Revision();
-    interactiveEnvironment.documentRevision = editorDocumentManager_.Revision();
     if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active()) {
         interactiveEnvironment.activeDocumentKey = activeDocument->id.Key();
+        interactiveEnvironment.documentEditRevision = activeDocument->editRevision;
+        interactiveEnvironment.documentGeneration = activeDocument->contentGeneration;
     }
     interactiveEnvironment.playSessionActive = editorPlaySession_.IsActive();
     interactiveEnvironment.canMutateAuthoring = editorCommandContext.canMutateAuthoring;
@@ -3043,16 +3144,20 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     interactiveInput.mouseX = ImGui::GetIO().MousePos.x;
     interactiveInput.mouseY = ImGui::GetIO().MousePos.y;
     interactiveInput.viewportPrimaryPressed =
-        editorViewportInteraction_.CanUseViewportInput() &&
-        ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+        editorViewportInteraction_.CanUseInteractiveToolInput() &&
+        editorViewportInteraction_.State().viewportPrimaryPressed;
     interactiveInput.viewportPrimaryDown =
-        editorViewportInteraction_.CanUseViewportInput() &&
-        ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        editorViewportInteraction_.CanUseInteractiveToolInput() &&
+        editorViewportInteraction_.State().viewportPrimaryDown;
     interactiveInput.viewportPrimaryReleased =
-        editorViewportInteraction_.MouseInsideViewport() &&
-        ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+        editorViewportInteraction_.CanUseInteractiveToolInput() &&
+        editorViewportInteraction_.State().viewportPrimaryReleased;
+    interactiveInput.viewportPrimaryCancelled =
+        editorViewportInteraction_.State().primaryCaptureCancelled;
     if (!ImGui::GetIO().WantTextInput) {
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) editorInteractiveTools_.RequestCancel();
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !cameraCancelRequested) {
+            editorInteractiveTools_.RequestCancel();
+        }
         if (ImGui::IsKeyPressed(ImGuiKey_Enter)) editorInteractiveTools_.RequestAccept();
         if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_1)) {
             editorInteractiveTools_.ActivateMode("editor.mode.select");
@@ -3120,6 +3225,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     editor::DrawEditorToolbar(editorContext);
     editor::DrawEditorDocumentTabs(editorContext);
     editor::DrawEditorStatusBar(editorContext);
+    editor::DrawEditorNotificationToast(
+        editorNotifications_, editorNotificationToastState_);
     editor::DrawEditorModalConfirmPanel(editorConfirmService_);
 
     const AppVfxDebugDataBuilderContext vfxDebugDataContext{
@@ -3924,10 +4031,13 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         "Editor Bottom Dock",
         &editorLayoutPersistence_);
     interactiveEnvironment.selectionRevision = editorSelection_.Revision();
-    interactiveEnvironment.documentRevision = editorDocumentManager_.Revision();
+    interactiveEnvironment.documentEditRevision = 0;
+    interactiveEnvironment.documentGeneration = 0;
     interactiveEnvironment.activeDocumentKey.clear();
     if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active()) {
         interactiveEnvironment.activeDocumentKey = activeDocument->id.Key();
+        interactiveEnvironment.documentEditRevision = activeDocument->editRevision;
+        interactiveEnvironment.documentGeneration = activeDocument->contentGeneration;
     }
     interactiveEnvironment.playSessionActive = editorPlaySession_.IsActive();
     interactiveEnvironment.canMutateAuthoring =
@@ -4003,6 +4113,7 @@ void AppImGuiLayer::Shutdown() {
     editorProductionShaderPipeline_.Shutdown();
     editorProductionTexturePipeline_.Shutdown();
     editorProductionMaterialPipeline_.Shutdown();
+    editorTransientMeshRenderPath_.Shutdown();
     editorProductionScenePipeline_.Shutdown();
     editorInteractiveExecution_.Clear();
     editorAssetThumbnails_.Clear();
@@ -4041,6 +4152,10 @@ const editor::EditorViewportOverlayService& AppImGuiLayer::EditorViewportOverlay
 
 const editor::EditorProductionScenePipeline& AppImGuiLayer::ProductionScenePipeline() const {
     return editorProductionScenePipeline_;
+}
+
+const editor::EditorTransientMeshRenderPath& AppImGuiLayer::TransientMeshRenderPath() const {
+    return editorTransientMeshRenderPath_;
 }
 
 const editor::EditorProductionMaterialPipeline& AppImGuiLayer::ProductionMaterialPipeline() const {
@@ -4190,6 +4305,10 @@ const editor::EditorViewportOverlayService& AppImGuiLayer::EditorViewportOverlay
 
 const editor::EditorProductionScenePipeline& AppImGuiLayer::ProductionScenePipeline() const {
     return editorProductionScenePipeline_;
+}
+
+const editor::EditorTransientMeshRenderPath& AppImGuiLayer::TransientMeshRenderPath() const {
+    return editorTransientMeshRenderPath_;
 }
 
 const editor::EditorProductionMaterialPipeline& AppImGuiLayer::ProductionMaterialPipeline() const {

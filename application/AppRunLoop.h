@@ -35,9 +35,11 @@
 #include "utils/math/MathUtils.h"
 #include "AppSceneState.h"
 #include "AppSceneStateManager.h"
+#include "runtime/AppFrameCoordinator.h"
 #include "VfxEngine.h"
 #include "editor/EditorPropertyEditSession.h"
 #include "editor/EditorTransactionStack.h"
+#include "editor/EditorViewportCameraController.h"
 #include "editor/EditorViewportAuthoringInputGuard.h"
 
 class AppFrameRenderer;
@@ -102,9 +104,6 @@ private:
         POINT& outViewportPoint,
         uint32_t& outViewportWidth,
         uint32_t& outViewportHeight) const;
-    bool WaitForFrameSlot(uint32_t frameIndex);
-    bool SignalFrame(uint32_t frameIndex);
-    bool FlushGpu();
     void ProcessCourseObjectViewportEditing();
     CourseObjectEditSnapshot CaptureCourseObjectSnapshot() const;
     std::string BuildCourseObjectSnapshotSummary(const CourseObjectEditSnapshot& snapshot) const;
@@ -161,12 +160,11 @@ private:
     void BeginRailGpuTiming(ID3D12GraphicsCommandList* commandList, uint32_t backBufferIndex);
     void EndRailGpuTiming(ID3D12GraphicsCommandList* commandList, uint32_t backBufferIndex);
     void CaptureRailGpuTimingCpuMetadata(uint32_t backBufferIndex);
-    void ConfigureEditorPresentPolicy();
-    void LogEditorPresentPolicy() const;
     void ProcessPostProcessShowcaseShortcuts();
     bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
+    editor::EditorViewportCameraController editorViewportCamera_{};
     AppRuntimeState& runtimeState_;
     AppSceneResources& scene_;
     AppParticleSystem& particleSystem_;
@@ -186,8 +184,7 @@ private:
     uint32_t windowHeight_;
     FrameLoopState& frameState_;
     ID3D12CommandQueue* commandQueue_;
-    ID3D12Fence* fence_;
-    HANDLE fenceEvent_;
+    AppFrameCoordinator frameCoordinator_;
     AppSceneStateManager sceneStateManager_;
     VfxEngine vfxEngine_;
     AppFrameGraphBuilder frameGraphBuilder_;
@@ -240,12 +237,6 @@ private:
     uint32_t lastTransientBufferCount_ = 0;
     uint32_t lastTransientBufferStorageCount_ = 0;
     uint32_t vfxTelemetryFrameIndex_ = 0;
-    std::vector<uint64_t> frameFenceValues_;
-    uint64_t nextFrameFenceValue_ = 1;
-    uint32_t presentSyncInterval_ = 1;
-    uint32_t presentMaxFrameLatency_ = 0;
-    bool editorLowLatencyPresent_ = false;
-    bool presentTearingAllowed_ = false;
     struct RailGpuTimingSlot {
         bool pending = false;
         uint32_t frame = 0;
