@@ -2,6 +2,10 @@
 #include "core/Device.h"
 #include <cassert>
 
+#if !defined(GE3_ENGINE_RENDERER) || GE3_ENGINE_RENDERER != 1
+#error SwapChain.cpp must only be compiled by the EngineRenderer module.
+#endif
+
 using Microsoft::WRL::ComPtr;
 using namespace graphics;
 

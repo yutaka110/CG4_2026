@@ -25,28 +25,54 @@
 #include <sstream>
 
 namespace editor {
-namespace {
 
-float SafePositive(float value, float fallback) {
-    return value > 0.0f ? value : fallback;
-}
-
-ImVec2 FitImageSize(
-    const EditorPanelRect& rect,
+EditorPanelRect ResolveEditorViewportRenderSurfaceRect(
+    const EditorPanelRect& panelRect,
     const EditorViewportPanelRenderInput& renderInput) {
+    if (!panelRect.Valid()) return {};
     if (!renderInput.preserveAspect) {
-        return ImVec2(rect.width, rect.height);
+        return panelRect;
     }
 
-    const float sourceWidth = SafePositive(renderInput.sourceWidth, rect.width);
-    const float sourceHeight = SafePositive(renderInput.sourceHeight, rect.height);
+    const float sourceWidth = renderInput.sourceWidth > 0.0f
+        ? renderInput.sourceWidth
+        : panelRect.width;
+    const float sourceHeight = renderInput.sourceHeight > 0.0f
+        ? renderInput.sourceHeight
+        : panelRect.height;
     const float sourceAspect = sourceWidth / sourceHeight;
-    const float targetAspect = rect.width / rect.height;
+    const float targetAspect = panelRect.width / panelRect.height;
+    float width = panelRect.width;
+    float height = panelRect.height;
     if (sourceAspect > targetAspect) {
-        return ImVec2(rect.width, rect.width / sourceAspect);
+        height = panelRect.width / sourceAspect;
+    } else {
+        width = panelRect.height * sourceAspect;
     }
-    return ImVec2(rect.height * sourceAspect, rect.height);
+    return EditorPanelRect{
+        panelRect.x + (panelRect.width - width) * 0.5f,
+        panelRect.y + (panelRect.height - height) * 0.5f,
+        width,
+        height};
 }
+
+bool EditorViewportOverlayUiContains(
+    const EditorPanelRect& panelRect,
+    float displayX,
+    float displayY,
+    float controlHeight) {
+    if (!panelRect.Valid()) return false;
+    const EditorPanelRect controls{
+        panelRect.x + panelRect.width - 92.0f,
+        panelRect.y + 8.0f,
+        82.0f,
+        (std::max)(controlHeight, 20.0f)};
+    return displayX >= controls.x && displayY >= controls.y &&
+        displayX < controls.x + controls.width &&
+        displayY < controls.y + controls.height;
+}
+
+namespace {
 
 void DrawViewportRenderSurface(
     const EditorPanelRect& rect,
@@ -68,10 +94,10 @@ void DrawViewportRenderSurface(
         return;
     }
 
-    const ImVec2 imageSize = FitImageSize(rect, renderInput);
-    const ImVec2 imagePos(
-        rect.x + (rect.width - imageSize.x) * 0.5f,
-        rect.y + (rect.height - imageSize.y) * 0.5f);
+    const EditorPanelRect surfaceRect =
+        ResolveEditorViewportRenderSurfaceRect(rect, renderInput);
+    const ImVec2 imageSize(surfaceRect.width, surfaceRect.height);
+    const ImVec2 imagePos(surfaceRect.x, surfaceRect.y);
     ImGui::SetCursorScreenPos(imagePos);
     ImGui::Image(
         reinterpret_cast<ImTextureID>(static_cast<uintptr_t>(renderInput.textureId)),
@@ -106,7 +132,16 @@ void SubmitViewportDiagnostics(EditorContext& context, const EditorPanelRect& re
          << "\nSession   " << PlaySessionLabel(context.playSession);
     if (context.viewportInteraction != nullptr) {
         text << "\nBoundary  " << context.viewportInteraction->BoundaryLabel()
-             << "\nAuthoring " << context.viewportInteraction->AuthoringLabel();
+             << "\nAuthoring " << context.viewportInteraction->AuthoringLabel()
+             << "\nInput     " << context.viewportInteraction->ViewportInputLabel()
+             << "\nOwner     "
+             << ToString(context.viewportInteraction->State().pointerOwner);
+        if (!context.viewportInteraction->CanUseViewportInput()) {
+            const char* disabled = context.viewportInteraction->DisabledReason();
+            if (disabled != nullptr && disabled[0] != '\0') {
+                text << "\nBlocked   " << disabled;
+            }
+        }
     } else {
         const EditorAuthoringMutationGuard mutationGuard =
             MakeEditorAuthoringMutationGuard(context.playSession);
@@ -248,11 +283,11 @@ void AcceptSceneAssetDrop(EditorContext& context) {
                 environment.execution = context.interactiveExecution;
                 environment.selectionRevision = context.selection != nullptr
                     ? context.selection->Revision() : 0;
-                environment.documentRevision = context.documentManager != nullptr
-                    ? context.documentManager->Revision() : 0;
                 if (context.documentManager != nullptr) {
                     if (const EditorDocumentRecord* document = context.documentManager->Active()) {
                         environment.activeDocumentKey = document->id.Key();
+                        environment.documentEditRevision = document->editRevision;
+                        environment.documentGeneration = document->contentGeneration;
                     }
                 }
                 environment.playSessionActive = context.playSession != nullptr &&

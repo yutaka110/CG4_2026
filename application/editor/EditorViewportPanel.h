@@ -20,6 +20,15 @@ struct EditorViewportPanelRenderInput {
     std::function<void(EditorViewportOverlayService&)> buildOverlay;
 };
 
+EditorPanelRect ResolveEditorViewportRenderSurfaceRect(
+    const EditorPanelRect& panelRect,
+    const EditorViewportPanelRenderInput& renderInput);
+bool EditorViewportOverlayUiContains(
+    const EditorPanelRect& panelRect,
+    float displayX,
+    float displayY,
+    float controlHeight);
+
 void DrawEditorViewportPanel(
     EditorContext& context,
     const EditorViewportPanelRenderInput& renderInput = {});

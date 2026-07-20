@@ -17,6 +17,7 @@ namespace eng::platform {
     public:
         using ResizeCallback = std::function<void(uint32_t w, uint32_t h)>;
         using DropFilesCallback = std::function<void(const std::wstring&)>;
+        using MessageCallback = std::function<bool(HWND, UINT, WPARAM, LPARAM)>;
 
         bool Create(const WindowDesc& desc);
         void Destroy();
@@ -30,6 +31,7 @@ namespace eng::platform {
 
         void SetResizeCallback(ResizeCallback cb) { onResize_ = std::move(cb); }
         void SetDropCallback(DropFilesCallback cb) { onDrop_ = std::move(cb); }
+        void SetMessageCallback(MessageCallback cb) { onMessage_ = std::move(cb); }
 
        
 
@@ -46,6 +48,7 @@ namespace eng::platform {
         uint32_t width_ = 0, height_ = 0;
         ResizeCallback onResize_;
         DropFilesCallback onDrop_;
+        MessageCallback onMessage_;
     };
 
 } // namespace eng::platform

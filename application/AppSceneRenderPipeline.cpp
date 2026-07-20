@@ -1,5 +1,7 @@
 #include "AppSceneRenderPipeline.h"
+#include "AppLogFile.h"
 #include "editor/scene/EditorProductionScenePipeline.h"
+#include "editor/geometry/EditorTransientMeshRenderPath.h"
 #include "editor/material/EditorProductionMaterialPipeline.h"
 #include "editor/texture/EditorProductionTexturePipeline.h"
 #include "editor/shader/EditorProductionShaderPipeline.h"
@@ -171,7 +173,7 @@ private:
             return;
         }
 
-        std::ofstream log(logPath_, std::ios::out | std::ios::app);
+        std::ofstream log = app::OpenRotatingLog(logPath_);
         if (!log) {
             pending_ = false;
             currentRuntimeState_ = nullptr;
@@ -851,6 +853,11 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                         directPackets.insert(directPackets.end(), hlodPackets.begin(), hlodPackets.end());
                     }
                 }
+                if (ctx.transientMeshRenderPath != nullptr) {
+                    const auto& transientPackets = ctx.transientMeshRenderPath->RenderPackets();
+                    directPackets.insert(
+                        directPackets.end(), transientPackets.begin(), transientPackets.end());
+                }
                 for (const editor::EditorProductionSceneRenderPacket& packet : directPackets) {
                     if (packet.indexCount == 0 || packet.transformAddress == 0 ||
                         packet.vertexBuffer.BufferLocation == 0 ||
@@ -875,7 +882,9 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                         continue;
                     }
                     D3D12_GPU_VIRTUAL_ADDRESS materialAddress =
-                        ctx.scene->materialResource->GetGPUVirtualAddress();
+                        packet.materialAddressOverride != 0
+                            ? packet.materialAddressOverride
+                            : ctx.scene->materialResource->GetGPUVirtualAddress();
                     D3D12_GPU_VIRTUAL_ADDRESS directionalAddress =
                         ctx.scene->directionalLightResource->GetGPUVirtualAddress();
                     D3D12_GPU_VIRTUAL_ADDRESS pointAddress =
@@ -886,7 +895,8 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                         ctx.scene->textureSrvHandleGPU2;
                     D3D12_GPU_DESCRIPTOR_HANDLE normalTexture =
                         ctx.scene->textureSrvHandleGPU2;
-                    if (ctx.productionMaterialPipeline != nullptr) {
+                    if (packet.materialAddressOverride == 0 &&
+                        ctx.productionMaterialPipeline != nullptr) {
                         const editor::EditorProductionMaterialBinding* binding =
                             ctx.productionMaterialPipeline->Resolve(
                                 packet.entityGuid, packet.materialSlot);

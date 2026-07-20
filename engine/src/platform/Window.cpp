@@ -1,10 +1,8 @@
 #include "platform/Window.h"
 #include <shellscalingapi.h> // SetProcessDpiAwareness
 #pragma comment(lib, "Shcore.lib")
-#include"utils/ProjectSettings.h"
-#if defined(DEVELOP) || defined(_DEBUG)
-#include "../../../externals/imgui/imgui.h"
-#include "../../../externals/imgui/imgui_impl_win32.h"
+#if !defined(GE3_ENGINE_RUNTIME) || GE3_ENGINE_RUNTIME != 1
+#error Window.cpp must only be compiled by the EngineRuntime module.
 #endif
 using namespace eng::platform;
 
@@ -94,10 +92,7 @@ LRESULT CALLBACK Window::WndProcStatic(HWND h, UINT m, WPARAM w, LPARAM l) {
 LRESULT Window::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 
     // Window::WndProc 冒頭あたり
-#if defined(DEVELOP) || defined(_DEBUG)
-    extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
-    if (ImGui_ImplWin32_WndProcHandler(h, m, w, l)) return true;
-#endif
+    if (onMessage_ && onMessage_(h, m, w, l)) return true;
 
 
     switch (m) {

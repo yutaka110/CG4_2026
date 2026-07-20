@@ -37,6 +37,7 @@
 #include "../course/CourseAsset.h"
 
 #include <cmath>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -44,6 +45,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -162,11 +164,22 @@ std::vector<unsigned char> MakeBmpPreviewHeader(uint32_t width, uint32_t height)
     return bytes;
 }
 
-void RemoveTreeIfPresent(const std::filesystem::path& path) {
-    std::error_code error;
-    if (std::filesystem::exists(path, error)) {
+bool RemoveTreeIfPresent(const std::filesystem::path& path) {
+    constexpr int kMaximumAttempts = 8;
+    for (int attempt = 0; attempt < kMaximumAttempts; ++attempt) {
+        std::error_code error;
+        if (!std::filesystem::exists(path, error)) {
+            return !error;
+        }
         std::filesystem::remove_all(path, error);
+        error.clear();
+        if (!std::filesystem::exists(path, error)) {
+            return !error;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(25 * (attempt + 1)));
     }
+    std::error_code finalError;
+    return !std::filesystem::exists(path, finalError) && !finalError;
 }
 
 void RunViewportCoordinateGate(SmokeRun& smoke, std::ostream& log) {
@@ -198,12 +211,13 @@ void RunViewportCoordinateGate(SmokeRun& smoke, std::ostream& log) {
             500.0f,
             275.0f,
             true,
+            true,
+            true,
+            true,
+            true,
+            true,
             false,
-            true,
-            true,
-            true,
-            true,
-            false});
+            true});
     smoke.Expect(interaction.MouseInsideViewport(), "mouse should be inside viewport");
     smoke.Expect(interaction.CanUseViewportInput(), "viewport input should be usable");
     smoke.Expect(Near(interaction.State().mouseViewportX, 400.0f), "mouse viewport X should map to render space");
@@ -283,7 +297,10 @@ void RunViewportCoordinateGate(SmokeRun& smoke, std::ostream& log) {
 
 void RunAssetMutationExecutorGate(SmokeRun& smoke, std::ostream& log) {
     const std::filesystem::path root = std::filesystem::path{"Resources"} / "__editor_smoke_asset_mutation";
-    RemoveTreeIfPresent(root);
+    if (!RemoveTreeIfPresent(root)) {
+        smoke.Expect(false, "asset mutation fixture cleanup should succeed");
+        return;
+    }
 
     const std::filesystem::path source = root / "source" / "smoke_asset.mesh";
     const std::filesystem::path sourceMeta = std::filesystem::path(source.generic_string() + ".meta");

@@ -3,6 +3,10 @@
 #include <cassert>
 #include <cstdio>
 
+#if !defined(GE3_ENGINE_RENDERER) || GE3_ENGINE_RENDERER != 1
+#error Device.cpp must only be compiled by the EngineRenderer module.
+#endif
+
 using Microsoft::WRL::ComPtr;
 using namespace core;
 

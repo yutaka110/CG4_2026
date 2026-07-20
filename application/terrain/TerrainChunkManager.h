@@ -4,6 +4,7 @@
 #include <array>
 #include <deque>
 #include <future>
+#include <stop_token>
 #include <vector>
 
 #include <d3d12.h>
@@ -69,7 +70,9 @@ struct TerrainChunkCpuBuild {
     float endDistance = 0.0f;
     uint32_t seed = 0;
     uint32_t lodTier = 0;
+    uint32_t settingsHash = 0;
     uint64_t editHash = 0;
+    bool cancelled = false;
     std::vector<VertexData> vertices;
     std::vector<uint32_t> indices;
     std::vector<TerrainDebrisInstanceGpu> debrisInstances;
@@ -94,7 +97,9 @@ struct TerrainChunkBuildJob {
     float endDistance = 0.0f;
     uint32_t seed = 0;
     uint32_t lodTier = 0;
+    uint32_t settingsHash = 0;
     uint64_t editHash = 0;
+    std::stop_source stopSource;
     std::future<TerrainChunkCpuBuild> future;
 };
 
@@ -109,6 +114,16 @@ struct TerrainChunkDebugInfo {
     std::vector<TerrainDebrisInstance> debrisInstances;
     std::vector<TerrainVfxZone> vfxZones;
 };
+
+bool TerrainChunkBuildRequestMatches(
+    const TerrainChunkBuildJob& job,
+    const TerrainChunkDebugInfo& requested,
+    uint32_t requestedSettingsHash) noexcept;
+
+uint32_t RequestStopForSupersededTerrainChunkBuildJobs(
+    std::deque<TerrainChunkBuildJob>& jobs,
+    const std::vector<TerrainChunkDebugInfo>& requested,
+    uint32_t requestedSettingsHash) noexcept;
 
 struct TerrainRenderChunk {
     static constexpr uint32_t kDebrisLodBucketCount = 3;
@@ -149,6 +164,21 @@ struct TerrainRenderChunk {
     uint32_t debrisInstanceCapacityPerBucket = 0;
 };
 
+// Presentation continuity policy for replacing asynchronously rebuilt chunks.
+// Higher values are preferred when more than one resident chunk covers the
+// requested spatial range.
+enum class TerrainChunkPresentationMatch : uint8_t {
+    None = 0,
+    StaleContentDifferentLod,
+    StaleContentSameLod,
+    CurrentContentDifferentLod,
+    Exact,
+};
+
+TerrainChunkPresentationMatch ClassifyTerrainChunkPresentationMatch(
+    const TerrainRenderChunk& resident,
+    const TerrainChunkDebugInfo& requested) noexcept;
+
 struct TerrainDebrisCullingStats {
     uint32_t renderChunkCount = 0;
     uint32_t debrisInstanceCount = 0;
@@ -165,6 +195,8 @@ struct RetiredTerrainRenderChunks {
 
 class TerrainChunkManager {
 public:
+    ~TerrainChunkManager();
+
     void Update(
         ID3D12Device* device,
         ge3::core::DescriptorHeap* srvHeap,

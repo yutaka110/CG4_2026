@@ -23,6 +23,8 @@ struct EditorAssetImportOptions {
     bool createMetadata = true;
     bool scanDependencies = true;
     bool replaceExisting = true;
+    bool readMetadata = true;
+    bool sourceKnownPresent = false;
     bool includeMeshes = true;
     bool includeEffects = true;
     bool includeCourseAssets = true;
@@ -69,6 +71,10 @@ public:
     EditorAssetImportResult Import(
         const std::filesystem::path& sourcePath,
         const EditorAssetImportOptions& options = {});
+    EditorAssetImportResult ImportIndexed(
+        const std::filesystem::path& physicalSourcePath,
+        const std::filesystem::path& relativeSourcePath,
+        const EditorAssetImportOptions& options = {});
     EditorAssetImportResult ImportExternal(
         const std::filesystem::path& externalSourcePath,
         const EditorAssetExternalImportPolicy& policy = {});
@@ -85,6 +91,11 @@ public:
 private:
     EditorAssetImportResult ImportInternal(
         const std::filesystem::path& sourcePath,
+        const EditorAssetImportOptions& options,
+        bool finalizeChange);
+    EditorAssetImportResult ImportResolved(
+        const std::filesystem::path& physicalSourcePath,
+        const std::filesystem::path& relativeSourcePath,
         const EditorAssetImportOptions& options,
         bool finalizeChange);
     EditorAssetImportResult ImportExternalInternal(

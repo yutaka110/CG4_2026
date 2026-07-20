@@ -1,0 +1,25 @@
+{
+  "schema": "ge3.buildTarget.v2",
+  "target": "GE3.Runtime",
+  "runtimeApi": "ge3.runtimeHost.v1",
+  "moduleGraph": [
+    "GE3.Runtime -> GE3.EngineRuntime",
+    "GE3.EngineRuntime -> GE3.EngineRenderer",
+    "GE3.EngineRenderer -> GE3.EngineCore"
+  ],
+  "engineModules": [
+    "GE3.EngineCore",
+    "GE3.EngineRenderer",
+    "GE3.EngineRuntime"
+  ],
+  "engineModuleLinkage": "static",
+  "configuration": "Shipping",
+  "editor": false,
+  "imgui": false,
+  "sourceAssetsRequired": false,
+  "outputExecutable": "GE3Shipping.exe",
+  "shippingApplicationCompileUnits": 1,
+  "engineCoreCompileUnits": 1,
+  "engineRendererCompileUnits": 3,
+  "engineRuntimeCompileUnits": 2
+}

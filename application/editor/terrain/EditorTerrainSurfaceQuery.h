@@ -7,6 +7,16 @@
 
 namespace editor {
 
+enum class EditorTerrainHitFailure {
+    None,
+    OutsideViewport,
+    InvalidWorldRay,
+    MissingRail,
+    NoSurfaceIntersection,
+};
+
+const char* ToString(EditorTerrainHitFailure failure);
+
 struct EditorTerrainSurfaceHit {
     Vector3 position{};
     Vector3 normal{0.0f, 1.0f, 0.0f};
@@ -15,6 +25,7 @@ struct EditorTerrainSurfaceHit {
     float surfaceRadius = 1.0f;
     float rayDistance = 0.0f;
     bool valid = false;
+    EditorTerrainHitFailure failure = EditorTerrainHitFailure::NoSurfaceIntersection;
 };
 
 class IEditorTerrainSurfaceQuery {

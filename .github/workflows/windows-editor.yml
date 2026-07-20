@@ -1,0 +1,95 @@
+name: Windows Editor and Shipping Validation
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editor-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  editor-validation:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Checkout pinned source revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Assert clean checkout
+        shell: pwsh
+        run: ./tools/assert_clean_tree.ps1
+
+      - name: Configure MSBuild
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+        with:
+          vs-version: '[18.0,19.0)'
+          msbuild-architecture: x64
+
+      - name: Check prerequisites
+        shell: pwsh
+        run: ./tools/check_prerequisites.ps1 -Configuration Development -ReportPath logs/m0_prerequisites.json
+
+      - name: Check CI policy
+        shell: pwsh
+        run: ./tools/check_ci_policy.ps1
+
+      - name: Check target dependency graph
+        shell: pwsh
+        run: ./tools/check_target_separation.ps1 -ReportPath logs/target_separation_report.json
+
+      - name: Clean Debug build
+        shell: pwsh
+        run: ./tools/build.ps1 -Configuration Debug -Clean
+
+      - name: Debug core regression
+        shell: pwsh
+        run: ../generated/outputs/Debug/GE3.exe --editor-core-regression
+
+      - name: Clean Development build
+        shell: pwsh
+        run: ./tools/build.ps1 -Configuration Development -Clean
+
+      - name: Commercial validation
+        shell: pwsh
+        run: ./tools/run_editor_validation.ps1 -Configuration Development -SkipBuild -RequireCleanTree
+
+      - name: Clean Release build
+        shell: pwsh
+        run: ./tools/build.ps1 -Configuration Release -Clean
+
+      - name: Clean Shipping build
+        shell: pwsh
+        run: ./tools/build.ps1 -Configuration Shipping -Clean
+
+      - name: Shipping target validation
+        shell: pwsh
+        run: ./tools/run_shipping_validation.ps1 -SkipBuild -RequireCleanTree
+
+      - name: Assert source tree unchanged
+        shell: pwsh
+        run: ./tools/assert_clean_tree.ps1
+
+      - name: Upload validation artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: editor-validation-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            logs/
+            editor_core_regression.log
+            editor_smoke_run.log
+            effect_authoring_smoke.log
+            Build/GE3.Dependencies.lock.json
+            THIRD_PARTY_NOTICES.md
+            THIRD_PARTY_NOTICES_SHIPPING.md
+            Build/GE3.ShippingTarget.json

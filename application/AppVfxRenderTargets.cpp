@@ -1,4 +1,5 @@
 #include "AppVfxRenderTargets.h"
+#include "AppLogFile.h"
 
 #include <atomic>
 #include <cstdio>
@@ -16,7 +17,7 @@ std::atomic<const char*> gVfxTargetsStageName{nullptr};
 
 void WriteVfxTargetsWatchdogLine(const char* message) {
     OutputDebugStringA(message);
-    std::ofstream log("logs/vfx_targets_watchdog.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/vfx_targets_watchdog.log");
     if (log) {
         log << message;
     }

@@ -1,4 +1,5 @@
 #include "CourseCollisionSystem.h"
+#include "../AppLogFile.h"
 
 #include <Windows.h>
 
@@ -372,7 +373,7 @@ void CourseCollisionSystem::LogFrameStats(const CourseCollisionFrameStats& stats
          << " obstacleShotHits=" << stats.playerShotObstacleHits
          << "\n";
     OutputDebugStringA(line.str().c_str());
-    std::ofstream log("logs/course_collision.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/course_collision.log");
     if (log) {
         log << line.str();
     }

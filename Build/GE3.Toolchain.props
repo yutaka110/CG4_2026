@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="GE3Toolchain">
+    <GE3PlatformToolset Condition="'$(GE3PlatformToolset)'==''">v145</GE3PlatformToolset>
+    <GE3WindowsSdkVersion Condition="'$(GE3WindowsSdkVersion)'==''">10.0.26100.0</GE3WindowsSdkVersion>
+    <GE3LanguageStandard Condition="'$(GE3LanguageStandard)'==''">stdcpp20</GE3LanguageStandard>
+    <GE3WarningLevel Condition="'$(GE3WarningLevel)'==''">Level3</GE3WarningLevel>
+    <GE3TreatWarningsAsErrors Condition="'$(GE3TreatWarningsAsErrors)'==''">true</GE3TreatWarningsAsErrors>
+    <GE3BuildRoot Condition="'$(GE3BuildRoot)'==''">$(SolutionDir)..\generated</GE3BuildRoot>
+    <GE3OutputRoot Condition="'$(GE3OutputRoot)'==''">$(GE3BuildRoot)\outputs</GE3OutputRoot>
+    <GE3IntermediateRoot Condition="'$(GE3IntermediateRoot)'==''">$(GE3BuildRoot)\objs</GE3IntermediateRoot>
+    <WindowsTargetPlatformVersion>$(GE3WindowsSdkVersion)</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+</Project>

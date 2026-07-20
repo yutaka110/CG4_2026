@@ -1,4 +1,5 @@
 #include "TerrainChunkManager.h"
+#include "../AppLogFile.h"
 
 #include <algorithm>
 #include <chrono>
@@ -11,6 +12,62 @@
 
 #include "../diagnostics/DebugDrawSystem.h"
 #include "TerrainVolumeField.h"
+
+TerrainChunkPresentationMatch ClassifyTerrainChunkPresentationMatch(
+    const TerrainRenderChunk& resident,
+    const TerrainChunkDebugInfo& requested) noexcept {
+    const bool sameSpatialIdentity =
+        resident.seed == requested.seed &&
+        std::abs(resident.startDistance - requested.startDistance) <= 0.001f &&
+        std::abs(resident.endDistance - requested.endDistance) <= 0.001f;
+    if (!sameSpatialIdentity) {
+        return TerrainChunkPresentationMatch::None;
+    }
+
+    const bool currentContent = resident.editHash == requested.editHash;
+    const bool currentLod = resident.lodTier == requested.lodTier;
+    if (currentContent && currentLod) {
+        return TerrainChunkPresentationMatch::Exact;
+    }
+    if (currentContent) {
+        return TerrainChunkPresentationMatch::CurrentContentDifferentLod;
+    }
+    return currentLod
+        ? TerrainChunkPresentationMatch::StaleContentSameLod
+        : TerrainChunkPresentationMatch::StaleContentDifferentLod;
+}
+
+bool TerrainChunkBuildRequestMatches(
+    const TerrainChunkBuildJob& job,
+    const TerrainChunkDebugInfo& requested,
+    uint32_t requestedSettingsHash) noexcept {
+    return job.seed == requested.seed &&
+        job.lodTier == requested.lodTier &&
+        job.settingsHash == requestedSettingsHash &&
+        job.editHash == requested.editHash &&
+        std::abs(job.startDistance - requested.startDistance) <= 0.001f &&
+        std::abs(job.endDistance - requested.endDistance) <= 0.001f;
+}
+
+uint32_t RequestStopForSupersededTerrainChunkBuildJobs(
+    std::deque<TerrainChunkBuildJob>& jobs,
+    const std::vector<TerrainChunkDebugInfo>& requested,
+    uint32_t requestedSettingsHash) noexcept {
+    uint32_t requestedStopCount = 0;
+    for (TerrainChunkBuildJob& job : jobs) {
+        const bool isCurrent = std::any_of(
+            requested.begin(),
+            requested.end(),
+            [&](const TerrainChunkDebugInfo& chunk) {
+                return TerrainChunkBuildRequestMatches(
+                    job, chunk, requestedSettingsHash);
+            });
+        if (!isCurrent && job.stopSource.request_stop()) {
+            ++requestedStopCount;
+        }
+    }
+    return requestedStopCount;
+}
 
 namespace {
 constexpr uint32_t kTerrainHiZMipCount = 5;
@@ -27,24 +84,13 @@ struct TerrainCpuMesh {
     std::vector<uint32_t> indices;
 };
 
-bool SameChunkIdentity(const TerrainRenderChunk& renderChunk, const TerrainChunkDebugInfo& debugChunk) {
-    return renderChunk.seed == debugChunk.seed &&
-        renderChunk.editHash == debugChunk.editHash &&
-        std::abs(renderChunk.startDistance - debugChunk.startDistance) <= 0.001f &&
-        std::abs(renderChunk.endDistance - debugChunk.endDistance) <= 0.001f;
-}
-
-bool SameJobIdentity(const TerrainChunkBuildJob& job, const TerrainChunkDebugInfo& debugChunk) {
-    return job.seed == debugChunk.seed &&
-        job.lodTier == debugChunk.lodTier &&
-        job.editHash == debugChunk.editHash &&
-        std::abs(job.startDistance - debugChunk.startDistance) <= 0.001f &&
-        std::abs(job.endDistance - debugChunk.endDistance) <= 0.001f;
-}
-
-bool SameBuildIdentity(const TerrainChunkCpuBuild& build, const TerrainChunkDebugInfo& debugChunk) {
+bool SameBuildIdentity(
+    const TerrainChunkCpuBuild& build,
+    const TerrainChunkDebugInfo& debugChunk,
+    uint32_t settingsHash) {
     return build.seed == debugChunk.seed &&
         build.lodTier == debugChunk.lodTier &&
+        build.settingsHash == settingsHash &&
         build.editHash == debugChunk.editHash &&
         std::abs(build.startDistance - debugChunk.startDistance) <= 0.001f &&
         std::abs(build.endDistance - debugChunk.endDistance) <= 0.001f;
@@ -71,6 +117,8 @@ void LogTerrainStreamingEvent(
     uint32_t reusedPending,
     uint32_t built,
     uint32_t submitted,
+    uint32_t cancelRequested,
+    uint32_t discarded,
     uint32_t skipped,
     uint32_t pending,
     double elapsedMs,
@@ -89,13 +137,15 @@ void LogTerrainStreamingEvent(
     std::snprintf(
         message,
         sizeof(message),
-        "[TerrainStreaming] chunks=%d..%d reusedExact=%u reusedPending=%u uploaded=%u submitted=%u skipped=%u pending=%u cpuMs=%.3f futureMs=%.3f meshMs=%.3f debrisMs=%.3f vertices=%u indices=%u debris=%u\n",
+        "[TerrainStreaming] chunks=%d..%d reusedExact=%u reusedPending=%u uploaded=%u submitted=%u cancelRequested=%u discarded=%u skipped=%u pending=%u cpuMs=%.3f futureMs=%.3f meshMs=%.3f debrisMs=%.3f vertices=%u indices=%u debris=%u\n",
         firstIndex,
         lastIndex,
         reusedExact,
         reusedPending,
         built,
         submitted,
+        cancelRequested,
+        discarded,
         skipped,
         pending,
         elapsedMs,
@@ -107,7 +157,7 @@ void LogTerrainStreamingEvent(
         uploadedDebris);
     OutputDebugStringA(message);
 
-    std::ofstream log("logs/terrain_streaming.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/terrain_streaming.log");
     if (log) {
         log << message;
     }
@@ -3779,8 +3829,12 @@ TerrainCpuMesh BuildChunkMesh(
     const RailPath& railPath,
     const TerrainGenerationSettings& settings,
     const TerrainEditLayer* editLayer,
-    const TerrainEditLayer* previewLayer) {
+    const TerrainEditLayer* previewLayer,
+    std::stop_token stopToken) {
     TerrainCpuMesh mesh{};
+    if (stopToken.stop_requested()) {
+        return mesh;
+    }
     const uint32_t lodDivisor = chunk.lodTier == 0u ? 1u : (chunk.lodTier == 1u ? 2u : 3u);
     const uint32_t longitudinalSteps = (std::clamp)(
         settings.surfaceLongitudinalSteps / lodDivisor,
@@ -3803,6 +3857,9 @@ TerrainCpuMesh BuildChunkMesh(
         static_cast<size_t>(longitudinalSteps + 1) *
         static_cast<size_t>(radialSegments + 1));
     for (uint32_t s = 0; s <= longitudinalSteps; ++s) {
+        if (stopToken.stop_requested()) {
+            return {};
+        }
         const float st = static_cast<float>(s) / static_cast<float>(longitudinalSteps);
         const float distance = chunk.startDistance + (chunk.endDistance - chunk.startDistance) * st;
         for (uint32_t a = 0; a <= radialSegments; ++a) {
@@ -3821,6 +3878,9 @@ TerrainCpuMesh BuildChunkMesh(
             mesh.vertices.push_back(vertex);
         }
     }
+    if (stopToken.stop_requested()) {
+        return {};
+    }
     PushMaskedGridIndices(
         mesh.indices,
         volumeBase,
@@ -3828,6 +3888,9 @@ TerrainCpuMesh BuildChunkMesh(
         radialSegments + 1,
         openingMasks,
         true);
+    if (stopToken.stop_requested()) {
+        return {};
+    }
     AppendOpenCanyonDistantWalls(mesh, railPath, volumeField, settings, chunk);
 
     const float openChunkBlend = (std::max)(
@@ -3838,6 +3901,9 @@ TerrainCpuMesh BuildChunkMesh(
         static_cast<uint32_t>(settings.rockPillarDensity * 5.0f * (std::max)(0.0f, openCanyonPillarSuppression)),
         chunk.lodTier);
     for (uint32_t i = 0; i < pillarCount; ++i) {
+        if (stopToken.stop_requested()) {
+            return {};
+        }
         const uint32_t seed = chunk.seed + 1009u + i * 131u;
         const float t = (static_cast<float>(i) + 0.35f + Hash01(seed + 3u) * 0.5f) /
             static_cast<float>((std::max)(pillarCount, 1u));
@@ -3857,6 +3923,9 @@ TerrainCpuMesh BuildChunkMesh(
         static_cast<uint32_t>(settings.volumeRoughness * 4.0f),
         chunk.lodTier);
     for (uint32_t i = 0; i < outcropCount; ++i) {
+        if (stopToken.stop_requested()) {
+            return {};
+        }
         const uint32_t seed = chunk.seed + 1601u + i * 149u;
         const float t = (static_cast<float>(i) + Hash01(seed + 5u)) /
             static_cast<float>((std::max)(outcropCount, 1u));
@@ -3871,6 +3940,9 @@ TerrainCpuMesh BuildChunkMesh(
         BuildRockScatterPlacements(chunk.startDistance, chunk.endDistance, chunk.seed, settings);
     const uint32_t scatterStride = chunk.lodTier == 0u ? 1u : (chunk.lodTier == 1u ? 2u : 4u);
     for (size_t placementIndex = 0; placementIndex < scatterPlacements.size(); ++placementIndex) {
+        if (stopToken.stop_requested()) {
+            return {};
+        }
         if ((placementIndex % scatterStride) != 0u) {
             continue;
         }
@@ -3893,6 +3965,9 @@ TerrainCpuMesh BuildChunkMesh(
     const uint32_t overhangFeatureCount =
         chunk.lodTier <= 1u && Hash01(chunk.seed + 701u) < settings.archDensity ? 1u : 0u;
     for (uint32_t i = 0; i < overhangFeatureCount; ++i) {
+        if (stopToken.stop_requested()) {
+            return {};
+        }
         const uint32_t seed = chunk.seed + 2003u + i * 173u;
         const float t = 0.28f + Hash01(seed + 9u) * 0.44f;
         const RailPathSample sample = railPath.Evaluate(
@@ -3901,6 +3976,9 @@ TerrainCpuMesh BuildChunkMesh(
     }
 
     for (size_t triangle = 0; triangle + 2 < mesh.indices.size(); triangle += 3) {
+        if ((triangle & 0x1ffu) == 0u && stopToken.stop_requested()) {
+            return {};
+        }
         VertexData& a = mesh.vertices[mesh.indices[triangle]];
         VertexData& b = mesh.vertices[mesh.indices[triangle + 1]];
         VertexData& c = mesh.vertices[mesh.indices[triangle + 2]];
@@ -4082,20 +4160,42 @@ TerrainChunkCpuBuild BuildTerrainChunkCpu(
     RailPath railPath,
     TerrainGenerationSettings settings,
     TerrainEditLayer editLayer,
-    TerrainEditLayer previewLayer) {
+    TerrainEditLayer previewLayer,
+    uint32_t settingsHash,
+    std::stop_token stopToken) {
     TerrainChunkCpuBuild build{};
     build.startDistance = debugChunk.startDistance;
     build.endDistance = debugChunk.endDistance;
     build.seed = debugChunk.seed;
     build.lodTier = debugChunk.lodTier;
+    build.settingsHash = settingsHash;
     build.editHash = debugChunk.editHash;
 
+    if (stopToken.stop_requested()) {
+        build.cancelled = true;
+        return build;
+    }
+
     TerrainCpuMesh mesh = BuildChunkMesh(
-        debugChunk, railPath, settings, &editLayer, &previewLayer);
+        debugChunk, railPath, settings, &editLayer, &previewLayer, stopToken);
+    if (stopToken.stop_requested()) {
+        build.cancelled = true;
+        return build;
+    }
     build.vertices = std::move(mesh.vertices);
     build.indices = std::move(mesh.indices);
     build.debrisInstances = BuildDebrisGpuInstances(debugChunk);
+    if (stopToken.stop_requested()) {
+        build.cancelled = true;
+        build.vertices.clear();
+        build.indices.clear();
+        build.debrisInstances.clear();
+        return build;
+    }
     PrepareTerrainChunkGpuResources(device, build);
+    if (stopToken.stop_requested()) {
+        build.cancelled = true;
+    }
     return build;
 }
 
@@ -4510,6 +4610,12 @@ void AppendVolumeDebugDraw(
 }
 } // namespace
 
+TerrainChunkManager::~TerrainChunkManager() {
+    for (TerrainChunkBuildJob& job : pendingBuildJobs_) {
+        job.stopSource.request_stop();
+    }
+}
+
 void TerrainChunkManager::Update(
     ID3D12Device* device,
     ge3::core::DescriptorHeap* srvHeap,
@@ -4523,6 +4629,9 @@ void TerrainChunkManager::Update(
     TrimRetiredRenderChunks();
 
     if (railPath.Length() <= 0.0f || settings.chunkLength <= 0.0f) {
+        for (TerrainChunkBuildJob& job : pendingBuildJobs_) {
+            job.stopSource.request_stop();
+        }
         RetireRenderChunks(std::move(renderChunks_));
         chunks_.clear();
         cachedFirstChunkIndex_ = -1;
@@ -4820,6 +4929,10 @@ void TerrainChunkManager::RebuildRenderChunks(
     uint32_t submittedCount = 0;
     uint32_t reusedExactCount = 0;
     uint32_t reusedPendingCount = 0;
+    const uint32_t cancelRequestedCount =
+        RequestStopForSupersededTerrainChunkBuildJobs(
+            pendingBuildJobs_, chunks_, renderSettingsHash_);
+    uint32_t discardedCount = 0;
     uint32_t skippedCount = 0;
     double futureGetMs = 0.0;
     double uploadMeshMs = 0.0;
@@ -4829,7 +4942,20 @@ void TerrainChunkManager::RebuildRenderChunks(
     uint32_t uploadedDebris = 0;
 
     for (auto it = pendingBuildJobs_.begin(); it != pendingBuildJobs_.end();) {
-        if (uploadedCount >= kTerrainStreamingUploadBudget || !IsBuildJobReady(*it)) {
+        const auto requested = std::find_if(
+            chunks_.begin(),
+            chunks_.end(),
+            [&](const TerrainChunkDebugInfo& chunk) {
+                return TerrainChunkBuildRequestMatches(
+                    *it, chunk, renderSettingsHash_);
+            });
+        const bool requestIsCurrent =
+            requested != chunks_.end() && !it->stopSource.stop_requested();
+        if (!IsBuildJobReady(*it)) {
+            ++it;
+            continue;
+        }
+        if (requestIsCurrent && uploadedCount >= kTerrainStreamingUploadBudget) {
             ++it;
             continue;
         }
@@ -4838,6 +4964,12 @@ void TerrainChunkManager::RebuildRenderChunks(
         TerrainChunkCpuBuild build = it->future.get();
         const auto futureEnd = std::chrono::steady_clock::now();
         futureGetMs += std::chrono::duration<double, std::milli>(futureEnd - futureStart).count();
+        if (!requestIsCurrent || build.cancelled ||
+            !SameBuildIdentity(build, *requested, renderSettingsHash_)) {
+            ++discardedCount;
+            it = pendingBuildJobs_.erase(it);
+            continue;
+        }
         TerrainRenderChunk renderChunk{};
         renderChunk.startDistance = build.startDistance;
         renderChunk.endDistance = build.endDistance;
@@ -4980,29 +5112,33 @@ void TerrainChunkManager::RebuildRenderChunks(
 
     renderChunks_.reserve(chunks_.size());
     for (const TerrainChunkDebugInfo& debugChunk : chunks_) {
-        size_t staleReuseIndex = reusableChunks.size();
+        size_t presentationFallbackIndex = reusableChunks.size();
+        TerrainChunkPresentationMatch presentationFallbackMatch =
+            TerrainChunkPresentationMatch::None;
         for (size_t index = 0; index < reusableChunks.size(); ++index) {
             if (reused[index]) {
                 continue;
             }
             TerrainRenderChunk& candidate = reusableChunks[index];
-            if (!SameChunkIdentity(candidate, debugChunk)) {
-                continue;
-            }
-            if (candidate.lodTier == debugChunk.lodTier) {
+            const TerrainChunkPresentationMatch match =
+                ClassifyTerrainChunkPresentationMatch(candidate, debugChunk);
+            if (match == TerrainChunkPresentationMatch::Exact) {
                 renderChunks_.push_back(std::move(candidate));
                 reused[index] = true;
                 ++reusedExactCount;
-                staleReuseIndex = reusableChunks.size();
+                presentationFallbackIndex = reusableChunks.size();
                 break;
             }
-            if (staleReuseIndex == reusableChunks.size()) {
-                staleReuseIndex = index;
+            if (static_cast<uint8_t>(match) >
+                static_cast<uint8_t>(presentationFallbackMatch)) {
+                presentationFallbackIndex = index;
+                presentationFallbackMatch = match;
             }
         }
         if (!renderChunks_.empty()) {
             const TerrainRenderChunk& lastChunk = renderChunks_.back();
-            if (SameChunkIdentity(lastChunk, debugChunk) && lastChunk.lodTier == debugChunk.lodTier) {
+            if (ClassifyTerrainChunkPresentationMatch(lastChunk, debugChunk) ==
+                TerrainChunkPresentationMatch::Exact) {
                 continue;
             }
         }
@@ -5011,7 +5147,9 @@ void TerrainChunkManager::RebuildRenderChunks(
             pendingBuildJobs_.begin(),
             pendingBuildJobs_.end(),
             [&](const TerrainChunkBuildJob& job) {
-                return SameJobIdentity(job, debugChunk);
+                return !job.stopSource.stop_requested() &&
+                    TerrainChunkBuildRequestMatches(
+                        job, debugChunk, renderSettingsHash_);
             });
         if (!alreadyPending &&
             submittedCount < kTerrainStreamingJobSubmitBudget &&
@@ -5021,6 +5159,7 @@ void TerrainChunkManager::RebuildRenderChunks(
             job.endDistance = debugChunk.endDistance;
             job.seed = debugChunk.seed;
             job.lodTier = debugChunk.lodTier;
+            job.settingsHash = renderSettingsHash_;
             job.editHash = debugChunk.editHash;
             TerrainChunkDebugInfo debugCopy = debugChunk;
             RailPath railPathCopy = railPath;
@@ -5032,6 +5171,8 @@ void TerrainChunkManager::RebuildRenderChunks(
                 ? previewLayer->Filtered(debugChunk.startDistance, debugChunk.endDistance)
                 : TerrainEditLayer{};
             ID3D12Device* deviceForJob = device;
+            const uint32_t settingsHashForJob = job.settingsHash;
+            const std::stop_token stopToken = job.stopSource.get_token();
             job.future = std::async(
                 std::launch::async,
                 [debugCopy = std::move(debugCopy),
@@ -5039,22 +5180,30 @@ void TerrainChunkManager::RebuildRenderChunks(
                  settingsCopy,
                  editCopy = std::move(editCopy),
                  previewCopy = std::move(previewCopy),
-                 deviceForJob]() mutable {
+                 deviceForJob,
+                 settingsHashForJob,
+                 stopToken]() mutable {
                     return BuildTerrainChunkCpu(
                         deviceForJob,
                         std::move(debugCopy),
                         std::move(railPathCopy),
                         settingsCopy,
                         std::move(editCopy),
-                        std::move(previewCopy));
+                        std::move(previewCopy),
+                        settingsHashForJob,
+                        stopToken);
                 });
             pendingBuildJobs_.push_back(std::move(job));
             ++submittedCount;
         }
 
-        if (staleReuseIndex < reusableChunks.size()) {
-            renderChunks_.push_back(std::move(reusableChunks[staleReuseIndex]));
-            reused[staleReuseIndex] = true;
+        if (presentationFallbackIndex < reusableChunks.size()) {
+            // Keep the last complete GPU resource resident until its exact
+            // replacement is uploaded. This prevents preview edits and LOD
+            // changes from exposing a temporary hole in the terrain.
+            renderChunks_.push_back(
+                std::move(reusableChunks[presentationFallbackIndex]));
+            reused[presentationFallbackIndex] = true;
             ++reusedPendingCount;
         } else {
             ++skippedCount;
@@ -5073,6 +5222,8 @@ void TerrainChunkManager::RebuildRenderChunks(
         reusedPendingCount,
         uploadedCount,
         submittedCount,
+        cancelRequestedCount,
+        discardedCount,
         skippedCount,
         static_cast<uint32_t>(pendingBuildJobs_.size()),
         elapsedMs,

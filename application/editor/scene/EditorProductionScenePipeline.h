@@ -43,6 +43,8 @@ struct EditorProductionSceneRenderPacket {
     Vector3 boundsCenter{};
     float boundsRadius = 0.0f;
     bool cpuVisible = false;
+    D3D12_GPU_VIRTUAL_ADDRESS materialAddressOverride = 0;
+    bool editorTransient = false;
 };
 
 struct EditorProductionScenePhysicsInstance {
@@ -95,7 +97,8 @@ public:
         uint64_t completedFenceValue,
         uint64_t scheduledFenceValue,
         std::string* errorMessage = nullptr,
-        const std::unordered_set<std::string>* sourceResidentEntities = nullptr);
+        const std::unordered_set<std::string>* sourceResidentEntities = nullptr,
+        const std::unordered_set<std::string>* editorTransientOverrides = nullptr);
 
     EditorProductionSceneRayHit Raycast(
         const Vector3& origin,

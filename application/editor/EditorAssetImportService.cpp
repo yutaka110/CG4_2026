@@ -424,10 +424,15 @@ EditorAssetRecord BuildRecordForSource(
     record.sourceTimestamp = SourceTimestamp(physicalSource);
     record.referenceable = record.kind != EditorAssetKind::Unknown;
 
-    std::error_code error;
-    record.missing = !std::filesystem::exists(physicalSource, error);
-    error.clear();
-    ReadAssetMetadata(physicalSource.string() + ".meta", record);
+    if (options.sourceKnownPresent) {
+        record.missing = false;
+    } else {
+        std::error_code error;
+        record.missing = !std::filesystem::exists(physicalSource, error);
+    }
+    if (options.readMetadata) {
+        ReadAssetMetadata(physicalSource.string() + ".meta", record);
+    }
     return record;
 }
 
@@ -464,6 +469,21 @@ EditorAssetImportResult EditorAssetImportService::Import(
     return ImportInternal(sourcePath, options, true);
 }
 
+EditorAssetImportResult EditorAssetImportService::ImportIndexed(
+    const std::filesystem::path& physicalSourcePath,
+    const std::filesystem::path& relativeSourcePath,
+    const EditorAssetImportOptions& options) {
+    if (physicalSourcePath.empty() || relativeSourcePath.empty() ||
+        relativeSourcePath.is_absolute()) {
+        return Fail("Indexed asset paths are invalid.");
+    }
+    return ImportResolved(
+        physicalSourcePath.lexically_normal(),
+        relativeSourcePath.lexically_normal(),
+        options,
+        true);
+}
+
 EditorAssetImportResult EditorAssetImportService::ImportInternal(
     const std::filesystem::path& sourcePath,
     const EditorAssetImportOptions& options,
@@ -480,6 +500,15 @@ EditorAssetImportResult EditorAssetImportService::ImportInternal(
         return Fail(error);
     }
 
+    return ImportResolved(physicalSource, relativeSource, options, finalizeChange);
+}
+
+EditorAssetImportResult EditorAssetImportService::ImportResolved(
+    const std::filesystem::path& physicalSource,
+    const std::filesystem::path& relativeSource,
+    const EditorAssetImportOptions& options,
+    bool finalizeChange) {
+    std::string error;
     EditorAssetRecord record =
         BuildRecordForSource(physicalSource, relativeSource, options.resourcesRoot, options);
     if (record.kind == EditorAssetKind::Unknown || record.id.empty()) {

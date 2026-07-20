@@ -26,6 +26,7 @@ class RenderGraph;
 }
 namespace editor {
 class EditorProductionScenePipeline;
+class EditorTransientMeshRenderPath;
 class EditorProductionMaterialPipeline;
 class EditorProductionTexturePipeline;
 class EditorProductionShaderPipeline;
@@ -62,6 +63,7 @@ struct AppFrameGraphBuildContext {
     float beamTime = 0.0f;
     TerrainChunkManager* terrainChunkManager = nullptr;
     const editor::EditorProductionScenePipeline* productionScenePipeline = nullptr;
+    const editor::EditorTransientMeshRenderPath* transientMeshRenderPath = nullptr;
     const editor::EditorProductionMaterialPipeline* productionMaterialPipeline = nullptr;
     const editor::EditorProductionTexturePipeline* productionTexturePipeline = nullptr;
     const editor::EditorProductionShaderPipeline* productionShaderPipeline = nullptr;

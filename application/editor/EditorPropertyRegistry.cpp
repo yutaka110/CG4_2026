@@ -130,16 +130,27 @@ const EditorPropertyDescriptor* EditorPropertyRegistry::Find(
 }
 
 std::vector<const EditorPropertyDescriptor*> EditorPropertyRegistry::FindByDomain(EditorDomainId domain) const {
+    return FindByDomainCached(domain);
+}
+
+const std::vector<const EditorPropertyDescriptor*>& EditorPropertyRegistry::FindByDomainCached(
+    EditorDomainId domain) const {
+    const uint32_t key = static_cast<uint32_t>(domain);
+    const auto cached = domainCache_.find(key);
+    if (cached != domainCache_.end()) return cached->second;
+
     std::vector<const EditorPropertyDescriptor*> results;
+    results.reserve(descriptors_.size());
     for (const EditorPropertyDescriptor& descriptor : descriptors_) {
         if (descriptor.domain == domain) {
             results.push_back(&descriptor);
         }
     }
-    return results;
+    return domainCache_.emplace(key, std::move(results)).first->second;
 }
 
 void EditorPropertyRegistry::Touch() {
+    domainCache_.clear();
     ++revision_;
 }
 

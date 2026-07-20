@@ -146,7 +146,7 @@ std::vector<const EditorPropertyDescriptor*> FindDetailsPropertyIntersection(
     }
 
     std::vector<const EditorPropertyDescriptor*> properties =
-        registry.FindByDomain(selectedObjects.front().domain);
+        registry.FindByDomainCached(selectedObjects.front().domain);
     if (selectedObjects.size() <= 1) {
         return properties;
     }

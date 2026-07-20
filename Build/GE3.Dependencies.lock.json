@@ -1,0 +1,83 @@
+{
+  "schema": "ge3.dependencies.v1",
+  "toolchain": {
+    "platformToolset": "v145",
+    "windowsSdkVersion": "10.0.26100.0",
+    "msbuild": {
+      "fileVersion": "18.8.2.30814",
+      "productVersion": "18.8.2+ce25c01082c9c46cd02ad1ff3ff8f16fe5cc2f44",
+      "sha256": "A656604626FAD62D03324071FDC103ABA0B9496E3130C45CC6A531B02FB8A776"
+    },
+    "compiler": {
+      "fileVersion": "19.51.36248.0",
+      "productVersion": "14.51.36248.0",
+      "sha256": "DC8426B8760D92CF757DF3D10B9F0244A95B454FF43194A58161568A0EC70D53"
+    },
+    "toolsetTargetsSha256": "4633E099B31C0A8A3C937FDF06D287E7C00E20E7317381A8563BBD1CED9717C5",
+    "dxcompiler": {
+      "fileVersion": "1.8.2502.11",
+      "sha256": "97ABD3B3083607DC29CC3F8EAE56C39C349B76EE3C20DEEB2F66258708E55BD8"
+    },
+    "dxil": {
+      "fileVersion": "1.8.2502.11",
+      "sha256": "FDA4DDE92222DDB8564C3173CE48FAA56F7E1C7B46B0B67DADA1182EE07A4123"
+    },
+    "sdkLicenseSha256": "0F4A26AC9DC50066F8A1BFEAAF3F092D1B9E4791DF5487B9F3C31E7C3DC4D7F5",
+    "sdkThirdPartyNoticesSha256": "EBB6640A8246B39B70322C5CEC9AAD7A71E86EA7B86C9C604D3A7F3FF1B30E89"
+  },
+  "ci": {
+    "runner": "windows-2025",
+    "visualStudioVersionRange": "[18.0,19.0)",
+    "actions": [
+      {
+        "id": "actions/checkout",
+        "version": "v7.0.0",
+        "commit": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+      },
+      {
+        "id": "microsoft/setup-msbuild",
+        "version": "v3",
+        "commit": "30375c66a4eea26614e0d39710365f22f8b0af57"
+      },
+      {
+        "id": "actions/upload-artifact",
+        "version": "v7.0.1",
+        "commit": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      }
+    ]
+  },
+  "dependencies": [
+    {
+      "id": "assimp",
+      "license": "BSD-3-Clause",
+      "licensePath": "externals/assimp/LICENSE.txt",
+      "licenseSha256": "EA47A877EFA0728C3376CBD0811ACE73321ADFAF59C4937A6C33EE77D83D3989",
+      "trackedTreeSha256": "F5AA68AC7A4D60FE2D35B9C65D2C64C59C0E21306C41A211CA4CBB242EC79E99",
+      "artifacts": {
+        "debug": {
+          "path": "externals/assimp/lib/Debug/assimp-vc143-mtd.lib",
+          "sha256": "0812F2F1788CAF3D9C468805EF66DEBEE535328548069DDD42EAB202ED57316D"
+        },
+        "release": {
+          "path": "externals/assimp/lib/Release/assimp-vc143-mt.lib",
+          "sha256": "C2561E93EEF2AF7531411B057D86FB2E4883372CADAA01DFA6C8893E7776EC17"
+        }
+      }
+    },
+    {
+      "id": "directxtex",
+      "license": "MIT",
+      "licensePath": "externals/DirectXTex/LICENSE.txt",
+      "licenseSha256": "7DF20DCDF9197E9945C14858D41C60F11B52B93E5B69E2B63416B874D598D322",
+      "trackedTreeSha256": "61AB0677C0868198D34551706BA7FB950336403867AE0BA4FE7B675650CD1C98",
+      "projectPath": "externals/DirectXTex/DirectXTex_Desktop_2022_Win10.vcxproj"
+    },
+    {
+      "id": "dear-imgui",
+      "license": "MIT",
+      "licensePath": "externals/imgui/LICENSE.txt",
+      "licenseSha256": "29F44AF2B6551AFDA01B8B9AD568FCF650439B2D8CD3B67142B99F4255E1235D",
+      "trackedTreeSha256": "F2C5DD84F3867F3451F788A3782B196ABC87C0DD33228D44FDBFC52433352FB2"
+    }
+  ]
+}

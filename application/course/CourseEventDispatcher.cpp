@@ -1,4 +1,5 @@
 #include "CourseEventDispatcher.h"
+#include "../AppLogFile.h"
 
 #include <Windows.h>
 #include <algorithm>
@@ -429,7 +430,7 @@ void CourseEventDispatcher::LogDispatch(const CourseEventMarker& event, const ch
          << " id=" << event.id
          << " result=\"" << result << "\"\n";
     OutputDebugStringA(line.str().c_str());
-    std::ofstream log("logs/course_dispatch.log", std::ios::app);
+    std::ofstream log = app::OpenRotatingLog("logs/course_dispatch.log");
     if (log) {
         log << line.str();
     }

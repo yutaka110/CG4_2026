@@ -14,32 +14,33 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
+  <Import Project="Build\GE3.Toolchain.props" />
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{dfe964e0-98cc-464f-bbc2-818c767a5a3c}</ProjectGuid>
     <RootNamespace>Project1</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>$(GE3WindowsSdkVersion)</WindowsTargetPlatformVersion>
     <ProjectName>CG5</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset>$(GE3PlatformToolset)</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset>$(GE3PlatformToolset)</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset>$(GE3PlatformToolset)</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -50,117 +51,20 @@
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="Build\GE3.Common.props" />
+    <Import Project="Build\GE3.Debug.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="Build\GE3.Common.props" />
+    <Import Project="Build\GE3.Release.props" />
   </ImportGroup>
   <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Development|x64'" Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="Build\GE3.Common.props" />
+    <Import Project="Build\GE3.Development.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>$(SolutionDir)..\generated\outputs\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)..\generated\objs\$(ProjectName)\$(Configuration)\</IntDir>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>$(SolutionDir)..\generated\outputs\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)..\generated\objs\$(ProjectName)\$(Configuration)\</IntDir>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development|x64'">
-    <OutDir>$(SolutionDir)..\generated\outputs\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)..\generated\objs\$(ProjectName)\$(Configuration)\</IntDir>
-  </PropertyGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
-      <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>GE3_ENABLE_IMGUI=1;GE3_BUILD_EDITOR=1;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <ConformanceMode>true</ConformanceMode>
-      <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalOptions>/utf-8 /D_WIN32_WINNT=0x0602
- %(AdditionalOptions)</AdditionalOptions>
-      <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <TreatWarningAsError>true</TreatWarningAsError>
-      <AdditionalIncludeDirectories>$(ProjectDir)externals\engine;$(ProjectDir)lib\Reciever;%(AdditionalIncludeDirectories);$(ProjectDir)engine\include;$(ProjectDir)application\include;$(ProjectDir)externals\assimp\include</AdditionalIncludeDirectories>
-    </ClCompile>
-    <Link>
-      <SubSystem>Windows</SubSystem>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
-      <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
-      <AdditionalLibraryDirectories>$(ProjectDir)externals\assimp\lib\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>assimp-vc143-mtd.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;mf.lib;%(AdditionalDependencies)</AdditionalDependencies>
-    </Link>
-    <PostBuildEvent>
-      <Command>copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxcompiler.dll" "$(TargetDir)dxcompiler.dll"
-copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dxil.dll"
-xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
-
-</Command>
-    </PostBuildEvent>
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
-      <FunctionLevelLinking>true</FunctionLevelLinking>
-      <IntrinsicFunctions>true</IntrinsicFunctions>
-      <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>GE3_ENABLE_IMGUI=0;GE3_BUILD_EDITOR=0;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <ConformanceMode>true</ConformanceMode>
-      <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-      <AdditionalIncludeDirectories>;$(ProjectDir)engine\include;$(ProjectDir)application\include;$(ProjectDir)externals\assimp\include</AdditionalIncludeDirectories>
-    </ClCompile>
-    <Link>
-      <SubSystem>Windows</SubSystem>
-      <EnableCOMDATFolding>true</EnableCOMDATFolding>
-      <OptimizeReferences>true</OptimizeReferences>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(ProjectDir)externals\assimp\lib\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>assimp-vc143-mt.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;mf.lib;%(AdditionalDependencies)</AdditionalDependencies>
-    </Link>
-    <PostBuildEvent>
-      <Command>copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxcompiler.dll" "$(TargetDir)dxcompiler.dll"
-copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dxil.dll"
-xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
-</Command>
-    </PostBuildEvent>
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development|x64'">
-    <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
-      <FunctionLevelLinking>true</FunctionLevelLinking>
-      <IntrinsicFunctions>true</IntrinsicFunctions>
-      <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>GE3_ENABLE_IMGUI=1;GE3_BUILD_EDITOR=1;_WINDOWS;DEVELOP;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <ConformanceMode>true</ConformanceMode>
-      <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(ProjectDir)engine\include;$(ProjectDir)application\include;$(ProjectDir)application\include;$(ProjectDir)externals\assimp\include</AdditionalIncludeDirectories>
-      <Optimization>Disabled</Optimization>
-      <WholeProgramOptimization>false</WholeProgramOptimization>
-    </ClCompile>
-    <Link>
-      <SubSystem>Windows</SubSystem>
-      <EnableCOMDATFolding>true</EnableCOMDATFolding>
-      <OptimizeReferences>true</OptimizeReferences>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
-      <LinkTimeCodeGeneration />
-      <AdditionalLibraryDirectories>$(ProjectDir)externals\assimp\lib\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>assimp-vc143-mt.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;mf.lib;%(AdditionalDependencies)</AdditionalDependencies>
-    </Link>
-    <PostBuildEvent>
-      <Command>copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxcompiler.dll" "$(TargetDir)dxcompiler.dll"
-copy "$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\dxil.dll" "$(TargetDir)dxil.dll"
-xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
-
-</Command>
-    </PostBuildEvent>
-  </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="application\AnimationClip.cpp" />
     <ClCompile Include="application\AnimationStateMachine.cpp" />
@@ -242,11 +146,13 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\editor\geometry\EditorGeometryTools.cpp" />
     <ClCompile Include="application\editor\mesh\EditorProductionMeshAsset.cpp" />
     <ClCompile Include="application\editor\scene\EditorProductionScenePipeline.cpp" />
+    <ClCompile Include="application\editor\geometry\EditorTransientMeshRenderPath.cpp" />
     <ClCompile Include="application\editor\mesh\EditorMeshBakePipeline.cpp" />
     <ClCompile Include="application\editor\mesh\EditorMeshBakeTools.cpp" />
       <ClCompile Include="application\editor\EditorTransformGizmoService.cpp" />
       <ClCompile Include="application\editor\EditorTransformGizmoMath.cpp" />
       <ClCompile Include="application\editor\EditorViewportInteractionService.cpp" />
+      <ClCompile Include="application\editor\EditorViewportCameraController.cpp" />
       <ClCompile Include="application\editor\EditorViewportCoordinateService.cpp" />
       <ClCompile Include="application\editor\EditorViewportOverlay.cpp" />
       <ClCompile Include="application\editor\EditorViewportPanel.cpp" />
@@ -365,6 +271,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="application\editor\ExistingFeatureProtection.cpp" />
     <ClCompile Include="application\editor\ExistingFeatureProtectionPanel.cpp" />
     <ClCompile Include="application\AppFrameGraphBuilder.cpp" />
+    <ClCompile Include="application\runtime\AppFrameCoordinator.cpp" />
     <ClCompile Include="application\AppPostProcessPipeline.cpp" />
     <ClCompile Include="application\AppSceneRenderPipeline.cpp" />
     <ClCompile Include="application\AppVfxRenderPipeline.cpp" />
@@ -473,25 +380,20 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="engine\src\audio\AudioWave.cpp" />
     <ClCompile Include="engine\src\camera\debugCamera.cpp" />
     <ClCompile Include="engine\src\camera\VfxCamera.cpp" />
-    <ClCompile Include="engine\src\core\CommandListPool.cpp" />
     <ClCompile Include="engine\src\core\DescriptorHeap.cpp" />
-    <ClCompile Include="engine\src\core\Device.cpp" />
     <ClCompile Include="engine\src\core\ShaderCompiler.cpp" />
     <ClCompile Include="engine\src\graphics\DxHelpers.cpp" />
     <ClCompile Include="engine\src\graphics\PipelineBuilder.cpp" />
     <ClCompile Include="engine\src\graphics\RenderGraph.cpp" />
     <ClCompile Include="engine\src\graphics\RenderContext.cpp" />
     <ClCompile Include="engine\src\graphics\SpriteRenderer.cpp" />
-    <ClCompile Include="engine\src\graphics\SwapChain.cpp" />
     <ClCompile Include="engine\src\input\Input.cpp" />
     <ClCompile Include="engine\src\particle\ParticleSystemCpu.cpp" />
     <ClCompile Include="engine\src\resources\ResourceRegistry.cpp" />
     <ClCompile Include="engine\src\platform\Win32App.cpp" />
-    <ClCompile Include="engine\src\platform\Window.cpp" />
     <ClCompile Include="engine\src\utils\Checked.cpp" />
     <ClCompile Include="engine\src\utils\DebugTools.cpp" />
     <ClCompile Include="engine\src\utils\dx12\BufferHelper.cpp" />
-    <ClCompile Include="engine\src\utils\Logger.cpp" />
     <ClCompile Include="engine\src\utils\math\MathUtils.cpp" />
     <ClCompile Include="engine\src\utils\StringConv.cpp" />
     <ClCompile Include="engine\src\utils\utill.cpp" />
@@ -517,7 +419,6 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="application\streaming\H264Encoder.cpp" />
-    <ClCompile Include="KeyInput.cpp" />
     <ClCompile Include="lib\Receiver\startTcpReciverRgb32.cpp" />
     <ClCompile Include="main.cpp">
       <Optimization Condition="'$(Configuration)|$(Platform)'=='Development|x64'">MaxSpeed</Optimization>
@@ -531,7 +432,6 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClCompile Include="TextureHelper.cpp" />
     <ClCompile Include="TextureUploader.cpp" />
     <ClCompile Include="application\streaming\UdpByteStream.cpp" />
-    <ClCompile Include="WinApp.cpp" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="Object3D.PS.hlsl">
@@ -994,11 +894,14 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\editor\geometry\EditorGeometryTools.h" />
     <ClInclude Include="application\editor\mesh\EditorProductionMeshAsset.h" />
     <ClInclude Include="application\editor\scene\EditorProductionScenePipeline.h" />
+    <ClInclude Include="application\editor\geometry\EditorTransientMeshRenderPath.h" />
     <ClInclude Include="application\editor\mesh\EditorMeshBakePipeline.h" />
     <ClInclude Include="application\editor\mesh\EditorMeshBakeTools.h" />
       <ClInclude Include="application\editor\EditorTransformGizmoService.h" />
       <ClInclude Include="application\editor\EditorTransformGizmoMath.h" />
       <ClInclude Include="application\editor\EditorViewportInteractionService.h" />
+      <ClInclude Include="application\editor\EditorViewportCameraInput.h" />
+      <ClInclude Include="application\editor\EditorViewportCameraController.h" />
       <ClInclude Include="application\editor\EditorViewportCoordinateService.h" />
       <ClInclude Include="application\editor\EditorViewportOverlay.h" />
       <ClInclude Include="application\editor\EditorViewportPanel.h" />
@@ -1135,6 +1038,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\editor\ExistingFeatureProtectionPanel.h" />
     <ClInclude Include="application\AppFrameState.h" />
     <ClInclude Include="application\AppFrameGraphBuilder.h" />
+    <ClInclude Include="application\runtime\AppFrameCoordinator.h" />
     <ClInclude Include="application\AppPostProcessPipeline.h" />
     <ClInclude Include="application\AppSceneRenderPipeline.h" />
     <ClInclude Include="application\AppVfxRenderPipeline.h" />
@@ -1197,6 +1101,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="application\AppVfxTelemetry.h" />
     <ClInclude Include="application\AppVfxTelemetryPanel.h" />
     <ClInclude Include="application\AppRuntimeConfig.h" />
+    <ClInclude Include="application\AppLogFile.h" />
     <ClInclude Include="application\AppRuntimeUtils.h" />
     <ClInclude Include="application\AppSceneState.h" />
     <ClInclude Include="application\AppSceneStateManager.h" />
@@ -1229,9 +1134,7 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="engine\include\audio\WaveAudio.h" />
     <ClInclude Include="engine\include\camera\debugCamera.h" />
     <ClInclude Include="engine\include\camera\VfxCamera.h" />
-    <ClInclude Include="engine\include\core\CommandListPool.h" />
     <ClInclude Include="engine\include\core\DescriptorHeap.h" />
-    <ClInclude Include="engine\include\core\Device.h" />
     <ClInclude Include="engine\include\core\ShaderCompiler.h" />
     <ClInclude Include="engine\include\graphics\DxHelpers.h" />
     <ClInclude Include="engine\include\graphics\pipelineBuilder.h" />
@@ -1240,17 +1143,13 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="engine\include\graphics\RenderContext.h" />
     <ClInclude Include="engine\include\graphics\Sprite.h" />
     <ClInclude Include="engine\include\graphics\SpriteRenderer.h" />
-    <ClInclude Include="engine\include\graphics\SwapChain.h" />
     <ClInclude Include="engine\include\input\Input.h" />
-    <ClInclude Include="engine\include\media\CpuTransferCtx.h" />
     <ClInclude Include="engine\include\particle\ParticleSystemCpu.h" />
     <ClInclude Include="engine\include\resources\ResourceRegistry.h" />
     <ClInclude Include="engine\include\platform\Win32App.h" />
-    <ClInclude Include="engine\include\platform\Window.h" />
     <ClInclude Include="engine\include\utils\Checked.h" />
     <ClInclude Include="engine\include\utils\DebugTools.h" />
     <ClInclude Include="engine\include\utils\dx12\BufferHelper.h" />
-    <ClInclude Include="engine\include\utils\Logger.h" />
     <ClInclude Include="engine\include\utils\math\MathUtils.h" />
     <ClInclude Include="engine\include\utils\math\Vector.h" />
     <ClInclude Include="engine\include\utils\ProjectSettings.h" />
@@ -1265,7 +1164,6 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="externals\imgui\imstb_textedit.h" />
     <ClInclude Include="externals\imgui\imstb_truetype.h" />
     <ClInclude Include="application\streaming\H264Encoder.h" />
-    <ClInclude Include="KeyInput.h" />
     <ClInclude Include="lib\Receiver\FrameProto.h" />
     <ClInclude Include="lib\Receiver\startTcpReceiverRgb32.h" />
     <ClInclude Include="Matrix4x4.h" />
@@ -1277,7 +1175,6 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <ClInclude Include="TextureUploader.h" />
     <ClInclude Include="application\streaming\UdpByteStream.h" />
     <ClInclude Include="Vertex.h" />
-    <ClInclude Include="WinApp.h" />
   </ItemGroup>
   <ItemGroup>
     <Text Include="externals\imgui\LICENSE.txt" />
@@ -1290,6 +1187,11 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     <None Include="Resources\iceShard.png" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="GE3.EngineRuntime.vcxproj">
+      <Project>{A6F3CD21-66AE-48F7-BADC-04F29BFCF25C}</Project>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+      <UseLibraryDependencyInputs>true</UseLibraryDependencyInputs>
+    </ProjectReference>
     <ProjectReference Include="externals\DirectXTex\DirectXTex_Desktop_2022_Win10.vcxproj">
       <Project>{371b9fa9-4c90-4ac6-a123-aced756d6c77}</Project>
     </ProjectReference>
@@ -1409,6 +1311,13 @@ xcopy "$(ProjectDir)Resources" "$(TargetDir)Resources\" /E /I /Y /Q
     </ClCompile>
     <ClCompile Update="application\editor\world\EditorWorldOutlinerPanel.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+    </ClCompile>
+  </ItemGroup>
+  <!-- Release is the optimized Editor target. Legacy per-file Release exclusions are
+       overridden here; Shipping source selection lives exclusively in GE3.Runtime. -->
+  <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile Update="application\**\*.cpp;externals\imgui\*.cpp">
+      <ExcludedFromBuild>false</ExcludedFromBuild>
     </ClCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

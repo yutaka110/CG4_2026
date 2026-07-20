@@ -28,6 +28,7 @@ class AppPipelines;
 #include "editor/EditorDetailsSectionProvider.h"
 #include "editor/EditorModalConfirmService.h"
 #include "editor/EditorNotificationCenter.h"
+#include "editor/EditorNotificationsPanel.h"
 #include "editor/EditorPanelHost.h"
 #include "editor/EditorPanelLayoutService.h"
 #include "editor/EditorPanelRegistry.h"
@@ -64,6 +65,7 @@ class AppPipelines;
 #include "editor/EditorTransformGizmoService.h"
 #include "editor/EditorTransactionStack.h"
 #include "editor/EditorViewportCoordinateService.h"
+#include "editor/EditorViewportCameraInput.h"
 #include "editor/EditorViewportInteractionService.h"
 #include "editor/EditorViewportOverlay.h"
 #include "editor/EditorViewportSelectionBridge.h"
@@ -76,6 +78,7 @@ class AppPipelines;
 #include "editor/geometry/EditorGeometryTools.h"
 #include "editor/geometry/EditorGeometryEditCommand.h"
 #include "editor/geometry/EditorGeometryWorkspace.h"
+#include "editor/geometry/EditorTransientMeshRenderPath.h"
 #include "editor/mesh/EditorMeshBakeTools.h"
 #include "editor/scene/EditorProductionScenePipeline.h"
 #include "editor/material/EditorProductionMaterialPipeline.h"
@@ -185,6 +188,7 @@ public:
     bool Initialize(HWND hwnd, ID3D12Device* device, int bufferCount,
         DXGI_FORMAT rtvFormat, ID3D12DescriptorHeap* srvHeap,
         AppPipelines* appPipelines);
+    bool HandleWindowMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
     void BeginFrame();
     void BuildUi(const AppImGuiFrameContext& context);
@@ -198,8 +202,12 @@ public:
     bool ShouldAdvanceEditorRuntimeFrame() const;
     void CompleteEditorRuntimeFrameAdvance(bool advanced);
     const editor::EditorViewportRenderTargetState& EditorViewportRenderTargetState() const;
+    const editor::EditorViewportCameraInput& EditorViewportCameraFrameInput() const {
+        return editorViewportCameraInput_;
+    }
     const editor::EditorViewportOverlayService& EditorViewportOverlay() const;
     const editor::EditorProductionScenePipeline& ProductionScenePipeline() const;
+    const editor::EditorTransientMeshRenderPath& TransientMeshRenderPath() const;
     const editor::EditorProductionMaterialPipeline& ProductionMaterialPipeline() const;
     const editor::EditorProductionTexturePipeline& ProductionTexturePipeline() const;
     const editor::EditorProductionShaderPipeline& ProductionShaderPipeline() const;
@@ -310,6 +318,7 @@ private:
     editor::EditorDetailsSectionProviderRegistry editorDetailsSectionProviders_{};
     editor::EditorViewportCoordinateService editorViewportCoordinates_{};
     editor::EditorViewportInteractionService editorViewportInteraction_{};
+    editor::EditorViewportCameraInput editorViewportCameraInput_{};
     editor::EditorModeRegistry editorModeRegistry_{};
     editor::EditorToolManager editorInteractiveTools_{editorModeRegistry_};
     editor::EditorExecutionContext editorInteractiveExecution_{};
@@ -324,6 +333,7 @@ private:
     editor::EditorMeshBakeExecutionService editorMeshBakeExecution_{};
     editor::EditorProductionMeshRuntimeCache editorProductionMeshRuntimeCache_{};
     editor::EditorProductionScenePipeline editorProductionScenePipeline_{};
+    editor::EditorTransientMeshRenderPath editorTransientMeshRenderPath_{};
     editor::EditorProductionMaterialPipeline editorProductionMaterialPipeline_{};
     editor::EditorProductionTexturePipeline editorProductionTexturePipeline_{};
     editor::EditorProductionShaderPipeline editorProductionShaderPipeline_{};
@@ -342,6 +352,7 @@ private:
     editor::EditorTransformGizmoService editorTransformGizmo_{};
     editor::EditorModalConfirmService editorConfirmService_{};
     editor::EditorNotificationCenter editorNotifications_{};
+    editor::EditorNotificationToastState editorNotificationToastState_{};
     editor::EditorPlaySessionIsolationSnapshot editorPlaySessionSnapshot_{};
     editor::EditorPlaySessionLifecycleService editorPlaySessionLifecycle_{};
     editor::EditorPlaySessionRuntimeControlService editorPlaySessionRuntimeControl_{};
