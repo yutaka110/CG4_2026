@@ -2,6 +2,9 @@
 #include "core/Device.h"
 #include "utils/Logger.h"
 #include <cassert>
+#if !defined(GE3_ENGINE_RENDERER) || GE3_ENGINE_RENDERER != 1
+#error CommandListPool.cpp must only be compiled by the EngineRenderer module.
+#endif
 #include <sstream>   // 追加
 
 using Microsoft::WRL::ComPtr;

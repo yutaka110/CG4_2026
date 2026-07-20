@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup Label="GE3Release">
-    <GE3EditorBuild>false</GE3EditorBuild>
+    <GE3EditorBuild>true</GE3EditorBuild>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
-      <PreprocessorDefinitions>GE3_ENABLE_IMGUI=0;GE3_BUILD_EDITOR=0;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>GE3_TARGET_EDITOR=1;GE3_ENABLE_IMGUI=1;GE3_BUILD_EDITOR=1;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>

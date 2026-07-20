@@ -165,19 +165,10 @@
     <ClCompile Include="lib\Receiver\startTcpReciverRgb32.cpp">
       <Filter>ソース ファイル\Receiver</Filter>
     </ClCompile>
-    <ClCompile Include="engine\src\core\CommandListPool.cpp">
-      <Filter>ソース ファイル\engine\core</Filter>
-    </ClCompile>
-    <ClCompile Include="engine\src\graphics\SwapChain.cpp">
-      <Filter>ソース ファイル\engine\graphics</Filter>
-    </ClCompile>
     <ClCompile Include="engine\src\input\Input.cpp">
       <Filter>ソース ファイル\engine\input</Filter>
     </ClCompile>
     <ClCompile Include="engine\src\platform\Win32App.cpp">
-      <Filter>ソース ファイル\engine\platform</Filter>
-    </ClCompile>
-    <ClCompile Include="engine\src\platform\Window.cpp">
       <Filter>ソース ファイル\engine\platform</Filter>
     </ClCompile>
     <ClCompile Include="engine\src\utils\Checked.cpp">
@@ -189,13 +180,7 @@
     <ClCompile Include="engine\src\utils\utill.cpp">
       <Filter>ソース ファイル\engine\utils</Filter>
     </ClCompile>
-    <ClCompile Include="engine\src\utils\Logger.cpp">
-      <Filter>ソース ファイル\engine\utils</Filter>
-    </ClCompile>
     <ClCompile Include="engine\src\core\DescriptorHeap.cpp">
-      <Filter>ソース ファイル\engine\core</Filter>
-    </ClCompile>
-    <ClCompile Include="engine\src\core\Device.cpp">
       <Filter>ソース ファイル\engine\core</Filter>
     </ClCompile>
     <ClCompile Include="engine\src\core\ShaderCompiler.cpp">
@@ -1058,9 +1043,6 @@
     <ClInclude Include="lib\Receiver\startTcpReceiverRgb32.h">
       <Filter>ヘッダー ファイル\Reciever</Filter>
     </ClInclude>
-    <ClInclude Include="engine\include\core\CommandListPool.h">
-      <Filter>ヘッダー ファイル\engine\core</Filter>
-    </ClInclude>
     <ClInclude Include="engine\include\utils\Checked.h">
       <Filter>ヘッダー ファイル\engine\utils</Filter>
     </ClInclude>
@@ -1070,12 +1052,6 @@
     <ClInclude Include="engine\include\core\DescriptorHeap.h">
       <Filter>ヘッダー ファイル\engine\core</Filter>
     </ClInclude>
-    <ClInclude Include="engine\include\core\Device.h">
-      <Filter>ヘッダー ファイル\engine\core</Filter>
-    </ClInclude>
-    <ClInclude Include="engine\include\utils\Logger.h">
-      <Filter>ヘッダー ファイル\engine\utils</Filter>
-    </ClInclude>
     <ClInclude Include="engine\include\utils\StringConv.h">
       <Filter>ヘッダー ファイル\engine\utils</Filter>
     </ClInclude>
@@ -1084,12 +1060,6 @@
     </ClInclude>
     <ClInclude Include="engine\include\platform\Win32App.h">
       <Filter>ヘッダー ファイル\engine\platform</Filter>
-    </ClInclude>
-    <ClInclude Include="engine\include\platform\Window.h">
-      <Filter>ヘッダー ファイル\engine\platform</Filter>
-    </ClInclude>
-    <ClInclude Include="engine\include\graphics\SwapChain.h">
-      <Filter>ヘッダー ファイル\engine\graphics</Filter>
     </ClInclude>
     <ClInclude Include="engine\include\core\ShaderCompiler.h">
       <Filter>ヘッダー ファイル</Filter>

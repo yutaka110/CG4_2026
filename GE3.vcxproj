@@ -380,25 +380,20 @@
     <ClCompile Include="engine\src\audio\AudioWave.cpp" />
     <ClCompile Include="engine\src\camera\debugCamera.cpp" />
     <ClCompile Include="engine\src\camera\VfxCamera.cpp" />
-    <ClCompile Include="engine\src\core\CommandListPool.cpp" />
     <ClCompile Include="engine\src\core\DescriptorHeap.cpp" />
-    <ClCompile Include="engine\src\core\Device.cpp" />
     <ClCompile Include="engine\src\core\ShaderCompiler.cpp" />
     <ClCompile Include="engine\src\graphics\DxHelpers.cpp" />
     <ClCompile Include="engine\src\graphics\PipelineBuilder.cpp" />
     <ClCompile Include="engine\src\graphics\RenderGraph.cpp" />
     <ClCompile Include="engine\src\graphics\RenderContext.cpp" />
     <ClCompile Include="engine\src\graphics\SpriteRenderer.cpp" />
-    <ClCompile Include="engine\src\graphics\SwapChain.cpp" />
     <ClCompile Include="engine\src\input\Input.cpp" />
     <ClCompile Include="engine\src\particle\ParticleSystemCpu.cpp" />
     <ClCompile Include="engine\src\resources\ResourceRegistry.cpp" />
     <ClCompile Include="engine\src\platform\Win32App.cpp" />
-    <ClCompile Include="engine\src\platform\Window.cpp" />
     <ClCompile Include="engine\src\utils\Checked.cpp" />
     <ClCompile Include="engine\src\utils\DebugTools.cpp" />
     <ClCompile Include="engine\src\utils\dx12\BufferHelper.cpp" />
-    <ClCompile Include="engine\src\utils\Logger.cpp" />
     <ClCompile Include="engine\src\utils\math\MathUtils.cpp" />
     <ClCompile Include="engine\src\utils\StringConv.cpp" />
     <ClCompile Include="engine\src\utils\utill.cpp" />
@@ -1139,9 +1134,7 @@
     <ClInclude Include="engine\include\audio\WaveAudio.h" />
     <ClInclude Include="engine\include\camera\debugCamera.h" />
     <ClInclude Include="engine\include\camera\VfxCamera.h" />
-    <ClInclude Include="engine\include\core\CommandListPool.h" />
     <ClInclude Include="engine\include\core\DescriptorHeap.h" />
-    <ClInclude Include="engine\include\core\Device.h" />
     <ClInclude Include="engine\include\core\ShaderCompiler.h" />
     <ClInclude Include="engine\include\graphics\DxHelpers.h" />
     <ClInclude Include="engine\include\graphics\pipelineBuilder.h" />
@@ -1150,16 +1143,13 @@
     <ClInclude Include="engine\include\graphics\RenderContext.h" />
     <ClInclude Include="engine\include\graphics\Sprite.h" />
     <ClInclude Include="engine\include\graphics\SpriteRenderer.h" />
-    <ClInclude Include="engine\include\graphics\SwapChain.h" />
     <ClInclude Include="engine\include\input\Input.h" />
     <ClInclude Include="engine\include\particle\ParticleSystemCpu.h" />
     <ClInclude Include="engine\include\resources\ResourceRegistry.h" />
     <ClInclude Include="engine\include\platform\Win32App.h" />
-    <ClInclude Include="engine\include\platform\Window.h" />
     <ClInclude Include="engine\include\utils\Checked.h" />
     <ClInclude Include="engine\include\utils\DebugTools.h" />
     <ClInclude Include="engine\include\utils\dx12\BufferHelper.h" />
-    <ClInclude Include="engine\include\utils\Logger.h" />
     <ClInclude Include="engine\include\utils\math\MathUtils.h" />
     <ClInclude Include="engine\include\utils\math\Vector.h" />
     <ClInclude Include="engine\include\utils\ProjectSettings.h" />
@@ -1197,6 +1187,11 @@
     <None Include="Resources\iceShard.png" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="GE3.EngineRuntime.vcxproj">
+      <Project>{A6F3CD21-66AE-48F7-BADC-04F29BFCF25C}</Project>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+      <UseLibraryDependencyInputs>true</UseLibraryDependencyInputs>
+    </ProjectReference>
     <ProjectReference Include="externals\DirectXTex\DirectXTex_Desktop_2022_Win10.vcxproj">
       <Project>{371b9fa9-4c90-4ac6-a123-aced756d6c77}</Project>
     </ProjectReference>
@@ -1316,6 +1311,13 @@
     </ClCompile>
     <ClCompile Update="application\editor\world\EditorWorldOutlinerPanel.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+    </ClCompile>
+  </ItemGroup>
+  <!-- Release is the optimized Editor target. Legacy per-file Release exclusions are
+       overridden here; Shipping source selection lives exclusively in GE3.Runtime. -->
+  <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile Update="application\**\*.cpp;externals\imgui\*.cpp">
+      <ExcludedFromBuild>false</ExcludedFromBuild>
     </ClCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

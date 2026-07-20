@@ -88,6 +88,9 @@
 #include "../../externals/imgui/imgui_impl_dx12.h"
 #include "../../externals/imgui/imgui_impl_win32.h"
 
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(
+    HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+
 #include <array>
 #include <algorithm>
 #include <chrono>
@@ -1520,6 +1523,11 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
     }
     initialized_ = true;
     return true;
+}
+
+bool AppImGuiLayer::HandleWindowMessage(
+    HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    return ImGui_ImplWin32_WndProcHandler(hwnd, message, wParam, lParam) != 0;
 }
 
 void AppImGuiLayer::QueueExternalAssetDrop(std::filesystem::path path) {
@@ -4258,6 +4266,15 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
     (void)appPipelines;
     initialized_ = false;
     return true;
+}
+
+bool AppImGuiLayer::HandleWindowMessage(
+    HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    (void)hwnd;
+    (void)message;
+    (void)wParam;
+    (void)lParam;
+    return false;
 }
 
 void AppImGuiLayer::BeginFrame() {

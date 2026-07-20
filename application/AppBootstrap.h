@@ -16,6 +16,9 @@ public:
     void SetDropCallback(eng::platform::Window::DropFilesCallback callback) {
         window_.SetDropCallback(std::move(callback));
     }
+    void SetMessageCallback(eng::platform::Window::MessageCallback callback) {
+        window_.SetMessageCallback(std::move(callback));
+    }
 
 private:
     HINSTANCE hInstance_ = nullptr;

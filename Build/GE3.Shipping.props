@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="GE3Shipping">
+    <GE3EditorBuild>false</GE3EditorBuild>
+    <OutDir>$(GE3OutputRoot)\Shipping\</OutDir>
+    <IntDir>$(GE3IntermediateRoot)\GE3.Runtime\Shipping\</IntDir>
+    <TargetName>GE3Shipping</TargetName>
+    <VcpkgApplocalDeps>false</VcpkgApplocalDeps>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>$(GE3WarningLevel)</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>$(GE3LanguageStandard)</LanguageStandard>
+      <AdditionalOptions>/utf-8 /D_WIN32_WINNT=0x0602 %(AdditionalOptions)</AdditionalOptions>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <TreatWarningAsError>$(GE3TreatWarningsAsErrors)</TreatWarningAsError>
+      <AdditionalIncludeDirectories>$(ProjectDir)engine\include;$(ProjectDir)application;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>GE3_TARGET_SHIPPING=1;GE3_BUILD_EDITOR=0;GE3_ENABLE_IMGUI=0;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <Optimization>MaxSpeed</Optimization>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <TreatLinkerWarningAsErrors>$(GE3TreatWarningsAsErrors)</TreatLinkerWarningAsErrors>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;Shcore.lib;Shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>copy "$(ProjectDir)Build\GE3.ShippingTarget.json" "$(TargetDir)shipping_target.json" || exit /b 1
+copy "$(ProjectDir)THIRD_PARTY_NOTICES_SHIPPING.md" "$(TargetDir)THIRD_PARTY_NOTICES.md" || exit /b 1</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+</Project>

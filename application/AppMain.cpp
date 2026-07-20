@@ -223,6 +223,10 @@ imguiLayer.Initialize(
 	kRtvFormat,
 	srvDescriptorHeap.Get(),
 	&appPipelines);
+bootstrap.SetMessageCallback(
+	[&imguiLayer](HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+		return imguiLayer.HandleWindowMessage(hwnd, message, wParam, lParam);
+	});
 bootstrap.SetDropCallback(
 	[&imguiLayer](const std::wstring& path) {
 		imguiLayer.QueueExternalAssetDrop(std::filesystem::path(path));
@@ -320,6 +324,7 @@ AppFrameRenderer frameRenderer;
 	}
 
 	audio.Finalize();
+	bootstrap.SetMessageCallback({});
 #if defined(_DEBUG)||DEVELOP
 	imguiLayer.Shutdown();
 #endif

@@ -188,6 +188,7 @@ public:
     bool Initialize(HWND hwnd, ID3D12Device* device, int bufferCount,
         DXGI_FORMAT rtvFormat, ID3D12DescriptorHeap* srvHeap,
         AppPipelines* appPipelines);
+    bool HandleWindowMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
     void BeginFrame();
     void BuildUi(const AppImGuiFrameContext& context);
