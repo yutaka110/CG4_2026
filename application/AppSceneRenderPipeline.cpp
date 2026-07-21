@@ -21,9 +21,11 @@
 #include "terrain/TerrainChunkManager.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 #include <wrl/client.h>
@@ -41,6 +43,74 @@ enum SkinningComputeRootParameter : uint32_t {
     kSkinningRootOutputVertices = 3,
     kSkinningRootInfo = 4,
 };
+
+Vector4 TransformToClipSpace(const Vector4& position, const Matrix4x4& matrix) {
+    return {
+        position.x * matrix.m[0][0] + position.y * matrix.m[1][0] +
+            position.z * matrix.m[2][0] + position.w * matrix.m[3][0],
+        position.x * matrix.m[0][1] + position.y * matrix.m[1][1] +
+            position.z * matrix.m[2][1] + position.w * matrix.m[3][1],
+        position.x * matrix.m[0][2] + position.y * matrix.m[1][2] +
+            position.z * matrix.m[2][2] + position.w * matrix.m[3][2],
+        position.x * matrix.m[0][3] + position.y * matrix.m[1][3] +
+            position.z * matrix.m[2][3] + position.w * matrix.m[3][3],
+    };
+}
+
+void UpdateWeaponScreenBounds(
+    const AppManagedModelResource& model,
+    const TransformationMatrix& transform,
+    const D3D12_VIEWPORT& viewport,
+    RuntimeWeaponDrawTelemetry& telemetry) {
+    float minimumX = (std::numeric_limits<float>::max)();
+    float minimumY = (std::numeric_limits<float>::max)();
+    float minimumZ = (std::numeric_limits<float>::max)();
+    float maximumX = std::numeric_limits<float>::lowest();
+    float maximumY = std::numeric_limits<float>::lowest();
+    float maximumZ = std::numeric_limits<float>::lowest();
+    bool hasProjectedVertex = false;
+
+    for (const VertexData& vertex : model.model.vertices) {
+        const Vector4 clip = TransformToClipSpace(vertex.position, transform.WVP);
+        if (!std::isfinite(clip.x) || !std::isfinite(clip.y) ||
+            !std::isfinite(clip.z) || !std::isfinite(clip.w) || clip.w <= 0.00001f) {
+            continue;
+        }
+        const float reciprocalW = 1.0f / clip.w;
+        const float x = clip.x * reciprocalW;
+        const float y = clip.y * reciprocalW;
+        const float z = clip.z * reciprocalW;
+        minimumX = (std::min)(minimumX, x);
+        minimumY = (std::min)(minimumY, y);
+        minimumZ = (std::min)(minimumZ, z);
+        maximumX = (std::max)(maximumX, x);
+        maximumY = (std::max)(maximumY, y);
+        maximumZ = (std::max)(maximumZ, z);
+        hasProjectedVertex = true;
+    }
+
+    telemetry.screenBoundsVisible = hasProjectedVertex &&
+        maximumX >= -1.0f && minimumX <= 1.0f &&
+        maximumY >= -1.0f && minimumY <= 1.0f &&
+        maximumZ >= 0.0f && minimumZ <= 1.0f;
+    if (!hasProjectedVertex) {
+        return;
+    }
+    telemetry.screenMinimum = {
+        viewport.TopLeftX + (minimumX * 0.5f + 0.5f) * viewport.Width,
+        viewport.TopLeftY + (-maximumY * 0.5f + 0.5f) * viewport.Height,
+    };
+    telemetry.screenMaximum = {
+        viewport.TopLeftX + (maximumX * 0.5f + 0.5f) * viewport.Width,
+        viewport.TopLeftY + (-minimumY * 0.5f + 0.5f) * viewport.Height,
+    };
+    constexpr float kMinimumReadableExtentPixels = 12.0f;
+    telemetry.screenBoundsReadable = telemetry.screenBoundsVisible &&
+        telemetry.screenMaximum.x - telemetry.screenMinimum.x >=
+            kMinimumReadableExtentPixels &&
+        telemetry.screenMaximum.y - telemetry.screenMinimum.y >=
+            kMinimumReadableExtentPixels;
+}
 
 class SkinningGpuTimingProbe {
 public:
@@ -441,6 +511,15 @@ bool DispatchComputeSkinnedSurface(
     return true;
 }
 
+const AppGpuMaterialResource* ResolveGpuMaterial(
+    const std::vector<AppGpuMaterialResource>& materials,
+    uint32_t materialIndex) {
+    if (materialIndex >= materials.size()) {
+        return materials.empty() ? nullptr : &materials.front();
+    }
+    return &materials[materialIndex];
+}
+
 bool DrawComputeSkinnedModelInstance(
     const AppFrameGraphBuildContext& ctx,
     ge3::graphics::RenderPassContext& passContext,
@@ -479,6 +558,7 @@ bool DrawComputeSkinnedModelInstance(
 
     const bool mainReady = ctx.frameRenderer->PrepareMainPass(
         passContext.commandList,
+        ctx.srvDescriptorHeap,
         ctx.runtimeState->viewport,
         ctx.runtimeState->scissorRect,
         ctx.appPipelines->GetMainRootSignature(),
@@ -488,21 +568,29 @@ bool DrawComputeSkinnedModelInstance(
         return false;
     }
 
-    ctx.frameRenderer->DrawMainModel(
-        passContext.commandList,
-        instance.skinCluster.skinnedVertexBufferView,
-        instance.mesh.ibv,
-        ctx.scene->materialResource->GetGPUVirtualAddress(),
-        instance.transformResource->GetGPUVirtualAddress(),
-        ctx.scene->textureSrvHandleGPU,
-        ctx.scene->textureSrvHandleGPU2,
-        ctx.scene->textureSrvHandleGPU2,
-        ctx.scene->skyboxTextureSrvHandleGPU,
-        ctx.scene->directionalLightResource->GetGPUVirtualAddress(),
-        ctx.scene->cameraResource->GetGPUVirtualAddress(),
-        ctx.scene->pointLightResource->GetGPUVirtualAddress(),
-        ctx.scene->spotLightResource->GetGPUVirtualAddress(),
-        instance.mesh.indexCount);
+    for (const SubMeshData& subMesh : instance.model.subMeshes) {
+        const AppGpuMaterialResource* material =
+            ResolveGpuMaterial(instance.gpuMaterials, subMesh.materialIndex);
+        if (material == nullptr || material->constantBuffer == nullptr) {
+            continue;
+        }
+        ctx.frameRenderer->DrawMainModel(
+            passContext.commandList,
+            instance.skinCluster.skinnedVertexBufferView,
+            instance.mesh.ibv,
+            material->constantBuffer->GetGPUVirtualAddress(),
+            instance.transformResource->GetGPUVirtualAddress(),
+            material->albedoTextureGpu,
+            material->normalTextureGpu,
+            ctx.scene->textureSrvHandleGPU2,
+            ctx.scene->skyboxTextureSrvHandleGPU,
+            ctx.scene->directionalLightResource->GetGPUVirtualAddress(),
+            ctx.scene->cameraResource->GetGPUVirtualAddress(),
+            ctx.scene->pointLightResource->GetGPUVirtualAddress(),
+            ctx.scene->spotLightResource->GetGPUVirtualAddress(),
+            subMesh.indexCount,
+            subMesh.indexStart);
+    }
     GetSkinningGpuTimingProbe().End(passContext.commandList);
     return true;
 }
@@ -533,6 +621,7 @@ void DrawSkinnedModelInstance(
 
     const bool skinnedReady = ctx.frameRenderer->PrepareMainPass(
         passContext.commandList,
+        ctx.srvDescriptorHeap,
         ctx.runtimeState->viewport,
         ctx.runtimeState->scissorRect,
         ctx.appPipelines->GetSkinnedRootSignature(),
@@ -542,23 +631,31 @@ void DrawSkinnedModelInstance(
         return;
     }
 
-    ctx.frameRenderer->DrawSkinnedModel(
-        passContext.commandList,
-        instance.mesh.vbv,
-        instance.skinCluster.influenceBufferView,
-        instance.mesh.ibv,
-        ctx.scene->materialResource->GetGPUVirtualAddress(),
-        instance.transformResource->GetGPUVirtualAddress(),
-        ctx.scene->textureSrvHandleGPU,
-        ctx.scene->textureSrvHandleGPU2,
-        ctx.scene->textureSrvHandleGPU2,
-        ctx.scene->skyboxTextureSrvHandleGPU,
-        instance.skinCluster.paletteSrvGpu,
-        ctx.scene->directionalLightResource->GetGPUVirtualAddress(),
-        ctx.scene->cameraResource->GetGPUVirtualAddress(),
-        ctx.scene->pointLightResource->GetGPUVirtualAddress(),
-        ctx.scene->spotLightResource->GetGPUVirtualAddress(),
-        instance.mesh.indexCount);
+    for (const SubMeshData& subMesh : instance.model.subMeshes) {
+        const AppGpuMaterialResource* material =
+            ResolveGpuMaterial(instance.gpuMaterials, subMesh.materialIndex);
+        if (material == nullptr || material->constantBuffer == nullptr) {
+            continue;
+        }
+        ctx.frameRenderer->DrawSkinnedModel(
+            passContext.commandList,
+            instance.mesh.vbv,
+            instance.skinCluster.influenceBufferView,
+            instance.mesh.ibv,
+            material->constantBuffer->GetGPUVirtualAddress(),
+            instance.transformResource->GetGPUVirtualAddress(),
+            material->albedoTextureGpu,
+            material->normalTextureGpu,
+            ctx.scene->textureSrvHandleGPU2,
+            ctx.scene->skyboxTextureSrvHandleGPU,
+            instance.skinCluster.paletteSrvGpu,
+            ctx.scene->directionalLightResource->GetGPUVirtualAddress(),
+            ctx.scene->cameraResource->GetGPUVirtualAddress(),
+            ctx.scene->pointLightResource->GetGPUVirtualAddress(),
+            ctx.scene->spotLightResource->GetGPUVirtualAddress(),
+            subMesh.indexCount,
+            subMesh.indexStart);
+    }
     GetSkinningGpuTimingProbe().End(passContext.commandList);
 }
 
@@ -625,6 +722,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
             [ctx](ge3::graphics::RenderPassContext& passContext) {
                 const bool skyboxReady = ctx.frameRenderer->PrepareMainPass(
                     passContext.commandList,
+                    ctx.srvDescriptorHeap,
                     ctx.runtimeState->viewport,
                     ctx.runtimeState->scissorRect,
                     ctx.appPipelines->GetSkyboxRootSignature(),
@@ -651,8 +749,12 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         },
         "SceneDepth",
         [ctx](ge3::graphics::RenderPassContext& passContext) {
+            if (!ctx.runtimeState->showSprite) {
+                return;
+            }
             const bool spritePassReady = ctx.frameRenderer->PrepareMainPass(
                 passContext.commandList,
+                ctx.srvDescriptorHeap,
                 ctx.runtimeState->viewport,
                 ctx.runtimeState->scissorRect,
                 ctx.appPipelines->GetSpriteRootSignature(),
@@ -690,11 +792,49 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 }
                 mainPassPrepared = ctx.frameRenderer->PrepareMainPass(
                     passContext.commandList,
+                    ctx.srvDescriptorHeap,
                     ctx.runtimeState->viewport,
                     ctx.runtimeState->scissorRect,
                     ctx.appPipelines->GetMainRootSignature(),
                     ctx.appPipelines->GetMainPSO());
                 return mainPassPrepared;
+            };
+            auto drawManagedModel = [&](const AppManagedModelResource& model,
+                                        const D3D12_VERTEX_BUFFER_VIEW& vertexBuffer,
+                                        const D3D12_INDEX_BUFFER_VIEW& indexBuffer,
+                                        D3D12_GPU_VIRTUAL_ADDRESS transformAddress) -> uint32_t {
+                if (transformAddress == 0 || model.mesh.indexCount == 0 ||
+                    !prepareMainPass()) {
+                    return 0;
+                }
+                uint32_t submittedSubMeshCount = 0;
+                for (const SubMeshData& subMesh : model.model.subMeshes) {
+                    const AppGpuMaterialResource* material =
+                        ResolveGpuMaterial(model.gpuMaterials, subMesh.materialIndex);
+                    if (material == nullptr || material->constantBuffer == nullptr ||
+                        material->albedoTextureGpu.ptr == 0 ||
+                        material->normalTextureGpu.ptr == 0) {
+                        continue;
+                    }
+                    ctx.frameRenderer->DrawMainModel(
+                        passContext.commandList,
+                        vertexBuffer,
+                        indexBuffer,
+                        material->constantBuffer->GetGPUVirtualAddress(),
+                        transformAddress,
+                        material->albedoTextureGpu,
+                        material->normalTextureGpu,
+                        ctx.scene->textureSrvHandleGPU2,
+                        ctx.scene->skyboxTextureSrvHandleGPU,
+                        ctx.scene->directionalLightResource->GetGPUVirtualAddress(),
+                        ctx.scene->cameraResource->GetGPUVirtualAddress(),
+                        ctx.scene->pointLightResource->GetGPUVirtualAddress(),
+                        ctx.scene->spotLightResource->GetGPUVirtualAddress(),
+                        subMesh.indexCount,
+                        subMesh.indexStart);
+                    ++submittedSubMeshCount;
+                }
+                return submittedSubMeshCount;
             };
 
             if (ctx.runtimeState->useMonsterBall && prepareMainPass()) {
@@ -741,28 +881,41 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     ctx.scene->FindManagedModel(object.modelIndex);
                 if (!object.visible ||
                     model == nullptr ||
-                    !object.transformResource ||
-                    model->textureGpu.ptr == 0 ||
-                    model->mesh.indexCount == 0 ||
-                    !prepareMainPass()) {
+                    !object.transformResource) {
                     continue;
                 }
-
-                ctx.frameRenderer->DrawMainModel(
-                    passContext.commandList,
+                drawManagedModel(
+                    *model,
                     model->mesh.vbv,
                     model->mesh.ibv,
-                    ctx.scene->materialResource->GetGPUVirtualAddress(),
-                    object.transformResource->GetGPUVirtualAddress(),
-                    model->textureGpu,
-                    ctx.scene->textureSrvHandleGPU2,
-                    ctx.scene->textureSrvHandleGPU2,
-                    ctx.scene->skyboxTextureSrvHandleGPU,
-                    ctx.scene->directionalLightResource->GetGPUVirtualAddress(),
-                    ctx.scene->cameraResource->GetGPUVirtualAddress(),
-                    ctx.scene->pointLightResource->GetGPUVirtualAddress(),
-                    ctx.scene->spotLightResource->GetGPUVirtualAddress(),
-                    model->mesh.indexCount);
+                    object.transformResource->GetGPUVirtualAddress());
+            }
+
+            const AppModelObjectInstance& weapon =
+                ctx.scene->WeaponAttachmentObject();
+            const AppManagedModelResource* weaponModel =
+                ctx.scene->FindManagedModel(weapon.modelIndex);
+            RuntimeWeaponDrawTelemetry& weaponDraw =
+                ctx.runtimeState->weaponDrawTelemetry;
+            weaponDraw = {};
+            if (weapon.visible &&
+                weaponModel != nullptr &&
+                weapon.transformResource) {
+                weaponDraw.materialCount =
+                    static_cast<uint32_t>(weaponModel->gpuMaterials.size());
+                weaponDraw.submittedSubMeshCount = drawManagedModel(
+                    *weaponModel,
+                    weaponModel->mesh.vbv,
+                    weaponModel->mesh.ibv,
+                    weapon.transformResource->GetGPUVirtualAddress());
+                weaponDraw.submitted = weaponDraw.submittedSubMeshCount != 0;
+                if (weapon.transformData != nullptr) {
+                    UpdateWeaponScreenBounds(
+                        *weaponModel,
+                        *weapon.transformData,
+                        ctx.runtimeState->viewport,
+                        weaponDraw);
+                }
             }
 
             for (const CourseMeshRenderItem& item : ctx.scene->CourseMeshes().Items()) {
@@ -770,28 +923,14 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     ctx.scene->FindManagedModel(item.modelIndex);
                 if (!item.visible ||
                     model == nullptr ||
-                    !item.transformResource ||
-                    model->textureGpu.ptr == 0 ||
-                    model->mesh.indexCount == 0 ||
-                    !prepareMainPass()) {
+                    !item.transformResource) {
                     continue;
                 }
-
-                ctx.frameRenderer->DrawMainModel(
-                    passContext.commandList,
+                drawManagedModel(
+                    *model,
                     model->mesh.vbv,
                     model->mesh.ibv,
-                    ctx.scene->materialResource->GetGPUVirtualAddress(),
-                    item.transformResource->GetGPUVirtualAddress(),
-                    model->textureGpu,
-                    ctx.scene->textureSrvHandleGPU2,
-                    ctx.scene->textureSrvHandleGPU2,
-                    ctx.scene->skyboxTextureSrvHandleGPU,
-                    ctx.scene->directionalLightResource->GetGPUVirtualAddress(),
-                    ctx.scene->cameraResource->GetGPUVirtualAddress(),
-                    ctx.scene->pointLightResource->GetGPUVirtualAddress(),
-                    ctx.scene->spotLightResource->GetGPUVirtualAddress(),
-                    model->mesh.indexCount);
+                    item.transformResource->GetGPUVirtualAddress());
             }
 
             if (ctx.productionScenePipeline != nullptr) {
@@ -804,7 +943,8 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                         ID3D12PipelineState* productionPso = batch.pipelineState != nullptr
                             ? batch.pipelineState : ctx.appPipelines->GetMainPSO();
                         if (!ctx.frameRenderer->PrepareMainPass(
-                                passContext.commandList, ctx.runtimeState->viewport,
+                                passContext.commandList, ctx.srvDescriptorHeap,
+                                ctx.runtimeState->viewport,
                                 ctx.runtimeState->scissorRect,
                                 ctx.appPipelines->GetMainRootSignature(), productionPso)) continue;
                         D3D12_GPU_VIRTUAL_ADDRESS materialAddress = batch.materialAddress != 0
@@ -875,6 +1015,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     }
                     if (!ctx.frameRenderer->PrepareMainPass(
                             passContext.commandList,
+                            ctx.srvDescriptorHeap,
                             ctx.runtimeState->viewport,
                             ctx.runtimeState->scissorRect,
                             ctx.appPipelines->GetMainRootSignature(),
@@ -943,6 +1084,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                         pointAddress,
                         spotAddress,
                         packet.indexCount,
+                        0,
                         ctx.productionLightingPipeline != nullptr
                             ? ctx.productionLightingPipeline->LightBufferAddress() : 0,
                         ctx.productionLightingPipeline != nullptr
@@ -961,10 +1103,13 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 if (SkinnedModelInstance* activeSkinnedModel =
                         ctx.scene->GetActiveSkinnedModel()) {
                     const bool needsSkinnedSurfaceVfx = RequiresSkinnedSurfaceVfx(ctx.runtimeState);
-                    if (needsSkinnedSurfaceVfx &&
+                    const bool preferComputeSkinning =
+                        needsSkinnedSurfaceVfx ||
+                        ctx.runtimeState->submissionShowcase.enabled;
+                    if (preferComputeSkinning &&
                         !DrawComputeSkinnedModelInstance(ctx, passContext, *activeSkinnedModel)) {
                         DrawSkinnedModelInstance(ctx, passContext, *activeSkinnedModel);
-                    } else if (!needsSkinnedSurfaceVfx) {
+                    } else if (!preferComputeSkinning) {
                         DrawSkinnedModelInstance(ctx, passContext, *activeSkinnedModel);
                     }
                 }
@@ -1011,6 +1156,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
 
             const bool ready = ctx.frameRenderer->PrepareMainPass(
                 passContext.commandList,
+                ctx.srvDescriptorHeap,
                 ctx.runtimeState->viewport,
                 ctx.runtimeState->scissorRect,
                 ctx.appPipelines->GetMainRootSignature(),
@@ -1096,6 +1242,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
 
                 const bool readyForDebris = ctx.frameRenderer->PrepareMainPass(
                     passContext.commandList,
+                    ctx.srvDescriptorHeap,
                     ctx.runtimeState->viewport,
                     ctx.runtimeState->scissorRect,
                     ctx.appPipelines->GetMainRootSignature(),
@@ -1155,6 +1302,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
 
             const bool ready = ctx.frameRenderer->PrepareMainPass(
                 passContext.commandList,
+                ctx.srvDescriptorHeap,
                 ctx.runtimeState->viewport,
                 ctx.runtimeState->scissorRect,
                 ctx.appPipelines->GetSkeletonDebugRootSignature(),
@@ -1190,6 +1338,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
 
             const bool ready = ctx.frameRenderer->PrepareMainPass(
                 passContext.commandList,
+                ctx.srvDescriptorHeap,
                 ctx.runtimeState->viewport,
                 ctx.runtimeState->scissorRect,
                 ctx.appPipelines->GetSkeletonDebugRootSignature(),

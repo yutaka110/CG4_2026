@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include <assimp/Importer.hpp>
+#include <assimp/postprocess.h>
 #include <assimp/scene.h>
 
 namespace {
@@ -70,7 +71,13 @@ AnimationClip LoadAnimationFile(
 
     Assimp::Importer importer;
     const std::string filePath = JoinPath(directoryPath, filename);
-    const aiScene* scene = importer.ReadFile(filePath.c_str(), 0);
+    // Animation channels must use the same handedness conversion as the
+    // imported mesh hierarchy and inverse-bind matrices. Mixing the original
+    // right-handed clip with a left-handed skeleton collapses weighted
+    // vertices even though the bind pose itself remains valid.
+    const aiScene* scene = importer.ReadFile(
+        filePath.c_str(),
+        aiProcess_ConvertToLeftHanded);
     if (scene == nullptr || scene->mNumAnimations == 0 || scene->mAnimations[0] == nullptr) {
         return animation;
     }

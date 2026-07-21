@@ -270,6 +270,120 @@ void DrawMaterialSettingsControlsPanel(
         -100.0f,
         100.0f);
 
+    ImGui::SeparatorText("Hand GPU Particle");
+    if (ImGui::Checkbox(
+            "Enable Hand Particle Attachment",
+            &runtimeState.handParticleAttachment.enabled) &&
+        runtimeState.handParticleAttachment.enabled) {
+        runtimeState.showSkinnedModel = true;
+        runtimeState.vfx.enableParticles = true;
+        if (runtimeState.selectedSkinnedModelIndex == 0) {
+            runtimeState.selectedSkinnedModelIndex = 1;
+            runtimeState.animatedCubeTime = 0.0f;
+        }
+    }
+    const char* handJointLabels[] = {
+        "Right Hand",
+        "Left Hand",
+        "Custom (environment)",
+    };
+    int selectedHandJoint =
+        runtimeState.handParticleAttachment.jointName == "mixamorig:LeftHand"
+        ? 1
+        : runtimeState.handParticleAttachment.jointName == "mixamorig:RightHand"
+            ? 0
+            : 2;
+    if (ImGui::Combo(
+            "Hand Joint",
+            &selectedHandJoint,
+            handJointLabels,
+            IM_ARRAYSIZE(handJointLabels))) {
+        if (selectedHandJoint == 0) {
+            runtimeState.handParticleAttachment.jointName = "mixamorig:RightHand";
+        } else if (selectedHandJoint == 1) {
+            runtimeState.handParticleAttachment.jointName = "mixamorig:LeftHand";
+        }
+    }
+    ImGui::DragFloat3(
+        "Hand Socket Offset",
+        reinterpret_cast<float*>(&runtimeState.handParticleAttachment.socketOffset.translate),
+        0.005f,
+        -2.0f,
+        2.0f);
+    const HandParticleAttachmentTelemetry& handTelemetry =
+        runtimeState.handParticleAttachmentTelemetry;
+    ImGui::Text(
+        "Attachment: %s | Socket: %s | Instance: %u",
+        HandParticleAttachmentStatusName(handTelemetry.status),
+        BoneSocketStatusName(handTelemetry.socketStatus),
+        handTelemetry.effectInstanceId);
+    ImGui::Text(
+        "Hand World: %.3f, %.3f, %.3f",
+        handTelemetry.worldPosition.x,
+        handTelemetry.worldPosition.y,
+        handTelemetry.worldPosition.z);
+    ImGui::Text("Effect: %s", runtimeState.handParticleAttachment.effectName.c_str());
+
+    ImGui::SeparatorText("Weapon Attachment");
+    if (ImGui::Checkbox(
+            "Enable Weapon Attachment",
+            &runtimeState.weaponAttachment.enabled) &&
+        runtimeState.weaponAttachment.enabled) {
+        runtimeState.showSkinnedModel = true;
+        if (runtimeState.selectedSkinnedModelIndex == 0) {
+            runtimeState.selectedSkinnedModelIndex = 1;
+            runtimeState.animatedCubeTime = 0.0f;
+        }
+    }
+    int selectedWeaponJoint =
+        runtimeState.weaponAttachment.jointName == "mixamorig:LeftHand"
+        ? 1
+        : runtimeState.weaponAttachment.jointName == "mixamorig:RightHand"
+            ? 0
+            : 2;
+    if (ImGui::Combo(
+            "Weapon Hand Joint",
+            &selectedWeaponJoint,
+            handJointLabels,
+            IM_ARRAYSIZE(handJointLabels))) {
+        if (selectedWeaponJoint == 0) {
+            runtimeState.weaponAttachment.jointName = "mixamorig:RightHand";
+        } else if (selectedWeaponJoint == 1) {
+            runtimeState.weaponAttachment.jointName = "mixamorig:LeftHand";
+        }
+    }
+    ImGui::DragFloat3(
+        "Weapon Socket Offset",
+        reinterpret_cast<float*>(&runtimeState.weaponAttachment.socketOffset.translate),
+        0.005f,
+        -2.0f,
+        2.0f);
+    ImGui::DragFloat4(
+        "Weapon Socket Rotation (Quaternion XYZW)",
+        reinterpret_cast<float*>(&runtimeState.weaponAttachment.socketOffset.rotate),
+        0.005f,
+        -1.0f,
+        1.0f);
+    ImGui::DragFloat3(
+        "Weapon Socket Scale",
+        reinterpret_cast<float*>(&runtimeState.weaponAttachment.socketOffset.scale),
+        0.005f,
+        0.01f,
+        5.0f);
+    const WeaponAttachmentTelemetry& weaponTelemetry =
+        runtimeState.weaponAttachmentTelemetry;
+    ImGui::Text(
+        "Weapon: %s | Socket: %s | Model: %u",
+        WeaponAttachmentStatusName(weaponTelemetry.status),
+        BoneSocketStatusName(weaponTelemetry.socketStatus),
+        weaponTelemetry.modelIndex);
+    ImGui::Text(
+        "Weapon World: %.3f, %.3f, %.3f",
+        weaponTelemetry.worldPosition.x,
+        weaponTelemetry.worldPosition.y,
+        weaponTelemetry.worldPosition.z);
+    ImGui::TextUnformatted("Asset: training_sword (shared procedural mesh)");
+
     ImGui::SeparatorText("Camera");
     ImGui::Checkbox("Debug Camera Input", &runtimeState.camera.enableDebugInput);
     ImGui::DragFloat3(
@@ -535,6 +649,14 @@ void DrawMaterialSettingsControlsPanel(
     const char* vfxModelLabels[] = {
         "ball",
         "animated_cube",
+        "organic_arch_large",
+        "rib_tunnel_wall",
+        "root_spire_column",
+        "curved_canyon_wall",
+        "vista_hole_wall",
+        "spire_broken_bridge_arc",
+        "multi_material_demo",
+        "training_sword",
     };
     int selectedModelIndex = static_cast<int>(selectedObject.modelIndex);
     if (ImGui::Combo(

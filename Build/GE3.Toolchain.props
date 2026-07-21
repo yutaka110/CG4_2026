@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup Label="GE3Toolchain">
+    <!-- Visual Studio 2026 (18.x) production toolchain. Override only for non-certified compatibility builds. -->
     <GE3PlatformToolset Condition="'$(GE3PlatformToolset)'==''">v145</GE3PlatformToolset>
     <GE3WindowsSdkVersion Condition="'$(GE3WindowsSdkVersion)'==''">10.0.26100.0</GE3WindowsSdkVersion>
     <GE3LanguageStandard Condition="'$(GE3LanguageStandard)'==''">stdcpp20</GE3LanguageStandard>

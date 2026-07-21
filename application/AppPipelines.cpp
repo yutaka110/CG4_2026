@@ -1622,6 +1622,10 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     D3D12_RASTERIZER_DESC rasterizerDesc{};
     rasterizerDesc.CullMode = D3D12_CULL_MODE_BACK;
     rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
+    // DirectX left-handed import contract: front faces are clockwise after
+    // aiProcess_ConvertToLeftHanded and geometry-orientation repair.
+    rasterizerDesc.FrontCounterClockwise = FALSE;
+    rasterizerDesc.DepthClipEnable = TRUE;
 
     // Depth
     D3D12_DEPTH_STENCIL_DESC depthStencilDesc{};

@@ -78,6 +78,7 @@ StyleCopReport.xml
 *.meta
 !Resources/**/*.meta
 *.obj
+!Resources/tests/MultiMaterial/MultiMaterial.obj
 *.iobj
 *.pch
 *.pdb
@@ -372,6 +373,10 @@ cache/
 .agents/
 externals/generated/
 vcpkg_installed/
+
+# Machine-local editor crash recovery state
+.editor/autosave/
+.editor/recovery/
 
 # Submission dependency libraries
 !externals/assimp/lib/

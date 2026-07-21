@@ -832,6 +832,124 @@ bool ShowcaseEffectButton(
     return pressed;
 }
 
+void DrawSubmissionShowcasePanel(
+    AppRuntimeState& runtimeState,
+    bool& showDeveloperTools) {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2 workPos = viewport ? viewport->WorkPos : ImVec2(0.0f, 0.0f);
+    const ImVec2 workSize = viewport ? viewport->WorkSize : ImGui::GetIO().DisplaySize;
+    const float panelWidth = ClampUiDimension(workSize.x * 0.34f, 430.0f, 560.0f);
+    ImGui::SetNextWindowPos(
+        ImVec2(workPos.x + 16.0f, workPos.y + 16.0f),
+        ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(panelWidth, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.88f);
+    constexpr ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoResize;
+
+    if (ImGui::Begin("Skinning + MultiMaterial Showcase", nullptr, flags)) {
+        ImGui::TextUnformatted("Skinning + MultiMaterial");
+        ImGui::SameLine();
+        ImGui::TextDisabled("development submission");
+        ImGui::Separator();
+
+        const RuntimeSubmissionShowcaseState& showcase =
+            runtimeState.submissionShowcase;
+        if (showcase.gamepadConnected) {
+            ImGui::TextColored(
+                ImVec4(0.30f, 0.95f, 0.50f, 1.0f),
+                "Gamepad %u connected",
+                showcase.controllerIndex + 1u);
+        } else {
+            ImGui::TextColored(
+                ImVec4(1.0f, 0.72f, 0.20f, 1.0f),
+                "Connect an XInput gamepad");
+        }
+
+        const char* animationName =
+            runtimeState.selectedSkinnedModelIndex == 2u
+                ? "Human Sneak Walk"
+                : "Human Walk";
+        ImGui::Text("Model: %s", animationName);
+        const HandParticleAttachmentTelemetry& handParticle =
+            runtimeState.handParticleAttachmentTelemetry;
+        const bool handParticleActive =
+            handParticle.status == HandParticleAttachmentStatus::Active;
+        ImGui::TextColored(
+            handParticleActive
+                ? ImVec4(0.30f, 0.90f, 1.0f, 1.0f)
+                : ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
+            "Right Hand GPU Particle: %s",
+            HandParticleAttachmentStatusName(handParticle.status));
+        const HandParticleAttachmentTelemetry& leftHandParticle =
+            runtimeState.leftHandParticleAttachmentTelemetry;
+        const bool leftHandParticleActive =
+            leftHandParticle.status == HandParticleAttachmentStatus::Active;
+        ImGui::TextColored(
+            leftHandParticleActive
+                ? ImVec4(1.0f, 0.22f, 0.12f, 1.0f)
+                : ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
+            "Left Hand GPU Particle: %s",
+            HandParticleAttachmentStatusName(leftHandParticle.status));
+        const WeaponAttachmentTelemetry& weapon =
+            runtimeState.weaponAttachmentTelemetry;
+        const bool weaponActive =
+            weapon.status == WeaponAttachmentStatus::Active;
+        ImGui::TextColored(
+            weaponActive
+                ? ImVec4(1.0f, 0.82f, 0.30f, 1.0f)
+                : ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
+            "Right Hand Weapon: %s",
+            WeaponAttachmentStatusName(weapon.status));
+        if (weaponActive) {
+            ImGui::TextDisabled(
+                "Joint Scale: (%.3f, %.3f, %.3f) -> World (%.2f, %.2f, %.2f)%s",
+                weapon.sourceJointScale.x,
+                weapon.sourceJointScale.y,
+                weapon.sourceJointScale.z,
+                weapon.worldScale.x,
+                weapon.worldScale.y,
+                weapon.worldScale.z,
+                weapon.jointScaleRemoved ? " [normalized]" : "");
+        }
+        const RuntimeWeaponDrawTelemetry& weaponDraw =
+            runtimeState.weaponDrawTelemetry;
+        const char* weaponDrawStatus = !weaponDraw.submitted
+            ? "not submitted"
+            : (!weaponDraw.screenBoundsVisible
+                ? "offscreen"
+                : (weaponDraw.screenBoundsReadable ? "visible" : "too small"));
+        ImGui::TextColored(
+            weaponDraw.submitted && weaponDraw.screenBoundsReadable
+                ? ImVec4(0.35f, 1.0f, 0.45f, 1.0f)
+                : ImVec4(1.0f, 0.45f, 0.20f, 1.0f),
+            "Weapon Draw: %s | SubMeshes %u / Materials %u",
+            weaponDrawStatus,
+            weaponDraw.submittedSubMeshCount,
+            weaponDraw.materialCount);
+        if (weaponDraw.submitted) {
+            ImGui::TextDisabled(
+                "Weapon Screen Bounds: (%.0f, %.0f) - (%.0f, %.0f)",
+                weaponDraw.screenMinimum.x,
+                weaponDraw.screenMinimum.y,
+                weaponDraw.screenMaximum.x,
+                weaponDraw.screenMaximum.y);
+        }
+        ImGui::ProgressBar(
+            (std::clamp)(showcase.moveMagnitude, 0.0f, 1.0f),
+            ImVec2(-1.0f, 8.0f),
+            "Movement");
+        ImGui::TextDisabled("Left Stick  Move / Right Stick  Rotate");
+        ImGui::TextDisabled("A  Skeleton / X  Walk Mode / B  Reset");
+        ImGui::Separator();
+        ImGui::Checkbox("Skeleton Debug", &runtimeState.showSkeletonDebug);
+        ImGui::SameLine();
+        ImGui::Checkbox("Developer Tools", &showDeveloperTools);
+    }
+    ImGui::End();
+}
+
 void DrawShowcasePresentationPanel(
     AppRuntimeState& runtimeState,
     EffectRuntime& effectRuntime,
@@ -2197,28 +2315,33 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorCourseObjectDirtyRevision_ = courseObjectRevision;
     }
     ++editorDocumentServiceFrame_;
-    if (!editorDocumentRecoveryScanned_ && editorDocumentManager_.OpenCount() > 0) {
+    if (!editorDocumentRecoveryScanned_) {
         editorDocumentRecoveryScanned_ = true;
-        const editor::EditorDocumentRecoveryScanResult recoveryScan =
+        editor::EditorDocumentRecoveryScanResult recoveryScan =
             editorDocumentRecoveryService_.Scan();
-        for (const editor::EditorDocumentRecoveryCandidate& candidate : recoveryScan.candidates) {
-            if (editorDocumentManager_.Find(candidate.autosave.id) == nullptr) continue;
-            if (candidate.sourceChangedSinceAutosave) {
-                editorDocumentManager_.SetConflict(
-                    candidate.autosave.id,
-                    editor::EditorDocumentConflictState::ExternalModified);
-                editorNotifications_.Push(
-                    editor::EditorNotificationSeverity::Warning,
-                    "Document Recovery",
-                    candidate.message);
-                continue;
-            }
+        editorDocumentRecoveryCandidates_ = std::move(recoveryScan.candidates);
+    }
+    for (auto candidate = editorDocumentRecoveryCandidates_.begin();
+         candidate != editorDocumentRecoveryCandidates_.end();) {
+        if (editorDocumentManager_.Find(candidate->autosave.id) == nullptr) {
+            ++candidate;
+            continue;
+        }
+        if (candidate->sourceChangedSinceAutosave) {
+            editorDocumentManager_.SetConflict(
+                candidate->autosave.id,
+                editor::EditorDocumentConflictState::ExternalModified);
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Warning,
+                "Document Recovery",
+                candidate->message);
+        } else {
             std::string recoveryError;
-            if (editorDocumentRecoveryService_.Recover(candidate, &recoveryError)) {
+            if (editorDocumentRecoveryService_.Recover(*candidate, &recoveryError)) {
                 editorNotifications_.Push(
                     editor::EditorNotificationSeverity::Info,
                     "Document Recovery",
-                    "Recovered autosaved authoring changes for " + candidate.autosave.id.Key());
+                    "Recovered autosaved authoring changes for " + candidate->autosave.id.Key());
             } else {
                 editorNotifications_.Push(
                     editor::EditorNotificationSeverity::Error,
@@ -2226,6 +2349,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                     recoveryError);
             }
         }
+        candidate = editorDocumentRecoveryCandidates_.erase(candidate);
     }
     if (editorDocumentServiceFrame_ % 120u == 0u) {
         editorExternalChangeMonitor_.Poll(editorDocumentManager_);
@@ -3369,7 +3493,13 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         runtimeState.vfx.showcaseAutoRotate = false;
         runtimeState.vfx.showcaseHudVisible = true;
         runtimeState.vfx.showcaseTuningVisible = false;
-        ClearShowcaseEffectState(runtimeState, effectRuntime);
+        // The submission scene owns its startup VFX configuration. Clearing the
+        // preview showcase here used to undo handParticleAttachment.enabled and
+        // vfx.enableParticles immediately after scene entry, so the persistent
+        // right-hand emitter never reached the GPU Particle render pass.
+        if (!runtimeState.submissionShowcase.enabled) {
+            ClearShowcaseEffectState(runtimeState, effectRuntime);
+        }
         ConfigureShowcasePostProcess(postProcessStack, runtimeState.vfx);
     }
 
@@ -3383,12 +3513,16 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         return;
     }
 
-    DrawShowcasePresentationPanel(
-        runtimeState,
-        effectRuntime,
-        postProcessStack,
-        showDeveloperTools_,
-        showcaseLoopCurrent_);
+    if (runtimeState.submissionShowcase.enabled) {
+        DrawSubmissionShowcasePanel(runtimeState, showDeveloperTools_);
+    } else {
+        DrawShowcasePresentationPanel(
+            runtimeState,
+            effectRuntime,
+            postProcessStack,
+            showDeveloperTools_,
+            showcaseLoopCurrent_);
+    }
     if (!showDeveloperTools_) {
         if (NeedsVfxRuntimeStatusTelemetry(runtimeState.vfx, hiddenRuntimeTelemetryFrame_++)) {
             UpdateVfxRuntimeStatusTelemetry(runtimeStatusInput);

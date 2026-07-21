@@ -378,5 +378,6 @@ private:
     uint64_t editorDocumentServiceFrame_ = 0;
     uint64_t editorWorldInputSignature_ = static_cast<uint64_t>(-1);
     bool editorDocumentRecoveryScanned_ = false;
+    std::vector<editor::EditorDocumentRecoveryCandidate> editorDocumentRecoveryCandidates_{};
     bool editorAssetRegistryInitialized_ = false;
 };

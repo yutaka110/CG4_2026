@@ -1,0 +1,48 @@
+# Compact red GPU emitter attached to the humanoid's animated left hand.
+# The emitter loops continuously, while each particle expires quickly enough
+# that the Bone Socket remains the obvious visual source.
+name = left_hand_socket_particle
+shader = Particle
+texture = circle2
+blend = additive
+layer = additive
+lifetime = 0
+renderQueue = 3080
+size = 1.0,1.0,1.0
+color = 1.0,1.0,1.0,1.0
+particle.lifetime = 0.45
+particle.emissive = 9.0
+particle.noiseStrength = 0.12
+particle.uvScrollSpeed = -0.15
+particle.pulseSpeed = 7.0
+particle.spawnRadius = 0.025
+particle.spawnCount = 2
+particle.spawnFrequency = 0.035
+particle.randomRotation = 1
+particle.scaleYMin = 0.45
+particle.scaleYMax = 0.85
+particle.depthFadeSoftness = 0.004
+particle.edgeSoftness = 0.10
+
+component = particle
+technique = ParticleAdditive
+name = left_hand_socket_particle_core
+layer = additive
+renderQueue = 3080
+duration = 0
+texture = circle2
+size = 0.16,0.16,0.16
+color = 1.0,1.0,1.0,1.0
+particle.lifetime = 0.45
+particle.emissive = 9.0
+particle.noiseStrength = 0.12
+particle.uvScrollSpeed = -0.15
+particle.pulseSpeed = 7.0
+particle.spawnRadius = 0.025
+particle.spawnCount = 2
+particle.spawnFrequency = 0.035
+particle.randomRotation = 1
+particle.scaleYMin = 0.45
+particle.scaleYMax = 0.85
+particle.depthFadeSoftness = 0.004
+particle.edgeSoftness = 0.10

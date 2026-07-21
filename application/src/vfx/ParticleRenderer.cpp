@@ -408,7 +408,9 @@ void ParticleRenderer::Simulate(
                 instance.transform.scale.z * component.size.z,
             };
             emitterPosition = instance.transform.translate;
-            particleLifetime = component.duration;
+            particleLifetime = settings.lifetime > 0.0f
+                ? settings.lifetime
+                : component.duration;
             emissive = settings.emissive;
             turbulence = settings.noiseStrength + settings.distortionStrength;
             pulseSpeed = settings.pulseSpeed;
@@ -422,7 +424,9 @@ void ParticleRenderer::Simulate(
         } else if (input.fallbackCommon != nullptr && input.fallbackSettings != nullptr) {
             tint = input.fallbackCommon->color;
             scale = input.fallbackCommon->size;
-            particleLifetime = input.fallbackCommon->duration;
+            particleLifetime = input.fallbackSettings->lifetime > 0.0f
+                ? input.fallbackSettings->lifetime
+                : input.fallbackCommon->duration;
             emissive = input.fallbackSettings->emissive;
             turbulence = input.fallbackSettings->noiseStrength + input.fallbackSettings->distortionStrength;
             pulseSpeed = input.fallbackSettings->pulseSpeed;
@@ -508,7 +512,9 @@ void ParticleRenderer::Simulate(
                 instance.transform.scale.z * component.size.z,
             };
             emitterPosition = instance.transform.translate;
-            particleLifetime = component.duration;
+            particleLifetime = settings.lifetime > 0.0f
+                ? settings.lifetime
+                : component.duration;
             emissive = settings.emissive;
             turbulence = settings.noiseStrength + settings.distortionStrength;
             pulseSpeed = settings.pulseSpeed;
@@ -523,7 +529,9 @@ void ParticleRenderer::Simulate(
         } else if (input.fallbackCommon != nullptr && input.fallbackSettings != nullptr) {
             tint = input.fallbackCommon->color;
             scale = input.fallbackCommon->size;
-            particleLifetime = input.fallbackCommon->duration;
+            particleLifetime = input.fallbackSettings->lifetime > 0.0f
+                ? input.fallbackSettings->lifetime
+                : input.fallbackCommon->duration;
             emissive = input.fallbackSettings->emissive;
             turbulence = input.fallbackSettings->noiseStrength + input.fallbackSettings->distortionStrength;
             pulseSpeed = input.fallbackSettings->pulseSpeed;

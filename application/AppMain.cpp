@@ -100,7 +100,9 @@ int AppMain::Run() {
 
 	auto& heaps = engineContext.GetHeaps();
 	ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap = heaps.srv.GetHeap();
-	heaps.srv.Reserve(160);
+	heaps.srv.Reserve(
+		AppSceneResources::kMaterialTextureSrvBaseIndex +
+		AppSceneResources::kMaterialTextureSrvCount);
 	// Fixed high ranges are owned outside the monotonic allocator:
 	// 3200-3711 Editor thumbnails, 3712-4095 E-8 production Texture residency.
 	heaps.srv.ReserveRange(3200, 896);
@@ -172,17 +174,27 @@ runtimeState.camera.fovY = 0.25f * std::numbers::pi_v<float>;
 runtimeState.camera.nearZ = 0.1f;
 runtimeState.camera.farZ = 1000.0f;
 
-runtimeState.vfxModelObjects[0].modelIndex = 0;
-runtimeState.vfxModelObjects[0].transform.scale = { 1.25f, 1.25f, 1.25f };
-runtimeState.vfxModelObjects[0].transform.rotate = { 0.0f, 0.0f, 0.0f };
-runtimeState.vfxModelObjects[0].transform.translate = { -2.4f, -0.35f, -5.8f };
+	runtimeState.vfxModelObjects[0].modelIndex = 0;
+	runtimeState.vfxModelObjects[0].transform.scale = { 0.9f, 0.9f, 0.9f };
+	runtimeState.vfxModelObjects[0].transform.rotate = { 0.28f, 0.55f, 0.0f };
+	runtimeState.vfxModelObjects[0].transform.translate = { 0.0f, 0.0f, -3.5f };
+	for (uint32_t modelIndex = 0;
+		 modelIndex < scene.ManagedModelLibrary().size();
+		 ++modelIndex) {
+		if (scene.ManagedModelLibrary()[modelIndex].name == "multi_material_demo") {
+			runtimeState.vfxModelObjects[0].modelIndex = modelIndex;
+			break;
+		}
+	}
 
-runtimeState.vfxModelObjects[1].modelIndex = 1;
+	runtimeState.vfxModelObjects[1].modelIndex = 1;
+	runtimeState.vfxModelObjects[1].visible = false;
 runtimeState.vfxModelObjects[1].transform.scale = { 0.45f, 0.45f, 0.45f };
 runtimeState.vfxModelObjects[1].transform.rotate = { 0.0f, 0.0f, 0.0f };
 runtimeState.vfxModelObjects[1].transform.translate = { 0.0f, -0.2f, -5.8f };
 
-runtimeState.vfxModelObjects[2].modelIndex = 0;
+	runtimeState.vfxModelObjects[2].modelIndex = 0;
+	runtimeState.vfxModelObjects[2].visible = false;
 runtimeState.vfxModelObjects[2].transform.scale = { 0.85f, 0.85f, 0.85f };
 runtimeState.vfxModelObjects[2].transform.rotate = { 0.0f, 0.6f, 0.0f };
 runtimeState.vfxModelObjects[2].transform.translate = { 2.0f, -0.35f, -5.8f };
@@ -195,7 +207,8 @@ runtimeState.uvTransformSprite.scale = { 1.0f, 1.0f, 1.0f };
 runtimeState.uvTransformSprite.rotate = { 0.0f, 0.0f, 0.0f };
 runtimeState.uvTransformSprite.translate = { 0.0f, 0.0f, 0.0f };
 
-ApplyEnvironmentRuntimeConfig(runtimeState);
+	runtimeState.showAnimatedCube = false;
+	ApplyEnvironmentRuntimeConfig(runtimeState);
 
 runtimeState.viewport.Width = 1280.0f;
 runtimeState.viewport.Height = 720.0f;
@@ -282,6 +295,7 @@ AppFrameRenderer frameRenderer;
 	MSG msg{};
 
 	FrameLoopState frameState{};
+	const AppStartupScene startupScene = ResolveAppStartupSceneFromCommandLine();
 	AppRunLoop runLoop(
 		debugCamera,
 		runtimeState,
@@ -304,7 +318,8 @@ AppFrameRenderer frameRenderer;
 		frameState,
 		commandQueue.Get(),
 		fence.Get(),
-		fenceEvent);
+		fenceEvent,
+		startupScene);
 	runLoop.InitializeBeam(
 		device.Get(),
 		srvDescriptorHeap.Get(),

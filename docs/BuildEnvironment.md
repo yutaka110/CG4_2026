@@ -5,7 +5,7 @@
 M0 fixes the editor build and validation contract so that a local clean build and CI use the same entry points. A successful M0 run requires all of the following:
 
 - Debug, Development, and Release x64 builds succeed from source.
-- Visual C++ toolset v145 and Windows SDK 10.0.26100.0 are present.
+- Visual Studio 2026 (18.x), Visual C++ toolset v145, and Windows SDK 10.0.26100.0 are present.
 - Editor Core Regression, Effect Authoring Smoke, Editor Smoke Run, and all Commercial Automation Gates return exit code 0.
 - The commercial report is fresh and reports failed, warning, blocked, and attention counts of zero.
 - The validation manifest records the commit, dirty state, toolchain, SDK, executable hash, GPU adapter, run exit codes, and report hashes.
@@ -20,14 +20,14 @@ M0.1 turns the reproducible-build convention into a fail-closed supply-chain and
 - `tools/check_prerequisites.ps1` rejects every version, content hash, license, or tracked dependency tree mismatch and can always emit a JSON preflight report with `-ReportPath`.
 - `tools/assert_clean_tree.ps1` rejects whitespace errors, modified paths, untracked paths, and a CI checkout whose `HEAD` differs from `GITHUB_SHA`.
 - `tools/run_editor_validation.ps1 -RequireCleanTree` checks cleanliness before executing anything, verifies the source revision did not change during validation, and records the result in `ge3.commercialValidation.v3`.
-- CI uses the reviewed `windows-2025` runner family, Visual Studio 18.x, and full 40-character action commit hashes. Exact binary hashes still fail the job if the hosted image is serviced underneath that label.
+- CI uses the reviewed `windows-2025` runner family, Visual Studio 2026 (18.x), and full 40-character action commit hashes. Exact binary hashes still fail the job if the hosted image is serviced underneath that label.
 
 Dependency/toolchain lock changes are review operations, not automatic updates. Capture the new provenance, verify licenses, perform all three clean builds and commercial validation, review the diff, and only then update the lock.
 
 ## Required environment
 
 - Windows x64
-- Visual Studio with Desktop development with C++
+- Visual Studio 2026 (18.x) with Desktop development with C++
 - MSVC v145 x64/x86 build tools
 - Windows SDK 10.0.26100.0, including x64 DXC/DXIL runtime files
 - The checked-in Assimp libraries and DirectXTex project

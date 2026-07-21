@@ -1452,7 +1452,8 @@ AppRunLoop::AppRunLoop(
     FrameLoopState& frameState,
     ID3D12CommandQueue* commandQueue,
     ID3D12Fence* fence,
-    HANDLE fenceEvent)
+    HANDLE fenceEvent,
+    AppStartupScene startupScene)
     : debugCamera_(debugCamera),
       runtimeState_(runtimeState),
       scene_(scene),
@@ -1486,11 +1487,23 @@ AppRunLoop::AppRunLoop(
         }
         OutputDebugStringA(message.str().c_str());
     }
-    sceneStateManager_.Initialize(std::make_unique<RailShooterSceneState>(), *this);
-    std::string presetError;
-    terrainPresetStore_.Load(runtimeState_.terrain, &presetError);
-    LoadRailShooterCourse();
-    ApplyRailShooterCourse();
+    if (startupScene == AppStartupScene::MultiMaterialShowcase) {
+        sceneStateManager_.Initialize(
+            std::make_unique<MultiMaterialShowcaseSceneState>(), *this);
+        OutputDebugStringA(
+            "[AppRunLoop] Startup scene: MultiMaterialShowcase "
+            "(--multi-material-showcase).\n");
+    } else if (startupScene == AppStartupScene::VfxPreview) {
+        sceneStateManager_.Initialize(std::make_unique<VfxPreviewSceneState>(), *this);
+        OutputDebugStringA("[AppRunLoop] Startup scene: VfxPreview (--vfx-preview).\n");
+    } else {
+        sceneStateManager_.Initialize(std::make_unique<RailShooterSceneState>(), *this);
+        std::string presetError;
+        terrainPresetStore_.Load(runtimeState_.terrain, &presetError);
+        LoadRailShooterCourse();
+        ApplyRailShooterCourse();
+        OutputDebugStringA("[AppRunLoop] Startup scene: RailShooter.\n");
+    }
     frameCoordinator_.Initialize();
 }
 
@@ -3812,7 +3825,116 @@ void AppRunLoop::LogRailShooterPerfSpike() {
 void AppRunLoop::Shutdown() {
     frameCoordinator_.FlushGpu();
     sceneStateManager_.Shutdown(*this);
+    handParticleAttachment_.Stop(vfxEngine_.Runtime());
+    leftHandParticleAttachment_.Stop(vfxEngine_.Runtime());
+    weaponAttachment_.Reset();
     vfxEngine_.Shutdown();
+}
+
+void AppRunLoop::UpdateHandParticleAttachment() {
+    const SkinnedModelInstance* model = scene_.GetActiveSkinnedModel();
+    const Skeleton* skeleton = model != nullptr && model->loaded
+        ? &model->skeleton
+        : nullptr;
+    Matrix4x4 ownerWorld = MakeIdentity4x4();
+    if (model != nullptr && model->loaded) {
+        ownerWorld = MakeAffineMatrix(
+            model->transform.scale,
+            model->transform.rotate,
+            model->transform.translate);
+    }
+
+    handParticleAttachment_.Update(
+        runtimeState_.handParticleAttachment,
+        skeleton,
+        ownerWorld,
+        vfxEngine_.Runtime());
+    runtimeState_.handParticleAttachmentTelemetry =
+        handParticleAttachment_.Telemetry();
+
+    leftHandParticleAttachment_.Update(
+        runtimeState_.leftHandParticleAttachment,
+        skeleton,
+        ownerWorld,
+        vfxEngine_.Runtime());
+    runtimeState_.leftHandParticleAttachmentTelemetry =
+        leftHandParticleAttachment_.Telemetry();
+}
+
+void AppRunLoop::UpdateWeaponAttachment() {
+    const SkinnedModelInstance* model = scene_.GetActiveSkinnedModel();
+    const Skeleton* skeleton = model != nullptr && model->loaded
+        ? &model->skeleton
+        : nullptr;
+    Matrix4x4 ownerWorld = MakeIdentity4x4();
+    if (model != nullptr && model->loaded) {
+        ownerWorld = MakeAffineMatrix(
+            model->transform.scale,
+            model->transform.rotate,
+            model->transform.translate);
+    }
+
+    const uint32_t modelIndex = scene_.TrainingSwordModelIndex();
+    weaponAttachment_.Update(
+        runtimeState_.weaponAttachment,
+        skeleton,
+        ownerWorld,
+        modelIndex,
+        scene_.FindManagedModel(modelIndex) != nullptr);
+    runtimeState_.weaponAttachmentTelemetry = weaponAttachment_.Telemetry();
+    scene_.UpdateWeaponAttachment(
+        runtimeState_.weaponAttachmentTelemetry,
+        frameState_.viewMatrix,
+        frameState_.projMatrix);
+}
+
+void AppRunLoop::EnterVfxPreviewScene() {
+    railShooterInitialized_ = false;
+    runtimeState_.terrain.enabled = false;
+    runtimeState_.terrain.autoAdvancePreview = false;
+    runtimeState_.camera.enableDebugInput = true;
+    runtimeState_.showSprite = true;
+    runtimeState_.showVfxModelObjects = true;
+    runtimeState_.submissionShowcase = {};
+}
+
+void AppRunLoop::EnterMultiMaterialShowcaseScene() {
+    railShooterInitialized_ = false;
+    runtimeState_.terrain.enabled = false;
+    runtimeState_.terrain.autoAdvancePreview = false;
+    ApplyMultiMaterialShowcasePresentationDefaults(runtimeState_);
+
+    uint32_t humanoidModelIndex = 1;
+    if (!scene_.skinnedModels[humanoidModelIndex].loaded) {
+        humanoidModelIndex = scene_.skinnedModels[2].loaded ? 2u : 0u;
+    }
+    runtimeState_.selectedSkinnedModelIndex = humanoidModelIndex;
+
+    ClearShowcaseEffects();
+    runtimeState_.vfx.showcaseMode = false;
+    runtimeState_.vfx.autoPlayVfxDemo = false;
+    runtimeState_.vfx.iceProjectileClickToFire = false;
+
+    uint32_t multiMaterialModelIndex = UINT32_MAX;
+    for (uint32_t modelIndex = 0;
+         modelIndex < scene_.ManagedModelLibrary().size();
+         ++modelIndex) {
+        if (scene_.ManagedModelLibrary()[modelIndex].name == "multi_material_demo") {
+            multiMaterialModelIndex = modelIndex;
+            break;
+        }
+    }
+    for (RuntimeVfxModelObjectState& object : runtimeState_.vfxModelObjects) {
+        object.visible = false;
+    }
+    if (multiMaterialModelIndex != UINT32_MAX) {
+        RuntimeVfxModelObjectState& showcase = runtimeState_.vfxModelObjects[0];
+        showcase.visible = true;
+        showcase.modelIndex = multiMaterialModelIndex;
+        showcase.transform.scale = {0.68f, 0.68f, 0.68f};
+        showcase.transform.rotate = {0.30f, 0.55f, 0.0f};
+        showcase.transform.translate = {1.55f, -0.42f, -1.0f};
+    }
 }
 
 void AppRunLoop::EnterRailShooterScene() {
@@ -3850,7 +3972,9 @@ void AppRunLoop::EnterRailShooterScene() {
     runtimeState_.showSkeletonDebug = false;
     runtimeState_.showSkybox = false;
     runtimeState_.showProceduralBackdrop = true;
+    runtimeState_.showSprite = true;
     runtimeState_.showVfxModelObjects = false;
+    runtimeState_.submissionShowcase = {};
 
     runtimeState_.vfx.showcaseMode = false;
     runtimeState_.vfx.autoPlayVfxDemo = false;
@@ -4236,6 +4360,92 @@ void AppRunLoop::RenderRailShooterFrame() {
     RenderVfxPreviewFrame();
 }
 
+void AppRunLoop::UpdateMultiMaterialShowcaseFrame() {
+    UpdateSubmissionShowcaseGamepad(
+        (std::max)(0.0f, frameState_.deltaTime));
+    RuntimeVfxModelObjectState& showcase = runtimeState_.vfxModelObjects[0];
+    if (showcase.visible) {
+        showcase.transform.rotate.y = std::fmod(
+            showcase.transform.rotate.y +
+                (std::max)(0.0f, frameState_.deltaTime) * 0.24f,
+            2.0f * 3.14159265358979323846f);
+    }
+    UpdateVfxPreviewFrame();
+}
+
+void AppRunLoop::UpdateSubmissionShowcaseGamepad(float deltaTime) {
+    const AppGamepadFrame gamepad = submissionGamepad_.Poll();
+    RuntimeSubmissionShowcaseState& telemetry =
+        runtimeState_.submissionShowcase;
+    telemetry.gamepadConnected = gamepad.connected;
+    telemetry.controllerIndex = gamepad.controllerIndex;
+    telemetry.moveX = gamepad.leftStick.x;
+    telemetry.moveY = gamepad.leftStick.y;
+    telemetry.moveMagnitude = gamepad.leftStick.magnitude;
+
+    if (gamepad.justConnected) {
+        OutputDebugStringA(
+            "[MultiMaterialShowcase] XInput gamepad connected.\n");
+    } else if (gamepad.justDisconnected) {
+        OutputDebugStringA(
+            "[MultiMaterialShowcase] XInput gamepad disconnected.\n");
+    }
+
+    if (!gamepad.connected) {
+        runtimeState_.playAnimatedCube = true;
+        runtimeState_.animatedCubeSpeed = 0.65f;
+        return;
+    }
+
+    constexpr float kMoveSpeed = 2.25f;
+    constexpr float kTurnSpeed = 2.35f;
+    constexpr float kPi = 3.14159265358979323846f;
+    Transform& transform = runtimeState_.skinnedModelTransform;
+    transform.translate.x +=
+        gamepad.leftStick.x * kMoveSpeed * deltaTime;
+    transform.translate.z +=
+        gamepad.leftStick.y * kMoveSpeed * deltaTime;
+    transform.translate.x =
+        (std::clamp)(transform.translate.x, -2.25f, 0.55f);
+    transform.translate.z =
+        (std::clamp)(transform.translate.z, -2.0f, 0.35f);
+
+    if (gamepad.rightStick.magnitude > 0.05f) {
+        transform.rotate.y = std::fmod(
+            transform.rotate.y +
+                gamepad.rightStick.x * kTurnSpeed * deltaTime +
+                2.0f * kPi,
+            2.0f * kPi);
+    } else if (gamepad.leftStick.magnitude > 0.08f) {
+        transform.rotate.y = std::atan2(
+            gamepad.leftStick.x,
+            gamepad.leftStick.y);
+    }
+
+    const bool moving = gamepad.leftStick.magnitude > 0.08f;
+    runtimeState_.playAnimatedCube = moving;
+    runtimeState_.animatedCubeSpeed =
+        0.65f + gamepad.leftStick.magnitude * 0.85f;
+
+    if (gamepad.toggleSkeletonPressed) {
+        runtimeState_.showSkeletonDebug =
+            !runtimeState_.showSkeletonDebug;
+    }
+    if (gamepad.nextAnimationPressed) {
+        const uint32_t nextModel =
+            runtimeState_.selectedSkinnedModelIndex == 1u ? 2u : 1u;
+        if (nextModel < scene_.skinnedModels.size() &&
+            scene_.skinnedModels[nextModel].loaded) {
+            runtimeState_.selectedSkinnedModelIndex = nextModel;
+            runtimeState_.animatedCubeTime = 0.0f;
+        }
+    }
+    if (gamepad.resetPressed) {
+        ResetMultiMaterialShowcaseHumanoidPose(runtimeState_);
+        runtimeState_.animatedCubeTime = 0.0f;
+    }
+}
+
 void AppRunLoop::UpdateVfxPreviewFrame() {
     appPipelines_.HotReloadIfNeeded(dev_.GetDevice());
     const RenderViewportMetrics metrics =
@@ -4311,7 +4521,11 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
 
     constexpr float kFixedPreviewDeltaTime = 0.016f;
     const bool editorRuntimeAdvance = imguiLayer_.ShouldAdvanceEditorRuntimeFrame();
-    const float previewDeltaTime = editorRuntimeAdvance ? kFixedPreviewDeltaTime : 0.0f;
+    const bool previewRuntimeAdvance = ShouldAdvancePreviewRuntime(
+        editorRuntimeAdvance,
+        runtimeState_.submissionShowcase.enabled);
+    const float previewDeltaTime =
+        previewRuntimeAdvance ? kFixedPreviewDeltaTime : 0.0f;
     ProcessReleaseShowcaseControls(previewDeltaTime);
     vfxEngine_.Update(runtimeState_.vfx, previewDeltaTime);
     UpdateTerrainAuthoring(previewDeltaTime);
@@ -4323,6 +4537,8 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
     frameState_.drawCount = particleSystem_.UpdateInstances(
         frameState_.viewProjectionMatrix,
         frameState_.deltaTime);
+    // Only acknowledge an editor-owned Play/Step request. Submission auto-run
+    // must not mutate the editor play-session state machine.
     imguiLayer_.CompleteEditorRuntimeFrameAdvance(editorRuntimeAdvance);
 }
 
@@ -7089,6 +7305,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
 
     const auto sceneRuntimeSyncStart = RailPerfClock::now();
     scene_.SyncRuntimeState(runtimeState_, frameState_.deltaTime);
+    UpdateHandParticleAttachment();
+    UpdateWeaponAttachment();
     particleSystem_.SetAccelerationField({
         runtimeState_.accelerationField.acceleration,
         {runtimeState_.accelerationField.area.min, runtimeState_.accelerationField.area.max}

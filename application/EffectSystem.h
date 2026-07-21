@@ -195,6 +195,9 @@ private:
 };
 
 struct EffectParticleSettings {
+    // Individual GPU particle lifetime. A value <= 0 preserves the legacy
+    // behavior (component duration, then the shader's bounded fallback).
+    float lifetime = 0.0f;
     float emissive = 1.0f;
     float distortionStrength = 0.0f;
     float noiseStrength = 0.0f;
