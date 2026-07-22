@@ -1,6 +1,6 @@
 # Continuous GPU emitter attached to an animated hand Bone Socket.
-# A zero effect/component duration keeps the emitter alive; GPU particles use
-# the shader's bounded default lifetime when the authored duration is zero.
+# A zero effect/component duration keeps the emitter alive, while each GPU
+# particle has an explicit bounded lifetime for every render-resource path.
 name = hand_socket_particle
 shader = Particle
 texture = circle2
@@ -11,16 +11,17 @@ renderQueue = 3075
 size = 1.0,1.0,1.0
 color = 1.0,1.0,1.0,1.0
 particle.emissive = 6.0
-particle.noiseStrength = 0.35
+particle.lifetime = 0.55
+particle.noiseStrength = 0.22
 particle.uvScrollSpeed = 0.25
 particle.pulseSpeed = 5.0
-particle.spawnRadius = 0.09
-particle.spawnCount = 3
-particle.spawnFrequency = 0.04
+particle.spawnRadius = 0.045
+particle.spawnCount = 7
+particle.spawnFrequency = 0.020
 particle.randomRotation = 1
-particle.scaleYMin = 0.35
-particle.scaleYMax = 1.15
-particle.depthFadeSoftness = 0.008
+particle.scaleYMin = 0.55
+particle.scaleYMax = 0.95
+particle.depthFadeSoftness = 0.0
 particle.edgeSoftness = 0.16
 
 component = particle
@@ -30,17 +31,18 @@ layer = additive
 renderQueue = 3075
 duration = 0
 texture = circle2
-size = 0.22,0.22,0.22
+size = 0.10,0.10,0.10
 color = 1.0,1.0,1.0,1.0
 particle.emissive = 6.0
-particle.noiseStrength = 0.35
+particle.lifetime = 0.55
+particle.noiseStrength = 0.22
 particle.uvScrollSpeed = 0.25
 particle.pulseSpeed = 5.0
-particle.spawnRadius = 0.09
-particle.spawnCount = 3
-particle.spawnFrequency = 0.04
+particle.spawnRadius = 0.045
+particle.spawnCount = 7
+particle.spawnFrequency = 0.020
 particle.randomRotation = 1
-particle.scaleYMin = 0.35
-particle.scaleYMax = 1.15
-particle.depthFadeSoftness = 0.008
+particle.scaleYMin = 0.55
+particle.scaleYMax = 0.95
+particle.depthFadeSoftness = 0.0
 particle.edgeSoftness = 0.16

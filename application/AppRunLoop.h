@@ -105,7 +105,7 @@ private:
     void UpdateVfxPreviewFrame() override;
     void RenderVfxPreviewFrame() override;
     void UpdateMultiMaterialShowcaseFrame() override;
-    void UpdateSubmissionShowcaseGamepad(float deltaTime);
+    void UpdateSubmissionShowcaseInput(float deltaTime);
     void BeginFrameSystems();
     void ApplyEditorViewportRenderTargetForRender();
     bool ResolveEditorViewportClientPoint(
@@ -150,6 +150,11 @@ private:
     bool EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList);
     bool BuildRailLockOnHudAtlasQuads();
     void RegisterRailLockOnHudPass(
+        ID3D12GraphicsCommandList* commandList,
+        const std::string& targetResourceName);
+    bool EnsureSubmissionHudResources(ID3D12GraphicsCommandList* commandList);
+    bool BuildSubmissionHudQuads();
+    void RegisterSubmissionHudPass(
         ID3D12GraphicsCommandList* commandList,
         const std::string& targetResourceName);
     void StartRailCameraTuningRecording();
@@ -234,6 +239,20 @@ private:
     D3D12_VERTEX_BUFFER_VIEW railLockOnHudAtlasVertexBufferView_{};
     uint32_t railLockOnHudAtlasVertexCount_ = 0;
     bool railLockOnHudAtlasReady_ = false;
+    Microsoft::WRL::ComPtr<ID3D12Resource> submissionHudVertexResource_;
+    RailHudAtlasVertex* submissionHudMappedVertices_ = nullptr;
+    D3D12_VERTEX_BUFFER_VIEW submissionHudVertexBufferView_{};
+    uint32_t submissionHudVertexCount_ = 0;
+    struct SubmissionHudGlyph {
+        Vector4 uv{};
+        Vector2 size{};
+        Vector2 offset{};
+        float advance = 0.0f;
+        bool valid = false;
+    };
+    std::array<SubmissionHudGlyph, 95> submissionHudGlyphs_{};
+    bool submissionHudFontReady_ = false;
+    bool submissionHudManuallyHidden_ = false;
     std::vector<RailNormalShotLine> railNormalShotLines_;
     std::string railShooterCoursePath_ = "Resources/courses/CanyonAssaultRoute01.course";
     std::string railShooterCourseLoadStatus_;

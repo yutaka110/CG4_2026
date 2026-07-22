@@ -137,7 +137,7 @@ void AppFrameGraphBuilder::Build(
         ctx.renderGraph->AddPass(std::move(emissivePreviewPass));
     }
 
-    if (ctx.imguiLayer->IsEnabled()) {
+    if (ctx.imguiLayer->IsVisible()) {
         if (developerDiagnosticsVisible) {
             ctx.renderGraph->AddPass({
                 "UI.ImGui",

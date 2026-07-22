@@ -18,6 +18,7 @@ struct AppGamepadFrame {
     bool toggleSkeletonPressed = false;
     bool nextAnimationPressed = false;
     bool resetPressed = false;
+    bool toggleHelpPressed = false;
 };
 
 class AppGamepadInput final {
@@ -28,6 +29,10 @@ public:
         int16_t x,
         int16_t y,
         int16_t deadZone) noexcept;
+
+    [[nodiscard]] static AppGamepadStick ClampUnitCircle(
+        float x,
+        float y) noexcept;
 
 private:
     uint32_t activeControllerIndex_ = UINT32_MAX;

@@ -1,14 +1,31 @@
 #include "Particle.hlsli"
 
-VSOutput main(VSInput input, uint instanceId : SV_InstanceID)
+VSOutput main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
 {
-    VSOutput output;
-    uint particleIndex = gUseAliveList != 0 ? gAliveList[instanceId] : instanceId;
+    const float2 positions[6] = {
+        float2(-0.5f, -0.5f),
+        float2(-0.5f, 0.5f),
+        float2(0.5f, -0.5f),
+        float2(-0.5f, 0.5f),
+        float2(0.5f, 0.5f),
+        float2(0.5f, -0.5f)
+    };
+    const float2 texcoords[6] = {
+        float2(0.0f, 1.0f),
+        float2(0.0f, 0.0f),
+        float2(1.0f, 1.0f),
+        float2(0.0f, 0.0f),
+        float2(1.0f, 0.0f),
+        float2(1.0f, 1.0f)
+    };
 
-    float4x4 wvp = gParticle[particleIndex].WVP;
-    output.position = mul(input.position, wvp);
-    output.texcoord = gParticle[particleIndex].uvRect.xy + input.texcoord * gParticle[particleIndex].uvRect.zw;
-    output.color = gParticle[particleIndex].color;
-    output.textureIndex = gParticle[particleIndex].textureIndex;
+    VSOutput output;
+    const uint particleIndex = gUseAliveList != 0 ? gAliveList[instanceId] : instanceId;
+    const uint safeVertexId = min(vertexId, 5u);
+    const ParticleForGPU particle = gParticle[particleIndex];
+    output.position = mul(float4(positions[safeVertexId], 0.0f, 1.0f), particle.WVP);
+    output.texcoord = particle.uvRect.xy + texcoords[safeVertexId] * particle.uvRect.zw;
+    output.color = particle.color;
+    output.textureIndex = particle.textureIndex;
     return output;
 }

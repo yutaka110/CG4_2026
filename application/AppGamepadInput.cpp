@@ -46,6 +46,19 @@ AppGamepadStick AppGamepadInput::ApplyRadialDeadZone(
     };
 }
 
+AppGamepadStick AppGamepadInput::ClampUnitCircle(
+    float x,
+    float y) noexcept {
+    const float rawMagnitude = std::sqrt(x * x + y * y);
+    if (!std::isfinite(rawMagnitude) || rawMagnitude <= 0.00001f) {
+        return {};
+    }
+    if (rawMagnitude <= 1.0f) {
+        return {x, y, rawMagnitude};
+    }
+    return {x / rawMagnitude, y / rawMagnitude, 1.0f};
+}
+
 AppGamepadFrame AppGamepadInput::Poll() noexcept {
     AppGamepadFrame frame{};
     XINPUT_STATE state{};
@@ -97,6 +110,8 @@ AppGamepadFrame AppGamepadInput::Poll() noexcept {
         IsPressed(buttons, edgeBaseline, XINPUT_GAMEPAD_X);
     frame.resetPressed =
         IsPressed(buttons, edgeBaseline, XINPUT_GAMEPAD_B);
+    frame.toggleHelpPressed =
+        IsPressed(buttons, edgeBaseline, XINPUT_GAMEPAD_Y);
     previousButtons_ = buttons;
     wasConnected_ = true;
     return frame;

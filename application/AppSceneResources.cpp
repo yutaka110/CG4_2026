@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "AppRenderResources.h"
+#include "AppRuntimeConfig.h"
 #include "AppRuntimeUtils.h"
 #include "ModelLoaderAssimp.h"
 
@@ -2828,9 +2829,24 @@ void AppSceneResources::UpdateTransforms(
 }
 
 void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float deltaTime) {
-    activeSkinnedModelIndex = (std::min)(
-        runtimeState.selectedSkinnedModelIndex,
-        uint32_t(skinnedModels.size() - 1));
+    RuntimeSkinnedAnimationBlendState& animationBlend =
+        runtimeState.skinnedAnimationBlend;
+    const bool validAnimationBlend =
+        animationBlend.active &&
+        animationBlend.fromModelIndex < skinnedModels.size() &&
+        animationBlend.toModelIndex < skinnedModels.size() &&
+        animationBlend.fromModelIndex != animationBlend.toModelIndex &&
+        skinnedModels[animationBlend.fromModelIndex].loaded &&
+        skinnedModels[animationBlend.toModelIndex].loaded;
+    if (animationBlend.active && !validAnimationBlend) {
+        CancelSkinnedAnimationBlend(runtimeState);
+    }
+
+    activeSkinnedModelIndex = validAnimationBlend
+        ? animationBlend.fromModelIndex
+        : (std::min)(
+            runtimeState.selectedSkinnedModelIndex,
+            uint32_t(skinnedModels.size() - 1));
     runtimeState.selectedSkinnedModelIndex = activeSkinnedModelIndex;
     runtimeState.selectedVfxModelObjectIndex = (std::min)(
         runtimeState.selectedVfxModelObjectIndex,
@@ -2850,18 +2866,73 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
             runtimeState.vfx.enableSkinnedSurfaceVfx ||
             runtimeState.handParticleAttachment.enabled ||
             runtimeState.leftHandParticleAttachment.enabled ||
-            runtimeState.weaponAttachment.enabled);
+            runtimeState.weaponAttachment.enabled ||
+            animationBlend.active);
 
     if (updateActiveSkinned) {
         activeSkinnedModel->visible = runtimeState.showSkinnedModel;
         activeSkinnedModel->transform = runtimeState.skinnedModelTransform;
-        UpdateSkinnedModelInstance(
-            *activeSkinnedModel,
-            deltaTime,
-            runtimeState.playAnimatedCube,
-            runtimeState.loopAnimatedCube,
-            runtimeState.animatedCubeSpeed,
-            runtimeState.animatedCubeTime);
+        if (animationBlend.active) {
+            SkinnedModelInstance& targetModel =
+                skinnedModels[animationBlend.toModelIndex];
+            targetModel.visible = false;
+            targetModel.transform = runtimeState.skinnedModelTransform;
+
+            const auto advanceAnimationClock = [&](
+                SkinnedModelInstance& model,
+                float& animationTime) {
+                model.animator.time = animationTime;
+                model.animator.playing = runtimeState.playAnimatedCube;
+                model.animator.loop = runtimeState.loopAnimatedCube;
+                model.animator.speed = runtimeState.animatedCubeSpeed;
+                if (runtimeState.playAnimatedCube) {
+                    model.animator.Update(deltaTime, model.animation.duration);
+                    animationTime = model.animator.time;
+                }
+            };
+            advanceAnimationClock(*activeSkinnedModel, animationBlend.fromTime);
+            advanceAnimationClock(targetModel, animationBlend.toTime);
+
+            const float blendAlpha =
+                AdvanceSkinnedAnimationBlend(runtimeState, deltaTime);
+            ApplyAnimationBlend(
+                activeSkinnedModel->skeleton,
+                activeSkinnedModel->animation,
+                animationBlend.fromTime,
+                targetModel.animation,
+                animationBlend.toTime,
+                blendAlpha);
+            UpdateSkeleton(activeSkinnedModel->skeleton);
+            UpdateSkinCluster(
+                activeSkinnedModel->skinCluster,
+                activeSkinnedModel->skeleton);
+            runtimeState.animatedCubeTime = animationBlend.fromTime;
+
+            if (blendAlpha >= 1.0f) {
+                targetModel.animator.time = animationBlend.toTime;
+                targetModel.animator.playing = runtimeState.playAnimatedCube;
+                targetModel.animator.loop = runtimeState.loopAnimatedCube;
+                targetModel.animator.speed = runtimeState.animatedCubeSpeed;
+                ApplyAnimation(
+                    targetModel.skeleton,
+                    targetModel.animation,
+                    animationBlend.toTime);
+                UpdateSkeleton(targetModel.skeleton);
+                UpdateSkinCluster(targetModel.skinCluster, targetModel.skeleton);
+                targetModel.visible = runtimeState.showSkinnedModel;
+                activeSkinnedModel->visible = false;
+                activeSkinnedModelIndex = animationBlend.toModelIndex;
+                CompleteSkinnedAnimationBlend(runtimeState);
+            }
+        } else {
+            UpdateSkinnedModelInstance(
+                *activeSkinnedModel,
+                deltaTime,
+                runtimeState.playAnimatedCube,
+                runtimeState.loopAnimatedCube,
+                runtimeState.animatedCubeSpeed,
+                runtimeState.animatedCubeTime);
+        }
     } else if (runtimeState.playAnimatedCube) {
         Animator animator{};
         animator.time = runtimeState.animatedCubeTime;

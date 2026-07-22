@@ -667,6 +667,7 @@ void RenderGraph::BindPassTargets(
             FALSE,
             dsv);
     }
+
 }
 
 void RenderGraph::EmitUavBarriers(

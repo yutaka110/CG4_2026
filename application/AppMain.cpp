@@ -236,14 +236,19 @@ imguiLayer.Initialize(
 	kRtvFormat,
 	srvDescriptorHeap.Get(),
 	&appPipelines);
-bootstrap.SetMessageCallback(
-	[&imguiLayer](HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
-		return imguiLayer.HandleWindowMessage(hwnd, message, wParam, lParam);
-	});
-bootstrap.SetDropCallback(
-	[&imguiLayer](const std::wstring& path) {
-		imguiLayer.QueueExternalAssetDrop(std::filesystem::path(path));
-	});
+#if defined(GE3_RELEASE_PRESENTATION) && GE3_RELEASE_PRESENTATION
+imguiLayer.SetVisible(false);
+#endif
+if (imguiLayer.IsVisible()) {
+	bootstrap.SetMessageCallback(
+		[&imguiLayer](HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+			return imguiLayer.HandleWindowMessage(hwnd, message, wParam, lParam);
+		});
+	bootstrap.SetDropCallback(
+		[&imguiLayer](const std::wstring& path) {
+			imguiLayer.QueueExternalAssetDrop(std::filesystem::path(path));
+		});
+}
 
 
 AppRenderResources renderResources;
@@ -340,9 +345,8 @@ AppFrameRenderer frameRenderer;
 
 	audio.Finalize();
 	bootstrap.SetMessageCallback({});
-#if defined(_DEBUG)||DEVELOP
+	bootstrap.SetDropCallback({});
 	imguiLayer.Shutdown();
-#endif
 
 	runLoop.Shutdown();
 

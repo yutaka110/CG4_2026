@@ -866,12 +866,40 @@ void DrawSubmissionShowcasePanel(
                 ImVec4(1.0f, 0.72f, 0.20f, 1.0f),
                 "Connect an XInput gamepad");
         }
+        if (showcase.keyboardInputEnabled) {
+            ImGui::TextColored(
+                ImVec4(0.45f, 0.85f, 1.0f, 1.0f),
+                showcase.keyboardActive
+                    ? "Keyboard ready (active)"
+                    : "Keyboard ready");
+        } else {
+            ImGui::TextColored(
+                ImVec4(1.0f, 0.72f, 0.20f, 1.0f),
+                "Focus window / finish text input for keyboard");
+        }
 
-        const char* animationName =
-            runtimeState.selectedSkinnedModelIndex == 2u
-                ? "Human Sneak Walk"
-                : "Human Walk";
-        ImGui::Text("Model: %s", animationName);
+        const auto animationName = [](uint32_t modelIndex) {
+            return modelIndex == 2u ? "Human Sneak Walk" : "Human Walk";
+        };
+        const RuntimeSkinnedAnimationBlendState& animationBlend =
+            runtimeState.skinnedAnimationBlend;
+        if (animationBlend.active) {
+            ImGui::TextColored(
+                ImVec4(0.55f, 0.85f, 1.0f, 1.0f),
+                "Animation Blend: %s -> %s",
+                animationName(animationBlend.fromModelIndex),
+                animationName(animationBlend.toModelIndex));
+            ImGui::ProgressBar(
+                (std::clamp)(animationBlend.alpha, 0.0f, 1.0f),
+                ImVec2(-1.0f, 8.0f),
+                "Cross Fade");
+            ImGui::TextDisabled(
+                "Translation / Scale: Lerp | Rotation: Slerp");
+        } else {
+            ImGui::Text(
+                "Model: %s",
+                animationName(runtimeState.selectedSkinnedModelIndex));
+        }
         const HandParticleAttachmentTelemetry& handParticle =
             runtimeState.handParticleAttachmentTelemetry;
         const bool handParticleActive =
@@ -941,7 +969,9 @@ void DrawSubmissionShowcasePanel(
             ImVec2(-1.0f, 8.0f),
             "Movement");
         ImGui::TextDisabled("Left Stick  Move / Right Stick  Rotate");
-        ImGui::TextDisabled("A  Skeleton / X  Walk Mode / B  Reset");
+        ImGui::TextDisabled("A  Skeleton / X  Blend Animation / B  Reset");
+        ImGui::TextDisabled("WASD  Move / Q E or Arrows  Rotate");
+        ImGui::TextDisabled("K  Skeleton / Space  Blend Animation / R  Reset");
         ImGui::Separator();
         ImGui::Checkbox("Skeleton Debug", &runtimeState.showSkeletonDebug);
         ImGui::SameLine();
@@ -1645,6 +1675,9 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
 
 bool AppImGuiLayer::HandleWindowMessage(
     HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (!initialized_ || !visible_) {
+        return false;
+    }
     return ImGui_ImplWin32_WndProcHandler(hwnd, message, wParam, lParam) != 0;
 }
 
@@ -1656,7 +1689,7 @@ void AppImGuiLayer::QueueExternalAssetDrop(std::filesystem::path path) {
 }
 
 void AppImGuiLayer::BeginFrame() {
-    if (!initialized_) {
+    if (!initialized_ || !visible_) {
         return;
     }
 
@@ -1666,7 +1699,7 @@ void AppImGuiLayer::BeginFrame() {
 }
 
 void AppImGuiLayer::RefreshEditorViewportRenderTargetLayout() {
-    if (!initialized_) {
+    if (!initialized_ || !visible_) {
         return;
     }
 
@@ -1710,7 +1743,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     imguiTiming.developerTools = showDeveloperTools_;
     imguiTiming.viewportFocus = viewportFocusMode_;
 
-    if (!initialized_ ||
+    if (!initialized_ || !visible_ ||
         context.runtimeState == nullptr ||
         context.effectRuntime == nullptr ||
         context.postProcessStack == nullptr ||
@@ -4214,7 +4247,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
 }
 
 void AppImGuiLayer::EndFrame() {
-    if (!initialized_) {
+    if (!initialized_ || !visible_) {
         return;
     }
 
@@ -4224,7 +4257,7 @@ void AppImGuiLayer::EndFrame() {
 }
 
 void AppImGuiLayer::Render(ID3D12GraphicsCommandList* cmdList) {
-    if (!initialized_ || !cmdList) {
+    if (!initialized_ || !visible_ || !cmdList) {
         return;
     }
 
@@ -4272,12 +4305,22 @@ bool AppImGuiLayer::IsEnabled() const {
     return initialized_;
 }
 
+void AppImGuiLayer::SetVisible(bool visible) {
+    visible_ = visible;
+}
+
+bool AppImGuiLayer::IsVisible() const {
+    return initialized_ && visible_;
+}
+
 bool AppImGuiLayer::WantsDeveloperDiagnostics() const {
-    return initialized_ && showDeveloperTools_ && !viewportFocusMode_;
+    return initialized_ && visible_ && showDeveloperTools_ && !viewportFocusMode_;
 }
 
 bool AppImGuiLayer::ShouldAdvanceEditorRuntimeFrame() const {
-    return editorPlaySession_.ShouldAdvanceRuntimeFrame();
+    // A UI-less presentation build has no Play button. Treat it as a running
+    // executable so animation, attachments, and GPU particles keep advancing.
+    return !visible_ || editorPlaySession_.ShouldAdvanceRuntimeFrame();
 }
 
 void AppImGuiLayer::CompleteEditorRuntimeFrameAdvance(bool advanced) {
@@ -4433,6 +4476,14 @@ void AppImGuiLayer::Render(ID3D12GraphicsCommandList* cmdList) {
 }
 
 bool AppImGuiLayer::IsEnabled() const {
+    return false;
+}
+
+void AppImGuiLayer::SetVisible(bool visible) {
+    visible_ = visible;
+}
+
+bool AppImGuiLayer::IsVisible() const {
     return false;
 }
 

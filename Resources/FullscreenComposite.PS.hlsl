@@ -25,10 +25,14 @@ float4 main(PSInput input) : SV_TARGET
 {
     float2 uv = saturate(input.uv);
     float4 scene = gSceneColor.Sample(gSampler, uv);
+    float4 vfx = gVfxAccumulation.Sample(gSampler, uv);
     float4 post = gPostColor.Sample(gSampler, uv);
     float postBlend = saturate(gPostIntensity);
     float postLuminance = dot(post.rgb, float3(0.2126f, 0.7152f, 0.0722f));
     float effectiveBlend = postLuminance > 0.0001f ? postBlend : 0.0f;
     float3 color = lerp(scene.rgb, post.rgb, effectiveBlend);
+    // Raw VFX belongs to the final presentation composite. Keeping this here
+    // makes particles independent of optional bloom/glow and editor UI paths.
+    color += vfx.rgb * max(vfx.a, 0.2f);
     return float4(saturate(color), 1.0f);
 }

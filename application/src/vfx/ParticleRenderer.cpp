@@ -144,7 +144,9 @@ ParticleRendererOperationalStatus EvaluateParticleRendererOperationalStatus(
         return status;
     }
     if (context.appPipelines->GetParticleRootSignature() == nullptr ||
-        context.appPipelines->GetParticleAlphaPSO() == nullptr) {
+        context.appPipelines->GetParticleOpaquePSO() == nullptr ||
+        context.appPipelines->GetParticleAlphaPSO() == nullptr ||
+        context.appPipelines->GetParticleAdditivePSO() == nullptr) {
         status.fallbackReason = "missing particle draw pipeline";
         return status;
     }
@@ -796,10 +798,33 @@ void ParticleRenderer::Draw(
             {0.02f, 1.0f, 0.5f, 1.35f});
     const vfx::VfxRendererResourceSet* rendererResources =
         context.typedResources != nullptr ? &context.typedResources->particle.renderer : nullptr;
+    ID3D12PipelineState* pipelineState = nullptr;
+    if (context.appPipelines != nullptr) {
+        const EffectComponentCommon* common =
+            input.primary.componentCommon != nullptr
+                ? input.primary.componentCommon
+                : input.fallbackCommon;
+        const ge3::graphics::BlendMode blendMode = common != nullptr
+            ? common->passState.blend
+            : ge3::graphics::BlendMode::Alpha;
+        switch (blendMode) {
+        case ge3::graphics::BlendMode::Opaque:
+            pipelineState = context.appPipelines->GetParticleOpaquePSO();
+            break;
+        case ge3::graphics::BlendMode::Additive:
+            pipelineState = context.appPipelines->GetParticleAdditivePSO();
+            break;
+        case ge3::graphics::BlendMode::Alpha:
+        case ge3::graphics::BlendMode::Distortion:
+        default:
+            pipelineState = context.appPipelines->GetParticleAlphaPSO();
+            break;
+        }
+    }
     vfx::DrawIndirectSpriteComponents(
         commandList,
         context,
-        context.appPipelines != nullptr ? context.appPipelines->GetParticleAlphaPSO() : nullptr,
+        pipelineState,
         drawParams,
         rendererResources,
         true);

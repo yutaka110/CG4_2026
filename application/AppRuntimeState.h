@@ -65,10 +65,23 @@ struct RuntimeCameraState {
 struct RuntimeSubmissionShowcaseState {
     bool enabled = false;
     bool gamepadConnected = false;
+    bool keyboardInputEnabled = false;
+    bool keyboardActive = false;
     uint32_t controllerIndex = UINT32_MAX;
     float moveX = 0.0f;
     float moveY = 0.0f;
     float moveMagnitude = 0.0f;
+};
+
+struct RuntimeSkinnedAnimationBlendState {
+    bool active = false;
+    uint32_t fromModelIndex = UINT32_MAX;
+    uint32_t toModelIndex = UINT32_MAX;
+    float fromTime = 0.0f;
+    float toTime = 0.0f;
+    float elapsed = 0.0f;
+    float duration = 0.25f;
+    float alpha = 0.0f;
 };
 
 struct RuntimeWeaponDrawTelemetry {
@@ -108,6 +121,7 @@ struct AppRuntimeState {
     SpotLight spotLight{};
     RuntimeCameraState camera{};
     RuntimeSubmissionShowcaseState submissionShowcase{};
+    RuntimeSkinnedAnimationBlendState skinnedAnimationBlend{};
     Vector3 cameraWorldPosition{};
 
     bool useMonsterBall = false;

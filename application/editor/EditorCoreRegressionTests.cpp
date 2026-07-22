@@ -9836,7 +9836,8 @@ void TestHandParticleAttachment(RegressionRunner& runner) {
             loadedEffect.asset.name == "hand_socket_particle" &&
             loadedEffect.asset.lifetime == 0.0f &&
             loadedEffect.asset.Components().ComponentCount() == 1 &&
-            loadedEffect.asset.defaultParticle.spawnCount == 3.0f &&
+            loadedEffect.asset.defaultParticle.spawnCount == 12.0f &&
+            loadedEffect.asset.defaultParticle.lifetime > 1.0f &&
             loadedEffect.asset.defaultParticle.spawnFrequency > 0.0f &&
             loadedEffect.asset.defaultParticle.spawnFrequency <= 0.04f &&
             loadedEffect.asset.defaultParticle.emissive >= 6.0f,
@@ -9859,7 +9860,7 @@ void TestHandParticleAttachment(RegressionRunner& runner) {
             loadedLeftEffect.asset.defaultParticle.lifetime > 0.0f &&
             loadedLeftEffect.asset.defaultParticle.lifetime <= 0.5f &&
             loadedLeftEffect.asset.defaultParticle.spawnRadius <= 0.03f &&
-            loadedLeftEffect.asset.defaultParticle.spawnCount <= 2.0f &&
+            loadedLeftEffect.asset.defaultParticle.spawnCount <= 8.0f &&
             loadedLeftEffect.asset.defaultParticle.emissive >= 8.0f,
         "Left Hand Particle Effect should remain compact, short-lived, and visibly red-tintable");
 
@@ -9901,7 +9902,7 @@ void TestHandParticleAttachment(RegressionRunner& runner) {
     runner.Expect(
         attachmentFrame.particleQueue.size() == 1 &&
             attachmentFrame.particleQueue.front().settings != nullptr &&
-            attachmentFrame.particleQueue.front().settings->spawnCount == 3.0f &&
+            attachmentFrame.particleQueue.front().settings->spawnCount == 12.0f &&
             attachmentFrame.particleQueue.front().settings->spawnFrequency > 0.0f &&
             attachmentFrame.particleQueue.front().common.componentCommon != nullptr &&
             attachmentFrame.particleQueue.front().common.componentCommon->size.x >= 0.20f &&
@@ -10170,6 +10171,8 @@ void TestMultiMaterialShowcasePresentationDefaults(RegressionRunner& runner) {
     runtimeState.weaponAttachment.socketOffset = {};
     runtimeState.vfx.enableParticles = false;
     runtimeState.vfx.enableTrails = true;
+    runtimeState.skinnedAnimationBlend.active = true;
+    runtimeState.skinnedAnimationBlend.fromModelIndex = 7;
 
     ApplyMultiMaterialShowcasePresentationDefaults(runtimeState);
 
@@ -10234,6 +10237,7 @@ void TestMultiMaterialShowcasePresentationDefaults(RegressionRunner& runner) {
             runtimeState.weaponAttachment.socketOffset.rotate.w == 1.0f &&
             runtimeState.weaponAttachment.socketOffset.translate.z < -0.10f &&
             runtimeState.vfx.enableParticles &&
+            runtimeState.vfx.enableParticleDedicatedResources &&
             !runtimeState.vfx.enableTrails &&
             !runtimeState.vfx.enableBeams &&
             !runtimeState.vfx.enableDistortions,
@@ -10243,6 +10247,10 @@ void TestMultiMaterialShowcasePresentationDefaults(RegressionRunner& runner) {
             ShouldAdvancePreviewRuntime(true, false) &&
             ShouldAdvancePreviewRuntime(false, true),
         "submission preview should advance independently of the editor Play/Stop state");
+    runner.Expect(
+        !runtimeState.skinnedAnimationBlend.active &&
+            std::abs(runtimeState.skinnedAnimationBlend.duration - 0.25f) < 0.0001f,
+        "submission presentation should clear stale animation transitions");
 
     const ModelData humanoid = LoadObjFile_Assimp(
         "Resources/human",
@@ -10312,8 +10320,64 @@ void TestMultiMaterialShowcasePresentationDefaults(RegressionRunner& runner) {
         std::abs(runtimeState.skinnedModelTransform.scale.x - 1.40f) < 0.0001f &&
             std::abs(runtimeState.skinnedModelTransform.translate.x + 0.90f) < 0.0001f &&
             std::abs(runtimeState.skinnedModelTransform.translate.y + 1.25f) < 0.0001f &&
-            std::abs(runtimeState.skinnedModelTransform.translate.z + 1.0f) < 0.0001f,
-        "gamepad reset should restore the same submission humanoid framing");
+            std::abs(runtimeState.skinnedModelTransform.translate.z + 1.0f) < 0.0001f &&
+            std::abs(runtimeState.skinnedModelTransform.rotate.y) < 0.0001f,
+        "gamepad reset should restore the front-facing submission humanoid framing");
+}
+
+void TestRuntimeSkinnedAnimationBlendControl(RegressionRunner& runner) {
+    AppRuntimeState runtimeState{};
+    runtimeState.selectedSkinnedModelIndex = 1;
+    runtimeState.animatedCubeTime = 0.40f;
+
+    runner.Expect(
+        BeginSkinnedAnimationBlend(runtimeState, 2, 0.25f) &&
+            runtimeState.skinnedAnimationBlend.active &&
+            runtimeState.skinnedAnimationBlend.fromModelIndex == 1 &&
+            runtimeState.skinnedAnimationBlend.toModelIndex == 2 &&
+            std::abs(runtimeState.skinnedAnimationBlend.fromTime - 0.40f) < 0.0001f &&
+            runtimeState.skinnedAnimationBlend.toTime == 0.0f &&
+            runtimeState.selectedSkinnedModelIndex == 1,
+        "runtime cross-fade should retain the source draw model while both clips are evaluated");
+    runner.Expect(
+        !BeginSkinnedAnimationBlend(runtimeState, 1, 0.25f),
+        "runtime cross-fade should reject re-entry while a transition is active");
+
+    const float halfAlpha = AdvanceSkinnedAnimationBlend(runtimeState, 0.125f);
+    runner.Expect(
+        std::abs(halfAlpha - 0.5f) < 0.0001f &&
+            std::abs(runtimeState.skinnedAnimationBlend.elapsed - 0.125f) < 0.0001f,
+        "runtime cross-fade should advance a frame-rate-independent normalized blend alpha");
+    AdvanceSkinnedAnimationBlend(runtimeState, -1.0f);
+    runner.Expect(
+        std::abs(runtimeState.skinnedAnimationBlend.alpha - 0.5f) < 0.0001f,
+        "runtime cross-fade should ignore invalid negative frame deltas");
+
+    runtimeState.skinnedAnimationBlend.toTime = 0.20f;
+    const float completedAlpha =
+        AdvanceSkinnedAnimationBlend(runtimeState, 0.125f);
+    CompleteSkinnedAnimationBlend(runtimeState);
+    runner.Expect(
+        completedAlpha == 1.0f &&
+            !runtimeState.skinnedAnimationBlend.active &&
+            runtimeState.skinnedAnimationBlend.alpha == 1.0f &&
+            runtimeState.selectedSkinnedModelIndex == 2 &&
+            std::abs(runtimeState.animatedCubeTime - 0.20f) < 0.0001f,
+        "runtime cross-fade completion should atomically hand playback to the target clip time");
+    runner.Expect(
+        !BeginSkinnedAnimationBlend(runtimeState, 2, 0.25f),
+        "runtime cross-fade should reject a transition to the already active clip");
+
+    runner.Expect(
+        BeginSkinnedAnimationBlend(runtimeState, 1, 0.0f) &&
+            AdvanceSkinnedAnimationBlend(runtimeState, 0.0f) == 1.0f,
+        "zero-duration runtime cross-fades should complete deterministically");
+    CancelSkinnedAnimationBlend(runtimeState);
+    runner.Expect(
+        !runtimeState.skinnedAnimationBlend.active &&
+            runtimeState.skinnedAnimationBlend.fromModelIndex == UINT32_MAX &&
+            runtimeState.skinnedAnimationBlend.toModelIndex == UINT32_MAX,
+        "canceling a runtime cross-fade should remove all stale clip references");
 }
 
 void TestGamepadInputDeadZone(RegressionRunner& runner) {
@@ -10344,6 +10408,58 @@ void TestGamepadInputDeadZone(RegressionRunner& runner) {
         diagonal.magnitude > 0.99f && diagonal.magnitude <= 1.0f &&
             diagonal.x > 0.70f && diagonal.y > 0.70f,
         "gamepad radial normalization should preserve diagonal direction without overflow");
+
+    const AppGamepadStick keyboardDiagonal =
+        AppGamepadInput::ClampUnitCircle(1.0f, 1.0f);
+    const AppGamepadStick combinedDevices =
+        AppGamepadInput::ClampUnitCircle(1.65f, -0.80f);
+    const AppGamepadStick invalidInput =
+        AppGamepadInput::ClampUnitCircle(
+            (std::numeric_limits<float>::infinity)(),
+            0.0f);
+    runner.Expect(
+        std::abs(keyboardDiagonal.magnitude - 1.0f) < 0.0001f &&
+            keyboardDiagonal.x > 0.70f && keyboardDiagonal.x < 0.71f &&
+            keyboardDiagonal.y > 0.70f && keyboardDiagonal.y < 0.71f &&
+            std::abs(combinedDevices.magnitude - 1.0f) < 0.0001f &&
+            std::isfinite(combinedDevices.x) &&
+            std::isfinite(combinedDevices.y) &&
+            invalidInput.magnitude == 0.0f,
+        "keyboard and gamepad movement should combine on a finite unit circle");
+
+    constexpr float kPi = 3.14159265358979323846f;
+    const float forwardYaw = ResolveHumanoidMovementYaw(0.0f, 1.0f);
+    const float backwardYaw = ResolveHumanoidMovementYaw(0.0f, -1.0f);
+    const float leftYaw = ResolveHumanoidMovementYaw(-1.0f, 0.0f);
+    const float rightYaw = ResolveHumanoidMovementYaw(1.0f, 0.0f);
+    const float invalidYaw = ResolveHumanoidMovementYaw(
+        (std::numeric_limits<float>::infinity)(),
+        0.0f);
+    runner.Expect(
+        std::abs(forwardYaw - kPi) < 0.0001f &&
+            std::abs(backwardYaw) < 0.0001f &&
+            std::abs(leftYaw - (kPi * 0.5f)) < 0.0001f &&
+            std::abs(rightYaw - (kPi * 1.5f)) < 0.0001f &&
+            invalidYaw == 0.0f,
+        "humanoid -Z forward axis should face each movement direction with a 180-degree correction");
+    runner.Expect(
+        DidHumanoidMovementStart(0.0f, 0.081f) &&
+            !DidHumanoidMovementStart(0.081f, 1.0f) &&
+            !DidHumanoidMovementStart(1.0f, 0.0f) &&
+            !DidHumanoidMovementStart(
+                (std::numeric_limits<float>::quiet_NaN)(),
+                1.0f),
+        "humanoid axis correction should run only on the idle-to-moving transition");
+    const float gradualTurn = AdvanceHumanoidMovementYaw(0.0f, 1.0f, 0.25f);
+    const float wrappedTurn = AdvanceHumanoidMovementYaw(
+        kPi * 1.95f,
+        kPi * 0.05f,
+        0.10f);
+    runner.Expect(
+        std::abs(gradualTurn - 0.25f) < 0.0001f &&
+            wrappedTurn > kPi * 1.95f &&
+            wrappedTurn < kPi * 2.0f,
+        "humanoid facing should advance from actual yaw along the shortest arc");
 }
 
 void TestHumanoidBindPoseMeshSpaceSkinning(RegressionRunner& runner) {
@@ -10723,6 +10839,9 @@ int RunEditorCoreRegressionTests() {
         {"app startup scene arguments", [&]() { TestAppStartupSceneArguments(runner); }},
         {"multi material showcase presentation defaults", [&]() {
              TestMultiMaterialShowcasePresentationDefaults(runner);
+         }},
+        {"runtime skinned animation blend control", [&]() {
+             TestRuntimeSkinnedAnimationBlendControl(runner);
          }},
         {"gamepad input dead zone", [&]() { TestGamepadInputDeadZone(runner); }},
         {"humanoid bind pose mesh space skinning", [&]() {

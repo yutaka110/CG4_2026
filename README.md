@@ -9,7 +9,7 @@ DirectX 12を使用したWindows向けゲームエンジン／エディタです
 | Skinningモデルの表示 (20) | 実装済み | Assimpから階層、骨、最大4ウェイトを読み込み、SkinClusterとMatrix Paletteを使用して描画します。`simpleSkin`、`human walk`、`human sneakWalk`を切り替えられます。 |
 | ComputeShaderによるスキニング (10) | 実装済み | `Skinning.CS.hlsl`で頂点と法線を変形し、UAV出力をVertex Bufferへ遷移して描画します。Compute経路が利用できない場合はVertex Shader Skinningへフォールバックします。 |
 | MultiMesh & MultiMaterial対応 (5) | 実装済み | 複数Meshを共有Vertex／Index Bufferへ結合し、SubMeshのIndex範囲ごとにMaterial Constant Buffer、Albedo、Normal Textureを切り替えて描画します。通常モデル、VS／Compute Skinningに対応しています。 |
-| Animation補間 (5) | 実装済み | 平行移動・拡縮は線形補間、回転はQuaternion Slerpを使用します。ループ、速度、時間指定に対応しています。 |
+| Animation補間 (5) | 実装済み | 平行移動・拡縮は線形補間、回転はQuaternion Slerpを使用します。提出デモの`X`入力を0.25秒Cross Fadeの実再生経路へ接続し、補間PoseからCompute Skinning PaletteとBone Socketを更新します。 |
 | 骨のデバッグ表示 (10) | 実装済み | 親子Jointのライン、各JointのXYZマーカーを専用Debug Pipelineで描画します。 |
 | 手からパーティクルを出す (10) | 実装済み | Bone Socketを永続Effect Instanceへ接続し、手JointのWorld座標からGPU管理Particleを連続生成します。UI、環境変数、状態Telemetryに対応しています。 |
 | 武器を手に持たせる (10) | 実装済み | 既存Bone Socketを共有する`WeaponAttachment`が、手JointのWorld行列を共有訓練剣Meshの永続Transform Bufferへ反映します。UI、環境変数、状態Telemetry、安全な非表示フォールバックに対応しています。 |
@@ -81,11 +81,11 @@ Animation ClipもMesh／Skeletonと同じ`aiProcess_ConvertToLeftHanded`で読�
 
 GPU側ではMaterial Slotごとに永続Constant BufferとTexture Descriptorを一度だけ確保します。Textureは正規化パスで重複排除され、Albedo欠落時はモデル既定Texture、Normal欠落時は生成Flat Normalを使用します。描画時はBufferを再生成せず、SubMeshごとに`StartIndexLocation`とMaterial Bindingだけを切り替えます。
 
-提出用Editorは引数なしで`MultiMaterialShowcaseSceneState`を起動します。人型のCompute Skinned Modelと、正面・側面・上面に3つの独立Material Slotを持つ立体`multi_material_demo`を固定カメラと2灯ライティングで同時表示します。Presentation Defaultsはカメラ、暗色Clear Color、Material Tint、Environment反射、Key／Fill Light、人型Transformを明示的に初期化するため、直前のEditor設定やAutosave状態に左右されません。人型は画面高の45～75%に収まる近接構図です。さらに`mixamorig:RightHand`のBone Socketへ共有訓練剣と青い`hand_socket_particle`、`mixamorig:LeftHand`へ短寿命・狭範囲の赤い`left_hand_socket_particle`を独立接続します。武器と両手Particleは引数、環境変数、Editor操作なしで自動的に有効化されます。提出シーンのVFX／Animation時計はEditorのPlay／Stop状態から分離した固定16ms刻みで進むため、exeを起動するだけでEmitterが開始します。Particleは提出画角向けにサイズ、発光、放出範囲、Soft Depth Fade、Socket Offsetを調整し、赤い粒子にはEmitter継続時間と独立した`particle.lifetime`を設定して左手が発生源だと判別できる範囲に制限しています。
+提出用Editorは引数なしで`MultiMaterialShowcaseSceneState`を起動します。人型のCompute Skinned Modelと、正面・側面・上面に3つの独立Material Slotを持つ立体`multi_material_demo`を固定カメラと2灯ライティングで同時表示します。Presentation Defaultsはカメラ、暗色Clear Color、Material Tint、Environment反射、Key／Fill Light、人型Transformを明示的に初期化するため、直前のEditor設定やAutosave状態に左右されません。人型は画面高の45～75%に収まる近接構図です。さらに`mixamorig:RightHand`のBone Socketへ共有訓練剣と青い`hand_socket_particle`、`mixamorig:LeftHand`へ短寿命・狭範囲の赤い`left_hand_socket_particle`を独立接続します。武器と両手Particleは引数、環境変数、Editor操作なしで自動的に有効化されます。提出シーンのVFX／Animation時計はEditorのPlay／Stop状態から分離した固定16ms刻みで進むため、exeを起動するだけでEmitterが開始します。左スティック／WASDの移動方向はモデルの実Yawに対して最短角で毎フレーム追従するため、スティックを滑らかに旋回しても横滑りしません。右スティック／Q・Eの手動回転中は手動入力を優先します。Particleは提出画角向けに粒径、寿命、発生密度、発光、放出範囲、Soft Depth Fade、Socket Offsetを調整しています。大きな発光板ではなく手元から連続する小粒として描画し、青は剣を持つ右手、赤は左手が発生源だと判別できる範囲に制限しています。
 
 訓練剣は右手Jointへ追従する共有GPUモデルです。Procedural Box生成時の三角形WindingをNormal基準で修復し、`Blade`／`Guard`／`Grip`の3 SubMesh・3 Materialへ分割しています。各Materialは暗いVFX用`gradationLine`ではなく白Albedoへ不透明な青銀／橙金／濃茶のBase Colorを乗せるため、固定照明下でも輪郭と部位差を確認できます。提出用Socket OffsetはScale 1.10、Identity Quaternion、手前方向Z Offsetを固定しています。Mixamo Humanoidの`Armature`が持つ単位変換用`0.01`スケールは、Bone SocketでJoint平行移動を維持しながら基底だけGram–Schmidt正規化して除去します。これにより武器が約100分の1へ縮小することを防ぎつつ、明示的な`InheritJointScale`モードではSquash／Stretchを継承できます。Showcaseパネルには入力Joint Scaleと正規化後World Scaleも表示します。`Weapon Draw`はAttachment状態とは別に実GPU Draw数とCPU投影Boundsを表示し、正常時は`visible | SubMeshes 3 / Materials 3`となります。`not submitted`ならGPU Material／Descriptor、`offscreen`ならSocket Transform／画角、`too small`ならJoint／Owner Scaleを調査してください。12×12 px未満は画面内でも可読表示とは判定しません。
 
-XInput互換パッドを接続すると、左スティックで人型モデルを移動、右スティックで向きを変更できます。`A`は骨デバッグ表示、`X`はwalk／sneakWalk切替、`B`は位置・向き・Animation時間のリセットです。未接続時もAnimationは自動再生され、画面左上の`Submission Showcase`パネルで接続状態、入力値、操作方法を確認できます。
+XInput互換パッドを接続すると、左スティックで人型モデルを移動、右スティックで向きを変更できます。`A`は骨デバッグ表示、`X`はwalk／sneakWalk間の0.25秒Cross Fade、`B`は位置・向き・Animation時間のリセットです。キーボードでは`WASD`で移動、`Q`／`E`または左右矢印で回転、`K`で骨デバッグ表示、`Space`でCross Fade、`R`でリセットできます。パッドとキーボードは同時利用でき、斜め入力は単位円へ正規化されます。Humanoidはローカル正面が`-Z`のため、停止→移動または移動方向が5度以上変化した瞬間だけ、方向Yawへ180度のモデル軸補正を加えます。W保持中にDを追加した場合も斜め方向へ更新され、同じ方向の保持中は補正を再適用しないためQ／Eや右スティックの手動旋回を維持できます。停止中およびReset直後は提出用の正面向きYaw 0を維持します。キーボードはGE3ウィンドウが前面にあり、Editorの文字入力欄が入力を要求していない場合だけ受け付けます。Cross Fade中は両Clipの時刻を進め、Translation／ScaleをLerp、RotationをQuaternion Slerpして同一Skeletonへ適用します。補間後のSkeletonからCompute Skinning Paletteを更新するため、Mesh、骨デバッグ、武器、両手Particleが同じPoseへ追従します。Animation時計はGamepadの接続状態や移動入力から分離され、Stickまたはキーを離した後も基準速度で進むため中間Poseでは停止しません。ReleaseではImGuiと独立したRenderGraphの`UI.SubmissionControlsHud` Passが、同梱の`MPLUSRounded1c-Medium.ttf`（Weight 500／中字）を専用AtlasへRasterizeして操作方法を常時表示します。時間経過によるFade Outはありません。キーボード`H`またはパッド`Y`で手動表示／非表示を切り替えられます。
 
 Assimp取込後は全SubMeshの三角形について幾何法線と頂点法線を照合し、逆向きのWindingを自動修復します。欠損・非有限・ゼロ長Normalは修復後の面法線から再生成されます。提出用OBJ自体の12三角形もDirectXの時計回りFront Faceと外向きNormalが一致するよう修正済みです。
 
@@ -184,7 +184,9 @@ Frame Begin
 
 詳細は`docs/BuildEnvironment.md`、`docs/VfxEngineFlow.md`、`docs/EditorCoreDesign.md`を参照してください。
 
-2026-07-21時点ではVisual Studio 2026/v145のDevelopment／Releaseビルド成功（警告0・エラー0）、Editor Core Regression `71 / 71`、引数なしのCompute Skinning＋MultiMaterial提出デモでDevelopment／Releaseの実GPUスモークを確認済みです。Humanoid Bind Pose全13,538頂点の一致、Animation 3時点のJoint／頂点／Bounds、提出構図、GamepadのDead Zone、正規化、最大入力に加え、提出用訓練剣の3 Material Layout・全Index範囲・白Albedo・Winding／Normal整合性も回帰テスト対象です。
+2026-07-21時点ではVisual Studio 2026/v145のDevelopment／Releaseビルド成功（警告0・エラー0）、Editor Core Regression `72 / 72`、引数なしのCompute Skinning＋MultiMaterial提出デモでDevelopment／Releaseの実GPUスモークを確認済みです。Humanoid Bind Pose全13,538頂点の一致、Animation 3時点のJoint／頂点／Bounds、実再生Cross Fade制御、提出構図、GamepadのDead Zone、正規化、最大入力に加え、提出用訓練剣の3 Material Layout・全Index範囲・白Albedo・Winding／Normal整合性も回帰テスト対象です。
+
+Releaseは提出用プレゼンテーションとして起動し、ImGuiのフレーム生成、入力捕捉、`UI.ImGui` Render Passを停止してゲーム画面だけを表示します。Debug／Developmentでは従来どおりEditor UIを利用できます。
 
 ## 主要実装
 

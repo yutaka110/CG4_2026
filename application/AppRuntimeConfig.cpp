@@ -6,6 +6,8 @@
 #include <Windows.h>
 #include <shellapi.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <string>
 #include <string_view>
@@ -107,6 +109,122 @@ void ResetMultiMaterialShowcaseHumanoidPose(AppRuntimeState& runtimeState) {
     runtimeState.skinnedModelTransform.translate = {-0.90f, -1.25f, -1.0f};
 }
 
+float ResolveHumanoidMovementYaw(float moveX, float moveY) noexcept {
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kTwoPi = 2.0f * kPi;
+    constexpr float kDirectionEpsilon = 0.0001f;
+
+    if (!std::isfinite(moveX) || !std::isfinite(moveY) ||
+        std::hypot(moveX, moveY) <= kDirectionEpsilon) {
+        return 0.0f;
+    }
+
+    // The submission humanoid faces local -Z at yaw zero, while movement input
+    // uses +Z as forward. Apply the asset-axis correction only when movement
+    // selects a facing direction; the idle/reset presentation remains yaw zero.
+    float correctedYaw = std::fmod(std::atan2(moveX, moveY) + kPi, kTwoPi);
+    if (correctedYaw < 0.0f) {
+        correctedYaw += kTwoPi;
+    }
+    return correctedYaw;
+}
+
+bool DidHumanoidMovementStart(
+    float previousMoveMagnitude,
+    float currentMoveMagnitude) noexcept {
+    constexpr float kMovementDeadZone = 0.08f;
+    if (!std::isfinite(previousMoveMagnitude) ||
+        !std::isfinite(currentMoveMagnitude)) {
+        return false;
+    }
+    return previousMoveMagnitude <= kMovementDeadZone &&
+        currentMoveMagnitude > kMovementDeadZone;
+}
+
+float AdvanceHumanoidMovementYaw(
+    float currentYaw,
+    float targetYaw,
+    float maxDelta) noexcept {
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kTwoPi = 2.0f * kPi;
+
+    if (!std::isfinite(currentYaw) || !std::isfinite(targetYaw) ||
+        !std::isfinite(maxDelta) || maxDelta < 0.0f) {
+        return std::isfinite(currentYaw) ? currentYaw : 0.0f;
+    }
+
+    // Compare the desired movement direction with the model's actual facing,
+    // not with the previous input sample. Consecutive gamepad samples can each
+    // differ by less than a threshold while their accumulated turn is large.
+    float shortestDelta = std::fmod(targetYaw - currentYaw + kPi, kTwoPi);
+    if (shortestDelta < 0.0f) {
+        shortestDelta += kTwoPi;
+    }
+    shortestDelta -= kPi;
+
+    const float appliedDelta =
+        (std::clamp)(shortestDelta, -maxDelta, maxDelta);
+    float result = std::fmod(currentYaw + appliedDelta, kTwoPi);
+    if (result < 0.0f) {
+        result += kTwoPi;
+    }
+    return result;
+}
+
+bool BeginSkinnedAnimationBlend(
+    AppRuntimeState& runtimeState,
+    unsigned int targetModelIndex,
+    float durationSeconds) noexcept {
+    if (runtimeState.skinnedAnimationBlend.active ||
+        targetModelIndex == runtimeState.selectedSkinnedModelIndex) {
+        return false;
+    }
+
+    RuntimeSkinnedAnimationBlendState& blend =
+        runtimeState.skinnedAnimationBlend;
+    blend = {};
+    blend.active = true;
+    blend.fromModelIndex = runtimeState.selectedSkinnedModelIndex;
+    blend.toModelIndex = targetModelIndex;
+    blend.fromTime = runtimeState.animatedCubeTime;
+    blend.toTime = 0.0f;
+    blend.duration = (std::max)(0.0f, durationSeconds);
+    blend.alpha = blend.duration <= 0.0f ? 1.0f : 0.0f;
+    return true;
+}
+
+float AdvanceSkinnedAnimationBlend(
+    AppRuntimeState& runtimeState,
+    float deltaTime) noexcept {
+    RuntimeSkinnedAnimationBlendState& blend =
+        runtimeState.skinnedAnimationBlend;
+    if (!blend.active) {
+        return blend.alpha;
+    }
+
+    blend.elapsed += (std::max)(0.0f, deltaTime);
+    blend.alpha = blend.duration <= 0.0f
+        ? 1.0f
+        : (std::clamp)(blend.elapsed / blend.duration, 0.0f, 1.0f);
+    return blend.alpha;
+}
+
+void CompleteSkinnedAnimationBlend(AppRuntimeState& runtimeState) noexcept {
+    RuntimeSkinnedAnimationBlendState& blend =
+        runtimeState.skinnedAnimationBlend;
+    if (!blend.active) {
+        return;
+    }
+    runtimeState.selectedSkinnedModelIndex = blend.toModelIndex;
+    runtimeState.animatedCubeTime = blend.toTime;
+    blend.active = false;
+    blend.alpha = 1.0f;
+}
+
+void CancelSkinnedAnimationBlend(AppRuntimeState& runtimeState) noexcept {
+    runtimeState.skinnedAnimationBlend = {};
+}
+
 bool ShouldAdvancePreviewRuntime(
     bool editorRuntimeAdvance,
     bool submissionShowcaseEnabled) noexcept {
@@ -137,16 +255,16 @@ void ApplyMultiMaterialShowcasePresentationDefaults(AppRuntimeState& runtimeStat
     runtimeState.materialData.color = {1.0f, 1.0f, 1.0f, 1.0f};
     runtimeState.materialData.enableLighting = true;
     runtimeState.materialData.uvTransform = MakeIdentity4x4();
-    runtimeState.materialData.shininess = 24.0f;
+    runtimeState.materialData.shininess = 18.0f;
     runtimeState.materialData.environmentCoefficient = 0.02f;
     runtimeState.materialData.specularMode = 1;
 
     runtimeState.directionalLightData.color = {1.0f, 0.94f, 0.86f, 1.0f};
     runtimeState.directionalLightData.direction = {0.35f, -1.0f, -0.45f};
-    runtimeState.directionalLightData.intensity = 1.10f;
-    runtimeState.pointLightData.color = {0.35f, 0.55f, 1.0f, 1.0f};
-    runtimeState.pointLightData.position = {-2.0f, 1.8f, -2.5f};
-    runtimeState.pointLightData.intensity = 0.40f;
+    runtimeState.directionalLightData.intensity = 1.28f;
+    runtimeState.pointLightData.color = {0.48f, 0.64f, 1.0f, 1.0f};
+    runtimeState.pointLightData.position = {-1.75f, 1.65f, -2.25f};
+    runtimeState.pointLightData.intensity = 0.48f;
     runtimeState.pointLightData.radius = 10.0f;
     runtimeState.pointLightData.decay = 2.0f;
     runtimeState.spotLight.intensity = 0.0f;
@@ -161,6 +279,7 @@ void ApplyMultiMaterialShowcasePresentationDefaults(AppRuntimeState& runtimeStat
     runtimeState.showVfxModelObjects = true;
     runtimeState.submissionShowcase = {};
     runtimeState.submissionShowcase.enabled = true;
+    CancelSkinnedAnimationBlend(runtimeState);
 
     // The submission executable must demonstrate the Bone Socket -> Effect ->
     // GPU Particle path without requiring an environment variable or editor UI.
@@ -170,7 +289,7 @@ void ApplyMultiMaterialShowcasePresentationDefaults(AppRuntimeState& runtimeStat
     runtimeState.handParticleAttachment.effectName = "hand_socket_particle";
     runtimeState.handParticleAttachment.socketOffset.translate = {0.0f, 0.10f, -0.04f};
     runtimeState.handParticleAttachment.color = {0.35f, 0.85f, 1.0f, 1.0f};
-    runtimeState.handParticleAttachment.effectScale = {1.25f, 1.25f, 1.25f};
+    runtimeState.handParticleAttachment.effectScale = {0.90f, 0.90f, 0.90f};
     // A second, deliberately compact emitter makes the left hand's Bone
     // Socket origin immediately readable beside the wider blue right-hand VFX.
     runtimeState.leftHandParticleAttachment = {};
@@ -179,7 +298,7 @@ void ApplyMultiMaterialShowcasePresentationDefaults(AppRuntimeState& runtimeStat
     runtimeState.leftHandParticleAttachment.effectName = "left_hand_socket_particle";
     runtimeState.leftHandParticleAttachment.socketOffset.translate = {0.0f, 0.07f, -0.04f};
     runtimeState.leftHandParticleAttachment.color = {1.0f, 0.12f, 0.04f, 1.0f};
-    runtimeState.leftHandParticleAttachment.effectScale = {1.0f, 1.0f, 1.0f};
+    runtimeState.leftHandParticleAttachment.effectScale = {0.90f, 0.90f, 0.90f};
 
     // Submission evidence: attach the shared procedural training sword to the
     // animated right hand without requiring an editor toggle or environment
@@ -201,6 +320,15 @@ void ApplyMultiMaterialShowcasePresentationDefaults(AppRuntimeState& runtimeStat
     runtimeState.vfx.enableRings = false;
     runtimeState.vfx.enableCylinders = false;
     runtimeState.vfx.enableElectricOrbStrike = false;
+    // Submission effects own their state, render, and indirect-argument
+    // buffers. This avoids interference from the shared VFX pool and keeps the
+    // executable result independent of editor telemetry/ImGui execution.
+    // The submission effects have a fixed, independently validated workload.
+    // Keep them on the dedicated GPU storage path so the shared VFX pool cannot
+    // consume or overwrite their indirect draw arguments before rasterization.
+    runtimeState.vfx.enableParticleDedicatedResources = true;
+    runtimeState.vfx.enableParticleDedicatedResourceProbe = false;
+    runtimeState.vfx.particleDedicatedResourceFallbackActive = false;
 
     ResetMultiMaterialShowcaseHumanoidPose(runtimeState);
     runtimeState.playAnimatedCube = true;

@@ -100,6 +100,9 @@ struct AppVfxRuntimeState {
     bool enableCylinders = true;
     bool enableElectricOrbStrike = true;
     bool enableSkinnedSurfaceVfx = false;
+    // Production path for effects that must not share the legacy particle
+    // state/indirect-argument buffers with other VFX families.
+    bool enableParticleDedicatedResources = false;
     bool enableParticleDedicatedResourceProbe = false;
     bool enableParticleDedicatedProbeTelemetry = false;
     bool enableParticleDedicatedAutoFallback = true;
