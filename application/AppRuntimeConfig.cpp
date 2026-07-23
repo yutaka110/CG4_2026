@@ -62,7 +62,7 @@ AppStartupScene ParseAppStartupSceneArguments(
     int argumentCount,
     const wchar_t* const* arguments) {
     if (argumentCount <= 1 || arguments == nullptr) {
-        return AppStartupScene::MultiMaterialShowcase;
+        return AppStartupScene::RailShooter;
     }
 
     bool explicitVfxPreview = false;
@@ -87,14 +87,14 @@ AppStartupScene ParseAppStartupSceneArguments(
     }
     return explicitVfxPreview
         ? AppStartupScene::VfxPreview
-        : AppStartupScene::MultiMaterialShowcase;
+        : AppStartupScene::RailShooter;
 }
 
 AppStartupScene ResolveAppStartupSceneFromCommandLine() {
     int argumentCount = 0;
     LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
     if (arguments == nullptr) {
-        return AppStartupScene::MultiMaterialShowcase;
+        return AppStartupScene::RailShooter;
     }
 
     const AppStartupScene startupScene =

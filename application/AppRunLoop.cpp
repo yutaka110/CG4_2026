@@ -4326,6 +4326,25 @@ void AppRunLoop::EnterRailShooterScene() {
     if (railPath_.Length() <= 0.0f) {
         ApplyRailShooterCourse();
     }
+
+    // Submission-only attachments are opt-in with the isolated showcase scene.
+    // Stop their persistent runtime instances before the rail course starts so
+    // an invisible humanoid cannot keep spawning hand particles in gameplay.
+    runtimeState_.handParticleAttachment.enabled = false;
+    runtimeState_.leftHandParticleAttachment.enabled = false;
+    runtimeState_.weaponAttachment.enabled = false;
+    runtimeState_.skinnedAnimationBlend = {};
+    runtimeState_.activeSkinningPath = RuntimeSkinningPath::Unavailable;
+    handParticleAttachment_.Stop(vfxEngine_.Runtime());
+    leftHandParticleAttachment_.Stop(vfxEngine_.Runtime());
+    weaponAttachment_.Reset();
+    runtimeState_.handParticleAttachmentTelemetry =
+        handParticleAttachment_.Telemetry();
+    runtimeState_.leftHandParticleAttachmentTelemetry =
+        leftHandParticleAttachment_.Telemetry();
+    runtimeState_.weaponAttachmentTelemetry = weaponAttachment_.Telemetry();
+    runtimeState_.weaponDrawTelemetry = {};
+
     ClearShowcaseEffects();
     railShooterCourseRuntime_.Reset(runtimeState_.terrain.previewDistance);
     railShooterDistance_ = railShooterCourseRuntime_.Distance();
