@@ -16,6 +16,7 @@ public:
 
     bool PrepareMainPass(
         ID3D12GraphicsCommandList* commandList,
+        ID3D12DescriptorHeap* srvDescriptorHeap,
         const D3D12_VIEWPORT& viewport,
         const D3D12_RECT& scissorRect,
         ID3D12RootSignature* rootSignature,
@@ -36,6 +37,7 @@ public:
         D3D12_GPU_VIRTUAL_ADDRESS pointLightBufferAddress,
         D3D12_GPU_VIRTUAL_ADDRESS spotLightBufferAddress,
         uint32_t indexCount,
+        uint32_t startIndexLocation = 0,
         D3D12_GPU_VIRTUAL_ADDRESS productionLightBufferAddress = 0,
         D3D12_GPU_VIRTUAL_ADDRESS productionClusterRangeAddress = 0,
         D3D12_GPU_VIRTUAL_ADDRESS productionClusterIndexAddress = 0,
@@ -76,7 +78,8 @@ public:
         D3D12_GPU_VIRTUAL_ADDRESS cameraBufferAddress,
         D3D12_GPU_VIRTUAL_ADDRESS pointLightBufferAddress,
         D3D12_GPU_VIRTUAL_ADDRESS spotLightBufferAddress,
-        uint32_t indexCount) const;
+        uint32_t indexCount,
+        uint32_t startIndexLocation = 0) const;
 
     void ApplyMaterialInstance(
         ID3D12GraphicsCommandList* commandList,

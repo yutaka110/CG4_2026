@@ -672,6 +672,15 @@
     <ClCompile Include="application\AnimationClip.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\BoneSocket.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
+    <ClCompile Include="application\HandParticleAttachment.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
+    <ClCompile Include="application\WeaponAttachment.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
     <ClCompile Include="application\AppMain.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -826,6 +835,9 @@
       <Filter>ソース ファイル</Filter>
     </ClCompile>
     <ClCompile Include="application\AppFrameRenderer.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
+    <ClCompile Include="application\AppGamepadInput.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
     <ClCompile Include="application\AppRenderResources.cpp">
@@ -1127,6 +1139,15 @@
     <ClInclude Include="application\AnimationClip.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
+    <ClInclude Include="application\BoneSocket.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\HandParticleAttachment.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\WeaponAttachment.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
     <ClInclude Include="application\AppMain.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
@@ -1287,6 +1308,9 @@
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\AppFrameRenderer.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\AppGamepadInput.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\AppRenderResources.h">
@@ -1892,6 +1916,8 @@
     <None Include="Resources\Terrain.PS.hlsl" />
     <None Include="Resources\TerrainShadow.VS.hlsl" />
     <None Include="Resources\effects\AuthoringMetadataDemo.effect" />
+    <None Include="Resources\effects\HandSocketParticle.effect" />
+    <None Include="Resources\effects\LeftHandSocketParticle.effect" />
     <None Include="Resources\effects\IceImpact.effect" />
     <None Include="Resources\effects\IceProjectile.effect" />
     <None Include="Resources\effects\WarpCore.effect" />

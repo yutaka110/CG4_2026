@@ -1,0 +1,26 @@
+newmtl RedMaterial
+Ka 0.08 0.02 0.02
+Kd 1.00 0.35 0.28
+Ks 0.55 0.55 0.55
+Ns 32.0
+d 1.0
+illum 2
+map_Kd ../../circle2.png
+
+newmtl BlueMaterial
+Ka 0.02 0.04 0.08
+Kd 0.25 0.55 1.00
+Ks 0.65 0.65 0.65
+Ns 48.0
+d 1.0
+illum 2
+map_Kd ../../gradationLine.png
+
+newmtl CheckerMaterial
+Ka 0.05 0.05 0.05
+Kd 0.92 0.92 1.00
+Ks 0.75 0.75 0.75
+Ns 64.0
+d 1.0
+illum 2
+map_Kd ../../uvChecker.png

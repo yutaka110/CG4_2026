@@ -263,6 +263,7 @@ uint64_t EditorVfxAuthoringFingerprint(const EffectRuntime& runtime) {
         hash = HashValue(hash, asset.shader);
         hash = HashValue(hash, asset.texture);
         hash = HashValue(hash, asset.lifetime);
+        hash = HashValue(hash, asset.defaultParticle.lifetime);
         hash = HashValue(hash, asset.defaultParticle.spawnFrequency);
         hash = HashValue(hash, asset.defaultParticle.uvScrollSpeed);
         hash = HashValue(hash, asset.color);

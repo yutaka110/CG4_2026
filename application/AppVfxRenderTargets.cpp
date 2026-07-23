@@ -15,6 +15,15 @@ std::atomic<bool> gVfxTargetsWatchdogStarted{false};
 std::atomic<DWORD> gVfxTargetsStageTick{0};
 std::atomic<const char*> gVfxTargetsStageName{nullptr};
 
+bool IsVfxAccumulationClearProbeEnabled() noexcept {
+    char value[2] = {};
+    const DWORD length = GetEnvironmentVariableA(
+        "GE3_VFX_ACCUMULATION_CLEAR_PROBE",
+        value,
+        static_cast<DWORD>(sizeof(value)));
+    return length == 1u && value[0] == '1';
+}
+
 void WriteVfxTargetsWatchdogLine(const char* message) {
     OutputDebugStringA(message);
     std::ofstream log = app::OpenRotatingLog("logs/vfx_targets_watchdog.log");
@@ -169,6 +178,10 @@ bool AppVfxRenderTargets::Initialize(
     uint32_t height) {
     RecordVfxTargetsStage("targets.initialize.begin");
     if (device == nullptr || width == 0 || height == 0) {
+        return false;
+    }
+    shaderVisibleSrvHeap_ = heaps.srv.GetHeap();
+    if (shaderVisibleSrvHeap_ == nullptr) {
         return false;
     }
     ReleaseExpiredRetiredTargets(heaps);
@@ -570,6 +583,14 @@ void AppVfxRenderTargets::BeginVfx(
         return;
     }
     Transition(commandList, *vfxAccumulation, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    if (IsVfxAccumulationClearProbeEnabled()) {
+        constexpr float kProbeColor[4] = {0.85f, 0.0f, 0.75f, 1.0f};
+        commandList->ClearRenderTargetView(
+            vfxAccumulation->rtv.cpu,
+            kProbeColor,
+            0,
+            nullptr);
+    }
     (void)dsv;
 }
 
@@ -599,6 +620,8 @@ void AppVfxRenderTargets::CompositeToBackBuffer(
 
     (void)backBuffer;
     (void)backBufferRtv;
+    ID3D12DescriptorHeap* descriptorHeaps[] = {shaderVisibleSrvHeap_};
+    commandList->SetDescriptorHeaps(1, descriptorHeaps);
     commandList->SetGraphicsRootSignature(rootSignature);
     commandList->SetPipelineState(pipelineState);
     commandList->SetGraphicsRootDescriptorTable(0, sceneColor->srv.gpu);
@@ -631,6 +654,11 @@ void AppVfxRenderTargets::ExecutePostProcessPass(
     }
 
     (void)output;
+    if (shaderVisibleSrvHeap_ == nullptr) {
+        return;
+    }
+    ID3D12DescriptorHeap* descriptorHeaps[] = {shaderVisibleSrvHeap_};
+    commandList->SetDescriptorHeaps(1, descriptorHeaps);
     commandList->SetGraphicsRootSignature(rootSignature);
     commandList->SetPipelineState(pipelineState);
     commandList->SetGraphicsRootDescriptorTable(0, input->srv.gpu);
@@ -661,6 +689,11 @@ void AppVfxRenderTargets::ExecuteDebugPreviewPass(
         return;
     }
 
+    if (shaderVisibleSrvHeap_ == nullptr) {
+        return;
+    }
+    ID3D12DescriptorHeap* descriptorHeaps[] = {shaderVisibleSrvHeap_};
+    commandList->SetDescriptorHeaps(1, descriptorHeaps);
     commandList->SetGraphicsRootSignature(rootSignature);
     commandList->SetPipelineState(pipelineState);
     commandList->SetGraphicsRootDescriptorTable(0, inputHandle);

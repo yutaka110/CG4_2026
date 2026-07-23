@@ -73,22 +73,66 @@ EditorDocumentRecoveryScanResult EditorDocumentRecoveryService::Scan() const {
     std::error_code ec;
     if (!std::filesystem::exists(root, ec)) return result;
 
-    std::map<std::string, EditorDocumentRecoveryCandidate> newest;
+    std::vector<std::filesystem::path> manifests;
     std::filesystem::recursive_directory_iterator iterator(
         root, std::filesystem::directory_options::skip_permission_denied, ec);
     const std::filesystem::recursive_directory_iterator end;
     for (; !ec && iterator != end; iterator.increment(ec)) {
-        if (!iterator->is_regular_file(ec) || iterator->path().filename() != "manifest.txt") continue;
+        if (iterator->is_regular_file(ec) && iterator->path().filename() == "manifest.txt") {
+            manifests.push_back(iterator->path());
+        }
+    }
+    if (ec) {
+        result.errors.push_back("Autosave scan failed: " + ec.message());
+        ec.clear();
+    }
+
+    std::map<std::string, EditorDocumentRecoveryCandidate> newest;
+    for (const std::filesystem::path& manifestPath : manifests) {
         EditorAutosaveRecord record{};
         std::string error;
-        if (!ParseManifest(iterator->path(), &record, &error)) {
-            result.errors.push_back(iterator->path().generic_string() + ": " + error);
+        if (!ParseManifest(manifestPath, &record, &error)) {
+            EditorDocumentRecoveryQuarantineRecord quarantined{};
+            std::string quarantineError;
+            if (QuarantineGeneration(
+                    manifestPath,
+                    error,
+                    &quarantined,
+                    &quarantineError)) {
+                result.quarantined.push_back(std::move(quarantined));
+            } else {
+                result.errors.push_back(
+                    manifestPath.generic_string() + ": " + error +
+                    " Quarantine failed: " + quarantineError);
+            }
             continue;
         }
         if (registry_.Find(record.id.type) == nullptr) {
             result.errors.push_back(record.id.Key() + ": provider is not registered.");
             continue;
         }
+
+        std::vector<uint8_t> autosaveBytes;
+        if (!ReadBytes(Absolute(record.contentPath), &autosaveBytes, &error) ||
+            EditorExternalChangeMonitor::HashBytes(autosaveBytes) !=
+                record.autosaveContentHash) {
+            if (error.empty()) error = "Autosave content hash mismatch.";
+            EditorDocumentRecoveryQuarantineRecord quarantined{};
+            std::string quarantineError;
+            if (QuarantineGeneration(
+                    manifestPath,
+                    error,
+                    &quarantined,
+                    &quarantineError)) {
+                result.quarantined.push_back(std::move(quarantined));
+            } else {
+                result.errors.push_back(
+                    record.id.Key() + ": " + error +
+                    " Quarantine failed: " + quarantineError);
+            }
+            continue;
+        }
+
         EditorDocumentRecoveryCandidate candidate{};
         candidate.autosave = record;
         const std::filesystem::path source = Absolute(record.sourcePath);
@@ -108,7 +152,6 @@ EditorDocumentRecoveryScanResult EditorDocumentRecoveryService::Scan() const {
             newest[key] = std::move(candidate);
         }
     }
-    if (ec) result.errors.push_back("Autosave scan failed: " + ec.message());
     for (auto& pair : newest) result.candidates.push_back(std::move(pair.second));
     result.succeeded = result.errors.empty();
     return result;
@@ -184,6 +227,97 @@ bool EditorDocumentRecoveryService::ParseManifest(
     record->sourcePath = sourceResolution.projectRelativePath;
     record->manifestPath = std::filesystem::relative(path, projectRoot_);
     record->contentPath = std::filesystem::relative(path.parent_path() / "document.autosave", projectRoot_);
+    return true;
+}
+
+bool EditorDocumentRecoveryService::QuarantineGeneration(
+    const std::filesystem::path& manifestPath,
+    const std::string& reason,
+    EditorDocumentRecoveryQuarantineRecord* record,
+    std::string* errorMessage) const {
+    std::error_code ec;
+    const std::filesystem::path absoluteProjectRoot =
+        std::filesystem::absolute(projectRoot_, ec).lexically_normal();
+    if (ec) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Could not resolve the project root: " + ec.message();
+        }
+        return false;
+    }
+    const std::filesystem::path autosaveRoot =
+        absoluteProjectRoot / ".editor" / "autosave";
+    const std::filesystem::path generationPath =
+        std::filesystem::absolute(manifestPath, ec).lexically_normal().parent_path();
+    if (ec) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Could not resolve the autosave generation: " + ec.message();
+        }
+        return false;
+    }
+    const EditorProjectPathPolicy pathPolicy(absoluteProjectRoot);
+    const EditorProjectPathResolution generationResolution =
+        pathPolicy.Resolve(generationPath);
+    if (!generationResolution.accepted) {
+        if (errorMessage != nullptr) *errorMessage = generationResolution.message;
+        return false;
+    }
+
+    const std::filesystem::path relativeGeneration =
+        std::filesystem::relative(generationResolution.absolutePath, autosaveRoot, ec);
+    if (ec || relativeGeneration.empty() || relativeGeneration == "." ||
+        relativeGeneration.is_absolute()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Could not resolve the autosave generation path.";
+        }
+        return false;
+    }
+    for (const std::filesystem::path& component : relativeGeneration) {
+        if (component == "..") {
+            if (errorMessage != nullptr) {
+                *errorMessage = "Autosave generation escaped the autosave root.";
+            }
+            return false;
+        }
+    }
+
+    const std::filesystem::path quarantineRoot =
+        projectRoot_ / ".editor" / "recovery" / "quarantine";
+    std::filesystem::path quarantinePath = quarantineRoot / relativeGeneration;
+    quarantinePath += ".invalid";
+    std::filesystem::create_directories(quarantinePath.parent_path(), ec);
+    if (ec) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Could not create the recovery quarantine: " + ec.message();
+        }
+        return false;
+    }
+
+    for (uint32_t suffix = 1; std::filesystem::exists(quarantinePath, ec) && !ec; ++suffix) {
+        quarantinePath = quarantineRoot / relativeGeneration;
+        quarantinePath += ".invalid." + std::to_string(suffix);
+    }
+    if (ec) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Could not inspect the recovery quarantine: " + ec.message();
+        }
+        return false;
+    }
+
+    std::filesystem::rename(generationResolution.absolutePath, quarantinePath, ec);
+    if (ec) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Could not quarantine the autosave generation: " + ec.message();
+        }
+        return false;
+    }
+
+    if (record != nullptr) {
+        record->originalGenerationPath =
+            std::filesystem::relative(generationResolution.absolutePath, absoluteProjectRoot);
+        record->quarantineGenerationPath =
+            std::filesystem::relative(quarantinePath, absoluteProjectRoot);
+        record->reason = reason;
+    }
     return true;
 }
 

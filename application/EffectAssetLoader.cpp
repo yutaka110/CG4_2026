@@ -119,7 +119,9 @@ bool ApplyParticleSettingsKey(
     EffectParticleSettings& settings,
     const std::string& key,
     const std::string& value) {
-    if (key == "emissive") {
+    if (key == "lifetime" || key == "particleLifetime") {
+        settings.lifetime = ToFloat(value, settings.lifetime);
+    } else if (key == "emissive") {
         settings.emissive = ToFloat(value, settings.emissive);
     } else if (key == "distortion" || key == "distortionStrength") {
         settings.distortionStrength = ToFloat(value, settings.distortionStrength);
@@ -347,7 +349,9 @@ bool ApplyLegacyAssetSettingsKey(
     EffectAsset& asset,
     const std::string& key,
     const std::string& value) {
-    if (key == "emissive") {
+    if (key == "particleLifetime") {
+        asset.defaultParticle.lifetime = ToFloat(value, asset.defaultParticle.lifetime);
+    } else if (key == "emissive") {
         asset.defaultParticle.emissive = ToFloat(value, asset.defaultParticle.emissive);
         asset.defaultBeam.emissive = asset.defaultParticle.emissive;
     } else if (key == "distortion") {

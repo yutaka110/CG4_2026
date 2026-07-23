@@ -1,6 +1,7 @@
 #include "Skeleton.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 
@@ -101,4 +102,63 @@ void UpdateSkeleton(Skeleton& skeleton) {
             joint.skeletonSpaceMatrix = joint.localMatrix;
         }
     }
+}
+
+Matrix4x4 BuildMeshSpaceSkinningMatrix(
+    const Matrix4x4& inverseBindPoseMatrix,
+    const Matrix4x4& jointGlobalMatrix,
+    const Matrix4x4& meshRootInverseMatrix) {
+    return Multiply(
+        Multiply(inverseBindPoseMatrix, jointGlobalMatrix),
+        meshRootInverseMatrix);
+}
+
+bool TryBuildMeshRootBindMatrix(
+    const Skeleton& skeleton,
+    const ModelData& model,
+    Matrix4x4& outMeshRootBindMatrix,
+    float* outMaximumDeviation) {
+    Skeleton bindPoseSkeleton = skeleton;
+    for (Joint& joint : bindPoseSkeleton.joints) {
+        joint.transform = joint.bindTransform;
+        joint.localMatrix = MakeLocalMatrix(joint.bindTransform);
+    }
+    UpdateSkeleton(bindPoseSkeleton);
+
+    bool foundCandidate = false;
+    float maximumDeviation = 0.0f;
+    Matrix4x4 meshRootBindMatrix = MakeIdentity4x4();
+    for (const auto& [jointName, jointWeight] : model.skinClusterData) {
+        const auto jointIt = bindPoseSkeleton.jointMap.find(jointName);
+        if (jointIt == bindPoseSkeleton.jointMap.end() || jointIt->second < 0 ||
+            static_cast<size_t>(jointIt->second) >= bindPoseSkeleton.joints.size()) {
+            continue;
+        }
+        const Matrix4x4 candidate = Multiply(
+            jointWeight.inverseBindPoseMatrix,
+            bindPoseSkeleton.joints[static_cast<size_t>(jointIt->second)].skeletonSpaceMatrix);
+        if (!foundCandidate) {
+            meshRootBindMatrix = candidate;
+            foundCandidate = true;
+            continue;
+        }
+        for (size_t row = 0; row < 4; ++row) {
+            for (size_t column = 0; column < 4; ++column) {
+                maximumDeviation = (std::max)(
+                    maximumDeviation,
+                    std::fabs(candidate.m[row][column] -
+                        meshRootBindMatrix.m[row][column]));
+            }
+        }
+    }
+
+    if (outMaximumDeviation != nullptr) {
+        *outMaximumDeviation = maximumDeviation;
+    }
+    if (!foundCandidate) {
+        outMeshRootBindMatrix = MakeIdentity4x4();
+        return false;
+    }
+    outMeshRootBindMatrix = meshRootBindMatrix;
+    return true;
 }

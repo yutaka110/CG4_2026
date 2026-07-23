@@ -5,6 +5,8 @@
 #include <d3d12.h>
 
 #include "AppVfxRuntimeState.h"
+#include "HandParticleAttachment.h"
+#include "WeaponAttachment.h"
 #include "terrain/TerrainGenerationSettings.h"
 #include "utils/math/MathUtils.h"
 
@@ -40,6 +42,12 @@ struct RuntimeSkinningTimingStats {
     RuntimeSkinningTimingPathStats computeSurfaceOnly{};
 };
 
+enum class RuntimeSkinningPath : uint8_t {
+    Unavailable,
+    ComputeShader,
+    VertexShader,
+};
+
 inline constexpr uint32_t kRuntimeVfxModelObjectCount = 3;
 
 struct RuntimeVfxModelObjectState {
@@ -60,6 +68,38 @@ struct RuntimeCameraState {
     bool enableDebugInput = true;
 };
 
+struct RuntimeSubmissionShowcaseState {
+    bool enabled = false;
+    bool gamepadConnected = false;
+    bool keyboardInputEnabled = false;
+    bool keyboardActive = false;
+    uint32_t controllerIndex = UINT32_MAX;
+    float moveX = 0.0f;
+    float moveY = 0.0f;
+    float moveMagnitude = 0.0f;
+};
+
+struct RuntimeSkinnedAnimationBlendState {
+    bool active = false;
+    uint32_t fromModelIndex = UINT32_MAX;
+    uint32_t toModelIndex = UINT32_MAX;
+    float fromTime = 0.0f;
+    float toTime = 0.0f;
+    float elapsed = 0.0f;
+    float duration = 0.25f;
+    float alpha = 0.0f;
+};
+
+struct RuntimeWeaponDrawTelemetry {
+    bool submitted = false;
+    bool screenBoundsVisible = false;
+    bool screenBoundsReadable = false;
+    uint32_t submittedSubMeshCount = 0;
+    uint32_t materialCount = 0;
+    Vector2 screenMinimum{};
+    Vector2 screenMaximum{};
+};
+
 struct AppRuntimeState {
     Transform transform{};
     Transform animatedCubeTransform{};
@@ -74,11 +114,21 @@ struct AppRuntimeState {
 
     RuntimeEmitterState emitter{};
     RuntimeAccelerationFieldState accelerationField{};
+    HandParticleAttachmentSettings handParticleAttachment{};
+    HandParticleAttachmentTelemetry handParticleAttachmentTelemetry{};
+    HandParticleAttachmentSettings leftHandParticleAttachment{};
+    HandParticleAttachmentTelemetry leftHandParticleAttachmentTelemetry{};
+    WeaponAttachmentSettings weaponAttachment{};
+    WeaponAttachmentTelemetry weaponAttachmentTelemetry{};
+    RuntimeWeaponDrawTelemetry weaponDrawTelemetry{};
 
     DirectionalLight directionalLightData{};
     PointLight pointLightData{};
     SpotLight spotLight{};
     RuntimeCameraState camera{};
+    RuntimeSubmissionShowcaseState submissionShowcase{};
+    RuntimeSkinnedAnimationBlendState skinnedAnimationBlend{};
+    RuntimeSkinningPath activeSkinningPath = RuntimeSkinningPath::Unavailable;
     Vector3 cameraWorldPosition{};
 
     bool useMonsterBall = false;
@@ -87,6 +137,7 @@ struct AppRuntimeState {
     bool showSkeletonDebug = false;
     bool showSkybox = false;
     bool showProceduralBackdrop = true;
+    bool showSprite = true;
     uint32_t selectedSkinnedModelIndex = 0;
     bool showVfxModelObjects = true;
     uint32_t selectedVfxModelObjectIndex = 0;

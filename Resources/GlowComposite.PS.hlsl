@@ -25,10 +25,10 @@ float4 main(PSInput input) : SV_TARGET
 {
     float2 uv = saturate(input.uv);
     float4 glowSource = gInputTexture.Sample(gSampler, uv);
-    float4 rawVfx = gRawVfxTexture.Sample(gSampler, uv);
     float3 baseColor = gBaseTexture.Sample(gSampler, uv).rgb;
     float3 glowTint = float3(gGlowTintR, gGlowTintG, gGlowTintB);
-    float3 rawContribution = rawVfx.rgb * max(rawVfx.a, 0.2f) * gIntensity;
     float3 glow = glowSource.rgb * glowTint * max(glowSource.a, 0.35f) * gGlowWeight * gIntensity;
-    return float4(baseColor + rawContribution + glow, 1.0f);
+    // Raw VFX is composited exactly once by FullscreenComposite. This pass only
+    // contributes the bloom/glow envelope around that source.
+    return float4(baseColor + glow, 1.0f);
 }

@@ -16,7 +16,11 @@
 #include "diagnostics/DebugDrawSystem.h"
 #include "AppFrameState.h"
 #include "AppFrameGraphBuilder.h"
+#include "AppGamepadInput.h"
+#include "AppRuntimeConfig.h"
 #include "AppVfxRuntimeState.h"
+#include "HandParticleAttachment.h"
+#include "WeaponAttachment.h"
 #include "graphics/RenderGraph.h"
 #include "graphics/SwapChain.h"
 #include "resources/ResourceRegistry.h"
@@ -77,7 +81,8 @@ public:
         FrameLoopState& frameState,
         ID3D12CommandQueue* commandQueue,
         ID3D12Fence* fence,
-        HANDLE fenceEvent);
+        HANDLE fenceEvent,
+        AppStartupScene startupScene);
 
     void InitializeBeam(
         ID3D12Device* device,
@@ -92,11 +97,15 @@ private:
     struct CourseObjectEditSnapshot;
     struct CourseObjectDragState;
 
+    void EnterVfxPreviewScene() override;
+    void EnterMultiMaterialShowcaseScene() override;
     void EnterRailShooterScene() override;
     void UpdateRailShooterFrame() override;
     void RenderRailShooterFrame() override;
     void UpdateVfxPreviewFrame() override;
     void RenderVfxPreviewFrame() override;
+    void UpdateMultiMaterialShowcaseFrame() override;
+    void UpdateSubmissionShowcaseInput(float deltaTime);
     void BeginFrameSystems();
     void ApplyEditorViewportRenderTargetForRender();
     bool ResolveEditorViewportClientPoint(
@@ -118,6 +127,8 @@ private:
     void CommitCourseObjectHistoryIfNeeded();
     void ProcessCourseObjectUndoRedo();
     void ProcessIceProjectileMouseLaunch();
+    void UpdateHandParticleAttachment();
+    void UpdateWeaponAttachment();
     void ProcessReleaseShowcaseControls(float deltaTime);
     void PlayShowcaseEffect(AppVfxRuntimeState::ShowcaseEffect effect, bool resetAutoTimer);
     void ClearShowcaseEffects();
@@ -139,6 +150,11 @@ private:
     bool EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList);
     bool BuildRailLockOnHudAtlasQuads();
     void RegisterRailLockOnHudPass(
+        ID3D12GraphicsCommandList* commandList,
+        const std::string& targetResourceName);
+    bool EnsureSubmissionHudResources(ID3D12GraphicsCommandList* commandList);
+    bool BuildSubmissionHudQuads();
+    void RegisterSubmissionHudPass(
         ID3D12GraphicsCommandList* commandList,
         const std::string& targetResourceName);
     void StartRailCameraTuningRecording();
@@ -187,6 +203,9 @@ private:
     AppFrameCoordinator frameCoordinator_;
     AppSceneStateManager sceneStateManager_;
     VfxEngine vfxEngine_;
+    HandParticleAttachment handParticleAttachment_{};
+    HandParticleAttachment leftHandParticleAttachment_{};
+    WeaponAttachment weaponAttachment_{};
     AppFrameGraphBuilder frameGraphBuilder_;
     CourseAsset railShooterCourse_;
     CourseRuntime railShooterCourseRuntime_;
@@ -220,6 +239,20 @@ private:
     D3D12_VERTEX_BUFFER_VIEW railLockOnHudAtlasVertexBufferView_{};
     uint32_t railLockOnHudAtlasVertexCount_ = 0;
     bool railLockOnHudAtlasReady_ = false;
+    Microsoft::WRL::ComPtr<ID3D12Resource> submissionHudVertexResource_;
+    RailHudAtlasVertex* submissionHudMappedVertices_ = nullptr;
+    D3D12_VERTEX_BUFFER_VIEW submissionHudVertexBufferView_{};
+    uint32_t submissionHudVertexCount_ = 0;
+    struct SubmissionHudGlyph {
+        Vector4 uv{};
+        Vector2 size{};
+        Vector2 offset{};
+        float advance = 0.0f;
+        bool valid = false;
+    };
+    std::array<SubmissionHudGlyph, 95> submissionHudGlyphs_{};
+    bool submissionHudFontReady_ = false;
+    bool submissionHudManuallyHidden_ = false;
     std::vector<RailNormalShotLine> railNormalShotLines_;
     std::string railShooterCoursePath_ = "Resources/courses/CanyonAssaultRoute01.course";
     std::string railShooterCourseLoadStatus_;
@@ -435,4 +468,5 @@ private:
     bool releaseShowcaseInitialized_ = false;
     bool releaseShowcaseTitleDirty_ = true;
     std::array<bool, 256> previousKeyDown_{};
+    AppGamepadInput submissionGamepad_{};
 };

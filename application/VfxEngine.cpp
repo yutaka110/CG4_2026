@@ -190,6 +190,7 @@ bool ShouldLoadAuthoringSamples() {
 void ApplyLiveTuningToComponent(
     const ParticleComponentAssetView& source,
     EffectParticleSettings& destination) {
+    destination.lifetime = source.settings->lifetime;
     destination.depthFadeSoftness = source.settings->depthFadeSoftness;
     destination.edgeSoftness = source.settings->edgeSoftness;
     destination.spawnCount = source.settings->spawnCount;

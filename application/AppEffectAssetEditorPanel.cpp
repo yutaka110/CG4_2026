@@ -512,6 +512,7 @@ bool DrawTrailFollowModeCombo(const char* label, EffectTrailFollowMode& mode) {
 
 bool DrawEffectTypeControls(EffectParticleSettings& particle) {
     bool changed = false;
+    changed |= ImGui::SliderFloat("Particle Lifetime", &particle.lifetime, 0.0f, 10.0f, "%.2f s");
     changed |= ImGui::SliderFloat("Particle Emissive", &particle.emissive, 0.0f, 12.0f, "%.2f");
     int spawnCount = static_cast<int>(particle.spawnCount);
     if (ImGui::SliderInt("Particle Spawn Count", &spawnCount, 0, 256)) {
@@ -601,6 +602,7 @@ bool DrawEffectTypeControls(EffectCylinderSettings& cylinder) {
 }
 
 void ResetEffectTypeToAssetDefault(EffectParticleSettings& particle, const EffectAsset& asset) {
+    particle.lifetime = asset.defaultParticle.lifetime;
     particle.emissive = asset.defaultParticle.emissive;
     particle.spawnCount = asset.defaultParticle.spawnCount;
     particle.spawnFrequency = asset.defaultParticle.spawnFrequency;
@@ -1101,6 +1103,7 @@ void DrawEffectAssetEditorPanel(
 
             if (ImGui::TreeNode("Asset Defaults")) {
                 ImGui::DragFloat4("Default UV Rect", &asset.uvRect.x, 0.001f, 0.0f, 1.0f, "%.3f");
+                ImGui::SliderFloat("Default Particle Lifetime", &asset.defaultParticle.lifetime, 0.0f, 10.0f, "%.2f s");
                 ImGui::SliderFloat("Default Particle Emissive", &asset.defaultParticle.emissive, 0.0f, 12.0f, "%.2f");
                 int defaultParticleSpawnCount = static_cast<int>(asset.defaultParticle.spawnCount);
                 if (ImGui::SliderInt("Default Particle Spawn Count", &defaultParticleSpawnCount, 0, 256)) {

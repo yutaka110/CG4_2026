@@ -128,6 +128,13 @@
 
 #include "../AppEditorToolModules.h"
 #include "../AppRuntimeState.h"
+#include "../AppSceneResources.h"
+#include "../BoneSocket.h"
+#include "../AppGamepadInput.h"
+#include "../AppRuntimeConfig.h"
+#include "../HandParticleAttachment.h"
+#include "../WeaponAttachment.h"
+#include "../ModelLoaderAssimp.h"
 #include "../Skeleton.h"
 #include "../EffectAssetLoader.h"
 #include "../EffectRuntime.h"
@@ -141,11 +148,13 @@
 #include "../terrain/TerrainChunkManager.h"
 #include "../terrain/TerrainVolumeField.h"
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -7134,6 +7143,29 @@ void TestGenericDocumentModel(RegressionRunner& runner) {
                 "scene=autosaved") != std::string::npos,
         "recovery should restore autosaved content");
 
+    {
+        std::ofstream corruptAutosave(
+            projectRoot / autosaveRecord.contentPath,
+            std::ios::binary | std::ios::app);
+        corruptAutosave << "corrupt";
+    }
+    const EditorDocumentRecoveryScanResult corruptScan = recovery.Scan();
+    runner.Expect(
+        corruptScan.succeeded && corruptScan.candidates.empty() &&
+            corruptScan.quarantined.size() == 1 &&
+            corruptScan.quarantined.front().reason == "Autosave content hash mismatch." &&
+            !std::filesystem::exists(projectRoot / autosaveRecord.contentPath) &&
+            std::filesystem::is_regular_file(
+                projectRoot /
+                corruptScan.quarantined.front().quarantineGenerationPath /
+                "document.autosave"),
+        "recovery scan should quarantine a corrupt Autosave generation without data loss");
+    const EditorDocumentRecoveryScanResult repeatCorruptScan = recovery.Scan();
+    runner.Expect(
+        repeatCorruptScan.succeeded && repeatCorruptScan.candidates.empty() &&
+            repeatCorruptScan.quarantined.empty(),
+        "quarantined Autosaves should not trigger repeated recovery notifications");
+
     runner.Expect(!manager.Close(sceneOpen.id, false, &error),
         "dirty document close should require explicit save or discard");
     runner.Expect(manager.Close(sceneOpen.id, true, &error) && manager.Reopen(sceneOpen.id, &error),
@@ -9525,6 +9557,1208 @@ void TestFeatureGuardTripwire(RegressionRunner& runner) {
     runner.Expect(!emptyReport.checks.empty(), "feature guard should emit detailed checks");
 }
 
+void TestBoneSocketFoundation(RegressionRunner& runner) {
+    Skeleton skeleton;
+    skeleton.joints.resize(2);
+    skeleton.joints[0].name = "Root";
+    skeleton.joints[0].index = 0;
+    skeleton.joints[0].skeletonSpaceMatrix = MakeIdentity4x4();
+    skeleton.joints[1].name = "RightHand";
+    skeleton.joints[1].index = 1;
+    skeleton.joints[1].parent = 0;
+
+    constexpr float kQuarterTurn = 1.57079632679489661923f;
+    const float halfAngle = kQuarterTurn * 0.5f;
+    skeleton.joints[1].skeletonSpaceMatrix = MakeAffineMatrix(
+        {0.01f, 0.01f, 0.01f},
+        {0.0f, 0.0f, std::sin(halfAngle), std::cos(halfAngle)},
+        {2.0f, 3.0f, 0.0f});
+    const Matrix4x4 scaledJointMatrix =
+        skeleton.joints[1].skeletonSpaceMatrix;
+    skeleton.jointMap.emplace("Root", 0);
+    skeleton.jointMap.emplace("RightHand", 1);
+
+    BoneSocketBinding socket;
+    SetBoneSocketJoint(socket, "RightHand");
+    socket.localOffset.translate = {1.0f, 0.0f, 0.0f};
+
+    const Matrix4x4 ownerWorld = MakeAffineMatrix(
+        {2.0f, 2.0f, 2.0f},
+        {0.0f, 0.0f, 0.0f, 1.0f},
+        {10.0f, 0.0f, 0.0f});
+    BoneSocketPose pose = EvaluateBoneSocket(socket, skeleton, ownerWorld);
+    const auto approximatelyEqual = [](float lhs, float rhs) {
+        return std::fabs(lhs - rhs) < 0.0001f;
+    };
+    runner.Expect(
+        pose.IsValid() && pose.jointIndex == 1 && socket.cachedJointIndex == 1,
+        "Bone Socket should resolve and cache the requested Joint index");
+    runner.Expect(
+        approximatelyEqual(pose.worldMatrix.m[3][0], 14.0f) &&
+            approximatelyEqual(pose.worldMatrix.m[3][1], 8.0f) &&
+            approximatelyEqual(pose.worldMatrix.m[3][2], 0.0f),
+        "Bone Socket should compose offset, animated Joint, and owner transforms in row-vector order");
+    runner.Expect(
+        approximatelyEqual(pose.worldMatrix.m[0][0], 0.0f) &&
+            approximatelyEqual(pose.worldMatrix.m[0][1], 2.0f) &&
+            approximatelyEqual(pose.worldMatrix.m[1][0], -2.0f) &&
+            approximatelyEqual(pose.worldMatrix.m[1][1], 0.0f) &&
+            approximatelyEqual(pose.sourceJointScale.x, 0.01f) &&
+            approximatelyEqual(pose.sourceJointScale.y, 0.01f) &&
+            approximatelyEqual(pose.sourceJointScale.z, 0.01f) &&
+            pose.jointScaleRemoved,
+        "Bone Socket should remove imported unit scale while preserving animated orientation, translation, and owner scale");
+
+    BoneSocketBinding inheritedScaleSocket = socket;
+    inheritedScaleSocket.scaleMode = BoneSocketScaleMode::InheritJointScale;
+    const BoneSocketPose inheritedScalePose = EvaluateBoneSocket(
+        inheritedScaleSocket,
+        skeleton,
+        ownerWorld);
+    runner.Expect(
+        inheritedScalePose.IsValid() &&
+            !inheritedScalePose.jointScaleRemoved &&
+            approximatelyEqual(inheritedScalePose.worldMatrix.m[0][1], 0.02f) &&
+            approximatelyEqual(inheritedScalePose.worldMatrix.m[1][0], -0.02f),
+        "Bone Socket should retain an explicit scale-inheritance mode for deforming attachments");
+
+    skeleton.joints[1].skeletonSpaceMatrix = MakeAffineMatrix(
+        {0.0f, 1.0f, 1.0f},
+        {0.0f, 0.0f, 0.0f, 1.0f},
+        {2.0f, 3.0f, 0.0f});
+    const BoneSocketPose invalidBasisPose = EvaluateBoneSocket(
+        socket,
+        skeleton,
+        ownerWorld);
+    runner.Expect(
+        invalidBasisPose.status == BoneSocketStatus::InvalidJointTransform &&
+            invalidBasisPose.jointIndex == -1,
+        "Bone Socket should fail closed when a Joint basis cannot be normalized");
+    skeleton.joints[1].skeletonSpaceMatrix = scaledJointMatrix;
+
+    skeleton.jointMap.clear();
+    pose = EvaluateBoneSocket(socket, skeleton, ownerWorld);
+    runner.Expect(
+        pose.IsValid() && pose.jointIndex == 1,
+        "Bone Socket should reuse a validated cached Joint without a per-frame name lookup");
+
+    skeleton.joints[1].name = "ReplacedJoint";
+    pose = EvaluateBoneSocket(socket, skeleton, ownerWorld);
+    runner.Expect(
+        pose.status == BoneSocketStatus::JointNotFound &&
+            pose.jointIndex == -1 && socket.cachedJointIndex == -1 &&
+            approximatelyEqual(pose.worldMatrix.m[0][0], 1.0f) &&
+            approximatelyEqual(pose.worldMatrix.m[3][0], 0.0f),
+        "Bone Socket should reject stale caches and return identity after Skeleton replacement");
+
+    skeleton.jointMap.emplace("RightHand", 42);
+    pose = EvaluateBoneSocket(socket, skeleton, ownerWorld);
+    runner.Expect(
+        pose.status == BoneSocketStatus::SkeletonMismatch &&
+            std::string_view(BoneSocketStatusName(pose.status)) == "skeleton_mismatch",
+        "Bone Socket should diagnose corrupt Skeleton maps without indexing out of bounds");
+
+    SetBoneSocketJoint(socket, "");
+    pose = EvaluateBoneSocket(socket, skeleton, ownerWorld);
+    runner.Expect(
+        pose.status == BoneSocketStatus::EmptyJointName,
+        "Bone Socket should reject an empty Joint name");
+
+    SetBoneSocketJoint(socket, "RightHand");
+    socket.enabled = false;
+    pose = EvaluateBoneSocket(socket, skeleton, ownerWorld);
+    runner.Expect(
+        pose.status == BoneSocketStatus::Disabled,
+        "Bone Socket should expose an explicit disabled state");
+}
+
+void TestMultiMaterialModelLoading(RegressionRunner& runner) {
+    ModelData model = LoadObjFile_Assimp(
+        "Resources/tests/MultiMaterial",
+        "MultiMaterial.obj");
+    const std::string importedLayoutSummary =
+        "Assimp loader should preserve three 3D mesh ranges in one shared vertex/index buffer"
+        " (vertices=" + std::to_string(model.vertices.size()) +
+        ", indices=" + std::to_string(model.indices.size()) +
+        ", subMeshes=" + std::to_string(model.subMeshes.size()) +
+        ", materials=" + std::to_string(model.materials.size()) + ")";
+    runner.Expect(
+        !model.vertices.empty() &&
+            model.indices.size() == 36 &&
+            model.subMeshes.size() == 3 &&
+            ValidateModelDataMaterialLayout(model) &&
+            ValidateModelGeometryOrientation(model),
+        importedLayoutSummary);
+
+    Vector3 boundsMin{
+        model.vertices.front().position.x,
+        model.vertices.front().position.y,
+        model.vertices.front().position.z,
+    };
+    Vector3 boundsMax = boundsMin;
+    for (const VertexData& vertex : model.vertices) {
+        boundsMin.x = (std::min)(boundsMin.x, vertex.position.x);
+        boundsMin.y = (std::min)(boundsMin.y, vertex.position.y);
+        boundsMin.z = (std::min)(boundsMin.z, vertex.position.z);
+        boundsMax.x = (std::max)(boundsMax.x, vertex.position.x);
+        boundsMax.y = (std::max)(boundsMax.y, vertex.position.y);
+        boundsMax.z = (std::max)(boundsMax.z, vertex.position.z);
+    }
+    runner.Expect(
+        boundsMax.x - boundsMin.x > 1.9f &&
+            boundsMax.y - boundsMin.y > 1.4f &&
+            boundsMax.z - boundsMin.z > 1.4f,
+        "MultiMaterial showcase should remain a volumetric 3D model rather than coplanar test cards");
+
+    bool foundRed = false;
+    bool foundBlue = false;
+    bool foundChecker = false;
+    uint32_t redMaterialIndex = UINT32_MAX;
+    uint32_t blueMaterialIndex = UINT32_MAX;
+    uint32_t checkerMaterialIndex = UINT32_MAX;
+    for (const SubMeshData& subMesh : model.subMeshes) {
+        runner.Expect(
+            subMesh.indexCount == 12 &&
+                subMesh.indexStart + subMesh.indexCount <= model.indices.size() &&
+                subMesh.materialIndex < model.materials.size(),
+            "Each imported SubMesh should expose a validated indexed draw range and Material Slot");
+        if (subMesh.materialIndex >= model.materials.size()) {
+            continue;
+        }
+        const MaterialData& material = model.materials[subMesh.materialIndex];
+        if (material.name == "RedMaterial") {
+            foundRed = true;
+            redMaterialIndex = subMesh.materialIndex;
+            const std::string redMaterialSummary =
+                "Red Material Slot should preserve circle2.png and a red-dominant base color"
+                " (texture=" + std::filesystem::path(material.textureFilePath).filename().string() +
+                ", rgba=" + std::to_string(material.baseColorFactor.x) + "," +
+                std::to_string(material.baseColorFactor.y) + "," +
+                std::to_string(material.baseColorFactor.z) + "," +
+                std::to_string(material.baseColorFactor.w) + ")";
+            runner.Expect(
+                std::filesystem::path(material.textureFilePath).filename() == "circle2.png" &&
+                    material.baseColorFactor.x > 0.95f &&
+                    material.baseColorFactor.y > 0.30f &&
+                    material.baseColorFactor.y < 0.40f &&
+                    material.baseColorFactor.z > 0.20f &&
+                    material.baseColorFactor.z < 0.35f,
+                redMaterialSummary);
+        } else if (material.name == "BlueMaterial") {
+            foundBlue = true;
+            blueMaterialIndex = subMesh.materialIndex;
+            runner.Expect(
+                std::filesystem::path(material.textureFilePath).filename() == "gradationLine.png" &&
+                    std::fabs(material.baseColorFactor.z - 1.0f) < 0.0001f,
+                "Blue Material Slot should preserve its independent texture and base-color factor");
+        } else if (material.name == "CheckerMaterial") {
+            foundChecker = true;
+            checkerMaterialIndex = subMesh.materialIndex;
+            runner.Expect(
+                std::filesystem::path(material.textureFilePath).filename() == "uvChecker.png" &&
+                    material.baseColorFactor.x > 0.9f &&
+                    material.baseColorFactor.y > 0.9f,
+                "Checker Material Slot should preserve its presentation texture and base-color factor");
+        }
+    }
+    runner.Expect(
+        foundRed && foundBlue && foundChecker &&
+            redMaterialIndex != blueMaterialIndex &&
+            redMaterialIndex != checkerMaterialIndex &&
+            blueMaterialIndex != checkerMaterialIndex,
+        "Assimp loader should retain three independent Material Slots across multiple meshes");
+
+    ModelData legacy;
+    legacy.vertices.resize(3);
+    legacy.indices = {0, 1, 2};
+    legacy.material.textureFilePath = "legacy.png";
+    EnsureModelDataMaterialLayout(legacy);
+    runner.Expect(
+        legacy.materials.size() == 1 &&
+            legacy.subMeshes.size() == 1 &&
+            legacy.subMeshes[0].indexStart == 0 &&
+            legacy.subMeshes[0].indexCount == 3 &&
+            legacy.subMeshes[0].materialIndex == 0 &&
+            legacy.materials[0].textureFilePath == "legacy.png" &&
+            ValidateModelDataMaterialLayout(legacy),
+        "Legacy single-material models should migrate to Material Slot 0 without data loss");
+
+    legacy.subMeshes[0].indexCount = 4;
+    runner.Expect(
+        !ValidateModelDataMaterialLayout(legacy),
+        "Material layout validation should reject SubMesh index ranges that exceed the shared buffer");
+
+    ModelData invertedTriangle;
+    invertedTriangle.vertices = {
+        {{-1.0f, -1.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, {0.0f, 0.0f, -1.0f}},
+        {{1.0f, -1.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, {0.0f, 0.0f, -1.0f}},
+        {{0.0f, 1.0f, 0.0f, 1.0f}, {0.5f, 0.0f}, {0.0f, 0.0f, -1.0f}},
+    };
+    invertedTriangle.indices = {0, 1, 2};
+    invertedTriangle.materials.push_back(MaterialData{"test"});
+    invertedTriangle.subMeshes.push_back({"inverted", 0, 3, 0});
+    const ModelGeometryOrientationStats repair =
+        RepairModelGeometryOrientation(invertedTriangle);
+    runner.Expect(
+        repair.triangleCount == 1 && repair.repairedWindingCount == 1 &&
+            invertedTriangle.indices[1] == 2 &&
+            invertedTriangle.indices[2] == 1 &&
+            ValidateModelGeometryOrientation(invertedTriangle),
+        "Model loader orientation repair should align reversed winding with authored normals");
+
+    ModelData missingNormals = invertedTriangle;
+    missingNormals.indices = {0, 1, 2};
+    for (VertexData& vertex : missingNormals.vertices) {
+        vertex.normal = {};
+    }
+    const ModelGeometryOrientationStats regenerated =
+        RepairModelGeometryOrientation(missingNormals);
+    runner.Expect(
+        regenerated.regeneratedNormalCount == 3 &&
+            ValidateModelGeometryOrientation(missingNormals),
+        "Model loader orientation repair should regenerate finite unit normals when absent");
+}
+
+void TestHandParticleAttachment(RegressionRunner& runner) {
+    EffectAssetLoader loader;
+    LoadedEffectAsset loadedEffect;
+    const bool loaded = loader.LoadFile(
+        "Resources/effects/HandSocketParticle.effect",
+        loadedEffect);
+    const bool hasLoadError = std::any_of(
+        loadedEffect.diagnostics.begin(),
+        loadedEffect.diagnostics.end(),
+        [](const EffectAssetDiagnostic& diagnostic) {
+            return diagnostic.severity == EffectAssetDiagnosticSeverity::Error;
+        });
+    runner.Expect(
+        loaded && !hasLoadError &&
+            loadedEffect.asset.name == "hand_socket_particle" &&
+            loadedEffect.asset.lifetime == 0.0f &&
+            loadedEffect.asset.Components().ComponentCount() == 1 &&
+            loadedEffect.asset.defaultParticle.spawnCount == 12.0f &&
+            loadedEffect.asset.defaultParticle.lifetime > 1.0f &&
+            loadedEffect.asset.defaultParticle.spawnFrequency > 0.0f &&
+            loadedEffect.asset.defaultParticle.spawnFrequency <= 0.04f &&
+            loadedEffect.asset.defaultParticle.emissive >= 6.0f,
+        "Hand Particle Effect asset should load as a visible continuous bounded-rate emitter");
+
+    LoadedEffectAsset loadedLeftEffect;
+    const bool loadedLeft = loader.LoadFile(
+        "Resources/effects/LeftHandSocketParticle.effect",
+        loadedLeftEffect);
+    const bool hasLeftLoadError = std::any_of(
+        loadedLeftEffect.diagnostics.begin(),
+        loadedLeftEffect.diagnostics.end(),
+        [](const EffectAssetDiagnostic& diagnostic) {
+            return diagnostic.severity == EffectAssetDiagnosticSeverity::Error;
+        });
+    runner.Expect(
+        loadedLeft && !hasLeftLoadError &&
+            loadedLeftEffect.asset.name == "left_hand_socket_particle" &&
+            loadedLeftEffect.asset.lifetime == 0.0f &&
+            loadedLeftEffect.asset.defaultParticle.lifetime > 0.0f &&
+            loadedLeftEffect.asset.defaultParticle.lifetime <= 0.5f &&
+            loadedLeftEffect.asset.defaultParticle.spawnRadius <= 0.03f &&
+            loadedLeftEffect.asset.defaultParticle.spawnCount <= 8.0f &&
+            loadedLeftEffect.asset.defaultParticle.emissive >= 8.0f,
+        "Left Hand Particle Effect should remain compact, short-lived, and visibly red-tintable");
+
+    EffectSystem effectSystem;
+    effectSystem.RegisterAsset(std::move(loadedEffect.asset));
+    EffectRuntime effectRuntime(&effectSystem);
+
+    Skeleton skeleton;
+    skeleton.joints.resize(1);
+    skeleton.joints[0].name = "RightHand";
+    skeleton.joints[0].index = 0;
+    skeleton.joints[0].skeletonSpaceMatrix = MakeTranslateMatrix({1.0f, 2.0f, 3.0f});
+    skeleton.jointMap.emplace("RightHand", 0);
+
+    HandParticleAttachmentSettings settings;
+    settings.enabled = true;
+    settings.jointName = "RightHand";
+    settings.effectName = "hand_socket_particle";
+    settings.socketOffset.translate = {0.5f, 0.0f, 0.0f};
+
+    HandParticleAttachment attachment;
+    attachment.Update(
+        settings,
+        &skeleton,
+        MakeTranslateMatrix({10.0f, 0.0f, 0.0f}),
+        effectRuntime);
+    const HandParticleAttachmentTelemetry first = attachment.Telemetry();
+    const EffectInstance* firstInstance = effectRuntime.FindInstance(first.effectInstanceId);
+    runner.Expect(
+        first.status == HandParticleAttachmentStatus::Active &&
+            first.socketStatus == BoneSocketStatus::Resolved &&
+            first.effectInstanceId != 0 &&
+            firstInstance != nullptr && firstInstance->attached && firstInstance->previewLoop &&
+            std::fabs(firstInstance->transform.translate.x - 11.5f) < 0.0001f &&
+            std::fabs(firstInstance->transform.translate.y - 2.0f) < 0.0001f &&
+            std::fabs(firstInstance->transform.translate.z - 3.0f) < 0.0001f,
+        "Hand Particle Attachment should create a persistent Effect at the Bone Socket world position");
+    const EffectRuntimeFrame attachmentFrame = effectRuntime.BuildFrame();
+    runner.Expect(
+        attachmentFrame.particleQueue.size() == 1 &&
+            attachmentFrame.particleQueue.front().settings != nullptr &&
+            attachmentFrame.particleQueue.front().settings->spawnCount == 12.0f &&
+            attachmentFrame.particleQueue.front().settings->spawnFrequency > 0.0f &&
+            attachmentFrame.particleQueue.front().common.componentCommon != nullptr &&
+            attachmentFrame.particleQueue.front().common.componentCommon->size.x >= 0.20f &&
+            attachmentFrame.particleQueue.front().common.componentCommon->duration == 0.0f,
+        "Hand Particle Attachment should submit a continuous Effect through the GPU Particle render queue");
+
+    skeleton.joints[0].skeletonSpaceMatrix = MakeTranslateMatrix({2.0f, 4.0f, 6.0f});
+    attachment.Update(
+        settings,
+        &skeleton,
+        MakeTranslateMatrix({10.0f, 0.0f, 0.0f}),
+        effectRuntime);
+    const HandParticleAttachmentTelemetry moved = attachment.Telemetry();
+    const EffectInstance* movedInstance = effectRuntime.FindInstance(moved.effectInstanceId);
+    runner.Expect(
+        moved.status == HandParticleAttachmentStatus::Active &&
+            moved.effectInstanceId == first.effectInstanceId &&
+            movedInstance != nullptr &&
+            std::fabs(movedInstance->transform.translate.x - 12.5f) < 0.0001f &&
+            std::fabs(movedInstance->transform.translate.y - 4.0f) < 0.0001f &&
+            std::fabs(movedInstance->transform.translate.z - 6.0f) < 0.0001f,
+        "Hand Particle Attachment should follow animation without recreating its Effect instance");
+
+    settings.effectName = "missing_hand_particle_effect";
+    attachment.Update(settings, &skeleton, MakeIdentity4x4(), effectRuntime);
+    runner.Expect(
+        attachment.Telemetry().status == HandParticleAttachmentStatus::EffectUnavailable &&
+            effectRuntime.Instances().empty(),
+        "Hand Particle Attachment should stop the old Effect when its asset becomes unavailable");
+
+    settings.effectName = "hand_socket_particle";
+    settings.enabled = false;
+    attachment.Update(settings, &skeleton, MakeIdentity4x4(), effectRuntime);
+    runner.Expect(
+        attachment.Telemetry().status == HandParticleAttachmentStatus::Disabled &&
+            effectRuntime.Instances().empty(),
+        "Hand Particle Attachment should stop emission when disabled");
+
+    settings.enabled = true;
+    attachment.Update(settings, nullptr, MakeIdentity4x4(), effectRuntime);
+    runner.Expect(
+        attachment.Telemetry().status == HandParticleAttachmentStatus::MissingSkeleton,
+        "Hand Particle Attachment should diagnose a missing animated Skeleton");
+
+    EffectSystem leftEffectSystem;
+    leftEffectSystem.RegisterAsset(std::move(loadedLeftEffect.asset));
+    EffectRuntime leftEffectRuntime(&leftEffectSystem);
+    Skeleton leftSkeleton;
+    leftSkeleton.joints.resize(1);
+    leftSkeleton.joints[0].name = "LeftHand";
+    leftSkeleton.joints[0].index = 0;
+    leftSkeleton.joints[0].skeletonSpaceMatrix =
+        MakeTranslateMatrix({-1.0f, 2.0f, 3.0f});
+    leftSkeleton.jointMap.emplace("LeftHand", 0);
+    HandParticleAttachmentSettings leftSettings;
+    leftSettings.enabled = true;
+    leftSettings.jointName = "LeftHand";
+    leftSettings.effectName = "left_hand_socket_particle";
+    leftSettings.color = {1.0f, 0.12f, 0.04f, 1.0f};
+    HandParticleAttachment leftAttachment;
+    leftAttachment.Update(
+        leftSettings,
+        &leftSkeleton,
+        MakeIdentity4x4(),
+        leftEffectRuntime);
+    const EffectRuntimeFrame leftFrame = leftEffectRuntime.BuildFrame();
+    runner.Expect(
+        leftAttachment.Telemetry().status == HandParticleAttachmentStatus::Active &&
+            leftFrame.particleQueue.size() == 1 &&
+            leftFrame.particleQueue.front().settings != nullptr &&
+            leftFrame.particleQueue.front().settings->lifetime > 0.0f &&
+            leftFrame.particleQueue.front().settings->lifetime <= 0.5f,
+        "Left Hand Attachment should submit an independent short-lived GPU Particle emitter");
+}
+
+void TestWeaponAttachment(RegressionRunner& runner) {
+    Skeleton skeleton;
+    skeleton.joints.resize(1);
+    skeleton.joints[0].name = "RightHand";
+    skeleton.joints[0].index = 0;
+    skeleton.joints[0].skeletonSpaceMatrix =
+        MakeTranslateMatrix({1.0f, 2.0f, 3.0f});
+    skeleton.jointMap.emplace("RightHand", 0);
+
+    WeaponAttachmentSettings settings;
+    settings.enabled = true;
+    settings.jointName = "RightHand";
+    settings.socketOffset.translate = {0.25f, 0.0f, 0.0f};
+
+    WeaponAttachment attachment;
+    attachment.Update(
+        settings,
+        &skeleton,
+        MakeTranslateMatrix({10.0f, 0.0f, 0.0f}),
+        9,
+        true);
+    const WeaponAttachmentTelemetry first = attachment.Telemetry();
+    runner.Expect(
+        first.status == WeaponAttachmentStatus::Active &&
+            first.socketStatus == BoneSocketStatus::Resolved &&
+            first.modelIndex == 9 &&
+            attachment.SocketBinding().cachedJointIndex == 0 &&
+            std::fabs(first.worldPosition.x - 11.25f) < 0.0001f &&
+            std::fabs(first.worldPosition.y - 2.0f) < 0.0001f &&
+            std::fabs(first.worldPosition.z - 3.0f) < 0.0001f,
+        "Weapon Attachment should publish a managed model pose from the shared Bone Socket");
+
+    skeleton.jointMap.clear();
+    skeleton.joints[0].skeletonSpaceMatrix =
+        MakeTranslateMatrix({2.0f, 4.0f, 6.0f});
+    attachment.Update(settings, &skeleton, MakeIdentity4x4(), 9, true);
+    runner.Expect(
+        attachment.Telemetry().status == WeaponAttachmentStatus::Active &&
+            attachment.SocketBinding().cachedJointIndex == 0 &&
+            std::fabs(attachment.Telemetry().worldPosition.x - 2.25f) < 0.0001f &&
+            std::fabs(attachment.Telemetry().worldPosition.y - 4.0f) < 0.0001f,
+        "Weapon Attachment should follow animation while reusing the validated Joint cache");
+
+    attachment.Update(settings, &skeleton, MakeIdentity4x4(), UINT32_MAX, false);
+    runner.Expect(
+        attachment.Telemetry().status == WeaponAttachmentStatus::ModelUnavailable &&
+            attachment.Telemetry().worldMatrix.m[0][0] == 1.0f &&
+            attachment.Telemetry().worldPosition.x == 0.0f,
+        "Weapon Attachment should fail closed without retaining a stale pose when the model is unavailable");
+
+    Matrix4x4 invalidOwner = MakeIdentity4x4();
+    invalidOwner.m[3][0] = std::numeric_limits<float>::quiet_NaN();
+    attachment.Update(settings, &skeleton, invalidOwner, 9, true);
+    runner.Expect(
+        attachment.Telemetry().status == WeaponAttachmentStatus::InvalidWorldTransform,
+        "Weapon Attachment should reject non-finite attachment matrices");
+
+    settings.enabled = false;
+    attachment.Update(settings, &skeleton, MakeIdentity4x4(), 9, true);
+    runner.Expect(
+        attachment.Telemetry().status == WeaponAttachmentStatus::Disabled,
+        "Weapon Attachment should hide its render instance when disabled");
+
+    settings.enabled = true;
+    attachment.Update(settings, nullptr, MakeIdentity4x4(), 9, true);
+    runner.Expect(
+        attachment.Telemetry().status == WeaponAttachmentStatus::MissingSkeleton,
+        "Weapon Attachment should diagnose a missing animated Skeleton");
+}
+
+void TestTrainingSwordSubmissionAsset(RegressionRunner& runner) {
+    const ModelData sword = BuildTrainingSwordModelDataForSubmission();
+    runner.Expect(
+        !sword.vertices.empty() && !sword.indices.empty() &&
+            sword.materials.size() == 3 && sword.subMeshes.size() == 3,
+        "submission sword should be a non-empty three-slot MultiMaterial model");
+
+    bool contiguousRanges = !sword.subMeshes.empty();
+    uint32_t expectedIndexStart = 0;
+    std::array<bool, 3> referencedMaterials{};
+    for (const SubMeshData& subMesh : sword.subMeshes) {
+        contiguousRanges = contiguousRanges &&
+            subMesh.indexStart == expectedIndexStart &&
+            subMesh.indexCount != 0 &&
+            subMesh.materialIndex < referencedMaterials.size();
+        expectedIndexStart = subMesh.indexStart + subMesh.indexCount;
+        if (subMesh.materialIndex < referencedMaterials.size()) {
+            referencedMaterials[subMesh.materialIndex] = true;
+        }
+    }
+    contiguousRanges = contiguousRanges &&
+        expectedIndexStart == sword.indices.size();
+    runner.Expect(
+        contiguousRanges && referencedMaterials[0] &&
+            referencedMaterials[1] && referencedMaterials[2] &&
+            ValidateModelDataMaterialLayout(sword),
+        "submission sword SubMeshes should cover every index exactly once and reference all materials");
+
+    bool usesReadableWhiteAlbedo = true;
+    for (const MaterialData& material : sword.materials) {
+        usesReadableWhiteAlbedo = usesReadableWhiteAlbedo &&
+            material.textureFilePath == "Resources/human/white.png" &&
+            material.baseColorFactor.w == 1.0f;
+    }
+    runner.Expect(
+        usesReadableWhiteAlbedo &&
+            sword.materials[0].baseColorFactor.z > sword.materials[0].baseColorFactor.x &&
+            sword.materials[1].baseColorFactor.x > sword.materials[1].baseColorFactor.z &&
+            sword.materials[2].baseColorFactor.x < 0.2f,
+        "submission sword should use opaque, readable Blade/Guard/Grip colours over white albedo");
+    runner.Expect(
+        ValidateModelGeometryOrientation(sword),
+        "submission sword winding and authored normals should agree for back-face culling");
+}
+
+void TestAppStartupSceneArguments(RegressionRunner& runner) {
+    const wchar_t* defaultArguments[] = {L"GE3.exe"};
+    runner.Expect(
+        ParseAppStartupSceneArguments(1, defaultArguments) ==
+            AppStartupScene::MultiMaterialShowcase,
+        "submission startup should enter MultiMaterial Showcase without requiring an argument");
+
+    const wchar_t* multiMaterialArguments[] = {
+        L"GE3.exe",
+        L"--multi-material-showcase",
+    };
+    runner.Expect(
+        ParseAppStartupSceneArguments(2, multiMaterialArguments) ==
+            AppStartupScene::MultiMaterialShowcase,
+        "--multi-material-showcase should explicitly select the isolated presentation scene");
+
+    const wchar_t* previewArguments[] = {L"GE3.exe", L"--vfx-preview"};
+    runner.Expect(
+        ParseAppStartupSceneArguments(2, previewArguments) == AppStartupScene::VfxPreview,
+        "--vfx-preview should remain a supported explicit preview argument");
+
+    const wchar_t* mixedArguments[] = {
+        L"GE3.exe",
+        L"--unrelated-option",
+        L"--vfx-preview",
+    };
+    runner.Expect(
+        ParseAppStartupSceneArguments(3, mixedArguments) == AppStartupScene::VfxPreview,
+        "startup scene parsing should find --vfx-preview after unrelated arguments");
+
+    const wchar_t* railArguments[] = {L"GE3.exe", L"--rail-shooter"};
+    runner.Expect(
+        ParseAppStartupSceneArguments(2, railArguments) == AppStartupScene::RailShooter,
+        "--rail-shooter should preserve access to the gameplay startup scene");
+
+    const wchar_t* conflictingArguments[] = {
+        L"GE3.exe",
+        L"--vfx-preview",
+        L"--rail-shooter",
+    };
+    runner.Expect(
+        ParseAppStartupSceneArguments(3, conflictingArguments) == AppStartupScene::RailShooter,
+        "the explicit gameplay argument should take priority over preview aliases");
+
+    const wchar_t* nearMatchArguments[] = {L"GE3.exe", L"--vfx-preview-extra"};
+    runner.Expect(
+        ParseAppStartupSceneArguments(2, nearMatchArguments) ==
+            AppStartupScene::MultiMaterialShowcase,
+        "unknown arguments should retain the safe MultiMaterial submission default");
+    runner.Expect(
+        ParseAppStartupSceneArguments(0, nullptr) ==
+            AppStartupScene::MultiMaterialShowcase,
+        "invalid startup arguments should fail safely to MultiMaterial Showcase");
+}
+
+void TestMultiMaterialShowcasePresentationDefaults(RegressionRunner& runner) {
+    AppRuntimeState runtimeState{};
+    runtimeState.camera.enableDebugInput = true;
+    runtimeState.camera.transform.translate = {12.0f, 8.0f, -50.0f};
+    runtimeState.clearColor[0] = 1.0f;
+    runtimeState.clearColor[1] = 1.0f;
+    runtimeState.clearColor[2] = 1.0f;
+    runtimeState.materialData.color = {0.1f, 0.2f, 0.3f, 0.4f};
+    runtimeState.materialData.environmentCoefficient = 1.0f;
+    runtimeState.directionalLightData.intensity = 0.0f;
+    runtimeState.pointLightData.intensity = 8.0f;
+    runtimeState.spotLight.intensity = 4.0f;
+    runtimeState.handParticleAttachment.enabled = false;
+    runtimeState.handParticleAttachment.jointName = "stale_joint";
+    runtimeState.handParticleAttachment.effectName = "stale_effect";
+    runtimeState.leftHandParticleAttachment.enabled = false;
+    runtimeState.leftHandParticleAttachment.jointName = "stale_left_joint";
+    runtimeState.leftHandParticleAttachment.effectName = "stale_left_effect";
+    runtimeState.weaponAttachment.enabled = false;
+    runtimeState.weaponAttachment.jointName = "stale_weapon_joint";
+    runtimeState.weaponAttachment.socketOffset = {};
+    runtimeState.vfx.enableParticles = false;
+    runtimeState.vfx.enableTrails = true;
+    runtimeState.skinnedAnimationBlend.active = true;
+    runtimeState.skinnedAnimationBlend.fromModelIndex = 7;
+
+    ApplyMultiMaterialShowcasePresentationDefaults(runtimeState);
+
+    runner.Expect(
+        !runtimeState.camera.enableDebugInput &&
+            runtimeState.camera.transform.translate.z > -6.0f &&
+            runtimeState.camera.transform.translate.z < -4.0f &&
+            runtimeState.camera.fovY > 0.7f && runtimeState.camera.fovY < 0.9f,
+        "submission presentation should use its fixed close camera and lens");
+    runner.Expect(
+        std::abs(runtimeState.skinnedModelTransform.scale.x - 1.40f) < 0.0001f &&
+            runtimeState.skinnedModelTransform.scale.x ==
+                runtimeState.skinnedModelTransform.scale.y &&
+            runtimeState.skinnedModelTransform.scale.y ==
+                runtimeState.skinnedModelTransform.scale.z,
+        "submission humanoid should use the enlarged uniform presentation scale");
+    runner.Expect(
+        runtimeState.clearColor[0] < 0.03f &&
+            runtimeState.clearColor[1] < 0.03f &&
+            runtimeState.clearColor[2] < 0.03f &&
+            runtimeState.clearColor[3] == 1.0f,
+        "submission presentation should force an opaque dark background");
+    runner.Expect(
+        runtimeState.materialData.color.x == 1.0f &&
+            runtimeState.materialData.color.y == 1.0f &&
+            runtimeState.materialData.color.z == 1.0f &&
+            runtimeState.materialData.enableLighting != 0 &&
+            runtimeState.materialData.environmentCoefficient <= 0.02f,
+        "submission materials should ignore stale tint and suppress environment reflection");
+    runner.Expect(
+        runtimeState.directionalLightData.intensity > 1.0f &&
+            runtimeState.pointLightData.intensity > 0.0f &&
+            runtimeState.pointLightData.intensity < 0.5f &&
+            runtimeState.spotLight.intensity == 0.0f,
+        "submission lighting should use a fixed key/fill rig without inherited spot lights");
+    runner.Expect(
+        runtimeState.submissionShowcase.enabled &&
+            runtimeState.showSkinnedModel &&
+            runtimeState.showVfxModelObjects &&
+            !runtimeState.showSkybox && !runtimeState.showProceduralBackdrop,
+        "submission presentation should expose only the intended humanoid and MultiMaterial model");
+    runner.Expect(
+        runtimeState.handParticleAttachment.enabled &&
+            runtimeState.handParticleAttachment.jointName == "mixamorig:RightHand" &&
+            runtimeState.handParticleAttachment.effectName == "hand_socket_particle" &&
+            runtimeState.handParticleAttachment.socketOffset.translate.y > 0.05f &&
+            runtimeState.handParticleAttachment.effectScale.x > 1.0f &&
+            runtimeState.leftHandParticleAttachment.enabled &&
+            runtimeState.leftHandParticleAttachment.jointName == "mixamorig:LeftHand" &&
+            runtimeState.leftHandParticleAttachment.effectName == "left_hand_socket_particle" &&
+            runtimeState.leftHandParticleAttachment.socketOffset.translate.y > 0.04f &&
+            runtimeState.leftHandParticleAttachment.color.x > 0.9f &&
+            runtimeState.leftHandParticleAttachment.color.y < 0.2f &&
+            runtimeState.weaponAttachment.enabled &&
+            runtimeState.weaponAttachment.jointName == "mixamorig:RightHand" &&
+            std::abs(runtimeState.weaponAttachment.socketOffset.scale.x - 1.10f) < 0.0001f &&
+            std::abs(runtimeState.weaponAttachment.socketOffset.scale.y - 1.10f) < 0.0001f &&
+            std::abs(runtimeState.weaponAttachment.socketOffset.scale.z - 1.10f) < 0.0001f &&
+            runtimeState.weaponAttachment.socketOffset.rotate.x == 0.0f &&
+            runtimeState.weaponAttachment.socketOffset.rotate.y == 0.0f &&
+            runtimeState.weaponAttachment.socketOffset.rotate.z == 0.0f &&
+            runtimeState.weaponAttachment.socketOffset.rotate.w == 1.0f &&
+            runtimeState.weaponAttachment.socketOffset.translate.z < -0.10f &&
+            runtimeState.vfx.enableParticles &&
+            runtimeState.vfx.enableParticleDedicatedResources &&
+            !runtimeState.vfx.enableTrails &&
+            !runtimeState.vfx.enableBeams &&
+            !runtimeState.vfx.enableDistortions,
+        "submission presentation should automatically enable the right-hand weapon and independent blue-right/red-left GPU Particle paths");
+    runner.Expect(
+        !ShouldAdvancePreviewRuntime(false, false) &&
+            ShouldAdvancePreviewRuntime(true, false) &&
+            ShouldAdvancePreviewRuntime(false, true),
+        "submission preview should advance independently of the editor Play/Stop state");
+    runner.Expect(
+        !runtimeState.skinnedAnimationBlend.active &&
+            std::abs(runtimeState.skinnedAnimationBlend.duration - 0.25f) < 0.0001f,
+        "submission presentation should clear stale animation transitions");
+
+    const ModelData humanoid = LoadObjFile_Assimp(
+        "Resources/human",
+        "walk_gltf.gltf");
+    runner.Expect(
+        !humanoid.vertices.empty(),
+        "submission framing test should load the presentation humanoid");
+    if (!humanoid.vertices.empty()) {
+        float minimumY = (std::numeric_limits<float>::max)();
+        float maximumY = std::numeric_limits<float>::lowest();
+        for (const VertexData& vertex : humanoid.vertices) {
+            minimumY = (std::min)(minimumY, vertex.position.y);
+            maximumY = (std::max)(maximumY, vertex.position.y);
+        }
+        const float modelHeight =
+            (maximumY - minimumY) * runtimeState.skinnedModelTransform.scale.y;
+        const float cameraDistance = std::abs(
+            runtimeState.skinnedModelTransform.translate.z -
+            runtimeState.camera.transform.translate.z);
+        const float visibleHeight =
+            2.0f * cameraDistance * std::tan(runtimeState.camera.fovY * 0.5f);
+        const float viewportHeightCoverage = modelHeight / visibleHeight;
+        runner.Expect(
+            viewportHeightCoverage > 0.45f && viewportHeightCoverage < 0.75f,
+            "submission humanoid should occupy 45-75 percent of viewport height"
+            " (coverage=" + std::to_string(viewportHeightCoverage) + ")");
+
+        Skeleton submissionSkeleton = CreateSkeleton(humanoid.rootNode);
+        const AnimationClip submissionAnimation = LoadAnimationFile(
+            "Resources/human",
+            "walk_gltf.gltf");
+        ApplyAnimation(submissionSkeleton, submissionAnimation, 0.0f);
+        UpdateSkeleton(submissionSkeleton);
+        WeaponAttachment submissionWeapon;
+        const Matrix4x4 humanoidWorld = MakeAffineMatrix(
+            runtimeState.skinnedModelTransform.scale,
+            runtimeState.skinnedModelTransform.rotate,
+            runtimeState.skinnedModelTransform.translate);
+        submissionWeapon.Update(
+            runtimeState.weaponAttachment,
+            &submissionSkeleton,
+            humanoidWorld,
+            1,
+            true);
+        const WeaponAttachmentTelemetry& submissionWeaponPose =
+            submissionWeapon.Telemetry();
+        runner.Expect(
+            submissionWeaponPose.status == WeaponAttachmentStatus::Active &&
+                submissionWeaponPose.jointScaleRemoved &&
+                submissionWeaponPose.sourceJointScale.x > 0.009f &&
+                submissionWeaponPose.sourceJointScale.x < 0.011f &&
+                submissionWeaponPose.worldScale.x > 1.50f &&
+                submissionWeaponPose.worldScale.x < 1.58f &&
+                submissionWeaponPose.worldScale.y > 1.50f &&
+                submissionWeaponPose.worldScale.y < 1.58f &&
+                submissionWeaponPose.worldScale.z > 1.50f &&
+                submissionWeaponPose.worldScale.z < 1.58f,
+            "submission Humanoid right-hand Socket should normalize its 0.01 Armature scale"
+            " to the intended 1.54 weapon world scale");
+    }
+
+    runtimeState.skinnedModelTransform.scale = {0.1f, 0.2f, 0.3f};
+    runtimeState.skinnedModelTransform.rotate = {1.0f, 2.0f, 3.0f};
+    runtimeState.skinnedModelTransform.translate = {9.0f, 8.0f, 7.0f};
+    ResetMultiMaterialShowcaseHumanoidPose(runtimeState);
+    runner.Expect(
+        std::abs(runtimeState.skinnedModelTransform.scale.x - 1.40f) < 0.0001f &&
+            std::abs(runtimeState.skinnedModelTransform.translate.x + 0.90f) < 0.0001f &&
+            std::abs(runtimeState.skinnedModelTransform.translate.y + 1.25f) < 0.0001f &&
+            std::abs(runtimeState.skinnedModelTransform.translate.z + 1.0f) < 0.0001f &&
+            std::abs(runtimeState.skinnedModelTransform.rotate.y) < 0.0001f,
+        "gamepad reset should restore the front-facing submission humanoid framing");
+}
+
+void TestRuntimeSkinnedAnimationBlendControl(RegressionRunner& runner) {
+    AppRuntimeState runtimeState{};
+    runtimeState.selectedSkinnedModelIndex = 1;
+    runtimeState.animatedCubeTime = 0.40f;
+
+    runner.Expect(
+        BeginSkinnedAnimationBlend(runtimeState, 2, 0.25f) &&
+            runtimeState.skinnedAnimationBlend.active &&
+            runtimeState.skinnedAnimationBlend.fromModelIndex == 1 &&
+            runtimeState.skinnedAnimationBlend.toModelIndex == 2 &&
+            std::abs(runtimeState.skinnedAnimationBlend.fromTime - 0.40f) < 0.0001f &&
+            runtimeState.skinnedAnimationBlend.toTime == 0.0f &&
+            runtimeState.selectedSkinnedModelIndex == 1,
+        "runtime cross-fade should retain the source draw model while both clips are evaluated");
+    runner.Expect(
+        !BeginSkinnedAnimationBlend(runtimeState, 1, 0.25f),
+        "runtime cross-fade should reject re-entry while a transition is active");
+
+    const float halfAlpha = AdvanceSkinnedAnimationBlend(runtimeState, 0.125f);
+    runner.Expect(
+        std::abs(halfAlpha - 0.5f) < 0.0001f &&
+            std::abs(runtimeState.skinnedAnimationBlend.elapsed - 0.125f) < 0.0001f,
+        "runtime cross-fade should advance a frame-rate-independent normalized blend alpha");
+    AdvanceSkinnedAnimationBlend(runtimeState, -1.0f);
+    runner.Expect(
+        std::abs(runtimeState.skinnedAnimationBlend.alpha - 0.5f) < 0.0001f,
+        "runtime cross-fade should ignore invalid negative frame deltas");
+
+    runtimeState.skinnedAnimationBlend.toTime = 0.20f;
+    const float completedAlpha =
+        AdvanceSkinnedAnimationBlend(runtimeState, 0.125f);
+    CompleteSkinnedAnimationBlend(runtimeState);
+    runner.Expect(
+        completedAlpha == 1.0f &&
+            !runtimeState.skinnedAnimationBlend.active &&
+            runtimeState.skinnedAnimationBlend.alpha == 1.0f &&
+            runtimeState.selectedSkinnedModelIndex == 2 &&
+            std::abs(runtimeState.animatedCubeTime - 0.20f) < 0.0001f,
+        "runtime cross-fade completion should atomically hand playback to the target clip time");
+    runner.Expect(
+        !BeginSkinnedAnimationBlend(runtimeState, 2, 0.25f),
+        "runtime cross-fade should reject a transition to the already active clip");
+
+    runner.Expect(
+        BeginSkinnedAnimationBlend(runtimeState, 1, 0.0f) &&
+            AdvanceSkinnedAnimationBlend(runtimeState, 0.0f) == 1.0f,
+        "zero-duration runtime cross-fades should complete deterministically");
+    CancelSkinnedAnimationBlend(runtimeState);
+    runner.Expect(
+        !runtimeState.skinnedAnimationBlend.active &&
+            runtimeState.skinnedAnimationBlend.fromModelIndex == UINT32_MAX &&
+            runtimeState.skinnedAnimationBlend.toModelIndex == UINT32_MAX,
+        "canceling a runtime cross-fade should remove all stale clip references");
+}
+
+void TestGamepadInputDeadZone(RegressionRunner& runner) {
+    constexpr int16_t kDeadZone = 7849;
+    const AppGamepadStick centered =
+        AppGamepadInput::ApplyRadialDeadZone(0, 0, kDeadZone);
+    runner.Expect(
+        centered.x == 0.0f && centered.y == 0.0f && centered.magnitude == 0.0f,
+        "gamepad dead zone should suppress centered stick noise");
+
+    const AppGamepadStick inside =
+        AppGamepadInput::ApplyRadialDeadZone(kDeadZone - 1, 0, kDeadZone);
+    runner.Expect(
+        inside.magnitude == 0.0f,
+        "gamepad dead zone should suppress sub-threshold input");
+
+    const AppGamepadStick fullRight =
+        AppGamepadInput::ApplyRadialDeadZone(32767, 0, kDeadZone);
+    runner.Expect(
+        std::fabs(fullRight.x - 1.0f) < 0.0001f &&
+            std::fabs(fullRight.y) < 0.0001f &&
+            std::fabs(fullRight.magnitude - 1.0f) < 0.0001f,
+        "gamepad normalization should preserve full-scale cardinal input");
+
+    const AppGamepadStick diagonal =
+        AppGamepadInput::ApplyRadialDeadZone(23169, 23169, kDeadZone);
+    runner.Expect(
+        diagonal.magnitude > 0.99f && diagonal.magnitude <= 1.0f &&
+            diagonal.x > 0.70f && diagonal.y > 0.70f,
+        "gamepad radial normalization should preserve diagonal direction without overflow");
+
+    const AppGamepadStick keyboardDiagonal =
+        AppGamepadInput::ClampUnitCircle(1.0f, 1.0f);
+    const AppGamepadStick combinedDevices =
+        AppGamepadInput::ClampUnitCircle(1.65f, -0.80f);
+    const AppGamepadStick invalidInput =
+        AppGamepadInput::ClampUnitCircle(
+            (std::numeric_limits<float>::infinity)(),
+            0.0f);
+    runner.Expect(
+        std::abs(keyboardDiagonal.magnitude - 1.0f) < 0.0001f &&
+            keyboardDiagonal.x > 0.70f && keyboardDiagonal.x < 0.71f &&
+            keyboardDiagonal.y > 0.70f && keyboardDiagonal.y < 0.71f &&
+            std::abs(combinedDevices.magnitude - 1.0f) < 0.0001f &&
+            std::isfinite(combinedDevices.x) &&
+            std::isfinite(combinedDevices.y) &&
+            invalidInput.magnitude == 0.0f,
+        "keyboard and gamepad movement should combine on a finite unit circle");
+
+    constexpr float kPi = 3.14159265358979323846f;
+    const float forwardYaw = ResolveHumanoidMovementYaw(0.0f, 1.0f);
+    const float backwardYaw = ResolveHumanoidMovementYaw(0.0f, -1.0f);
+    const float leftYaw = ResolveHumanoidMovementYaw(-1.0f, 0.0f);
+    const float rightYaw = ResolveHumanoidMovementYaw(1.0f, 0.0f);
+    const float invalidYaw = ResolveHumanoidMovementYaw(
+        (std::numeric_limits<float>::infinity)(),
+        0.0f);
+    runner.Expect(
+        std::abs(forwardYaw - kPi) < 0.0001f &&
+            std::abs(backwardYaw) < 0.0001f &&
+            std::abs(leftYaw - (kPi * 0.5f)) < 0.0001f &&
+            std::abs(rightYaw - (kPi * 1.5f)) < 0.0001f &&
+            invalidYaw == 0.0f,
+        "humanoid -Z forward axis should face each movement direction with a 180-degree correction");
+    runner.Expect(
+        DidHumanoidMovementStart(0.0f, 0.081f) &&
+            !DidHumanoidMovementStart(0.081f, 1.0f) &&
+            !DidHumanoidMovementStart(1.0f, 0.0f) &&
+            !DidHumanoidMovementStart(
+                (std::numeric_limits<float>::quiet_NaN)(),
+                1.0f),
+        "humanoid axis correction should run only on the idle-to-moving transition");
+    const float gradualTurn = AdvanceHumanoidMovementYaw(0.0f, 1.0f, 0.25f);
+    const float wrappedTurn = AdvanceHumanoidMovementYaw(
+        kPi * 1.95f,
+        kPi * 0.05f,
+        0.10f);
+    runner.Expect(
+        std::abs(gradualTurn - 0.25f) < 0.0001f &&
+            wrappedTurn > kPi * 1.95f &&
+            wrappedTurn < kPi * 2.0f,
+        "humanoid facing should advance from actual yaw along the shortest arc");
+}
+
+void TestHumanoidBindPoseMeshSpaceSkinning(RegressionRunner& runner) {
+    const ModelData model = LoadObjFile_Assimp(
+        "Resources/human",
+        "walk_gltf.gltf");
+    runner.Expect(
+        !model.vertices.empty() && !model.skinClusterData.empty(),
+        "humanoid bind-pose regression asset should contain vertices and skin weights");
+    if (model.vertices.empty() || model.skinClusterData.empty()) {
+        return;
+    }
+
+    Skeleton skeleton = CreateSkeleton(model.rootNode);
+    UpdateSkeleton(skeleton);
+    runner.Expect(
+        skeleton.root >= 0 &&
+            static_cast<size_t>(skeleton.root) < skeleton.joints.size(),
+        "humanoid skeleton should expose a valid mesh root");
+    if (skeleton.root < 0 ||
+        static_cast<size_t>(skeleton.root) >= skeleton.joints.size()) {
+        return;
+    }
+
+    Matrix4x4 meshRootMatrix = MakeIdentity4x4();
+    float meshRootMaximumDeviation = 0.0f;
+    const bool resolvedMeshRoot = TryBuildMeshRootBindMatrix(
+        skeleton,
+        model,
+        meshRootMatrix,
+        &meshRootMaximumDeviation);
+    runner.Expect(
+        resolvedMeshRoot,
+        "humanoid skin weights should resolve an Assimp mesh-root bind basis");
+    runner.Expect(
+        meshRootMaximumDeviation < 0.001f,
+        "all humanoid joints should resolve the same mesh-root bind basis"
+        " (maxDeviation=" + std::to_string(meshRootMaximumDeviation) + ")");
+    if (!resolvedMeshRoot) {
+        return;
+    }
+    const Matrix4x4 meshRootInverseMatrix = Inverse(meshRootMatrix);
+
+    struct AccumulatedPosition {
+        double x = 0.0;
+        double y = 0.0;
+        double z = 0.0;
+        double weight = 0.0;
+    };
+    std::vector<AccumulatedPosition> transformed(model.vertices.size());
+
+    auto transformPosition = [](const Vector4& position, const Matrix4x4& matrix) {
+        return Vector3{
+            position.x * matrix.m[0][0] +
+                position.y * matrix.m[1][0] +
+                position.z * matrix.m[2][0] +
+                position.w * matrix.m[3][0],
+            position.x * matrix.m[0][1] +
+                position.y * matrix.m[1][1] +
+                position.z * matrix.m[2][1] +
+                position.w * matrix.m[3][1],
+            position.x * matrix.m[0][2] +
+                position.y * matrix.m[1][2] +
+                position.z * matrix.m[2][2] +
+                position.w * matrix.m[3][2],
+        };
+    };
+
+    size_t resolvedJointCount = 0;
+    for (const auto& [jointName, jointWeight] : model.skinClusterData) {
+        const auto jointIt = skeleton.jointMap.find(jointName);
+        if (jointIt == skeleton.jointMap.end() || jointIt->second < 0 ||
+            static_cast<size_t>(jointIt->second) >= skeleton.joints.size()) {
+            continue;
+        }
+        ++resolvedJointCount;
+        const Matrix4x4 skinMatrix = BuildMeshSpaceSkinningMatrix(
+            jointWeight.inverseBindPoseMatrix,
+            skeleton.joints[static_cast<size_t>(jointIt->second)].skeletonSpaceMatrix,
+            meshRootInverseMatrix);
+        for (const VertexWeightData& vertexWeight : jointWeight.vertexWeights) {
+            if (vertexWeight.vertexIndex >= model.vertices.size() ||
+                vertexWeight.weight <= 0.0f) {
+                continue;
+            }
+            const Vector3 position = transformPosition(
+                model.vertices[vertexWeight.vertexIndex].position,
+                skinMatrix);
+            AccumulatedPosition& output = transformed[vertexWeight.vertexIndex];
+            output.x += static_cast<double>(position.x) * vertexWeight.weight;
+            output.y += static_cast<double>(position.y) * vertexWeight.weight;
+            output.z += static_cast<double>(position.z) * vertexWeight.weight;
+            output.weight += vertexWeight.weight;
+        }
+    }
+
+    double maximumPositionError = 0.0;
+    size_t verifiedVertexCount = 0;
+    for (size_t vertexIndex = 0; vertexIndex < model.vertices.size(); ++vertexIndex) {
+        const AccumulatedPosition& output = transformed[vertexIndex];
+        if (output.weight <= 0.999 || output.weight >= 1.001) {
+            continue;
+        }
+        const Vector4& source = model.vertices[vertexIndex].position;
+        const double inverseWeight = 1.0 / output.weight;
+        const double dx = output.x * inverseWeight - source.x;
+        const double dy = output.y * inverseWeight - source.y;
+        const double dz = output.z * inverseWeight - source.z;
+        maximumPositionError = (std::max)(
+            maximumPositionError,
+            std::sqrt(dx * dx + dy * dy + dz * dz));
+        ++verifiedVertexCount;
+    }
+
+    runner.Expect(
+        resolvedJointCount >= 60,
+        "humanoid bind-pose test should resolve the imported Mixamo joints");
+    runner.Expect(
+        verifiedVertexCount == model.vertices.size(),
+        "every humanoid vertex should have normalized bind-pose skin weights");
+    runner.Expect(
+        maximumPositionError < 0.001,
+        "mesh-root-relative bind-pose skinning should preserve every humanoid vertex"
+        " (maxError=" + std::to_string(maximumPositionError) +
+        ", verified=" + std::to_string(verifiedVertexCount) +
+        ", total=" + std::to_string(model.vertices.size()) + ")");
+}
+
+struct HumanoidPoseBoundsMetrics {
+    bool finiteJointMatrices = true;
+    bool finiteVertexPositions = true;
+    size_t verifiedVertexCount = 0;
+    Vector3 minimum{};
+    Vector3 maximum{};
+};
+
+HumanoidPoseBoundsMetrics EvaluateHumanoidPoseBounds(
+    const ModelData& model,
+    const Skeleton& skeleton,
+    const Matrix4x4& meshRootInverseMatrix) {
+    HumanoidPoseBoundsMetrics metrics{};
+    for (const Joint& joint : skeleton.joints) {
+        for (size_t row = 0; row < 4; ++row) {
+            for (size_t column = 0; column < 4; ++column) {
+                metrics.finiteJointMatrices = metrics.finiteJointMatrices &&
+                    std::isfinite(joint.skeletonSpaceMatrix.m[row][column]);
+            }
+        }
+    }
+
+    struct AccumulatedPosition {
+        double x = 0.0;
+        double y = 0.0;
+        double z = 0.0;
+        double weight = 0.0;
+    };
+    std::vector<AccumulatedPosition> transformed(model.vertices.size());
+    auto transformPosition = [](const Vector4& position, const Matrix4x4& matrix) {
+        return Vector3{
+            position.x * matrix.m[0][0] +
+                position.y * matrix.m[1][0] +
+                position.z * matrix.m[2][0] +
+                position.w * matrix.m[3][0],
+            position.x * matrix.m[0][1] +
+                position.y * matrix.m[1][1] +
+                position.z * matrix.m[2][1] +
+                position.w * matrix.m[3][1],
+            position.x * matrix.m[0][2] +
+                position.y * matrix.m[1][2] +
+                position.z * matrix.m[2][2] +
+                position.w * matrix.m[3][2],
+        };
+    };
+
+    for (const auto& [jointName, jointWeight] : model.skinClusterData) {
+        const auto jointIt = skeleton.jointMap.find(jointName);
+        if (jointIt == skeleton.jointMap.end() || jointIt->second < 0 ||
+            static_cast<size_t>(jointIt->second) >= skeleton.joints.size()) {
+            continue;
+        }
+        const Matrix4x4 skinMatrix = BuildMeshSpaceSkinningMatrix(
+            jointWeight.inverseBindPoseMatrix,
+            skeleton.joints[static_cast<size_t>(jointIt->second)].skeletonSpaceMatrix,
+            meshRootInverseMatrix);
+        for (const VertexWeightData& vertexWeight : jointWeight.vertexWeights) {
+            if (vertexWeight.vertexIndex >= model.vertices.size() ||
+                vertexWeight.weight <= 0.0f) {
+                continue;
+            }
+            const Vector3 position = transformPosition(
+                model.vertices[vertexWeight.vertexIndex].position,
+                skinMatrix);
+            AccumulatedPosition& output = transformed[vertexWeight.vertexIndex];
+            output.x += static_cast<double>(position.x) * vertexWeight.weight;
+            output.y += static_cast<double>(position.y) * vertexWeight.weight;
+            output.z += static_cast<double>(position.z) * vertexWeight.weight;
+            output.weight += vertexWeight.weight;
+        }
+    }
+
+    const float maximumFloat = (std::numeric_limits<float>::max)();
+    metrics.minimum = {maximumFloat, maximumFloat, maximumFloat};
+    metrics.maximum = {-maximumFloat, -maximumFloat, -maximumFloat};
+    for (const AccumulatedPosition& output : transformed) {
+        if (output.weight <= 0.999 || output.weight >= 1.001) {
+            continue;
+        }
+        const double inverseWeight = 1.0 / output.weight;
+        const Vector3 position{
+            static_cast<float>(output.x * inverseWeight),
+            static_cast<float>(output.y * inverseWeight),
+            static_cast<float>(output.z * inverseWeight),
+        };
+        const bool finite = std::isfinite(position.x) &&
+            std::isfinite(position.y) && std::isfinite(position.z);
+        metrics.finiteVertexPositions = metrics.finiteVertexPositions && finite;
+        if (!finite) {
+            continue;
+        }
+        metrics.minimum.x = (std::min)(metrics.minimum.x, position.x);
+        metrics.minimum.y = (std::min)(metrics.minimum.y, position.y);
+        metrics.minimum.z = (std::min)(metrics.minimum.z, position.z);
+        metrics.maximum.x = (std::max)(metrics.maximum.x, position.x);
+        metrics.maximum.y = (std::max)(metrics.maximum.y, position.y);
+        metrics.maximum.z = (std::max)(metrics.maximum.z, position.z);
+        ++metrics.verifiedVertexCount;
+    }
+    return metrics;
+}
+
+void TestHumanoidAnimationPoseBounds(RegressionRunner& runner) {
+    const ModelData model = LoadObjFile_Assimp(
+        "Resources/human",
+        "walk_gltf.gltf");
+    const AnimationClip animation = LoadAnimationFile(
+        "Resources/human",
+        "walk_gltf.gltf");
+    runner.Expect(
+        !model.vertices.empty() && animation.duration > 0.0f &&
+            animation.nodeAnimations.size() >= 60,
+        "humanoid animation regression asset should load a complete converted clip");
+    if (model.vertices.empty() || animation.duration <= 0.0f) {
+        return;
+    }
+
+    Skeleton bindSkeleton = CreateSkeleton(model.rootNode);
+    Matrix4x4 meshRootMatrix = MakeIdentity4x4();
+    if (!TryBuildMeshRootBindMatrix(
+            bindSkeleton,
+            model,
+            meshRootMatrix)) {
+        runner.Expect(false, "humanoid animation test should resolve its mesh-root basis");
+        return;
+    }
+    const Matrix4x4 meshRootInverseMatrix = Inverse(meshRootMatrix);
+    const std::array<float, 3> sampleTimes{
+        0.0f,
+        animation.duration * 0.5f,
+        animation.duration * 0.999f,
+    };
+
+    for (size_t sampleIndex = 0; sampleIndex < sampleTimes.size(); ++sampleIndex) {
+        Skeleton pose = CreateSkeleton(model.rootNode);
+        ApplyAnimation(pose, animation, sampleTimes[sampleIndex]);
+        UpdateSkeleton(pose);
+        const HumanoidPoseBoundsMetrics metrics = EvaluateHumanoidPoseBounds(
+            model,
+            pose,
+            meshRootInverseMatrix);
+        const Vector3 extent{
+            metrics.maximum.x - metrics.minimum.x,
+            metrics.maximum.y - metrics.minimum.y,
+            metrics.maximum.z - metrics.minimum.z,
+        };
+        const float diagonal = std::sqrt(
+            extent.x * extent.x + extent.y * extent.y + extent.z * extent.z);
+        const std::string sampleSummary =
+            " (sample=" + std::to_string(sampleIndex) +
+            ", time=" + std::to_string(sampleTimes[sampleIndex]) +
+            ", extent=" + std::to_string(extent.x) + "," +
+            std::to_string(extent.y) + "," + std::to_string(extent.z) +
+            ", diagonal=" + std::to_string(diagonal) + ")";
+        runner.Expect(
+            metrics.finiteJointMatrices,
+            "animated humanoid Joint matrices should remain finite" + sampleSummary);
+        runner.Expect(
+            metrics.finiteVertexPositions &&
+                metrics.verifiedVertexCount == model.vertices.size(),
+            "animated humanoid vertices should remain finite and fully weighted" +
+                sampleSummary);
+        runner.Expect(
+            extent.y > 0.8f &&
+                (std::max)(extent.x, extent.z) > 0.35f &&
+                diagonal > 1.0f && diagonal < 3.5f,
+            "animated humanoid bounds should retain a recognizable body-sized volume" +
+                sampleSummary);
+    }
+}
+
 } // namespace
 
 int RunEditorCoreRegressionTests() {
@@ -9595,6 +10829,27 @@ int RunEditorCoreRegressionTests() {
         {"panel layout geometry", [&]() { TestPanelLayoutGeometry(runner); }},
         {"viewport input ownership routing", [&]() { TestViewportInputOwnershipRouting(runner); }},
         {"editor viewport fly camera", [&]() { TestEditorViewportFlyCamera(runner); }},
+        {"bone socket foundation", [&]() { TestBoneSocketFoundation(runner); }},
+        {"multi material model loading", [&]() { TestMultiMaterialModelLoading(runner); }},
+        {"hand particle attachment", [&]() { TestHandParticleAttachment(runner); }},
+        {"weapon attachment", [&]() { TestWeaponAttachment(runner); }},
+        {"training sword submission asset", [&]() {
+             TestTrainingSwordSubmissionAsset(runner);
+         }},
+        {"app startup scene arguments", [&]() { TestAppStartupSceneArguments(runner); }},
+        {"multi material showcase presentation defaults", [&]() {
+             TestMultiMaterialShowcasePresentationDefaults(runner);
+         }},
+        {"runtime skinned animation blend control", [&]() {
+             TestRuntimeSkinnedAnimationBlendControl(runner);
+         }},
+        {"gamepad input dead zone", [&]() { TestGamepadInputDeadZone(runner); }},
+        {"humanoid bind pose mesh space skinning", [&]() {
+             TestHumanoidBindPoseMeshSpaceSkinning(runner);
+         }},
+        {"humanoid animation pose bounds", [&]() {
+             TestHumanoidAnimationPoseBounds(runner);
+         }},
         {"feature guard tripwire", [&]() { TestFeatureGuardTripwire(runner); }},
     };
 

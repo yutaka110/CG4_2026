@@ -94,6 +94,59 @@ Quaternion Slerp(const Quaternion& a, const Quaternion& b, float t) {
 	});
 }
 
+void EnsureModelDataMaterialLayout(ModelData& modelData) {
+	if (modelData.materials.empty()) {
+		if (modelData.material.name.empty()) {
+			modelData.material.name = "material_0";
+		}
+		modelData.materials.push_back(modelData.material);
+	}
+
+	for (size_t index = 0; index < modelData.materials.size(); ++index) {
+		if (modelData.materials[index].name.empty()) {
+			modelData.materials[index].name =
+				"material_" + std::to_string(index);
+		}
+	}
+
+	if (modelData.subMeshes.empty() && !modelData.indices.empty()) {
+		modelData.subMeshes.push_back({
+			"submesh_0",
+			0,
+			static_cast<uint32_t>(modelData.indices.size()),
+			0,
+		});
+	}
+
+	for (SubMeshData& subMesh : modelData.subMeshes) {
+		if (subMesh.materialIndex >= modelData.materials.size()) {
+			subMesh.materialIndex = 0;
+		}
+	}
+
+	uint32_t legacyMaterialIndex = 0;
+	if (!modelData.subMeshes.empty()) {
+		legacyMaterialIndex = modelData.subMeshes.front().materialIndex;
+	}
+	modelData.material = modelData.materials[legacyMaterialIndex];
+}
+
+bool ValidateModelDataMaterialLayout(const ModelData& modelData) noexcept {
+	if (modelData.materials.empty() ||
+		(modelData.indices.empty() != modelData.subMeshes.empty())) {
+		return false;
+	}
+	for (const SubMeshData& subMesh : modelData.subMeshes) {
+		if (subMesh.indexCount == 0 ||
+			subMesh.indexStart > modelData.indices.size() ||
+			subMesh.indexCount > modelData.indices.size() - subMesh.indexStart ||
+			subMesh.materialIndex >= modelData.materials.size()) {
+			return false;
+		}
+	}
+	return true;
+}
+
 //Matrix3x3 MakeScaleMatrix(const Vector2& scale) {
 //	Matrix3x3 result{};
 //	result.m[0][0] = scale.x;

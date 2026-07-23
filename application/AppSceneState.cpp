@@ -8,11 +8,31 @@ const char* VfxPreviewSceneState::Name() const {
     return "VfxPreview";
 }
 
+void VfxPreviewSceneState::OnEnter(AppSceneHost& host) {
+    host.EnterVfxPreviewScene();
+}
+
 void VfxPreviewSceneState::Update(AppSceneHost& host) {
     host.UpdateVfxPreviewFrame();
 }
 
 void VfxPreviewSceneState::Render(AppSceneHost& host) {
+    host.RenderVfxPreviewFrame();
+}
+
+const char* MultiMaterialShowcaseSceneState::Name() const {
+    return "MultiMaterialShowcase";
+}
+
+void MultiMaterialShowcaseSceneState::OnEnter(AppSceneHost& host) {
+    host.EnterMultiMaterialShowcaseScene();
+}
+
+void MultiMaterialShowcaseSceneState::Update(AppSceneHost& host) {
+    host.UpdateMultiMaterialShowcaseFrame();
+}
+
+void MultiMaterialShowcaseSceneState::Render(AppSceneHost& host) {
     host.RenderVfxPreviewFrame();
 }
 

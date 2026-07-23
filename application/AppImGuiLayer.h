@@ -198,6 +198,8 @@ public:
 
     void Render(ID3D12GraphicsCommandList* cmdList);
     bool IsEnabled() const;
+    void SetVisible(bool visible);
+    bool IsVisible() const;
     bool WantsDeveloperDiagnostics() const;
     bool ShouldAdvanceEditorRuntimeFrame() const;
     void CompleteEditorRuntimeFrameAdvance(bool advanced);
@@ -232,6 +234,7 @@ public:
 
 private:
     bool initialized_ = false;
+    bool visible_ = true;
     HWND hwnd_ = nullptr;
     bool viewportFocusMode_ = false;
     bool showcasePresentationInitialized_ = false;
@@ -378,5 +381,6 @@ private:
     uint64_t editorDocumentServiceFrame_ = 0;
     uint64_t editorWorldInputSignature_ = static_cast<uint64_t>(-1);
     bool editorDocumentRecoveryScanned_ = false;
+    std::vector<editor::EditorDocumentRecoveryCandidate> editorDocumentRecoveryCandidates_{};
     bool editorAssetRegistryInitialized_ = false;
 };

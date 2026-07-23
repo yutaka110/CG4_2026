@@ -26,7 +26,8 @@ VfxTypedResourceSet VfxResourceResolver::SelectPassResources(
     resources.trail.renderer.meshStream.usesDedicatedMeshStream =
         EffectiveTrailMeshStreamEnabled(runtimeState);
 
-    if (runtimeState.enableParticleDedicatedResourceProbe &&
+    if ((runtimeState.enableParticleDedicatedResources ||
+         runtimeState.enableParticleDedicatedResourceProbe) &&
         !runtimeState.particleDedicatedResourceFallbackActive) {
         ApplyParticleDedicatedStorageProbe(resources);
     }

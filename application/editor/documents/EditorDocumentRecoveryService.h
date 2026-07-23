@@ -15,9 +15,16 @@ struct EditorDocumentRecoveryCandidate {
     std::string message;
 };
 
+struct EditorDocumentRecoveryQuarantineRecord {
+    std::filesystem::path originalGenerationPath;
+    std::filesystem::path quarantineGenerationPath;
+    std::string reason;
+};
+
 struct EditorDocumentRecoveryScanResult {
     bool succeeded = true;
     std::vector<EditorDocumentRecoveryCandidate> candidates;
+    std::vector<EditorDocumentRecoveryQuarantineRecord> quarantined;
     std::vector<std::string> errors;
 };
 
@@ -37,6 +44,11 @@ private:
     bool ParseManifest(
         const std::filesystem::path& path,
         EditorAutosaveRecord* record,
+        std::string* errorMessage) const;
+    bool QuarantineGeneration(
+        const std::filesystem::path& manifestPath,
+        const std::string& reason,
+        EditorDocumentRecoveryQuarantineRecord* record,
         std::string* errorMessage) const;
     std::filesystem::path Absolute(const std::filesystem::path& path) const;
 

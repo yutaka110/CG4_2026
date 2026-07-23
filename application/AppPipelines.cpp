@@ -1,4 +1,5 @@
 #include "AppPipelines.h"
+#include "utils/math/Vector.h"
 
 #include <cassert>
 #include <cstdint>
@@ -62,6 +63,12 @@ bool FailHr(const char* stage, HRESULT hr) {
     std::snprintf(message, sizeof(message), "[AppPipelines] %s failed. HRESULT=0x%08X\n",
                   stage, static_cast<unsigned int>(hr));
     OutputDebugStringA(message);
+    std::error_code error;
+    std::filesystem::create_directories("logs", error);
+    std::ofstream output("logs/app_pipelines_error.log", std::ios::app);
+    if (output) {
+        output << message;
+    }
     return false;
 }
 
@@ -218,6 +225,13 @@ ComPtr<IDxcBlob> AppPipelines::Compile_(const std::wstring& filePath, const wcha
         OutputDebugStringW(L"[AppPipelines] Shader compile failed: ");
         OutputDebugStringW(resolvedPath.wstring().c_str());
         OutputDebugStringW(L"\n");
+        std::error_code error;
+        std::filesystem::create_directories("logs", error);
+        std::ofstream output("logs/app_pipelines_error.log", std::ios::app);
+        if (output) {
+            output << "[AppPipelines] Shader compile failed: "
+                   << resolvedPath.string() << '\n';
+        }
         return nullptr;
     }
     StoreCachedShaderBytecode(cachePath, blob);
@@ -352,6 +366,16 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
 
 bool AppPipelines::Initialize(ID3D12Device* device) {
     if (!device) return false;
+
+    // Each initialization attempt owns one diagnostic session. Truncating the
+    // files prevents a recovered startup from being mistaken for a current
+    // failure while FailHr/ShaderCompiler still preserve actionable details.
+    {
+        std::error_code error;
+        std::filesystem::create_directories("logs", error);
+        std::ofstream("logs/app_pipelines_error.log", std::ios::trunc);
+        std::ofstream("logs/shader_compile_errors.log", std::ios::trunc);
+    }
 
     HRESULT hr = S_OK;
 
@@ -1622,6 +1646,10 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     D3D12_RASTERIZER_DESC rasterizerDesc{};
     rasterizerDesc.CullMode = D3D12_CULL_MODE_BACK;
     rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
+    // DirectX left-handed import contract: front faces are clockwise after
+    // aiProcess_ConvertToLeftHanded and geometry-orientation repair.
+    rasterizerDesc.FrontCounterClockwise = FALSE;
+    rasterizerDesc.DepthClipEnable = TRUE;
 
     // Depth
     D3D12_DEPTH_STENCIL_DESC depthStencilDesc{};
@@ -2208,7 +2236,9 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         auto& rt = d.RenderTarget[0];
         rt.BlendEnable = TRUE;
         rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-        rt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        // Particle.PS emits premultiplied RGB, so applying SRC_ALPHA here
+        // would square alpha and make soft particles effectively invisible.
+        rt.SrcBlend = D3D12_BLEND_ONE;
         rt.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
         rt.BlendOp = D3D12_BLEND_OP_ADD;
         rt.SrcBlendAlpha = D3D12_BLEND_ONE;
@@ -2217,26 +2247,41 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         return d;
     };
 
-    // Particle quad uses VertexData: position(float4), texcoord(float2), normal(float3).
-    D3D12_INPUT_ELEMENT_DESC particleElements[3] = {};
-    particleElements[0].SemanticName = "POSITION";
-    particleElements[0].SemanticIndex = 0;
-    particleElements[0].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-    particleElements[0].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
+    auto MakeParticleAdditiveBlend = []() {
+        D3D12_BLEND_DESC d{};
+        d.AlphaToCoverageEnable = FALSE;
+        d.IndependentBlendEnable = FALSE;
+        auto& rt = d.RenderTarget[0];
+        rt.BlendEnable = TRUE;
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        // Particle.PS emits premultiplied RGB. ONE/ONE preserves authored
+        // emissive energy and performs a true additive accumulation.
+        rt.SrcBlend = D3D12_BLEND_ONE;
+        rt.DestBlend = D3D12_BLEND_ONE;
+        rt.BlendOp = D3D12_BLEND_OP_ADD;
+        rt.SrcBlendAlpha = D3D12_BLEND_ONE;
+        rt.DestBlendAlpha = D3D12_BLEND_ONE;
+        rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        return d;
+    };
 
-    particleElements[1].SemanticName = "TEXCOORD";
-    particleElements[1].SemanticIndex = 0;
-    particleElements[1].Format = DXGI_FORMAT_R32G32_FLOAT;
-    particleElements[1].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
-
-    particleElements[2].SemanticName = "NORMAL";
-    particleElements[2].SemanticIndex = 0;
-    particleElements[2].Format = DXGI_FORMAT_R32G32B32_FLOAT;
-    particleElements[2].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
-
+    // Particle.VS builds the six billboard vertices from SV_VertexID. Keeping
+    // this layout empty removes the fragile shared-quad vertex-buffer coupling.
     D3D12_INPUT_LAYOUT_DESC particleInputLayout{};
-    particleInputLayout.pInputElementDescs = particleElements;
-    particleInputLayout.NumElements = _countof(particleElements);
+
+    D3D12_INPUT_ELEMENT_DESC sharedSpriteElements[3] = {};
+    sharedSpriteElements[0].SemanticName = "POSITION";
+    sharedSpriteElements[0].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    sharedSpriteElements[0].AlignedByteOffset = static_cast<UINT>(offsetof(VertexData, position));
+    sharedSpriteElements[1].SemanticName = "TEXCOORD";
+    sharedSpriteElements[1].Format = DXGI_FORMAT_R32G32_FLOAT;
+    sharedSpriteElements[1].AlignedByteOffset = static_cast<UINT>(offsetof(VertexData, texcoord));
+    sharedSpriteElements[2].SemanticName = "NORMAL";
+    sharedSpriteElements[2].Format = DXGI_FORMAT_R32G32B32_FLOAT;
+    sharedSpriteElements[2].AlignedByteOffset = static_cast<UINT>(offsetof(VertexData, normal));
+    D3D12_INPUT_LAYOUT_DESC sharedSpriteInputLayout{};
+    sharedSpriteInputLayout.pInputElementDescs = sharedSpriteElements;
+    sharedSpriteInputLayout.NumElements = _countof(sharedSpriteElements);
 
     // Particle rasterizer: no cull is common for billboard
     D3D12_RASTERIZER_DESC particleRaster{};
@@ -2285,8 +2330,23 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(ParticleAlpha)", hr);
     }
 
+    // Additive
     {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d = particleDesc;
+        d.BlendState = MakeParticleAdditiveBlend();
+        // Hand-socket emission originates on the skinned surface. Rendering
+        // additive light sprites without a depth test avoids complete rejection
+        // from tiny bind-pose/socket depth differences while keeping alpha and
+        // opaque particle modes depth-tested.
+        d.DepthStencilState.DepthEnable = FALSE;
+        d.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        hr = device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&particleAdditivePso_));
+        if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(ParticleAdditive)", hr);
+    }
+
+    {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = particleDesc;
+        d.InputLayout = sharedSpriteInputLayout;
         d.VS = { trailMeshVs_->GetBufferPointer(), trailMeshVs_->GetBufferSize() };
         d.PS = { trailMeshPs_->GetBufferPointer(), trailMeshPs_->GetBufferSize() };
         d.BlendState = MakeParticleAlphaBlend();
@@ -2337,6 +2397,10 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d = particleDesc;
+        // DistortionSprite.VS still consumes the shared quad's POSITION,
+        // TEXCOORD and NORMAL attributes. Do not inherit Particle's empty
+        // SV_VertexID-only layout here.
+        d.InputLayout = sharedSpriteInputLayout;
         d.VS = { distortionSpriteVs_->GetBufferPointer(), distortionSpriteVs_->GetBufferSize() };
         d.PS = { distortionSpritePs_->GetBufferPointer(), distortionSpritePs_->GetBufferSize() };
         d.BlendState = distortionBlend;
@@ -2360,6 +2424,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d = particleDesc;
         d.pRootSignature = ringRootSignature_.Get();
+        d.InputLayout = sharedSpriteInputLayout;
         d.VS = { ringVs_->GetBufferPointer(), ringVs_->GetBufferSize() };
         d.PS = { ringPs_->GetBufferPointer(), ringPs_->GetBufferSize() };
         d.BlendState = ringBlend;
@@ -2385,6 +2450,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d = particleDesc;
         d.pRootSignature = cylinderRootSignature_.Get();
+        d.InputLayout = sharedSpriteInputLayout;
         d.VS = { cylinderVs_->GetBufferPointer(), cylinderVs_->GetBufferSize() };
         d.PS = { cylinderPs_->GetBufferPointer(), cylinderPs_->GetBufferSize() };
         d.BlendState = cylinderBlend;
@@ -2410,6 +2476,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d = particleDesc;
         d.pRootSignature = ringRootSignature_.Get();
+        d.InputLayout = sharedSpriteInputLayout;
         d.VS = { spearVs_->GetBufferPointer(), spearVs_->GetBufferSize() };
         d.PS = { spearPs_->GetBufferPointer(), spearPs_->GetBufferSize() };
         d.BlendState = spearBlend;
@@ -2435,6 +2502,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d = particleDesc;
         d.pRootSignature = cylinderRootSignature_.Get();
+        d.InputLayout = sharedSpriteInputLayout;
         d.VS = { orbitRibbonVs_->GetBufferPointer(), orbitRibbonVs_->GetBufferSize() };
         d.PS = { orbitRibbonPs_->GetBufferPointer(), orbitRibbonPs_->GetBufferSize() };
         d.BlendState = orbitRibbonBlend;

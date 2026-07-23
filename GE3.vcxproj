@@ -68,6 +68,9 @@
   <ItemGroup>
     <ClCompile Include="application\AnimationClip.cpp" />
     <ClCompile Include="application\AnimationStateMachine.cpp" />
+    <ClCompile Include="application\BoneSocket.cpp" />
+    <ClCompile Include="application\HandParticleAttachment.cpp" />
+    <ClCompile Include="application\WeaponAttachment.cpp" />
     <ClCompile Include="application\GameplayVisualScript.cpp" />
     <ClCompile Include="application\AppAudio.cpp" />
     <ClCompile Include="application\AppBootstrap.cpp" />
@@ -317,6 +320,7 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="application\AppFrameRenderer.cpp" />
+    <ClCompile Include="application\AppGamepadInput.cpp" />
     <ClCompile Include="application\AppGpuParticleSystem.cpp" />
     <ClCompile Include="application\AppPostProcessPanel.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
@@ -812,6 +816,9 @@
   <ItemGroup>
     <ClInclude Include="application\AnimationClip.h" />
     <ClInclude Include="application\AnimationStateMachine.h" />
+    <ClInclude Include="application\BoneSocket.h" />
+    <ClInclude Include="application\HandParticleAttachment.h" />
+    <ClInclude Include="application\WeaponAttachment.h" />
     <ClInclude Include="application\GameplayVisualScript.h" />
     <ClInclude Include="application\AppRunLoop.h" />
     <ClInclude Include="application\VfxEngine.h" />
@@ -1082,6 +1089,7 @@
     <ClInclude Include="application\AppEffectAssetEditorPanel.h" />
     <ClInclude Include="application\AppEffectInstancePanel.h" />
     <ClInclude Include="application\AppFrameRenderer.h" />
+    <ClInclude Include="application\AppGamepadInput.h" />
     <ClInclude Include="application\AppGpuParticleSystem.h" />
     <ClInclude Include="application\AppPostProcessPanel.h" />
     <ClInclude Include="application\PostProcessPresetStore.h" />
@@ -1181,6 +1189,8 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\effects\AuthoringMetadataDemo.effect" />
+    <None Include="Resources\effects\HandSocketParticle.effect" />
+    <None Include="Resources\effects\LeftHandSocketParticle.effect" />
     <None Include="Resources\effects\IceImpact.effect" />
     <None Include="Resources\effects\IceProjectile.effect" />
     <None Include="Resources\effects\WarpCore.effect" />

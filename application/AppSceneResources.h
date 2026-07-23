@@ -13,6 +13,7 @@
 #include "course/CourseMeshRenderQueue.h"
 #include "diagnostics/DebugDrawSystem.h"
 #include "Skeleton.h"
+#include "WeaponAttachment.h"
 #include "utils/math/MathUtils.h"
 #include "utils/math/Vector.h"
 #include "utils/dx12/BufferHelper.h"
@@ -66,6 +67,16 @@ struct GpuMeshResource {
     UINT indexCount = 0;
 };
 
+struct AppGpuMaterialResource {
+    MaterialData source;
+    Microsoft::WRL::ComPtr<ID3D12Resource> constantBuffer;
+    Material* mappedConstants = nullptr;
+    D3D12_GPU_DESCRIPTOR_HANDLE albedoTextureGpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE normalTextureGpu{};
+    bool albedoFallback = true;
+    bool normalFallback = true;
+};
+
 static constexpr uint32_t kNumMaxInfluence = 4;
 
 struct VertexInfluence {
@@ -85,6 +96,7 @@ struct SkinningInformation {
 
 struct SkinCluster {
     std::vector<Matrix4x4> inverseBindPoseMatrices;
+    Matrix4x4 meshRootInverseMatrix{};
     Microsoft::WRL::ComPtr<ID3D12Resource> influenceResource;
     D3D12_VERTEX_BUFFER_VIEW influenceBufferView{};
     Microsoft::WRL::ComPtr<ID3D12Resource> paletteResource;
@@ -118,6 +130,7 @@ struct SkinnedModelInstance {
     Animator animator;
     GpuMeshResource mesh;
     SkinCluster skinCluster;
+    std::vector<AppGpuMaterialResource> gpuMaterials;
     Microsoft::WRL::ComPtr<ID3D12Resource> transformResource;
     TransformationMatrix* transformData = nullptr;
     Transform transform{};
@@ -160,6 +173,7 @@ struct AppManagedModelResource {
     GpuMeshResource mesh;
     D3D12_GPU_DESCRIPTOR_HANDLE textureGpu{};
     bool loaded = false;
+    std::vector<AppGpuMaterialResource> gpuMaterials;
 };
 
 struct AppModelObjectInstance {
@@ -171,11 +185,18 @@ struct AppModelObjectInstance {
     bool visible = true;
 };
 
+// Builds the submission sword as a validated, render-ready MultiMaterial model.
+// Kept public so the CPU regression suite can verify the exact procedural asset
+// that is uploaded by AppSceneResources.
+[[nodiscard]] ModelData BuildTrainingSwordModelDataForSubmission();
+
 class AppSceneResources {
 public:
     static constexpr uint32_t kCascadeShadowCount = 4;
     static constexpr uint32_t kCascadeShadowMapSize = 2048;
     static constexpr uint32_t kCascadeShadowSrvBaseIndex = 12;
+    static constexpr uint32_t kMaterialTextureSrvBaseIndex = 160;
+    static constexpr uint32_t kMaterialTextureSrvCount = 512;
 
     bool Initialize(
         Microsoft::WRL::ComPtr<ID3D12Device> device,
@@ -196,6 +217,16 @@ public:
     SkinnedModelInstance* GetActiveSkinnedModel();
     const SkinnedModelInstance* GetActiveSkinnedModel() const;
     const AppManagedModelResource* FindManagedModel(uint32_t modelIndex) const;
+    [[nodiscard]] uint32_t TrainingSwordModelIndex() const noexcept {
+        return trainingSwordModelIndex;
+    }
+    [[nodiscard]] const AppModelObjectInstance& WeaponAttachmentObject() const noexcept {
+        return weaponAttachmentObject;
+    }
+    void UpdateWeaponAttachment(
+        const WeaponAttachmentTelemetry& telemetry,
+        const Matrix4x4& viewMatrix,
+        const Matrix4x4& projMatrix);
     const std::vector<AppManagedModelResource>& ManagedModelLibrary() const { return vfxModelLibrary; }
     const std::vector<AppModelObjectInstance>& ModelObjectInstances() const { return vfxModelObjects; }
     const CourseMeshRenderQueue& CourseMeshes() const { return courseMeshRenderQueue; }
@@ -265,6 +296,7 @@ public:
     Microsoft::WRL::ComPtr<ID3D12Resource> gradationLineTextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> skyboxTextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> animatedCubeTextureResource;
+    Microsoft::WRL::ComPtr<ID3D12Resource> flatNormalTextureResource;
     D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU2{};
     D3D12_GPU_DESCRIPTOR_HANDLE terrainAlbedoTextureSrvHandleGPU{};
@@ -274,6 +306,7 @@ public:
     D3D12_GPU_DESCRIPTOR_HANDLE gradationLineTextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE animatedCubeTextureSrvHandleGPU{};
+    D3D12_GPU_DESCRIPTOR_HANDLE flatNormalTextureSrvHandleGPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU2{};
     D3D12_CPU_DESCRIPTOR_HANDLE terrainAlbedoTextureSrvHandleCPU{};
@@ -283,9 +316,12 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE gradationLineTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE animatedCubeTextureSrvHandleCPU{};
+    D3D12_CPU_DESCRIPTOR_HANDLE flatNormalTextureSrvHandleCPU{};
     std::vector<AppManagedTextureResource> vfxTextureLibrary;
     std::vector<AppManagedModelResource> vfxModelLibrary;
     std::vector<AppModelObjectInstance> vfxModelObjects;
+    uint32_t trainingSwordModelIndex = UINT32_MAX;
+    AppModelObjectInstance weaponAttachmentObject{};
     CourseMeshRenderQueue courseMeshRenderQueue;
 
     // Sphere

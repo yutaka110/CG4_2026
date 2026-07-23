@@ -15,6 +15,26 @@ static void DebugPrint(const wchar_t* msg) {
 #endif
 }
 
+static void LogShaderCompileError(
+    const std::wstring& filePath,
+    const std::wstring& targetProfile,
+    const char* details) {
+    std::error_code error;
+    std::filesystem::create_directories("logs", error);
+    std::ofstream output("logs/shader_compile_errors.log", std::ios::app);
+    if (!output) {
+        return;
+    }
+    output << "file=" << std::filesystem::path(filePath).string()
+           << " profile=" << std::filesystem::path(targetProfile).string() << '\n';
+    if (details != nullptr && details[0] != '\0') {
+        output << details;
+        if (details[std::char_traits<char>::length(details) - 1] != '\n') {
+            output << '\n';
+        }
+    }
+}
+
 namespace {
 uint64_t HashAppend(uint64_t hash, const void* data, size_t size) {
     constexpr uint64_t kFnvPrime = 1099511628211ull;
@@ -265,6 +285,10 @@ Microsoft::WRL::ComPtr<IDxcBlob> ShaderCompiler::CompileFromFile(
     result->GetStatus(&status);
     if (FAILED(status)) {
         DebugPrint(L"[ShaderCompiler] CompileFromFile status FAILED\n");
+        LogShaderCompileError(
+            filePath,
+            targetProfile,
+            errors ? errors->GetStringPointer() : "DXC compilation failed without diagnostics.");
         lastError_ = status;
         return ComPtr<IDxcBlob>();
     }

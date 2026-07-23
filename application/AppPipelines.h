@@ -93,6 +93,7 @@ public:
     ID3D12PipelineState* GetParticlePSO() const { return particlePso_.Get(); }
     ID3D12PipelineState* GetParticleOpaquePSO() const { return particleOpaquePso_.Get(); }
     ID3D12PipelineState* GetParticleAlphaPSO() const { return particleAlphaPso_.Get(); }
+    ID3D12PipelineState* GetParticleAdditivePSO() const { return particleAdditivePso_.Get(); }
     ID3D12PipelineState* GetTrailMeshPSO() const { return trailMeshPso_.Get(); }
     ID3D12PipelineState* GetTrailMeshStreamPSO() const { return trailMeshStreamPso_.Get(); }
     ID3D12PipelineState* GetDistortionSpritePSO() const { return distortionSpritePso_.Get(); }
@@ -183,6 +184,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> particlePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> particleOpaquePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> particleAlphaPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> particleAdditivePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> trailMeshPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> trailMeshStreamPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> distortionSpritePso_;

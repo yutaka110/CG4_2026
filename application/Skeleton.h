@@ -31,3 +31,20 @@ void ApplyAnimationBlend(Skeleton& skeleton,
     const AnimationClip& fromAnimation, float fromTime,
     const AnimationClip& toAnimation, float toTime, float blendAlpha);
 void UpdateSkeleton(Skeleton& skeleton);
+
+// Matrices in this renderer use row-vector convention. This is the row-vector
+// equivalent of Root^-1 * JointGlobal * InverseBind used by column-vector
+// renderers: InverseBind * JointGlobal * RootInverse.
+Matrix4x4 BuildMeshSpaceSkinningMatrix(
+    const Matrix4x4& inverseBindPoseMatrix,
+    const Matrix4x4& jointGlobalMatrix,
+    const Matrix4x4& meshRootInverseMatrix);
+
+// Assimp bone offsets transform mesh-local positions into bind-pose joint
+// space. Therefore InverseBind * BindJointGlobal resolves the actual mesh
+// root basis, which is not necessarily the skeleton hierarchy root.
+bool TryBuildMeshRootBindMatrix(
+    const Skeleton& skeleton,
+    const ModelData& model,
+    Matrix4x4& outMeshRootBindMatrix,
+    float* outMaximumDeviation = nullptr);

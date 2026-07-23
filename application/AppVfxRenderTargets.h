@@ -151,6 +151,9 @@ private:
     std::unordered_map<std::string, Target> targets_;
     std::unordered_map<std::string, Target> transientStorageTargets_;
     std::vector<RetiredTarget> retiredTargets_;
+    // Non-owning. Every pass that consumes an SRV explicitly rebinds the heap
+    // instead of inheriting descriptor state from the previous render pass.
+    ID3D12DescriptorHeap* shaderVisibleSrvHeap_ = nullptr;
     uint32_t width_ = 0;
     uint32_t height_ = 0;
     bool initialized_ = false;

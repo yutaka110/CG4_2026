@@ -32,14 +32,20 @@ void AppFrameRenderer::BeginFrame(
 
 bool AppFrameRenderer::PrepareMainPass(
     ID3D12GraphicsCommandList* commandList,
+    ID3D12DescriptorHeap* srvDescriptorHeap,
     const D3D12_VIEWPORT& viewport,
     const D3D12_RECT& scissorRect,
     ID3D12RootSignature* rootSignature,
     ID3D12PipelineState* pipelineState) const {
-    if (commandList == nullptr || rootSignature == nullptr || pipelineState == nullptr) {
+    if (commandList == nullptr || srvDescriptorHeap == nullptr ||
+        rootSignature == nullptr || pipelineState == nullptr) {
         return false;
     }
 
+    // Descriptor heaps are command-list state. Bind the pass dependency here
+    // instead of relying on an earlier pass to leave a compatible heap active.
+    ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap};
+    commandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
     commandList->RSSetViewports(1, &viewport);
     commandList->RSSetScissorRects(1, &scissorRect);
     commandList->SetGraphicsRootSignature(rootSignature);
@@ -62,6 +68,7 @@ void AppFrameRenderer::DrawMainModel(
     D3D12_GPU_VIRTUAL_ADDRESS pointLightBufferAddress,
     D3D12_GPU_VIRTUAL_ADDRESS spotLightBufferAddress,
     uint32_t indexCount,
+    uint32_t startIndexLocation,
     D3D12_GPU_VIRTUAL_ADDRESS productionLightBufferAddress,
     D3D12_GPU_VIRTUAL_ADDRESS productionClusterRangeAddress,
     D3D12_GPU_VIRTUAL_ADDRESS productionClusterIndexAddress,
@@ -85,7 +92,7 @@ void AppFrameRenderer::DrawMainModel(
         productionClusterIndexAddress, productionLightingConstantsAddress,
         productionShadowAtlasHandle);
     commandList->SetGraphicsRootConstantBufferView(1, transformBufferAddress);
-    commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+    commandList->DrawIndexedInstanced(indexCount, 1, startIndexLocation, 0, 0);
 }
 
 bool AppFrameRenderer::PrepareIndirectMainBatch(
@@ -154,7 +161,8 @@ void AppFrameRenderer::DrawSkinnedModel(
     D3D12_GPU_VIRTUAL_ADDRESS cameraBufferAddress,
     D3D12_GPU_VIRTUAL_ADDRESS pointLightBufferAddress,
     D3D12_GPU_VIRTUAL_ADDRESS spotLightBufferAddress,
-    uint32_t indexCount) const {
+    uint32_t indexCount,
+    uint32_t startIndexLocation) const {
     if (commandList == nullptr || indexCount == 0 ||
         vertexBufferView.BufferLocation == 0 ||
         influenceBufferView.BufferLocation == 0 ||
@@ -189,7 +197,7 @@ void AppFrameRenderer::DrawSkinnedModel(
     material.textures.srv[9] = environmentTextureHandle;
     ApplyMaterialInstance(commandList, material);
     commandList->SetGraphicsRootDescriptorTable(18, matrixPaletteHandle);
-    commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+    commandList->DrawIndexedInstanced(indexCount, 1, startIndexLocation, 0, 0);
 }
 
 void AppFrameRenderer::ApplyMaterialInstance(

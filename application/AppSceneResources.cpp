@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cwctype>
 #include <cmath>
@@ -12,12 +13,26 @@
 #include <vector>
 
 #include "AppRenderResources.h"
+#include "AppRuntimeConfig.h"
 #include "AppRuntimeUtils.h"
 #include "ModelLoaderAssimp.h"
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
+
+    std::string NormalizeResourcePathKey(const std::string& pathText) {
+        if (pathText.empty()) {
+            return {};
+        }
+        std::string key = std::filesystem::path(pathText)
+            .lexically_normal()
+            .generic_string();
+        std::transform(key.begin(), key.end(), key.begin(), [](unsigned char value) {
+            return static_cast<char>(std::tolower(value));
+        });
+        return key;
+    }
 
     struct SphereVertex {
         float position[4];
@@ -587,6 +602,110 @@ namespace {
         return vertices;
     }
 
+    void AppendBox(
+        ModelData& model,
+        const Vector3& minimum,
+        const Vector3& maximum) {
+        const Vector3 corners[8] = {
+            {minimum.x, minimum.y, minimum.z},
+            {minimum.x, maximum.y, minimum.z},
+            {maximum.x, maximum.y, minimum.z},
+            {maximum.x, minimum.y, minimum.z},
+            {minimum.x, minimum.y, maximum.z},
+            {minimum.x, maximum.y, maximum.z},
+            {maximum.x, maximum.y, maximum.z},
+            {maximum.x, minimum.y, maximum.z},
+        };
+        struct Face {
+            uint32_t corners[4];
+            Vector3 normal;
+        };
+        const Face faces[6] = {
+            {{4, 5, 6, 7}, {0.0f, 0.0f, 1.0f}},
+            {{3, 2, 1, 0}, {0.0f, 0.0f, -1.0f}},
+            {{7, 6, 2, 3}, {1.0f, 0.0f, 0.0f}},
+            {{0, 1, 5, 4}, {-1.0f, 0.0f, 0.0f}},
+            {{5, 1, 2, 6}, {0.0f, 1.0f, 0.0f}},
+            {{0, 4, 7, 3}, {0.0f, -1.0f, 0.0f}},
+        };
+        const Vector2 uvs[4] = {
+            {0.0f, 1.0f},
+            {0.0f, 0.0f},
+            {1.0f, 0.0f},
+            {1.0f, 1.0f},
+        };
+
+        for (const Face& face : faces) {
+            const uint32_t base = static_cast<uint32_t>(model.vertices.size());
+            for (uint32_t corner = 0; corner < 4; ++corner) {
+                const Vector3& position = corners[face.corners[corner]];
+                model.vertices.push_back({
+                    {position.x, position.y, position.z, 1.0f},
+                    uvs[corner],
+                    face.normal,
+                });
+            }
+            model.indices.insert(model.indices.end(), {
+                base + 0, base + 1, base + 2,
+                base + 0, base + 2, base + 3,
+            });
+        }
+    }
+
+    ModelData BuildTrainingSwordModelData() {
+        ModelData model;
+        // The socket origin sits inside the grip and the blade extends along
+        // local +Y. A white albedo preserves the authored material colours;
+        // using the dark VFX gradation texture made the weapon effectively
+        // disappear under the fixed submission lighting.
+        constexpr const char* kWhiteAlbedo = "Resources/human/white.png";
+        model.materials = {
+            {"blade", kWhiteAlbedo, {}, {0.55f, 0.78f, 1.00f, 1.0f}},
+            {"guard", kWhiteAlbedo, {}, {1.00f, 0.58f, 0.10f, 1.0f}},
+            {"grip", kWhiteAlbedo, {}, {0.16f, 0.045f, 0.025f, 1.0f}},
+        };
+        model.material = model.materials.front();
+
+        auto appendPart = [&](const char* name, uint32_t materialIndex, auto appendGeometry) {
+            const uint32_t indexStart = static_cast<uint32_t>(model.indices.size());
+            appendGeometry();
+            model.subMeshes.push_back({
+                name,
+                indexStart,
+                static_cast<uint32_t>(model.indices.size()) - indexStart,
+                materialIndex,
+            });
+        };
+        appendPart("grip_and_pommel", 2, [&]() {
+            AppendBox(model, {-0.045f, -0.22f, -0.045f}, {0.045f, 0.08f, 0.045f});
+            AppendBox(model, {-0.085f, -0.29f, -0.065f}, {0.085f, -0.22f, 0.065f});
+        });
+        appendPart("guard", 1, [&]() {
+            AppendBox(model, {-0.30f, 0.08f, -0.06f}, {0.30f, 0.14f, 0.06f});
+        });
+        appendPart("blade_and_tip", 0, [&]() {
+            AppendBox(model, {-0.065f, 0.14f, -0.025f}, {0.065f, 1.02f, 0.025f});
+            AppendBox(model, {-0.045f, 1.02f, -0.018f}, {0.045f, 1.14f, 0.018f});
+        });
+        model.rootNode.name = "training_sword_root";
+        model.rootNode.transform = {
+            {1.0f, 1.0f, 1.0f},
+            {0.0f, 0.0f, 0.0f, 1.0f},
+            {0.0f, 0.0f, 0.0f},
+        };
+        model.rootNode.localMatrix = MakeIdentity4x4();
+        EnsureModelDataMaterialLayout(model);
+        const ModelGeometryOrientationStats orientation =
+            RepairModelGeometryOrientation(model);
+        if (!ValidateModelDataMaterialLayout(model) ||
+            !ValidateModelGeometryOrientation(model) ||
+            orientation.degenerateTriangleCount != 0) {
+            OutputDebugStringA(
+                "[AppSceneResources] Training sword CPU geometry validation failed.\n");
+        }
+        return model;
+    }
+
     std::vector<OrbitRibbonVertex> BuildOrbitRibbonVertices() {
         auto makeVertex = [](float t, float side, float ribbonIndex) {
             OrbitRibbonVertex vertex{};
@@ -849,6 +968,14 @@ namespace {
             skinCluster.inverseBindPoseMatrices.begin(),
             skinCluster.inverseBindPoseMatrices.end(),
             MakeIdentity4x4());
+        skinCluster.meshRootInverseMatrix = MakeIdentity4x4();
+        Matrix4x4 meshRootBindMatrix = MakeIdentity4x4();
+        if (TryBuildMeshRootBindMatrix(
+                skeleton,
+                modelData,
+                meshRootBindMatrix)) {
+            skinCluster.meshRootInverseMatrix = Inverse(meshRootBindMatrix);
+        }
 
         skinCluster.paletteEntries.resize(jointCount);
         skinCluster.paletteResource =
@@ -1066,9 +1193,10 @@ namespace {
                 break;
             }
 
-            Matrix4x4 skinMatrix = Multiply(
+            Matrix4x4 skinMatrix = BuildMeshSpaceSkinningMatrix(
                 skinCluster.inverseBindPoseMatrices[jointIndex],
-                skeleton.joints[jointIndex].skeletonSpaceMatrix);
+                skeleton.joints[jointIndex].skeletonSpaceMatrix,
+                skinCluster.meshRootInverseMatrix);
             skinCluster.paletteEntries[jointIndex].skeletonSpaceMatrix = skinMatrix;
             skinCluster.paletteEntries[jointIndex].skeletonSpaceInverseTransposeMatrix =
                 Transpose(InverseCopy(skinMatrix));
@@ -1193,6 +1321,10 @@ namespace {
     }
 
 } // namespace
+
+ModelData BuildTrainingSwordModelDataForSubmission() {
+    return BuildTrainingSwordModelData();
+}
 
 bool AppSceneResources::Initialize(
     ComPtr<ID3D12Device> device,
@@ -1561,6 +1693,31 @@ bool AppSceneResources::Initialize(
         &terrainDetailNormalMapSrvDesc,
         terrainDetailNormalMapTextureSrvHandleCPU);
 
+    DirectX::ScratchImage flatNormalImages =
+        CreateSolidColorTexture(128, 128, 255, 255);
+    const DirectX::TexMetadata& flatNormalMetadata = flatNormalImages.GetMetadata();
+    flatNormalTextureResource =
+        AppRenderResources::CreateTextureResource(device, flatNormalMetadata);
+    AppRenderResources::UploadTextureData(
+        device,
+        uploadCommandList,
+        flatNormalTextureResource,
+        flatNormalImages,
+        initialUploadResources_);
+    D3D12_SHADER_RESOURCE_VIEW_DESC flatNormalSrvDesc{};
+    flatNormalSrvDesc.Format = flatNormalMetadata.format;
+    flatNormalSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    flatNormalSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    flatNormalSrvDesc.Texture2D.MipLevels = UINT(flatNormalMetadata.mipLevels);
+    flatNormalTextureSrvHandleCPU =
+        AppRenderResources::GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 11);
+    flatNormalTextureSrvHandleGPU =
+        AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 11);
+    device->CreateShaderResourceView(
+        flatNormalTextureResource.Get(),
+        &flatNormalSrvDesc,
+        flatNormalTextureSrvHandleCPU);
+
     const std::string circle2TexturePath =
         std::filesystem::exists("Resources/circle2.png") ? "Resources/circle2.png" : "resources/monsterBall.png";
     DirectX::ScratchImage circle2Images = AppRenderResources::LoadTexture(circle2TexturePath);
@@ -1750,6 +1907,14 @@ bool AppSceneResources::Initialize(
         terrainDetailNormalMapTextureSrvHandleGPU,
         10,
         terrainDetailNormalMapMetadata);
+    registerExistingVfxTexture(
+        "flatNormal",
+        "generated://flat-normal",
+        flatNormalTextureResource,
+        flatNormalTextureSrvHandleCPU,
+        flatNormalTextureSrvHandleGPU,
+        11,
+        flatNormalMetadata);
 
     struct VfxTextureLoadSpec {
         const char* name;
@@ -1810,6 +1975,114 @@ bool AppSceneResources::Initialize(
             static_cast<uint32_t>(vfxTextureMetadata.height)
         });
     }
+
+    uint32_t nextMaterialTextureDescriptorIndex =
+        kMaterialTextureSrvBaseIndex;
+    auto findTextureByPath = [&](const std::string& path)
+        -> const AppManagedTextureResource* {
+        const std::string key = NormalizeResourcePathKey(path);
+        if (key.empty()) {
+            return nullptr;
+        }
+        for (const AppManagedTextureResource& texture : vfxTextureLibrary) {
+            if (NormalizeResourcePathKey(texture.path) == key) {
+                return &texture;
+            }
+        }
+        return nullptr;
+    };
+    auto resolveMaterialTexture = [&](
+        const std::string& path,
+        D3D12_GPU_DESCRIPTOR_HANDLE fallback,
+        bool& usedFallback) {
+        usedFallback = true;
+        if (path.empty()) {
+            return fallback;
+        }
+        if (const AppManagedTextureResource* existing = findTextureByPath(path)) {
+            usedFallback = false;
+            return existing->gpu;
+        }
+        if (!std::filesystem::exists(path) ||
+            nextMaterialTextureDescriptorIndex >=
+                kMaterialTextureSrvBaseIndex + kMaterialTextureSrvCount) {
+            return fallback;
+        }
+
+        DirectX::ScratchImage images = AppRenderResources::LoadTexture(path);
+        const DirectX::TexMetadata& metadata = images.GetMetadata();
+        ComPtr<ID3D12Resource> resource =
+            AppRenderResources::CreateTextureResource(device, metadata);
+        AppRenderResources::UploadTextureData(
+            device,
+            uploadCommandList,
+            resource,
+            images,
+            initialUploadResources_);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDescription{};
+        srvDescription.Format = metadata.format;
+        srvDescription.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDescription.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDescription.Texture2D.MipLevels = UINT(metadata.mipLevels);
+        const uint32_t descriptorIndex = nextMaterialTextureDescriptorIndex++;
+        const D3D12_CPU_DESCRIPTOR_HANDLE cpu =
+            AppRenderResources::GetCPUDescriptorHandle(
+                srvDescriptorHeap,
+                descriptorSizeSRV,
+                descriptorIndex);
+        const D3D12_GPU_DESCRIPTOR_HANDLE gpu =
+            AppRenderResources::GetGPUDescriptorHandle(
+                srvDescriptorHeap,
+                descriptorSizeSRV,
+                descriptorIndex);
+        device->CreateShaderResourceView(resource.Get(), &srvDescription, cpu);
+        vfxTextureLibrary.push_back({
+            "material_texture_" + std::to_string(descriptorIndex),
+            path,
+            resource,
+            cpu,
+            gpu,
+            descriptorIndex,
+            static_cast<uint32_t>(metadata.width),
+            static_cast<uint32_t>(metadata.height),
+        });
+        usedFallback = false;
+        return gpu;
+    };
+    auto buildGpuMaterials = [&](
+        ModelData& sourceModel,
+        D3D12_GPU_DESCRIPTOR_HANDLE fallbackAlbedo) {
+        EnsureModelDataMaterialLayout(sourceModel);
+        std::vector<AppGpuMaterialResource> result;
+        result.reserve(sourceModel.materials.size());
+        for (const MaterialData& sourceMaterial : sourceModel.materials) {
+            AppGpuMaterialResource gpuMaterial;
+            gpuMaterial.source = sourceMaterial;
+            gpuMaterial.constantBuffer = CreateBufferResource(device, sizeof(Material));
+            gpuMaterial.constantBuffer->Map(
+                0,
+                nullptr,
+                reinterpret_cast<void**>(&gpuMaterial.mappedConstants));
+            *gpuMaterial.mappedConstants = *materialData;
+            gpuMaterial.mappedConstants->color = {
+                materialData->color.x * sourceMaterial.baseColorFactor.x,
+                materialData->color.y * sourceMaterial.baseColorFactor.y,
+                materialData->color.z * sourceMaterial.baseColorFactor.z,
+                materialData->color.w * sourceMaterial.baseColorFactor.w,
+            };
+            gpuMaterial.albedoTextureGpu = resolveMaterialTexture(
+                sourceMaterial.textureFilePath,
+                fallbackAlbedo,
+                gpuMaterial.albedoFallback);
+            gpuMaterial.normalTextureGpu = resolveMaterialTexture(
+                sourceMaterial.normalTextureFilePath,
+                flatNormalTextureSrvHandleGPU,
+                gpuMaterial.normalFallback);
+            result.push_back(std::move(gpuMaterial));
+        }
+        return result;
+    };
 
     // =========================================================
     // Sphere mesh
@@ -2063,6 +2336,46 @@ bool AppSceneResources::Initialize(
     registerCourseMesh("curved_canyon_wall", "Resources/course_meshes/CurvedCanyonWall", "CurvedCanyonWall.obj", "courseOrganicRock");
     registerCourseMesh("vista_hole_wall", "Resources/course_meshes/VistaHoleWall", "VistaHoleWall.obj", "courseVistaRock");
     registerCourseMesh("spire_broken_bridge_arc", "Resources/course_meshes/SpireBrokenBridgeArc", "SpireBrokenBridgeArc.obj", "courseRootRock");
+    registerCourseMesh(
+        "multi_material_demo",
+        "Resources/tests/MultiMaterial",
+        "MultiMaterial.obj",
+        "default");
+
+    trainingSwordModelIndex = UINT32_MAX;
+    ModelData trainingSwordData = BuildTrainingSwordModelDataForSubmission();
+    GpuMeshResource trainingSwordMesh = CreateGpuMeshResource(
+        device,
+        uploadCommandList,
+        trainingSwordData,
+        initialUploadResources_);
+    const D3D12_GPU_DESCRIPTOR_HANDLE trainingSwordTexture =
+        findManagedTextureGpu("default");
+    if (trainingSwordMesh.indexCount > 0 && trainingSwordTexture.ptr != 0) {
+        trainingSwordModelIndex = static_cast<uint32_t>(vfxModelLibrary.size());
+        vfxModelLibrary.push_back({
+            "training_sword",
+            "<procedural>",
+            "training_sword",
+            std::move(trainingSwordData),
+            trainingSwordMesh,
+            trainingSwordTexture,
+            true,
+        });
+    } else {
+        OutputDebugStringA("[AppSceneResources] Training sword resource creation failed.\n");
+    }
+
+    for (AppManagedModelResource& managedModel : vfxModelLibrary) {
+        managedModel.gpuMaterials = buildGpuMaterials(
+            managedModel.model,
+            managedModel.textureGpu.ptr != 0
+                ? managedModel.textureGpu
+                : textureSrvHandleGPU2);
+        managedModel.loaded = managedModel.loaded &&
+            ValidateModelDataMaterialLayout(managedModel.model) &&
+            !managedModel.gpuMaterials.empty();
+    }
 
     vfxModelObjects.clear();
     vfxModelObjects.resize(kRuntimeVfxModelObjectCount);
@@ -2082,6 +2395,20 @@ bool AppSceneResources::Initialize(
         object.transformData->World = MakeIdentity4x4();
         object.transformData->WorldInverseTranspose = MakeIdentity4x4();
     }
+
+    weaponAttachmentObject = {};
+    weaponAttachmentObject.name = "weapon_attachment";
+    weaponAttachmentObject.modelIndex = trainingSwordModelIndex;
+    weaponAttachmentObject.visible = false;
+    weaponAttachmentObject.transformResource =
+        CreateBufferResource(device, sizeof(TransformationMatrix));
+    weaponAttachmentObject.transformResource->Map(
+        0,
+        nullptr,
+        reinterpret_cast<void**>(&weaponAttachmentObject.transformData));
+    weaponAttachmentObject.transformData->WVP = MakeIdentity4x4();
+    weaponAttachmentObject.transformData->World = MakeIdentity4x4();
+    weaponAttachmentObject.transformData->WorldInverseTranspose = MakeIdentity4x4();
 
     // =========================================================
     // Skinned model instances
@@ -2113,7 +2440,7 @@ bool AppSceneResources::Initialize(
         initialUploadResources_,
         "human walk",
         "Resources/human",
-        "walk.gltf",
+        "walk_gltf.gltf",
         skinnedDefaultTransform);
     LoadSkinnedModelInstance(
         skinnedModels[2],
@@ -2127,6 +2454,17 @@ bool AppSceneResources::Initialize(
         "Resources/human",
         "sneakWalk.gltf",
         skinnedDefaultTransform);
+    for (SkinnedModelInstance& skinnedModel : skinnedModels) {
+        if (!skinnedModel.loaded) {
+            continue;
+        }
+        skinnedModel.gpuMaterials = buildGpuMaterials(
+            skinnedModel.model,
+            textureSrvHandleGPU);
+        skinnedModel.loaded = skinnedModel.loaded &&
+            ValidateModelDataMaterialLayout(skinnedModel.model) &&
+            !skinnedModel.gpuMaterials.empty();
+    }
 
     size_t maxJointCount = 0;
     for (const SkinnedModelInstance& instance : skinnedModels) {
@@ -2208,6 +2546,27 @@ const AppManagedModelResource* AppSceneResources::FindManagedModel(uint32_t mode
     }
     const AppManagedModelResource& model = vfxModelLibrary[modelIndex];
     return model.loaded ? &model : nullptr;
+}
+
+void AppSceneResources::UpdateWeaponAttachment(
+    const WeaponAttachmentTelemetry& telemetry,
+    const Matrix4x4& viewMatrix,
+    const Matrix4x4& projMatrix) {
+    weaponAttachmentObject.modelIndex = telemetry.modelIndex;
+    weaponAttachmentObject.visible =
+        telemetry.status == WeaponAttachmentStatus::Active &&
+        weaponAttachmentObject.transformData != nullptr &&
+        FindManagedModel(telemetry.modelIndex) != nullptr;
+    if (!weaponAttachmentObject.visible) {
+        return;
+    }
+
+    Matrix4x4 worldMatrix = telemetry.worldMatrix;
+    weaponAttachmentObject.transformData->World = worldMatrix;
+    weaponAttachmentObject.transformData->WVP =
+        Multiply(worldMatrix, Multiply(viewMatrix, projMatrix));
+    weaponAttachmentObject.transformData->WorldInverseTranspose =
+        Transpose(Inverse(worldMatrix));
 }
 
 void AppSceneResources::SyncCourseMeshRenderQueue(
@@ -2470,9 +2829,24 @@ void AppSceneResources::UpdateTransforms(
 }
 
 void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float deltaTime) {
-    activeSkinnedModelIndex = (std::min)(
-        runtimeState.selectedSkinnedModelIndex,
-        uint32_t(skinnedModels.size() - 1));
+    RuntimeSkinnedAnimationBlendState& animationBlend =
+        runtimeState.skinnedAnimationBlend;
+    const bool validAnimationBlend =
+        animationBlend.active &&
+        animationBlend.fromModelIndex < skinnedModels.size() &&
+        animationBlend.toModelIndex < skinnedModels.size() &&
+        animationBlend.fromModelIndex != animationBlend.toModelIndex &&
+        skinnedModels[animationBlend.fromModelIndex].loaded &&
+        skinnedModels[animationBlend.toModelIndex].loaded;
+    if (animationBlend.active && !validAnimationBlend) {
+        CancelSkinnedAnimationBlend(runtimeState);
+    }
+
+    activeSkinnedModelIndex = validAnimationBlend
+        ? animationBlend.fromModelIndex
+        : (std::min)(
+            runtimeState.selectedSkinnedModelIndex,
+            uint32_t(skinnedModels.size() - 1));
     runtimeState.selectedSkinnedModelIndex = activeSkinnedModelIndex;
     runtimeState.selectedVfxModelObjectIndex = (std::min)(
         runtimeState.selectedVfxModelObjectIndex,
@@ -2489,18 +2863,76 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
         activeSkinnedModel != nullptr &&
         (runtimeState.showSkinnedModel ||
             runtimeState.showSkeletonDebug ||
-            runtimeState.vfx.enableSkinnedSurfaceVfx);
+            runtimeState.vfx.enableSkinnedSurfaceVfx ||
+            runtimeState.handParticleAttachment.enabled ||
+            runtimeState.leftHandParticleAttachment.enabled ||
+            runtimeState.weaponAttachment.enabled ||
+            animationBlend.active);
 
     if (updateActiveSkinned) {
         activeSkinnedModel->visible = runtimeState.showSkinnedModel;
         activeSkinnedModel->transform = runtimeState.skinnedModelTransform;
-        UpdateSkinnedModelInstance(
-            *activeSkinnedModel,
-            deltaTime,
-            runtimeState.playAnimatedCube,
-            runtimeState.loopAnimatedCube,
-            runtimeState.animatedCubeSpeed,
-            runtimeState.animatedCubeTime);
+        if (animationBlend.active) {
+            SkinnedModelInstance& targetModel =
+                skinnedModels[animationBlend.toModelIndex];
+            targetModel.visible = false;
+            targetModel.transform = runtimeState.skinnedModelTransform;
+
+            const auto advanceAnimationClock = [&](
+                SkinnedModelInstance& model,
+                float& animationTime) {
+                model.animator.time = animationTime;
+                model.animator.playing = runtimeState.playAnimatedCube;
+                model.animator.loop = runtimeState.loopAnimatedCube;
+                model.animator.speed = runtimeState.animatedCubeSpeed;
+                if (runtimeState.playAnimatedCube) {
+                    model.animator.Update(deltaTime, model.animation.duration);
+                    animationTime = model.animator.time;
+                }
+            };
+            advanceAnimationClock(*activeSkinnedModel, animationBlend.fromTime);
+            advanceAnimationClock(targetModel, animationBlend.toTime);
+
+            const float blendAlpha =
+                AdvanceSkinnedAnimationBlend(runtimeState, deltaTime);
+            ApplyAnimationBlend(
+                activeSkinnedModel->skeleton,
+                activeSkinnedModel->animation,
+                animationBlend.fromTime,
+                targetModel.animation,
+                animationBlend.toTime,
+                blendAlpha);
+            UpdateSkeleton(activeSkinnedModel->skeleton);
+            UpdateSkinCluster(
+                activeSkinnedModel->skinCluster,
+                activeSkinnedModel->skeleton);
+            runtimeState.animatedCubeTime = animationBlend.fromTime;
+
+            if (blendAlpha >= 1.0f) {
+                targetModel.animator.time = animationBlend.toTime;
+                targetModel.animator.playing = runtimeState.playAnimatedCube;
+                targetModel.animator.loop = runtimeState.loopAnimatedCube;
+                targetModel.animator.speed = runtimeState.animatedCubeSpeed;
+                ApplyAnimation(
+                    targetModel.skeleton,
+                    targetModel.animation,
+                    animationBlend.toTime);
+                UpdateSkeleton(targetModel.skeleton);
+                UpdateSkinCluster(targetModel.skinCluster, targetModel.skeleton);
+                targetModel.visible = runtimeState.showSkinnedModel;
+                activeSkinnedModel->visible = false;
+                activeSkinnedModelIndex = animationBlend.toModelIndex;
+                CompleteSkinnedAnimationBlend(runtimeState);
+            }
+        } else {
+            UpdateSkinnedModelInstance(
+                *activeSkinnedModel,
+                deltaTime,
+                runtimeState.playAnimatedCube,
+                runtimeState.loopAnimatedCube,
+                runtimeState.animatedCubeSpeed,
+                runtimeState.animatedCubeTime);
+        }
     } else if (runtimeState.playAnimatedCube) {
         Animator animator{};
         animator.time = runtimeState.animatedCubeTime;
@@ -2537,6 +2969,28 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
     if (materialData != nullptr) {
         runtimeState.materialData.specularMode = std::clamp(runtimeState.materialData.specularMode, 0, 1);
         *materialData = runtimeState.materialData;
+        auto syncGpuMaterial = [&](AppGpuMaterialResource& gpuMaterial) {
+            if (gpuMaterial.mappedConstants == nullptr) {
+                return;
+            }
+            *gpuMaterial.mappedConstants = runtimeState.materialData;
+            gpuMaterial.mappedConstants->color = {
+                runtimeState.materialData.color.x * gpuMaterial.source.baseColorFactor.x,
+                runtimeState.materialData.color.y * gpuMaterial.source.baseColorFactor.y,
+                runtimeState.materialData.color.z * gpuMaterial.source.baseColorFactor.z,
+                runtimeState.materialData.color.w * gpuMaterial.source.baseColorFactor.w,
+            };
+        };
+        for (AppManagedModelResource& managedModel : vfxModelLibrary) {
+            for (AppGpuMaterialResource& gpuMaterial : managedModel.gpuMaterials) {
+                syncGpuMaterial(gpuMaterial);
+            }
+        }
+        for (SkinnedModelInstance& skinnedModel : skinnedModels) {
+            for (AppGpuMaterialResource& gpuMaterial : skinnedModel.gpuMaterials) {
+                syncGpuMaterial(gpuMaterial);
+            }
+        }
     }
 
     if (terrainMaterialData != nullptr) {

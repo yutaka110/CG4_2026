@@ -41,6 +41,12 @@
 #include "editor/io/EditorFileTransaction.h"
 #include "utils/dx12/BufferHelper.h"
 
+#define STBTT_STATIC
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "../externals/imgui/imstb_truetype.h"
+#undef STB_TRUETYPE_IMPLEMENTATION
+#undef STBTT_STATIC
+
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
 #include "../externals/imgui/imgui.h"
 #endif
@@ -246,6 +252,7 @@ bool RailShaderHotReloadEnabled() {
     }();
     return enabled;
 }
+
 
 void LogRailFrameStage(uint32_t frameIndex, float distance, const char* stage) {
     RecordRailFrameStage(frameIndex, stage);
@@ -1452,7 +1459,8 @@ AppRunLoop::AppRunLoop(
     FrameLoopState& frameState,
     ID3D12CommandQueue* commandQueue,
     ID3D12Fence* fence,
-    HANDLE fenceEvent)
+    HANDLE fenceEvent,
+    AppStartupScene startupScene)
     : debugCamera_(debugCamera),
       runtimeState_(runtimeState),
       scene_(scene),
@@ -1486,11 +1494,23 @@ AppRunLoop::AppRunLoop(
         }
         OutputDebugStringA(message.str().c_str());
     }
-    sceneStateManager_.Initialize(std::make_unique<RailShooterSceneState>(), *this);
-    std::string presetError;
-    terrainPresetStore_.Load(runtimeState_.terrain, &presetError);
-    LoadRailShooterCourse();
-    ApplyRailShooterCourse();
+    if (startupScene == AppStartupScene::MultiMaterialShowcase) {
+        sceneStateManager_.Initialize(
+            std::make_unique<MultiMaterialShowcaseSceneState>(), *this);
+        OutputDebugStringA(
+            "[AppRunLoop] Startup scene: MultiMaterialShowcase "
+            "(--multi-material-showcase).\n");
+    } else if (startupScene == AppStartupScene::VfxPreview) {
+        sceneStateManager_.Initialize(std::make_unique<VfxPreviewSceneState>(), *this);
+        OutputDebugStringA("[AppRunLoop] Startup scene: VfxPreview (--vfx-preview).\n");
+    } else {
+        sceneStateManager_.Initialize(std::make_unique<RailShooterSceneState>(), *this);
+        std::string presetError;
+        terrainPresetStore_.Load(runtimeState_.terrain, &presetError);
+        LoadRailShooterCourse();
+        ApplyRailShooterCourse();
+        OutputDebugStringA("[AppRunLoop] Startup scene: RailShooter.\n");
+    }
     frameCoordinator_.Initialize();
 }
 
@@ -2070,8 +2090,8 @@ void AppRunLoop::BuildRailVisibilityDebugOverlay(
 }
 
 bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList) {
-    constexpr uint32_t kAtlasWidth = 256;
-    constexpr uint32_t kAtlasHeight = 128;
+    constexpr uint32_t kAtlasWidth = 512;
+    constexpr uint32_t kAtlasHeight = 256;
     constexpr uint32_t kDescriptorIndex = 18;
     constexpr uint32_t kMaxAtlasVertices = 16384;
     ComPtr<ID3D12Device> device = dev_.GetDevice();
@@ -2178,6 +2198,71 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
     for (int digit = 0; digit < 10; ++digit) {
         drawSegmentDigit(digit, digit * 12, 0);
     }
+    // Bake the bundled M PLUS Rounded 1c Medium (weight 500 / 中字) directly
+    // into the native HUD atlas. This is not an ImGui font atlas: the TTF is
+    // rasterized once and rendered by UI.SubmissionLiveVisualizer.
+    constexpr int kSubmissionFontFirstCodepoint = 32;
+    constexpr int kSubmissionFontGlyphCount = 95;
+    constexpr int kSubmissionFontBitmapHeight = 128;
+    constexpr int kSubmissionFontAtlasY = 128;
+    constexpr float kSubmissionFontPixelHeight = 24.0f;
+    submissionHudFontReady_ = false;
+    submissionHudGlyphs_ = {};
+    std::ifstream fontFile(
+        "Resources/Editor/Fonts/MPLUSRounded1c-Medium.ttf",
+        std::ios::binary | std::ios::ate);
+    if (fontFile) {
+        const std::streamsize byteCount = fontFile.tellg();
+        if (byteCount > 0) {
+            fontFile.seekg(0, std::ios::beg);
+            std::vector<unsigned char> fontBytes(static_cast<size_t>(byteCount));
+            std::vector<unsigned char> fontBitmap(
+                static_cast<size_t>(kAtlasWidth) * kSubmissionFontBitmapHeight,
+                0);
+            std::array<stbtt_bakedchar, kSubmissionFontGlyphCount> baked{};
+            if (fontFile.read(
+                    reinterpret_cast<char*>(fontBytes.data()), byteCount) &&
+                stbtt_BakeFontBitmap(
+                    fontBytes.data(),
+                    0,
+                    kSubmissionFontPixelHeight,
+                    fontBitmap.data(),
+                    static_cast<int>(kAtlasWidth),
+                    kSubmissionFontBitmapHeight,
+                    kSubmissionFontFirstCodepoint,
+                    kSubmissionFontGlyphCount,
+                    baked.data()) > 0) {
+                for (int y = 0; y < kSubmissionFontBitmapHeight; ++y) {
+                    for (int x = 0; x < static_cast<int>(kAtlasWidth); ++x) {
+                        const uint8_t alpha = fontBitmap[
+                            static_cast<size_t>(y) * kAtlasWidth +
+                            static_cast<size_t>(x)];
+                        if (alpha != 0) {
+                            writePixel(x, kSubmissionFontAtlasY + y, alpha);
+                        }
+                    }
+                }
+                for (int glyphIndex = 0;
+                     glyphIndex < kSubmissionFontGlyphCount;
+                     ++glyphIndex) {
+                    const stbtt_bakedchar& source = baked[glyphIndex];
+                    SubmissionHudGlyph& destination = submissionHudGlyphs_[glyphIndex];
+                    destination.uv = {
+                        static_cast<float>(source.x0) / kAtlasWidth,
+                        static_cast<float>(source.y0 + kSubmissionFontAtlasY) / kAtlasHeight,
+                        static_cast<float>(source.x1) / kAtlasWidth,
+                        static_cast<float>(source.y1 + kSubmissionFontAtlasY) / kAtlasHeight};
+                    destination.size = {
+                        static_cast<float>(source.x1 - source.x0),
+                        static_cast<float>(source.y1 - source.y0)};
+                    destination.offset = {source.xoff, source.yoff};
+                    destination.advance = source.xadvance;
+                    destination.valid = source.x1 > source.x0 && source.y1 > source.y0;
+                }
+                submissionHudFontReady_ = true;
+            }
+        }
+    }
 
     railLockOnHudAtlasTexture_ =
         AppRenderResources::CreateTextureResource(device, atlasImage.GetMetadata());
@@ -2209,8 +2294,8 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
 
 bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     constexpr uint32_t kMaxAtlasVertices = 16384;
-    constexpr float kAtlasW = 256.0f;
-    constexpr float kAtlasH = 128.0f;
+    constexpr float kAtlasW = 512.0f;
+    constexpr float kAtlasH = 256.0f;
     railLockOnHudAtlasVertexCount_ = 0;
     const RenderViewportMetrics hudMetrics =
         ResolveRenderViewportMetrics(
@@ -2633,6 +2718,314 @@ void AppRunLoop::RegisterRailLockOnHudPass(
             passContext.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             passContext.commandList->DrawInstanced(railLockOnHudAtlasVertexCount_, 1, 0, 0);
         }});
+}
+
+bool AppRunLoop::EnsureSubmissionHudResources(
+    ID3D12GraphicsCommandList* commandList) {
+    constexpr uint32_t kMaxSubmissionHudVertices = 4096;
+    if (!EnsureRailLockOnHudAtlas(commandList)) {
+        return false;
+    }
+    if (submissionHudVertexResource_ != nullptr &&
+        submissionHudMappedVertices_ != nullptr) {
+        return true;
+    }
+
+    ComPtr<ID3D12Device> device = dev_.GetDevice();
+    if (device == nullptr) {
+        return false;
+    }
+    submissionHudVertexResource_ = CreateBufferResource(
+        device,
+        sizeof(RailHudAtlasVertex) * kMaxSubmissionHudVertices);
+    if (submissionHudVertexResource_ == nullptr ||
+        FAILED(submissionHudVertexResource_->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&submissionHudMappedVertices_))) ||
+        submissionHudMappedVertices_ == nullptr) {
+        submissionHudVertexResource_.Reset();
+        submissionHudMappedVertices_ = nullptr;
+        return false;
+    }
+    submissionHudVertexBufferView_.BufferLocation =
+        submissionHudVertexResource_->GetGPUVirtualAddress();
+    submissionHudVertexBufferView_.SizeInBytes =
+        sizeof(RailHudAtlasVertex) * kMaxSubmissionHudVertices;
+    submissionHudVertexBufferView_.StrideInBytes = sizeof(RailHudAtlasVertex);
+    return true;
+}
+
+bool AppRunLoop::BuildSubmissionHudQuads() {
+    constexpr uint32_t kMaxSubmissionHudVertices = 4096;
+    constexpr float kAtlasWidth = 512.0f;
+    constexpr float kAtlasHeight = 256.0f;
+
+    submissionHudVertexCount_ = 0;
+    if (!runtimeState_.submissionShowcase.enabled ||
+        submissionHudManuallyHidden_ ||
+        !submissionHudFontReady_ ||
+        submissionHudMappedVertices_ == nullptr) {
+        return false;
+    }
+
+    const RenderViewportMetrics metrics = ResolveRenderViewportMetrics(
+        imguiLayer_.EditorViewportRenderTargetState(),
+        windowWidth_,
+        windowHeight_);
+    if (metrics.width == 0 || metrics.height == 0) {
+        return false;
+    }
+
+    const float uiScale = (std::clamp)(
+        static_cast<float>(metrics.height) / 900.0f,
+        0.72f,
+        1.18f);
+    const auto uv = [](float x, float y, float w, float h) {
+        return Vector4{
+            x / kAtlasWidth,
+            y / kAtlasHeight,
+            (x + w) / kAtlasWidth,
+            (y + h) / kAtlasHeight};
+    };
+    const Vector4 uvWhite = uv(0.0f, 112.0f, 8.0f, 8.0f);
+    const auto clip = [&](float x, float y) {
+        return Vector4{
+            x / static_cast<float>(metrics.width) * 2.0f - 1.0f,
+            1.0f - y / static_cast<float>(metrics.height) * 2.0f,
+            0.0f,
+            1.0f};
+    };
+    auto push = [&](float x, float y, float u, float v, const Vector4& color) {
+        if (submissionHudVertexCount_ >= kMaxSubmissionHudVertices) return;
+        submissionHudMappedVertices_[submissionHudVertexCount_++] = {
+            clip(x, y),
+            {u, v},
+            color};
+    };
+    auto addQuad = [&](float x, float y, float width, float height,
+                       const Vector4& rect, const Vector4& color) {
+        if (width <= 0.0f || height <= 0.0f ||
+            submissionHudVertexCount_ + 6 > kMaxSubmissionHudVertices) {
+            return;
+        }
+        const float x1 = x + width;
+        const float y1 = y + height;
+        push(x,  y,  rect.x, rect.y, color);
+        push(x1, y,  rect.z, rect.y, color);
+        push(x,  y1, rect.x, rect.w, color);
+        push(x,  y1, rect.x, rect.w, color);
+        push(x1, y,  rect.z, rect.y, color);
+        push(x1, y1, rect.z, rect.w, color);
+    };
+    auto addText = [&](const char* text, float x, float baseline, float scale,
+                       const Vector4& color) {
+        float cursor = x;
+        for (const char* ch = text; *ch != '\0'; ++ch) {
+            const unsigned char codepoint = static_cast<unsigned char>(*ch);
+            if (codepoint < 32 || codepoint > 126) {
+                continue;
+            }
+            const SubmissionHudGlyph& glyph = submissionHudGlyphs_[codepoint - 32];
+            if (glyph.valid) {
+                addQuad(
+                    cursor + glyph.offset.x * scale,
+                    baseline + glyph.offset.y * scale,
+                    glyph.size.x * scale,
+                    glyph.size.y * scale,
+                    glyph.uv,
+                    color);
+            }
+            cursor += glyph.advance * scale;
+        }
+    };
+
+    const float panelX = 22.0f * uiScale;
+    const float panelY = 22.0f * uiScale;
+    const float panelWidth = 510.0f * uiScale;
+    const float panelHeight = 222.0f * uiScale;
+    addQuad(panelX, panelY, panelWidth, panelHeight, uvWhite,
+            {0.008f, 0.014f, 0.028f, 0.84f});
+    addQuad(panelX, panelY, 5.0f * uiScale, panelHeight, uvWhite,
+            {0.10f, 0.72f, 1.0f, 0.92f});
+    addQuad(panelX, panelY, panelWidth, 2.0f * uiScale, uvWhite,
+            {0.25f, 0.86f, 1.0f, 0.75f});
+
+    const Vector4 titleColor{0.92f, 0.98f, 1.0f, 1.0f};
+    const Vector4 keyColor{0.28f, 0.84f, 1.0f, 1.0f};
+    const Vector4 actionColor{0.78f, 0.86f, 0.92f, 1.0f};
+    addText("CONTROLS", panelX + 20.0f * uiScale,
+            panelY + 42.0f * uiScale, 1.12f * uiScale, titleColor);
+
+    struct ControlLine { const char* input; const char* action; };
+    static constexpr ControlLine kLines[] = {
+        {"WASD / LEFT STICK", "MOVE"},
+        {"Q E / RIGHT STICK", "ROTATE"},
+        {"SPACE / X", "BLEND ANIMATION"},
+        {"K / A", "SKELETON DEBUG"},
+        {"R / B", "RESET"},
+        {"H / Y", "TOGGLE HUD"},
+    };
+    float lineY = panelY + 78.0f * uiScale;
+    for (const ControlLine& line : kLines) {
+        addText(line.input, panelX + 20.0f * uiScale, lineY,
+                0.78f * uiScale, keyColor);
+        addText(line.action, panelX + 270.0f * uiScale, lineY,
+                0.78f * uiScale, actionColor);
+        lineY += 25.0f * uiScale;
+    }
+
+    const float statusPanelWidth = 370.0f * uiScale;
+    const float statusPanelHeight = panelHeight;
+    const float panelGap = 12.0f * uiScale;
+    const bool placeStatusBesideControls =
+        panelX + panelWidth + panelGap + statusPanelWidth + 22.0f * uiScale <=
+        static_cast<float>(metrics.width);
+    const float statusPanelX = placeStatusBesideControls
+        ? panelX + panelWidth + panelGap
+        : panelX;
+    const float statusPanelY = placeStatusBesideControls
+        ? panelY
+        : panelY + panelHeight + panelGap;
+
+    addQuad(statusPanelX, statusPanelY, statusPanelWidth, statusPanelHeight,
+            uvWhite, {0.008f, 0.014f, 0.028f, 0.88f});
+    addQuad(statusPanelX, statusPanelY, 5.0f * uiScale, statusPanelHeight,
+            uvWhite, {0.36f, 1.0f, 0.54f, 0.94f});
+    addQuad(statusPanelX, statusPanelY, statusPanelWidth, 2.0f * uiScale,
+            uvWhite, {0.50f, 1.0f, 0.66f, 0.78f});
+
+    const auto animationName = [](uint32_t modelIndex) -> const char* {
+        switch (modelIndex) {
+        case 1u: return "WALK";
+        case 2u: return "SNEAK WALK";
+        default: return "BIND POSE";
+        }
+    };
+    const RuntimeSkinnedAnimationBlendState& blend =
+        runtimeState_.skinnedAnimationBlend;
+    const char* currentAnimation = blend.active
+        ? animationName(blend.fromModelIndex)
+        : animationName(runtimeState_.selectedSkinnedModelIndex);
+    const char* nextAnimation = blend.active
+        ? animationName(blend.toModelIndex)
+        : "--";
+    const float blendProgress = blend.active
+        ? (std::clamp)(blend.alpha, 0.0f, 1.0f)
+        : 1.0f;
+    const std::string blendText = blend.active
+        ? std::to_string(static_cast<int>(std::lround(blendProgress * 100.0f))) + "%"
+        : "READY";
+
+    const char* skinningPath = "WAITING";
+    Vector4 skinningPathColor{0.65f, 0.72f, 0.78f, 1.0f};
+    switch (runtimeState_.activeSkinningPath) {
+    case RuntimeSkinningPath::ComputeShader:
+        skinningPath = "COMPUTE";
+        skinningPathColor = {0.36f, 1.0f, 0.54f, 1.0f};
+        break;
+    case RuntimeSkinningPath::VertexShader:
+        skinningPath = "VERTEX SHADER";
+        skinningPathColor = {1.0f, 0.72f, 0.24f, 1.0f};
+        break;
+    case RuntimeSkinningPath::Unavailable:
+    default:
+        break;
+    }
+
+    const SkinnedModelInstance* activeSkinnedModel =
+        scene_.GetActiveSkinnedModel();
+    const std::string jointCount = activeSkinnedModel != nullptr
+        ? std::to_string(activeSkinnedModel->skeleton.joints.size())
+        : "0";
+
+    const Vector4 statusLabelColor{0.52f, 0.72f, 0.82f, 1.0f};
+    const Vector4 statusValueColor{0.92f, 0.98f, 1.0f, 1.0f};
+    const float statusLabelX = statusPanelX + 20.0f * uiScale;
+    const float statusValueX = statusPanelX + 155.0f * uiScale;
+    float statusLineY = statusPanelY + 78.0f * uiScale;
+    addText("ANIMATION LIVE", statusPanelX + 20.0f * uiScale,
+            statusPanelY + 42.0f * uiScale, 1.12f * uiScale, titleColor);
+    addText("SKINNING", statusLabelX, statusLineY,
+            0.78f * uiScale, statusLabelColor);
+    addText(skinningPath, statusValueX, statusLineY,
+            0.78f * uiScale, skinningPathColor);
+    statusLineY += 25.0f * uiScale;
+    addText("STATE", statusLabelX, statusLineY,
+            0.78f * uiScale, statusLabelColor);
+    addText(currentAnimation, statusValueX, statusLineY,
+            0.78f * uiScale, statusValueColor);
+    statusLineY += 25.0f * uiScale;
+    addText("NEXT", statusLabelX, statusLineY,
+            0.78f * uiScale, statusLabelColor);
+    addText(nextAnimation, statusValueX, statusLineY,
+            0.78f * uiScale, blend.active ? keyColor : actionColor);
+    statusLineY += 25.0f * uiScale;
+    addText("BLEND", statusLabelX, statusLineY,
+            0.78f * uiScale, statusLabelColor);
+    addText(blendText.c_str(), statusValueX, statusLineY,
+            0.78f * uiScale, blend.active ? keyColor : statusValueColor);
+    statusLineY += 25.0f * uiScale;
+    addText("JOINTS", statusLabelX, statusLineY,
+            0.78f * uiScale, statusLabelColor);
+    addText(jointCount.c_str(), statusValueX, statusLineY,
+            0.78f * uiScale, statusValueColor);
+
+    const float progressX = statusPanelX + 20.0f * uiScale;
+    const float progressY = statusPanelY + 199.0f * uiScale;
+    const float progressWidth = statusPanelWidth - 40.0f * uiScale;
+    const float progressHeight = 8.0f * uiScale;
+    addQuad(progressX, progressY, progressWidth, progressHeight, uvWhite,
+            {0.08f, 0.14f, 0.18f, 0.94f});
+    addQuad(progressX, progressY, progressWidth * blendProgress, progressHeight,
+            uvWhite, blend.active
+                ? Vector4{0.20f, 0.78f, 1.0f, 1.0f}
+                : Vector4{0.28f, 0.88f, 0.46f, 0.88f});
+    return submissionHudVertexCount_ > 0;
+}
+
+void AppRunLoop::RegisterSubmissionHudPass(
+    ID3D12GraphicsCommandList* commandList,
+    const std::string& targetResourceName) {
+    if (targetResourceName.empty() ||
+        !runtimeState_.submissionShowcase.enabled ||
+        submissionHudManuallyHidden_) {
+        return;
+    }
+    if (!EnsureSubmissionHudResources(commandList) ||
+        !BuildSubmissionHudQuads() ||
+        submissionHudVertexCount_ == 0) {
+        return;
+    }
+
+    renderGraph_.AddPass({
+        "UI.SubmissionLiveVisualizer",
+        ge3::graphics::RenderPassLayer::Ui,
+        {{targetResourceName, ge3::graphics::RenderResourceAccessType::WriteRtv}},
+        "",
+        [this](ge3::graphics::RenderPassContext& passContext) {
+            if (submissionHudVertexCount_ == 0 ||
+                railLockOnHudAtlasSrvGpu_.ptr == 0 ||
+                submissionHudVertexBufferView_.BufferLocation == 0) {
+                return;
+            }
+            passContext.commandList->RSSetViewports(1, &runtimeState_.viewport);
+            passContext.commandList->RSSetScissorRects(1, &runtimeState_.scissorRect);
+            passContext.commandList->SetGraphicsRootSignature(
+                appPipelines_.GetRailHudAtlasRootSignature());
+            passContext.commandList->SetPipelineState(appPipelines_.GetRailHudAtlasPSO());
+            ID3D12DescriptorHeap* descriptorHeaps[] = {srvDescriptorHeap_.Get()};
+            passContext.commandList->SetDescriptorHeaps(1, descriptorHeaps);
+            passContext.commandList->SetGraphicsRootDescriptorTable(
+                0, railLockOnHudAtlasSrvGpu_);
+            passContext.commandList->IASetVertexBuffers(
+                0, 1, &submissionHudVertexBufferView_);
+            passContext.commandList->IASetPrimitiveTopology(
+                D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            passContext.commandList->DrawInstanced(
+                submissionHudVertexCount_, 1, 0, 0);
+        },
+        true});
 }
 
 void AppRunLoop::DrawRailLockOnDebugPanel() {
@@ -3812,7 +4205,121 @@ void AppRunLoop::LogRailShooterPerfSpike() {
 void AppRunLoop::Shutdown() {
     frameCoordinator_.FlushGpu();
     sceneStateManager_.Shutdown(*this);
+    handParticleAttachment_.Stop(vfxEngine_.Runtime());
+    leftHandParticleAttachment_.Stop(vfxEngine_.Runtime());
+    weaponAttachment_.Reset();
     vfxEngine_.Shutdown();
+}
+
+void AppRunLoop::UpdateHandParticleAttachment() {
+    const SkinnedModelInstance* model = scene_.GetActiveSkinnedModel();
+    const Skeleton* skeleton = model != nullptr && model->loaded
+        ? &model->skeleton
+        : nullptr;
+    Matrix4x4 ownerWorld = MakeIdentity4x4();
+    if (model != nullptr && model->loaded) {
+        ownerWorld = MakeAffineMatrix(
+            model->transform.scale,
+            model->transform.rotate,
+            model->transform.translate);
+    }
+
+    handParticleAttachment_.Update(
+        runtimeState_.handParticleAttachment,
+        skeleton,
+        ownerWorld,
+        vfxEngine_.Runtime());
+    runtimeState_.handParticleAttachmentTelemetry =
+        handParticleAttachment_.Telemetry();
+
+    leftHandParticleAttachment_.Update(
+        runtimeState_.leftHandParticleAttachment,
+        skeleton,
+        ownerWorld,
+        vfxEngine_.Runtime());
+    runtimeState_.leftHandParticleAttachmentTelemetry =
+        leftHandParticleAttachment_.Telemetry();
+}
+
+void AppRunLoop::UpdateWeaponAttachment() {
+    const SkinnedModelInstance* model = scene_.GetActiveSkinnedModel();
+    const Skeleton* skeleton = model != nullptr && model->loaded
+        ? &model->skeleton
+        : nullptr;
+    Matrix4x4 ownerWorld = MakeIdentity4x4();
+    if (model != nullptr && model->loaded) {
+        ownerWorld = MakeAffineMatrix(
+            model->transform.scale,
+            model->transform.rotate,
+            model->transform.translate);
+    }
+
+    const uint32_t modelIndex = scene_.TrainingSwordModelIndex();
+    weaponAttachment_.Update(
+        runtimeState_.weaponAttachment,
+        skeleton,
+        ownerWorld,
+        modelIndex,
+        scene_.FindManagedModel(modelIndex) != nullptr);
+    runtimeState_.weaponAttachmentTelemetry = weaponAttachment_.Telemetry();
+    scene_.UpdateWeaponAttachment(
+        runtimeState_.weaponAttachmentTelemetry,
+        frameState_.viewMatrix,
+        frameState_.projMatrix);
+}
+
+void AppRunLoop::EnterVfxPreviewScene() {
+    railShooterInitialized_ = false;
+    runtimeState_.terrain.enabled = false;
+    runtimeState_.terrain.autoAdvancePreview = false;
+    runtimeState_.camera.enableDebugInput = true;
+    runtimeState_.showSprite = true;
+    runtimeState_.showVfxModelObjects = true;
+    runtimeState_.submissionShowcase = {};
+}
+
+void AppRunLoop::EnterMultiMaterialShowcaseScene() {
+    railShooterInitialized_ = false;
+    runtimeState_.terrain.enabled = false;
+    runtimeState_.terrain.autoAdvancePreview = false;
+    ApplyMultiMaterialShowcasePresentationDefaults(runtimeState_);
+    submissionHudManuallyHidden_ = false;
+
+    uint32_t humanoidModelIndex = 1;
+    if (!scene_.skinnedModels[humanoidModelIndex].loaded) {
+        humanoidModelIndex = scene_.skinnedModels[2].loaded ? 2u : 0u;
+    }
+    runtimeState_.selectedSkinnedModelIndex = humanoidModelIndex;
+
+    ClearShowcaseEffects();
+    runtimeState_.vfx.showcaseMode = false;
+    runtimeState_.vfx.autoPlayVfxDemo = false;
+    runtimeState_.vfx.iceProjectileClickToFire = false;
+    // Presentation state must be configured by the scene, not by BuildUi().
+    // Release intentionally skips ImGui while retaining the same VFX and
+    // lighting pipeline as the development executable.
+    ConfigureShowcasePostProcess();
+
+    uint32_t multiMaterialModelIndex = UINT32_MAX;
+    for (uint32_t modelIndex = 0;
+         modelIndex < scene_.ManagedModelLibrary().size();
+         ++modelIndex) {
+        if (scene_.ManagedModelLibrary()[modelIndex].name == "multi_material_demo") {
+            multiMaterialModelIndex = modelIndex;
+            break;
+        }
+    }
+    for (RuntimeVfxModelObjectState& object : runtimeState_.vfxModelObjects) {
+        object.visible = false;
+    }
+    if (multiMaterialModelIndex != UINT32_MAX) {
+        RuntimeVfxModelObjectState& showcase = runtimeState_.vfxModelObjects[0];
+        showcase.visible = true;
+        showcase.modelIndex = multiMaterialModelIndex;
+        showcase.transform.scale = {0.68f, 0.68f, 0.68f};
+        showcase.transform.rotate = {0.30f, 0.55f, 0.0f};
+        showcase.transform.translate = {1.55f, -0.42f, -1.0f};
+    }
 }
 
 void AppRunLoop::EnterRailShooterScene() {
@@ -3850,7 +4357,9 @@ void AppRunLoop::EnterRailShooterScene() {
     runtimeState_.showSkeletonDebug = false;
     runtimeState_.showSkybox = false;
     runtimeState_.showProceduralBackdrop = true;
+    runtimeState_.showSprite = true;
     runtimeState_.showVfxModelObjects = false;
+    runtimeState_.submissionShowcase = {};
 
     runtimeState_.vfx.showcaseMode = false;
     runtimeState_.vfx.autoPlayVfxDemo = false;
@@ -3862,6 +4371,7 @@ void AppRunLoop::EnterRailShooterScene() {
     runtimeState_.vfx.enableCylinders = true;
     runtimeState_.vfx.enableElectricOrbStrike = false;
     runtimeState_.vfx.enableSkinnedSurfaceVfx = false;
+    runtimeState_.vfx.enableParticleDedicatedResources = false;
     runtimeState_.vfx.enableTrailMeshStream = false;
     runtimeState_.vfx.enableTrailMeshStreamAutoFallback = false;
     runtimeState_.vfx.enableTrailMeshStreamStartupTelemetry = false;
@@ -4082,7 +4592,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     previousLeftMouseDown_ = leftMouseDown;
     bool normalShotBlockedByUi = false;
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
-    normalShotBlockedByUi = ImGui::GetIO().WantCaptureMouse;
+    normalShotBlockedByUi =
+        imguiLayer_.IsVisible() && ImGui::GetIO().WantCaptureMouse;
 #endif
     const bool normalShotPressed = leftMouseDown && !wasLeftMouseDown;
     const bool normalShotReleased = !leftMouseDown && wasLeftMouseDown;
@@ -4236,6 +4747,150 @@ void AppRunLoop::RenderRailShooterFrame() {
     RenderVfxPreviewFrame();
 }
 
+void AppRunLoop::UpdateMultiMaterialShowcaseFrame() {
+    UpdateSubmissionShowcaseInput(
+        (std::max)(0.0f, frameState_.deltaTime));
+    RuntimeVfxModelObjectState& showcase = runtimeState_.vfxModelObjects[0];
+    if (showcase.visible) {
+        showcase.transform.rotate.y = std::fmod(
+            showcase.transform.rotate.y +
+                (std::max)(0.0f, frameState_.deltaTime) * 0.24f,
+            2.0f * 3.14159265358979323846f);
+    }
+    UpdateVfxPreviewFrame();
+}
+
+void AppRunLoop::UpdateSubmissionShowcaseInput(float deltaTime) {
+    const AppGamepadFrame gamepad = submissionGamepad_.Poll();
+    RuntimeSubmissionShowcaseState& telemetry =
+        runtimeState_.submissionShowcase;
+    telemetry.gamepadConnected = gamepad.connected;
+    telemetry.controllerIndex = gamepad.controllerIndex;
+
+    if (gamepad.justConnected) {
+        OutputDebugStringA(
+            "[MultiMaterialShowcase] XInput gamepad connected.\n");
+    } else if (gamepad.justDisconnected) {
+        OutputDebugStringA(
+            "[MultiMaterialShowcase] XInput gamepad disconnected.\n");
+    }
+
+    bool keyboardInputAllowed =
+        hwnd_ != nullptr && GetForegroundWindow() == hwnd_;
+#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
+    if (keyboardInputAllowed &&
+        imguiLayer_.IsVisible() &&
+        (ImGui::GetIO().WantTextInput || ImGui::IsAnyItemActive())) {
+        keyboardInputAllowed = false;
+    }
+#endif
+
+    const auto keyDown = [keyboardInputAllowed](int virtualKey) {
+        return keyboardInputAllowed &&
+            (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+    };
+    const float keyboardMoveX =
+        (keyDown('D') ? 1.0f : 0.0f) - (keyDown('A') ? 1.0f : 0.0f);
+    const float keyboardMoveY =
+        (keyDown('W') ? 1.0f : 0.0f) - (keyDown('S') ? 1.0f : 0.0f);
+    const float keyboardTurn =
+        ((keyDown('E') || keyDown(VK_RIGHT)) ? 1.0f : 0.0f) -
+        ((keyDown('Q') || keyDown(VK_LEFT)) ? 1.0f : 0.0f);
+    const bool keyboardToggleSkeleton =
+        keyboardInputAllowed && WasKeyPressed('K');
+    const bool keyboardNextAnimation =
+        keyboardInputAllowed && WasKeyPressed(VK_SPACE);
+    const bool keyboardReset =
+        keyboardInputAllowed && WasKeyPressed('R');
+    const bool keyboardToggleHelp =
+        keyboardInputAllowed && WasKeyPressed('H');
+
+    if (gamepad.toggleHelpPressed || keyboardToggleHelp) {
+        submissionHudManuallyHidden_ = !submissionHudManuallyHidden_;
+    }
+
+    const AppGamepadStick combinedMove = AppGamepadInput::ClampUnitCircle(
+        gamepad.leftStick.x + keyboardMoveX,
+        gamepad.leftStick.y + keyboardMoveY);
+    const float moveX = combinedMove.x;
+    const float moveY = combinedMove.y;
+    const float moveMagnitude = combinedMove.magnitude;
+    const bool moving = moveMagnitude > 0.08f;
+    const float turnInput =
+        (std::clamp)(gamepad.rightStick.x + keyboardTurn, -1.0f, 1.0f);
+    const bool keyboardActive =
+        std::abs(keyboardMoveX) > 0.0f ||
+        std::abs(keyboardMoveY) > 0.0f ||
+        std::abs(keyboardTurn) > 0.0f ||
+        keyboardToggleSkeleton || keyboardNextAnimation || keyboardReset ||
+        keyboardToggleHelp;
+
+    telemetry.keyboardInputEnabled = keyboardInputAllowed;
+    telemetry.keyboardActive = keyboardActive;
+    telemetry.moveX = moveX;
+    telemetry.moveY = moveY;
+    telemetry.moveMagnitude = moveMagnitude;
+
+    constexpr float kMoveSpeed = 2.25f;
+    constexpr float kTurnSpeed = 2.35f;
+    constexpr float kMovementFacingSpeed = 9.0f;
+    constexpr float kPi = 3.14159265358979323846f;
+    Transform& transform = runtimeState_.skinnedModelTransform;
+    transform.translate.x +=
+        moveX * kMoveSpeed * deltaTime;
+    transform.translate.z +=
+        moveY * kMoveSpeed * deltaTime;
+    transform.translate.x =
+        (std::clamp)(transform.translate.x, -2.25f, 0.55f);
+    transform.translate.z =
+        (std::clamp)(transform.translate.z, -2.0f, 0.35f);
+
+    const bool manualTurning = std::abs(turnInput) > 0.05f;
+    if (moving && !manualTurning) {
+        transform.rotate.y = AdvanceHumanoidMovementYaw(
+            transform.rotate.y,
+            ResolveHumanoidMovementYaw(moveX, moveY),
+            kMovementFacingSpeed * (std::max)(0.0f, deltaTime));
+    }
+    if (manualTurning) {
+        transform.rotate.y = std::fmod(
+            transform.rotate.y +
+                turnInput * kTurnSpeed * deltaTime +
+                2.0f * kPi,
+            2.0f * kPi);
+    }
+
+    // Animation playback is presentation state, not device-connection state.
+    // Keep its clock advancing after either keyboard or gamepad movement ends
+    // so releasing a stick cannot freeze the humanoid at an arbitrary walk
+    // pose. Movement magnitude only controls playback speed.
+    runtimeState_.playAnimatedCube = true;
+    runtimeState_.animatedCubeSpeed =
+        0.65f + (moving ? moveMagnitude * 0.85f : 0.0f);
+
+    if (gamepad.toggleSkeletonPressed || keyboardToggleSkeleton) {
+        runtimeState_.showSkeletonDebug =
+            !runtimeState_.showSkeletonDebug;
+    }
+    if ((gamepad.nextAnimationPressed || keyboardNextAnimation) &&
+        !runtimeState_.skinnedAnimationBlend.active) {
+        const uint32_t nextModel =
+            runtimeState_.selectedSkinnedModelIndex == 1u ? 2u : 1u;
+        if (nextModel < scene_.skinnedModels.size() &&
+            scene_.skinnedModels[nextModel].loaded) {
+            BeginSkinnedAnimationBlend(runtimeState_, nextModel, 0.25f);
+        }
+    }
+    if (gamepad.resetPressed || keyboardReset) {
+        CancelSkinnedAnimationBlend(runtimeState_);
+        ResetMultiMaterialShowcaseHumanoidPose(runtimeState_);
+        runtimeState_.animatedCubeTime = 0.0f;
+        telemetry.moveX = 0.0f;
+        telemetry.moveY = 0.0f;
+        telemetry.moveMagnitude = 0.0f;
+    }
+}
+
 void AppRunLoop::UpdateVfxPreviewFrame() {
     appPipelines_.HotReloadIfNeeded(dev_.GetDevice());
     const RenderViewportMetrics metrics =
@@ -4311,7 +4966,11 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
 
     constexpr float kFixedPreviewDeltaTime = 0.016f;
     const bool editorRuntimeAdvance = imguiLayer_.ShouldAdvanceEditorRuntimeFrame();
-    const float previewDeltaTime = editorRuntimeAdvance ? kFixedPreviewDeltaTime : 0.0f;
+    const bool previewRuntimeAdvance = ShouldAdvancePreviewRuntime(
+        editorRuntimeAdvance,
+        runtimeState_.submissionShowcase.enabled);
+    const float previewDeltaTime =
+        previewRuntimeAdvance ? kFixedPreviewDeltaTime : 0.0f;
     ProcessReleaseShowcaseControls(previewDeltaTime);
     vfxEngine_.Update(runtimeState_.vfx, previewDeltaTime);
     UpdateTerrainAuthoring(previewDeltaTime);
@@ -4323,6 +4982,8 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
     frameState_.drawCount = particleSystem_.UpdateInstances(
         frameState_.viewProjectionMatrix,
         frameState_.deltaTime);
+    // Only acknowledge an editor-owned Play/Step request. Submission auto-run
+    // must not mutate the editor play-session state machine.
     imguiLayer_.CompleteEditorRuntimeFrameAdvance(editorRuntimeAdvance);
 }
 
@@ -4949,7 +5610,8 @@ void AppRunLoop::ProcessPostProcessShowcaseShortcuts() {
     }
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
     // Number entry in an active editor widget must not change the rendered look.
-    if (ImGui::GetIO().WantTextInput || ImGui::IsAnyItemActive()) {
+    if (imguiLayer_.IsVisible() &&
+        (ImGui::GetIO().WantTextInput || ImGui::IsAnyItemActive())) {
         return;
     }
 #endif
@@ -5880,7 +6542,8 @@ void AppRunLoop::ProcessCourseObjectViewportEditing() {
             viewportHeight);
     bool imguiWantsMouse = false;
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
-    imguiWantsMouse = ImGui::GetIO().WantCaptureMouse;
+    imguiWantsMouse =
+        imguiLayer_.IsVisible() && ImGui::GetIO().WantCaptureMouse;
 #endif
 
     if (leftMousePressed && cursorInViewport && !imguiWantsMouse) {
@@ -6534,6 +7197,36 @@ void AppRunLoop::ClearShowcaseEffects() {
 }
 
 void AppRunLoop::ConfigureShowcasePostProcess() {
+    if (runtimeState_.submissionShowcase.enabled) {
+        PostProcessStack& stack = vfxEngine_.PostProcess();
+        // DistanceFog is authored for the canyon rail course and turns a dark
+        // presentation clear color into a flat grey field. ContactAO also
+        // over-darkens this close-up model because its depth radius targets the
+        // much larger rail scene. Keep the neutral scene/VFX/tone/glow chain.
+        stack.SetEnabled("DistortionComposite", true);
+        stack.SetEnabled("ContactAO", false);
+        stack.SetEnabled("DistanceFog", false);
+        stack.SetEnabled("AccretionComposite", false);
+        stack.SetEnabled("ToneMapping", true);
+        stack.SetEnabled("GlowComposite", true);
+        stack.SetIntensity("DistortionComposite", 1.0f);
+        stack.SetIntensity("ToneMapping", 1.0f);
+        stack.SetIntensity("GlowComposite", 0.94f);
+        for (PostProcessPass& pass : stack.MutablePasses()) {
+            if (pass.name == "ToneMapping") {
+                pass.parameters.toneExposure = 1.12f;
+            } else if (pass.name == "GlowComposite") {
+                pass.parameters.glowWeight = 0.82f;
+                pass.parameters.glowTintR = 0.96f;
+                pass.parameters.glowTintG = 0.98f;
+                pass.parameters.glowTintB = 1.08f;
+            } else if (pass.name == "DistortionComposite") {
+                pass.parameters.distortionScale = 0.0f;
+            }
+        }
+        return;
+    }
+
     const bool blackHole =
         runtimeState_.vfx.showcaseEffect == AppVfxRuntimeState::ShowcaseEffect::BlackHole;
     AppVfxRuntimeState::ShowcaseTuning& tuning =
@@ -6805,7 +7498,7 @@ void AppRunLoop::ProcessIceProjectileMouseLaunch() {
         return;
     }
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
-    if (ImGui::GetIO().WantCaptureMouse) {
+    if (imguiLayer_.IsVisible() && ImGui::GetIO().WantCaptureMouse) {
         railInputRouteDebug_.showcaseClickIgnoredByImgui = true;
         return;
     }
@@ -7089,6 +7782,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
 
     const auto sceneRuntimeSyncStart = RailPerfClock::now();
     scene_.SyncRuntimeState(runtimeState_, frameState_.deltaTime);
+    UpdateHandParticleAttachment();
+    UpdateWeaponAttachment();
     particleSystem_.SetAccelerationField({
         runtimeState_.accelerationField.acceleration,
         {runtimeState_.accelerationField.area.min, runtimeState_.accelerationField.area.max}
@@ -7134,6 +7829,11 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         commandList.Get(),
         scene_,
         spriteTextureHandle);
+    // The submission controls and live animation state use one native, final
+    // UI pass. It deliberately does
+    // not depend on AppImGuiLayer visibility, so Release can keep editor UI
+    // disabled while still presenting the assignment controls.
+    RegisterSubmissionHudPass(commandList.Get(), "BackBuffer");
     gRailPerfFrame.registerPassesMs = ElapsedMs(registerPassesStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterRegisterPasses");
     const auto prepareGraphStart = RailPerfClock::now();

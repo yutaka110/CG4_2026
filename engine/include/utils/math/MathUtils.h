@@ -101,7 +101,17 @@ struct SpotLight
 
 // MaterialData構造体
 struct MaterialData {
+    std::string name;
     std::string textureFilePath;
+    std::string normalTextureFilePath;
+    Vector4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
+};
+
+struct SubMeshData {
+    std::string name;
+    uint32_t indexStart = 0;
+    uint32_t indexCount = 0;
+    uint32_t materialIndex = 0;
 };
 
 struct VertexWeightData {
@@ -126,9 +136,18 @@ struct ModelData {
     std::vector<VertexData> vertices;
     std::vector<uint32_t> indices;
     std::map<std::string, JointWeightData> skinClusterData;
+    std::vector<SubMeshData> subMeshes;
+    std::vector<MaterialData> materials;
+    // Legacy slot-0 view kept for existing loaders and call sites.
     MaterialData material;
     Node rootNode;
 };
+
+// Adds a slot-0 material/submesh for legacy single-material models and keeps
+// ModelData::material synchronized with the first referenced material.
+void EnsureModelDataMaterialLayout(ModelData& modelData);
+[[nodiscard]] bool ValidateModelDataMaterialLayout(
+    const ModelData& modelData) noexcept;
 
 
 
