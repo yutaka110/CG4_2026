@@ -10097,8 +10097,8 @@ void TestAppStartupSceneArguments(RegressionRunner& runner) {
     const wchar_t* defaultArguments[] = {L"GE3.exe"};
     runner.Expect(
         ParseAppStartupSceneArguments(1, defaultArguments) ==
-            AppStartupScene::MultiMaterialShowcase,
-        "submission startup should enter MultiMaterial Showcase without requiring an argument");
+            AppStartupScene::RailShooter,
+        "normal startup should enter Rail Shooter without requiring an argument");
 
     const wchar_t* multiMaterialArguments[] = {
         L"GE3.exe",
@@ -10140,12 +10140,12 @@ void TestAppStartupSceneArguments(RegressionRunner& runner) {
     const wchar_t* nearMatchArguments[] = {L"GE3.exe", L"--vfx-preview-extra"};
     runner.Expect(
         ParseAppStartupSceneArguments(2, nearMatchArguments) ==
-            AppStartupScene::MultiMaterialShowcase,
-        "unknown arguments should retain the safe MultiMaterial submission default");
+            AppStartupScene::RailShooter,
+        "unknown arguments should retain the Rail Shooter development default");
     runner.Expect(
         ParseAppStartupSceneArguments(0, nullptr) ==
-            AppStartupScene::MultiMaterialShowcase,
-        "invalid startup arguments should fail safely to MultiMaterial Showcase");
+            AppStartupScene::RailShooter,
+        "invalid startup arguments should fail safely to Rail Shooter");
 }
 
 void TestMultiMaterialShowcasePresentationDefaults(RegressionRunner& runner) {
