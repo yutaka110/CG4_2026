@@ -77,6 +77,7 @@
 #include "editor/tools/EditorModePanels.h"
 #include "editor/tools/EditorPlacementTools.h"
 #include "editor/world/EditorWorldOutlinerPanel.h"
+#include "editor/scene/EditorBlenderSceneImportTransaction.h"
 #include "editor/ExistingFeatureProtection.h"
 #include "editor/ExistingFeatureProtectionPanel.h"
 #include "vfx/DistortionRenderer.h"
@@ -96,6 +97,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(
 #include <chrono>
 #include <cfloat>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -104,6 +106,30 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(
 
 namespace {
 using EditorUiTimingClock = std::chrono::steady_clock;
+
+std::optional<std::filesystem::path> OpenBlenderLevelJsonDialog(HWND owner) {
+    std::vector<wchar_t> buffer(32768, L'\0');
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFile = buffer.data();
+    dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+    dialog.lpstrFilter =
+        L"Blender Level JSON (*.json)\0*.json\0"
+        L"All Files\0*.*\0";
+    dialog.nFilterIndex = 1;
+    dialog.lpstrTitle = L"Import Blender Level JSON";
+    dialog.lpstrDefExt = L"json";
+    dialog.Flags =
+        OFN_EXPLORER |
+        OFN_FILEMUSTEXIST |
+        OFN_PATHMUSTEXIST |
+        OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameW(&dialog)) {
+        return std::nullopt;
+    }
+    return std::filesystem::path(buffer.data());
+}
 
 double EditorUiElapsedMs(
     EditorUiTimingClock::time_point begin,
@@ -3275,6 +3301,37 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     editorContext.navigationAuthoring = &editorProductionNavigationAuthoringPipeline_;
     editorContext.interactiveTools = &editorInteractiveTools_;
     editorContext.interactiveExecution = &editorInteractiveExecution_;
+    auto onBlenderSceneChanged =
+        [this](const editor::EditorDocumentId& document, std::string_view) {
+            if (document.type == editor::EditorDocumentTypes::Scene) {
+                editorSceneDocumentId_ = document;
+                editorSceneWorldProvider_.Bind(
+                    editorSceneDocumentProvider_.Scene(document),
+                    document);
+            }
+            editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+            editorSelection_.Clear();
+        };
+    editor::EditorBlenderSceneImportExecutionService
+        blenderSceneImportExecution{
+            editorSceneDocumentProvider_,
+            &editorDocumentManager_,
+            &editorDirtyState_,
+            onBlenderSceneChanged};
+    editor::EditorBlenderSceneImportWorkflow blenderSceneImportWorkflow{
+        editorSceneDocumentProvider_,
+        editorTransactions,
+        &editorAssetRegistry_,
+        &editorDocumentManager_,
+        &editorDirtyState_,
+        onBlenderSceneChanged};
+    editorContext.blenderSceneImportExecution =
+        &blenderSceneImportExecution;
+    editorContext.blenderSceneImportWorkflow =
+        &blenderSceneImportWorkflow;
+    editorContext.selectBlenderLevelJsonFile = [this]() {
+        return OpenBlenderLevelJsonDialog(hwnd_);
+    };
     editorContext.onWorldMutated = [&](const editor::EditorWorldMutationResult& result) {
         if (result.document.type == editor::EditorDocumentTypes::Course) {
             ++runtimeState.terrain.courseObjectEditRevision;
@@ -4329,6 +4386,22 @@ void AppImGuiLayer::CompleteEditorRuntimeFrameAdvance(bool advanced) {
     }
 }
 
+editor::EditorScene* AppImGuiLayer::ActiveEditorScene() {
+    if (const editor::EditorDocumentRecord* active = editorDocumentManager_.Active();
+        active != nullptr && active->id.type == editor::EditorDocumentTypes::Scene) {
+        return editorSceneDocumentProvider_.Scene(active->id);
+    }
+    return editorSceneDocumentProvider_.Scene(editorSceneDocumentId_);
+}
+
+const editor::EditorScene* AppImGuiLayer::ActiveEditorScene() const {
+    if (const editor::EditorDocumentRecord* active = editorDocumentManager_.Active();
+        active != nullptr && active->id.type == editor::EditorDocumentTypes::Scene) {
+        return editorSceneDocumentProvider_.Scene(active->id);
+    }
+    return editorSceneDocumentProvider_.Scene(editorSceneDocumentId_);
+}
+
 const editor::EditorViewportRenderTargetState& AppImGuiLayer::EditorViewportRenderTargetState() const {
     return editorViewportRenderTarget_.State();
 }
@@ -4497,6 +4570,14 @@ bool AppImGuiLayer::ShouldAdvanceEditorRuntimeFrame() const {
 
 void AppImGuiLayer::CompleteEditorRuntimeFrameAdvance(bool advanced) {
     (void)advanced;
+}
+
+editor::EditorScene* AppImGuiLayer::ActiveEditorScene() {
+    return editorSceneDocumentProvider_.Scene(editorSceneDocumentId_);
+}
+
+const editor::EditorScene* AppImGuiLayer::ActiveEditorScene() const {
+    return editorSceneDocumentProvider_.Scene(editorSceneDocumentId_);
 }
 
 const editor::EditorViewportRenderTargetState& AppImGuiLayer::EditorViewportRenderTargetState() const {

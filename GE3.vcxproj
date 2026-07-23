@@ -148,6 +148,10 @@
     <ClCompile Include="application\editor\geometry\EditorGeometryWorkspace.cpp" />
     <ClCompile Include="application\editor\geometry\EditorGeometryTools.cpp" />
     <ClCompile Include="application\editor\mesh\EditorProductionMeshAsset.cpp" />
+    <ClCompile Include="application\editor\scene\EditorBlenderSceneImportService.cpp" />
+    <ClCompile Include="application\editor\scene\EditorBlenderSceneImportCommandProvider.cpp" />
+    <ClCompile Include="application\editor\scene\EditorBlenderSceneImportTransaction.cpp" />
+    <ClCompile Include="application\editor\scene\EditorGameplaySpawnRuntimeService.cpp" />
     <ClCompile Include="application\editor\scene\EditorProductionScenePipeline.cpp" />
     <ClCompile Include="application\editor\geometry\EditorTransientMeshRenderPath.cpp" />
     <ClCompile Include="application\editor\mesh\EditorMeshBakePipeline.cpp" />
@@ -283,6 +287,7 @@
     <ClCompile Include="application\RendererRegistry.cpp" />
     <ClCompile Include="application\SimulationRegistry.cpp" />
     <ClCompile Include="application\TechniqueRegistry.cpp" />
+    <ClCompile Include="application\level\BlenderLevelJsonLoader.cpp" />
     <ClCompile Include="application\course\BulletPatternAsset.cpp" />
     <ClCompile Include="application\course\CourseActorAsset.cpp" />
     <ClCompile Include="application\course\CourseAsset.cpp" />
@@ -900,6 +905,10 @@
     <ClInclude Include="application\editor\geometry\EditorGeometryWorkspace.h" />
     <ClInclude Include="application\editor\geometry\EditorGeometryTools.h" />
     <ClInclude Include="application\editor\mesh\EditorProductionMeshAsset.h" />
+    <ClInclude Include="application\editor\scene\EditorBlenderSceneImportService.h" />
+    <ClInclude Include="application\editor\scene\EditorBlenderSceneImportCommandProvider.h" />
+    <ClInclude Include="application\editor\scene\EditorBlenderSceneImportTransaction.h" />
+    <ClInclude Include="application\editor\scene\EditorGameplaySpawnRuntimeService.h" />
     <ClInclude Include="application\editor\scene\EditorProductionScenePipeline.h" />
     <ClInclude Include="application\editor\geometry\EditorTransientMeshRenderPath.h" />
     <ClInclude Include="application\editor\mesh\EditorMeshBakePipeline.h" />
@@ -1054,6 +1063,7 @@
     <ClInclude Include="application\RendererRegistry.h" />
     <ClInclude Include="application\SimulationRegistry.h" />
     <ClInclude Include="application\TechniqueRegistry.h" />
+    <ClInclude Include="application\level\BlenderLevelJsonLoader.h" />
     <ClInclude Include="application\course\BulletPatternAsset.h" />
     <ClInclude Include="application\course\CourseActorAsset.h" />
     <ClInclude Include="application\course\CourseAsset.h" />

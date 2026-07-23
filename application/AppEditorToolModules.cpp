@@ -27,6 +27,8 @@
 #include "editor/gameplay/EditorGameplayVisualScript.h"
 #include "editor/ai/EditorProductionAiAuthoringPipeline.h"
 #include "editor/navigation/EditorProductionNavigationAuthoringPipeline.h"
+#include "editor/scene/EditorBlenderSceneImportCommandProvider.h"
+#include "editor/scene/EditorBlenderSceneImportTransaction.h"
 
 #include <string>
 #include <memory>
@@ -86,7 +88,8 @@ EditorCommandResult UndoEditorTransaction(
     EditorAnimationStateMachineService* animationStateMachines,
     EditorGameplayVisualScriptService* gameplayVisualScripts,
     EditorProductionAiAuthoringPipeline* aiAuthoring,
-    EditorProductionNavigationAuthoringPipeline* navigationAuthoring) {
+    EditorProductionNavigationAuthoringPipeline* navigationAuthoring,
+    IEditorBlenderSceneImportExecutionService* blenderSceneImportExecution) {
     const EditorTransactionRecord* next =
         transactions != nullptr ? transactions->NextUndoTransaction() : nullptr;
     if (next != nullptr && next->command != nullptr &&
@@ -97,7 +100,8 @@ EditorCommandResult UndoEditorTransaction(
             next->command->DomainId() == "animation-state-machine" ||
             next->command->DomainId() == "gameplay-visual-script" ||
             next->command->DomainId() == "ai-authoring" ||
-            next->command->DomainId() == "navigation-authoring")) {
+            next->command->DomainId() == "navigation-authoring" ||
+            next->command->DomainId() == "blender-scene-import")) {
         const bool assetCommand = next->command->DomainId() == "asset";
         const bool worldCommand = next->command->DomainId() == "world";
         const bool sequencerCommand = next->command->DomainId() == "sequencer";
@@ -108,6 +112,8 @@ EditorCommandResult UndoEditorTransaction(
         const bool gameplayVisualScriptCommand = next->command->DomainId() == "gameplay-visual-script";
         const bool aiAuthoringCommand = next->command->DomainId() == "ai-authoring";
         const bool navigationAuthoringCommand = next->command->DomainId() == "navigation-authoring";
+        const bool blenderSceneImportCommand =
+            next->command->DomainId() == "blender-scene-import";
         const EditorDocumentId worldDocument = worldCommand
             ? WorldMutationDocument(next)
             : EditorDocumentId{};
@@ -127,7 +133,8 @@ EditorCommandResult UndoEditorTransaction(
                 dirtyState, notifications, "editor.command.runtimeApplyUndo"});
         if (!assetCommand && !worldCommand && !sequencerCommand && !prefabCommand &&
             !materialGraphCommand && !vfxGraphCommand && !animationStateMachineCommand &&
-            !gameplayVisualScriptCommand && !aiAuthoringCommand && !navigationAuthoringCommand) {
+            !gameplayVisualScriptCommand && !aiAuthoringCommand &&
+            !navigationAuthoringCommand && !blenderSceneImportCommand) {
             execution.Register(runtimeExecution, &registrationError);
         }
         if (worldCommand && worldExecution != nullptr) {
@@ -156,6 +163,9 @@ EditorCommandResult UndoEditorTransaction(
         }
         if (navigationAuthoringCommand && navigationAuthoring != nullptr) {
             execution.Register(*navigationAuthoring, &registrationError);
+        }
+        if (blenderSceneImportCommand && blenderSceneImportExecution != nullptr) {
+            execution.Register(*blenderSceneImportExecution, &registrationError);
         }
         EditorError error;
         const bool applied = transactions->Undo(execution, &error);
@@ -194,7 +204,8 @@ EditorCommandResult RedoEditorTransaction(
     EditorAnimationStateMachineService* animationStateMachines,
     EditorGameplayVisualScriptService* gameplayVisualScripts,
     EditorProductionAiAuthoringPipeline* aiAuthoring,
-    EditorProductionNavigationAuthoringPipeline* navigationAuthoring) {
+    EditorProductionNavigationAuthoringPipeline* navigationAuthoring,
+    IEditorBlenderSceneImportExecutionService* blenderSceneImportExecution) {
     const EditorTransactionRecord* next =
         transactions != nullptr ? transactions->NextRedoTransaction() : nullptr;
     if (next != nullptr && next->command != nullptr &&
@@ -205,7 +216,8 @@ EditorCommandResult RedoEditorTransaction(
             next->command->DomainId() == "animation-state-machine" ||
             next->command->DomainId() == "gameplay-visual-script" ||
             next->command->DomainId() == "ai-authoring" ||
-            next->command->DomainId() == "navigation-authoring")) {
+            next->command->DomainId() == "navigation-authoring" ||
+            next->command->DomainId() == "blender-scene-import")) {
         const bool assetCommand = next->command->DomainId() == "asset";
         const bool worldCommand = next->command->DomainId() == "world";
         const bool sequencerCommand = next->command->DomainId() == "sequencer";
@@ -216,6 +228,8 @@ EditorCommandResult RedoEditorTransaction(
         const bool gameplayVisualScriptCommand = next->command->DomainId() == "gameplay-visual-script";
         const bool aiAuthoringCommand = next->command->DomainId() == "ai-authoring";
         const bool navigationAuthoringCommand = next->command->DomainId() == "navigation-authoring";
+        const bool blenderSceneImportCommand =
+            next->command->DomainId() == "blender-scene-import";
         const EditorDocumentId worldDocument = worldCommand
             ? WorldMutationDocument(next)
             : EditorDocumentId{};
@@ -235,7 +249,8 @@ EditorCommandResult RedoEditorTransaction(
                 dirtyState, notifications, "editor.command.runtimeApplyRedo"});
         if (!assetCommand && !worldCommand && !sequencerCommand && !prefabCommand &&
             !materialGraphCommand && !vfxGraphCommand && !animationStateMachineCommand &&
-            !gameplayVisualScriptCommand && !aiAuthoringCommand && !navigationAuthoringCommand) {
+            !gameplayVisualScriptCommand && !aiAuthoringCommand &&
+            !navigationAuthoringCommand && !blenderSceneImportCommand) {
             execution.Register(runtimeExecution, &registrationError);
         }
         if (worldCommand && worldExecution != nullptr) {
@@ -264,6 +279,9 @@ EditorCommandResult RedoEditorTransaction(
         }
         if (navigationAuthoringCommand && navigationAuthoring != nullptr) {
             execution.Register(*navigationAuthoring, &registrationError);
+        }
+        if (blenderSceneImportCommand && blenderSceneImportExecution != nullptr) {
+            execution.Register(*blenderSceneImportExecution, &registrationError);
         }
         EditorError error;
         const bool applied = transactions->Redo(execution, &error);
@@ -624,7 +642,9 @@ void RegisterAppEditorCommandToolModules(
                          animationStateMachines = editorContext.animationStateMachines,
                          gameplayVisualScripts = editorContext.gameplayVisualScripts,
                          aiAuthoring = editorContext.aiAuthoring,
-                         navigationAuthoring = editorContext.navigationAuthoring]() {
+                         navigationAuthoring = editorContext.navigationAuthoring,
+                         blenderSceneImportExecution =
+                             editorContext.blenderSceneImportExecution]() {
                             return UndoEditorTransaction(
                                 context,
                                 runtimeState,
@@ -641,7 +661,8 @@ void RegisterAppEditorCommandToolModules(
                                 animationStateMachines,
                                 gameplayVisualScripts,
                                 aiAuthoring,
-                                navigationAuthoring);
+                                navigationAuthoring,
+                                blenderSceneImportExecution);
                         },
                         [&context,
                          &runtimeState,
@@ -659,7 +680,9 @@ void RegisterAppEditorCommandToolModules(
                          animationStateMachines = editorContext.animationStateMachines,
                          gameplayVisualScripts = editorContext.gameplayVisualScripts,
                          aiAuthoring = editorContext.aiAuthoring,
-                         navigationAuthoring = editorContext.navigationAuthoring]() {
+                         navigationAuthoring = editorContext.navigationAuthoring,
+                         blenderSceneImportExecution =
+                             editorContext.blenderSceneImportExecution]() {
                             return RedoEditorTransaction(
                                 context,
                                 runtimeState,
@@ -676,7 +699,8 @@ void RegisterAppEditorCommandToolModules(
                                 animationStateMachines,
                                 gameplayVisualScripts,
                                 aiAuthoring,
-                                navigationAuthoring);
+                                navigationAuthoring,
+                                blenderSceneImportExecution);
                         },
                         [&context,
                          &runtimeState,
@@ -696,6 +720,26 @@ void RegisterAppEditorCommandToolModules(
                                         context.effectRuntime,
                                         context.postProcessStack},
                                     mode);
+                            if (result.succeeded && context.onBeginGameplaySpawns) {
+                                std::string spawnError;
+                                if (!context.onBeginGameplaySpawns(&spawnError)) {
+                                    playSessionLifecycle.Stop(
+                                        EditorPlaySessionLifecycleRequest{
+                                            playSession,
+                                            &playSessionSnapshot,
+                                            context.course,
+                                            &runtimeState,
+                                            notifications,
+                                            "editor.command.playSession",
+                                            context.effectRuntime,
+                                            context.postProcessStack});
+                                    return EditorCommandResult{
+                                        false,
+                                        spawnError.empty()
+                                            ? std::string("Runtime Spawn initialization failed.")
+                                            : std::move(spawnError)};
+                                }
+                            }
                             return EditorCommandResult{result.succeeded, result.message};
                         },
                         [&context,
@@ -715,6 +759,9 @@ void RegisterAppEditorCommandToolModules(
                                         "editor.command.playSession",
                                         context.effectRuntime,
                                         context.postProcessStack});
+                            if (result.succeeded && context.onStopGameplaySpawns) {
+                                context.onStopGameplaySpawns();
+                            }
                             return EditorCommandResult{result.succeeded, result.message};
                         },
                         [&context,
@@ -883,6 +930,23 @@ void RegisterAppEditorCommandToolModules(
                                     : "Transform snap disabled."};
                         }});
                 builtinProvider.RegisterCommands(editorContext);
+            }},
+        diagnostics);
+    modules.Register(
+        EditorToolModuleRegistration{
+            EditorToolModuleDescriptor{
+                {},
+                "editor.module.commands.blenderSceneImport",
+                "Blender Scene Import Commands",
+                15,
+                false,
+                {}},
+            [input](EditorToolModuleRegistrationContext&) {
+                if (!HasCommandPipelineInput(input)) {
+                    return;
+                }
+                EditorBlenderSceneImportCommandProvider provider;
+                provider.RegisterCommands(*input.editorContext);
             }},
         diagnostics);
     modules.Register(

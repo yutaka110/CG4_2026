@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "scene_guid": "11111111111111111111111111111111",
+  "name": "SampleLevel",
+  "coordinate_system": {
+    "handedness": "RIGHT_HANDED",
+    "up_axis": "Z",
+    "forward_axis": "-Y",
+    "unit_scale_meters": 1.0,
+    "transform_space": "LOCAL",
+    "rotation_unit": "DEGREES",
+    "rotation_order": "XYZ"
+  },
+  "objects": [
+    {
+      "guid": "22222222222222222222222222222222",
+      "type": "EMPTY",
+      "name": "PlayerSpawn",
+      "spawn_kind": "PLAYER",
+      "transform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scaling": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "guid": "33333333333333333333333333333333",
+      "type": "EMPTY",
+      "name": "EnemyTurret01",
+      "spawn_kind": "ENEMY",
+      "enemy_type": "TURRET",
+      "transform": {
+        "translation": [
+          10.0,
+          2.0,
+          30.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scaling": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    }
+  ]
+}

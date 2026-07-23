@@ -85,6 +85,9 @@
     <Filter Include="ソース ファイル\application\runtime">
       <UniqueIdentifier>{69b5a8b5-c09a-4a78-b88c-f5d98d8741f6}</UniqueIdentifier>
     </Filter>
+    <Filter Include="ソース ファイル\application\level">
+      <UniqueIdentifier>{b4d4212e-5653-4b2b-bd80-fc08ee60d08f}</UniqueIdentifier>
+    </Filter>
     <Filter Include="ヘッダー ファイル\application\diagnostics">
       <UniqueIdentifier>{a35ef5d2-5188-4f91-9f73-3b332d19c465}</UniqueIdentifier>
     </Filter>
@@ -99,6 +102,9 @@
     </Filter>
     <Filter Include="ヘッダー ファイル\application\runtime">
       <UniqueIdentifier>{70d26cbf-8335-420d-9244-a1575356f7e6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ヘッダー ファイル\application\level">
+      <UniqueIdentifier>{4ace8b91-85bd-4a8b-aa47-c67f64fbca72}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -602,6 +608,10 @@
     <ClCompile Include="application\editor\geometry\EditorGeometryWorkspace.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\geometry\EditorGeometryTools.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\mesh\EditorProductionMeshAsset.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\scene\EditorBlenderSceneImportService.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\scene\EditorBlenderSceneImportCommandProvider.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\scene\EditorBlenderSceneImportTransaction.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\scene\EditorGameplaySpawnRuntimeService.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\scene\EditorProductionScenePipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\geometry\EditorTransientMeshRenderPath.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\mesh\EditorMeshBakePipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
@@ -743,6 +753,9 @@
     </ClCompile>
     <ClCompile Include="application\TechniqueRegistry.cpp">
       <Filter>ソース ファイル</Filter>
+    </ClCompile>
+    <ClCompile Include="application\level\BlenderLevelJsonLoader.cpp">
+      <Filter>ソース ファイル\application\level</Filter>
     </ClCompile>
     <ClCompile Include="application\course\BulletPatternAsset.cpp">
       <Filter>ソース ファイル\application\course</Filter>
@@ -1207,6 +1220,9 @@
     </ClInclude>
     <ClInclude Include="application\TechniqueRegistry.h">
       <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\level\BlenderLevelJsonLoader.h">
+      <Filter>ヘッダー ファイル\application\level</Filter>
     </ClInclude>
     <ClInclude Include="application\course\BulletPatternAsset.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
@@ -1723,6 +1739,10 @@
     <ClInclude Include="application\editor\geometry\EditorGeometryWorkspace.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\geometry\EditorGeometryTools.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\mesh\EditorProductionMeshAsset.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\scene\EditorBlenderSceneImportService.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\scene\EditorBlenderSceneImportCommandProvider.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\scene\EditorBlenderSceneImportTransaction.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\scene\EditorGameplaySpawnRuntimeService.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\scene\EditorProductionScenePipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\geometry\EditorTransientMeshRenderPath.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\mesh\EditorMeshBakePipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>

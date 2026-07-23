@@ -1,6 +1,8 @@
 #pragma once
 
+#include <filesystem>
 #include <functional>
+#include <optional>
 
 namespace editor {
 
@@ -49,6 +51,8 @@ class SceneWorldObjectProvider;
 class EditorToolManager;
 class EditorExecutionContext;
 class IEditorWorldMutationExecutionService;
+class IEditorBlenderSceneImportExecutionService;
+class EditorBlenderSceneImportWorkflow;
 struct EditorWorldMutationResult;
 struct EditorCommandContext;
 struct EditorSaveApplyPolicyInput;
@@ -107,6 +111,10 @@ struct EditorContext {
     EditorProductionNavigationAuthoringPipeline* navigationAuthoring = nullptr;
     EditorToolManager* interactiveTools = nullptr;
     EditorExecutionContext* interactiveExecution = nullptr;
+    EditorBlenderSceneImportWorkflow* blenderSceneImportWorkflow = nullptr;
+    IEditorBlenderSceneImportExecutionService* blenderSceneImportExecution = nullptr;
+    std::function<std::optional<std::filesystem::path>()>
+        selectBlenderLevelJsonFile;
 
     bool HasCommandServices() const {
         return commands != nullptr && commandContext != nullptr;

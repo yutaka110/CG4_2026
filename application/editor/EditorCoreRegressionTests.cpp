@@ -23,6 +23,7 @@
 #include "EditorDetailsEditController.h"
 #include "EditorCompositePropertyAccessor.h"
 #include "EditorContentBrowserState.h"
+#include "EditorCommandContext.h"
 #include "EditorContext.h"
 #include "CourseObjectPropertyAdapter.h"
 #include "EditorBuiltinDetailsSectionProviders.h"
@@ -124,6 +125,10 @@
 #include "mesh/EditorProductionMeshAsset.h"
 #include "mesh/EditorMeshBakePipeline.h"
 #include "mesh/EditorMeshBakeTools.h"
+#include "scene/EditorBlenderSceneImportService.h"
+#include "scene/EditorBlenderSceneImportCommandProvider.h"
+#include "scene/EditorBlenderSceneImportTransaction.h"
+#include "scene/EditorGameplaySpawnRuntimeService.h"
 #include "scene/EditorProductionScenePipeline.h"
 
 #include "../AppEditorToolModules.h"
@@ -135,6 +140,7 @@
 #include "../HandParticleAttachment.h"
 #include "../WeaponAttachment.h"
 #include "../ModelLoaderAssimp.h"
+#include "../level/BlenderLevelJsonLoader.h"
 #include "../Skeleton.h"
 #include "../EffectAssetLoader.h"
 #include "../EffectRuntime.h"
@@ -155,6 +161,7 @@
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -7674,6 +7681,744 @@ void TestWorldOutlinerMutations(RegressionRunner& runner) {
         "Outliner reparent should redo through the generic World execution service");
 }
 
+void TestBlenderLevelJsonLoader(RegressionRunner& runner) {
+    using ge3::level::BlenderEnemyType;
+    using ge3::level::BlenderLevelJsonLimits;
+    using ge3::level::BlenderLevelJsonLoader;
+    using ge3::level::BlenderLevelLoadErrorCode;
+    using ge3::level::BlenderSpawnKind;
+
+    const std::filesystem::path samplePath =
+        std::filesystem::path{"Resources"} / "Levels" / "Blender" / "sample_level_v1.json";
+    BlenderLevelJsonLoader loader;
+    const auto loaded = loader.LoadFile(samplePath);
+    runner.Expect(
+        loaded.Succeeded() && loaded.data->schemaVersion == 1 &&
+            loaded.data->sceneGuid == "11111111111111111111111111111111" &&
+            loaded.data->ObjectCount() == 2 &&
+            loaded.data->PlayerSpawnCount() == 1 &&
+            loaded.data->EnemySpawnCount() == 1,
+        "Blender Level loader should decode the fixed v1 file fixture");
+
+    const auto* player = loaded.Succeeded()
+        ? loaded.data->FindObject("22222222222222222222222222222222")
+        : nullptr;
+    const auto* enemy = loaded.Succeeded()
+        ? loaded.data->FindObject("33333333333333333333333333333333")
+        : nullptr;
+    runner.Expect(
+        player != nullptr && player->spawnKind == BlenderSpawnKind::Player &&
+            player->transform.translation.x == 0.0 &&
+            enemy != nullptr && enemy->spawnKind == BlenderSpawnKind::Enemy &&
+            enemy->enemyType == BlenderEnemyType::Turret &&
+            enemy->transform.translation.x == 10.0 &&
+            enemy->transform.translation.y == 2.0 &&
+            enemy->transform.translation.z == 30.0,
+        "Blender Level loader should preserve spawn roles, enemy types, and source transforms");
+
+    std::ifstream sampleStream(samplePath, std::ios::binary);
+    std::ostringstream sampleBuffer;
+    sampleBuffer << sampleStream.rdbuf();
+    const std::string sample = sampleBuffer.str();
+    runner.Expect(!sample.empty(), "Blender Level regression fixture should be readable");
+
+    std::string unsupportedVersion = sample;
+    const std::size_t versionOffset = unsupportedVersion.find("\"schema_version\": 1");
+    if (versionOffset != std::string::npos) {
+        unsupportedVersion.replace(
+            versionOffset,
+            std::string("\"schema_version\": 1").size(),
+            "\"schema_version\": 2");
+    }
+    const auto versionFailure =
+        loader.LoadJsonString(unsupportedVersion, "unsupported-version.json");
+    runner.Expect(
+        !versionFailure.Succeeded() && versionFailure.error.has_value() &&
+            versionFailure.error->code == BlenderLevelLoadErrorCode::SchemaViolation &&
+            versionFailure.error->jsonPath == "$.schema_version",
+        "Blender Level loader should reject unsupported schema versions with a JSON path");
+
+    std::string duplicateGuid = sample;
+    const std::size_t enemyGuidOffset =
+        duplicateGuid.find("33333333333333333333333333333333");
+    if (enemyGuidOffset != std::string::npos) {
+        duplicateGuid.replace(
+            enemyGuidOffset,
+            32,
+            "22222222222222222222222222222222");
+    }
+    const auto duplicateFailure =
+        loader.LoadJsonString(duplicateGuid, "duplicate-guid.json");
+    runner.Expect(
+        !duplicateFailure.Succeeded() && duplicateFailure.error.has_value() &&
+            duplicateFailure.error->code == BlenderLevelLoadErrorCode::SchemaViolation &&
+            duplicateFailure.error->message.find("duplicated") != std::string::npos,
+        "Blender Level loader should reject duplicated stable Object GUIDs");
+
+    const auto duplicateKeyFailure = loader.LoadJsonString(
+        R"({"schema_version":1,"schema_version":1})",
+        "duplicate-key.json");
+    runner.Expect(
+        !duplicateKeyFailure.Succeeded() && duplicateKeyFailure.error.has_value() &&
+            duplicateKeyFailure.error->code == BlenderLevelLoadErrorCode::JsonSyntax &&
+            duplicateKeyFailure.error->line == 1 &&
+            duplicateKeyFailure.error->column > 0,
+        "Blender Level JSON parser should reject duplicate keys with source coordinates");
+
+    const auto unicodeFailure = loader.LoadJsonString(
+        R"({"name":"\uD800"})",
+        "invalid-unicode.json");
+    runner.Expect(
+        !unicodeFailure.Succeeded() && unicodeFailure.error.has_value() &&
+            unicodeFailure.error->code == BlenderLevelLoadErrorCode::JsonSyntax,
+        "Blender Level JSON parser should reject unpaired Unicode surrogates");
+
+    std::string invalidUtf8 = "{\"name\":\"";
+    invalidUtf8.push_back(static_cast<char>(0xFF));
+    invalidUtf8 += "\"}";
+    const auto utf8Failure = loader.LoadJsonString(invalidUtf8, "invalid-utf8.json");
+    runner.Expect(
+        !utf8Failure.Succeeded() && utf8Failure.error.has_value() &&
+            utf8Failure.error->code == BlenderLevelLoadErrorCode::InvalidUtf8 &&
+            utf8Failure.error->line == 1,
+        "Blender Level loader should reject invalid UTF-8 before parsing");
+
+    BlenderLevelJsonLimits oneObjectLimits{};
+    oneObjectLimits.maximumObjects = 1;
+    const auto objectLimitFailure =
+        BlenderLevelJsonLoader(oneObjectLimits).LoadJsonString(sample, "object-limit.json");
+    runner.Expect(
+        !objectLimitFailure.Succeeded() && objectLimitFailure.error.has_value() &&
+            objectLimitFailure.error->code == BlenderLevelLoadErrorCode::ResourceLimit,
+        "Blender Level loader should enforce the configured total Object limit");
+
+    BlenderLevelJsonLimits byteLimits{};
+    byteLimits.maximumFileBytes = 16;
+    const auto byteLimitFailure =
+        BlenderLevelJsonLoader(byteLimits).LoadJsonString(sample, "byte-limit.json");
+    runner.Expect(
+        !byteLimitFailure.Succeeded() && byteLimitFailure.error.has_value() &&
+            byteLimitFailure.error->code == BlenderLevelLoadErrorCode::FileTooLarge,
+        "Blender Level loader should enforce the configured input byte limit");
+
+    const auto missingFile = loader.LoadFile(
+        std::filesystem::path{"Resources"} / "Levels" / "Blender" / "__missing__.json");
+    runner.Expect(
+        !missingFile.Succeeded() && missingFile.error.has_value() &&
+            missingFile.error->code == BlenderLevelLoadErrorCode::FileOpenFailed,
+        "Blender Level loader should report a missing source file without throwing");
+}
+
+void TestBlenderSceneImportReimport(RegressionRunner& runner) {
+    using ge3::level::BlenderEnemyType;
+    using ge3::level::BlenderLevelCollider;
+    using ge3::level::BlenderLevelData;
+    using ge3::level::BlenderLevelJsonLoader;
+    using ge3::level::BlenderLevelObject;
+    using ge3::level::BlenderSpawnKind;
+
+    const std::filesystem::path samplePath =
+        std::filesystem::path{"Resources"} / "Levels" / "Blender" /
+        "sample_level_v1.json";
+    const auto loaded = BlenderLevelJsonLoader(
+        ge3::level::BlenderLevelJsonLimits{}).LoadFile(samplePath);
+    runner.Expect(
+        loaded.Succeeded(),
+        "Blender Scene import regression should load the fixed v1 fixture");
+    if (!loaded.Succeeded()) return;
+
+    BlenderLevelData source = *loaded.data;
+    source.objects[1].fileName = "turret_mesh";
+    source.objects[1].transform.rotationDegrees.z = 90.0;
+    source.objects[1].collider = BlenderLevelCollider{
+        "BOX", {1.0, 2.0, 3.0}, {2.0, 4.0, 6.0}};
+    source.objects[0].children.push_back(source.objects[1]);
+    source.objects.erase(source.objects.begin() + 1);
+
+    EditorAssetRegistry assets;
+    EditorAssetRecord mesh{};
+    mesh.kind = EditorAssetKind::Mesh;
+    mesh.id = "turret_mesh";
+    mesh.guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    mesh.logicalPath = "Models/turret_mesh.obj";
+    mesh.sourcePath = "Resources/Models/turret_mesh.obj";
+    mesh.referenceable = true;
+    runner.Expect(
+        assets.Register(mesh),
+        "Blender Scene import regression Mesh Asset should register");
+
+    EditorBlenderSceneImportService service(&assets);
+    EditorScene scene;
+    const EditorBlenderSceneImportResult imported = service.Import(
+        source, samplePath, scene);
+    runner.Expect(
+        imported.succeeded && !imported.reimported &&
+            imported.createdObjectCount == 2 &&
+            imported.updatedObjectCount == 0 &&
+            imported.removedObjectCount == 0 &&
+            scene.entities.size() == 3 &&
+            scene.revision == 1,
+        "Blender Scene Import should atomically create an anchor and every source Object");
+
+    const auto componentProperty = [&](
+        const EditorSceneEntity* entity,
+        std::string_view componentType,
+        std::string_view propertyName) {
+        if (entity == nullptr) return std::string{};
+        const EditorSceneComponent* component =
+            scene.FindComponent(*entity, componentType);
+        if (component == nullptr) return std::string{};
+        const auto property = std::find_if(
+            component->properties.begin(),
+            component->properties.end(),
+            [&](const EditorSceneProperty& value) {
+                return value.name == propertyName;
+            });
+        return property != component->properties.end()
+            ? property->value
+            : std::string{};
+    };
+    const auto findImportedObject = [&](std::string_view sourceObjectGuid)
+        -> const EditorSceneEntity* {
+        for (const EditorSceneEntity& entity : scene.entities) {
+            const EditorSceneComponent* sourceComponent =
+                scene.FindComponent(
+                    entity, kEditorBlenderObjectSourceComponentType);
+            if (sourceComponent == nullptr) continue;
+            const auto objectGuid = std::find_if(
+                sourceComponent->properties.begin(),
+                sourceComponent->properties.end(),
+                [&](const EditorSceneProperty& property) {
+                    return property.name == "object_guid" &&
+                        property.value == sourceObjectGuid;
+                });
+            if (objectGuid != sourceComponent->properties.end()) return &entity;
+        }
+        return nullptr;
+    };
+
+    const EditorSceneEntity* anchor =
+        scene.FindEntity(imported.rootEntityGuid);
+    const EditorSceneEntity* player =
+        findImportedObject("22222222222222222222222222222222");
+    const EditorSceneEntity* enemy =
+        findImportedObject("33333333333333333333333333333333");
+    const std::string playerEntityGuid =
+        player != nullptr ? player->guid : std::string{};
+    const std::string enemyEntityGuid =
+        enemy != nullptr ? enemy->guid : std::string{};
+    runner.Expect(
+        anchor != nullptr && player != nullptr && enemy != nullptr &&
+            player->parentGuid == anchor->guid &&
+            enemy->parentGuid == player->guid &&
+            componentProperty(
+                anchor,
+                kEditorBlenderSceneSourceComponentType,
+                "scene_guid") == source.sceneGuid,
+        "Blender Scene Import should preserve source hierarchy and persistent provenance");
+
+    const std::string enemyTranslation = componentProperty(
+        enemy, kEditorTransformComponentType, "translation");
+    const std::string enemyRotation = componentProperty(
+        enemy, kEditorTransformComponentType, "rotation");
+    double rotationX = 0.0;
+    double rotationY = 0.0;
+    double rotationZ = 0.0;
+    std::istringstream rotationInput(enemyRotation);
+    rotationInput >> rotationX >> rotationY >> rotationZ;
+    runner.Expect(
+        enemyTranslation == "10 30 -2" &&
+            std::abs(rotationX) < 0.000001 &&
+            std::abs(rotationY - 1.5707963267948966) < 0.000001 &&
+            std::abs(rotationZ) < 0.000001,
+        "Blender +X/+Z-up/-Y-forward Transform should convert to GE3 +X/+Y-up/+Z-forward radians");
+
+    const EditorSceneComponent* enemySpawn = enemy != nullptr
+        ? scene.FindComponent(*enemy, kEditorGameplaySpawnPointComponentType)
+        : nullptr;
+    const EditorSceneComponent* enemyCollider = enemy != nullptr
+        ? scene.FindComponent(*enemy, kEditorBoxColliderComponentType)
+        : nullptr;
+    const EditorSceneComponent* enemyMesh = enemy != nullptr
+        ? scene.FindComponent(*enemy, kEditorMeshRendererComponentType)
+        : nullptr;
+    runner.Expect(
+        enemySpawn != nullptr &&
+            componentProperty(
+                enemy, kEditorGameplaySpawnPointComponentType, "kind") ==
+                "ENEMY" &&
+            componentProperty(
+                enemy,
+                kEditorGameplaySpawnPointComponentType,
+                "enemy_type") == "TURRET" &&
+            enemyCollider != nullptr &&
+            componentProperty(
+                enemy, kEditorBoxColliderComponentType, "center") ==
+                "1 3 -2" &&
+            componentProperty(
+                enemy, kEditorBoxColliderComponentType, "size") ==
+                "2 6 4" &&
+            enemyMesh != nullptr && enemyMesh->references.size() == 1 &&
+            enemyMesh->references.front().assetGuid ==
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "Blender metadata should become typed Spawn, BOX Collider, and resolved Mesh Renderer Components");
+
+    const uint64_t beforeRepeatedImportRevision = scene.revision;
+    const std::size_t beforeRepeatedImportEntities = scene.entities.size();
+    const EditorBlenderSceneImportResult repeatedImport =
+        service.Import(source, samplePath, scene);
+    runner.Expect(
+        !repeatedImport.succeeded &&
+            repeatedImport.errorCode ==
+                EditorBlenderSceneImportErrorCode::SourceAlreadyImported &&
+            scene.revision == beforeRepeatedImportRevision &&
+            scene.entities.size() == beforeRepeatedImportEntities,
+        "Import should reject an existing scene_guid without mutating EditorScene");
+
+    EditorSceneEntity* mutablePlayer = scene.FindEntity(playerEntityGuid);
+    if (mutablePlayer != nullptr) {
+        mutablePlayer->components.push_back(
+            {"user.gameplay-note", true, {{"text", "preserve me"}}, {}});
+    }
+    EditorSceneEntity* userChild =
+        scene.CreateEntity("User Child", enemyEntityGuid, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    runner.Expect(
+        mutablePlayer != nullptr && userChild != nullptr,
+        "Blender Reimport regression should create user-owned edits");
+
+    BlenderLevelData changed = source;
+    changed.objects[0].transform.translation = {4.0, 5.0, 6.0};
+    changed.objects[0].children.clear();
+    BlenderLevelObject routeMarker{};
+    routeMarker.guid = "44444444444444444444444444444444";
+    routeMarker.blenderType = "EMPTY";
+    routeMarker.name = "RouteMarker";
+    routeMarker.spawnKind = BlenderSpawnKind::None;
+    changed.objects.push_back(routeMarker);
+
+    const uint64_t beforeReimportRevision = scene.revision;
+    const EditorBlenderSceneImportResult reimported =
+        service.Reimport(changed, samplePath, scene);
+    player = findImportedObject("22222222222222222222222222222222");
+    enemy = findImportedObject("33333333333333333333333333333333");
+    const EditorSceneEntity* marker =
+        findImportedObject("44444444444444444444444444444444");
+    userChild = scene.FindEntity("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    runner.Expect(
+        reimported.succeeded && reimported.reimported &&
+            reimported.createdObjectCount == 1 &&
+            reimported.updatedObjectCount == 1 &&
+            reimported.removedObjectCount == 1 &&
+            reimported.preservedUserChildCount == 1 &&
+            scene.revision == beforeReimportRevision + 1 &&
+            player != nullptr && player->guid == playerEntityGuid &&
+            enemy == nullptr && marker != nullptr &&
+            userChild != nullptr && userChild->parentGuid == playerEntityGuid,
+        "Reimport should update/create/remove by Blender GUID while preserving user-owned children");
+    runner.Expect(
+        player != nullptr &&
+            scene.FindComponent(*player, "user.gameplay-note") != nullptr &&
+            componentProperty(
+                player, kEditorTransformComponentType, "translation") ==
+                "4 6 -5",
+        "Reimport should preserve user Components while replacing Blender-managed Transform data");
+
+    EditorDocumentContent encoded{};
+    std::string serializationError;
+    EditorScene decoded;
+    runner.Expect(
+        EditorSceneDocumentProvider::Encode(
+            scene, &encoded, &serializationError) &&
+            EditorSceneDocumentProvider::Decode(
+                encoded, &decoded, &serializationError) &&
+            decoded.FindEntity(playerEntityGuid) != nullptr &&
+            decoded.FindComponent(
+                *decoded.FindEntity(playerEntityGuid),
+                kEditorBlenderObjectSourceComponentType) != nullptr,
+        "Imported provenance and managed Components should persist through the native Scene format");
+
+    BlenderLevelData noPlayer = changed;
+    noPlayer.objects[0].spawnKind = BlenderSpawnKind::None;
+    const uint64_t beforeInvalidRevision = scene.revision;
+    const std::size_t beforeInvalidEntities = scene.entities.size();
+    const EditorBlenderSceneImportResult invalid =
+        service.Reimport(noPlayer, samplePath, scene);
+    runner.Expect(
+        !invalid.succeeded &&
+            invalid.errorCode ==
+                EditorBlenderSceneImportErrorCode::PlayabilityViolation &&
+            scene.revision == beforeInvalidRevision &&
+            scene.entities.size() == beforeInvalidEntities,
+        "A failed playable-level Reimport should leave EditorScene unchanged");
+
+    EditorScene freshScene;
+    const EditorBlenderSceneImportResult missingSource =
+        service.Reimport(changed, samplePath, freshScene);
+    runner.Expect(
+        !missingSource.succeeded &&
+            missingSource.errorCode ==
+                EditorBlenderSceneImportErrorCode::SourceNotImported &&
+            freshScene.entities.empty(),
+        "Reimport should require a matching persistent Blender Scene anchor");
+
+    EditorScene fileImportedScene;
+    const EditorBlenderSceneImportResult fileImported =
+        service.ImportFile(samplePath, fileImportedScene);
+    runner.Expect(
+        fileImported.succeeded &&
+            fileImportedScene.entities.size() == 3,
+        "ImportFile should connect BlenderLevelJsonLoader directly to EditorScene conversion");
+}
+
+void TestBlenderSceneImportEditorIntegration(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" /
+        "blender_scene_import_editor_integration";
+    RemoveTreeIfPresent(root);
+
+    EditorSceneDocumentProvider sceneProvider;
+    EditorDocumentRegistry documentRegistry;
+    std::string error;
+    runner.Expect(
+        documentRegistry.Register(sceneProvider, &error),
+        "Blender editor integration should register the Scene document provider");
+    EditorDocumentManager documentManager(documentRegistry, root);
+    const EditorDocumentOpenResult opened = documentManager.Open(
+        EditorDocumentTypes::Scene,
+        std::filesystem::path{"Scenes"} / "blender_import.scene");
+    runner.Expect(
+        opened.succeeded && opened.id.IsValid(),
+        "Blender editor integration should open an active Scene document");
+    if (!opened.succeeded) {
+        RemoveTreeIfPresent(root);
+        return;
+    }
+
+    EditorTransactionStack transactions;
+    EditorDirtyStateService dirtyState;
+    EditorAssetRegistry assets;
+    uint32_t sceneChangedCount = 0;
+    EditorBlenderSceneImportWorkflow workflow{
+        sceneProvider,
+        transactions,
+        &assets,
+        &documentManager,
+        &dirtyState,
+        [&](const EditorDocumentId&, std::string_view) {
+            ++sceneChangedCount;
+        }};
+    EditorBlenderSceneImportExecutionService executionService{
+        sceneProvider,
+        &documentManager,
+        &dirtyState,
+        [&](const EditorDocumentId&, std::string_view) {
+            ++sceneChangedCount;
+        }};
+
+    const std::filesystem::path samplePath =
+        std::filesystem::path{"Resources"} / "Levels" / "Blender" /
+        "sample_level_v1.json";
+    uint32_t fileSelectionCount = 0;
+    EditorCommandRegistry commands;
+    EditorCommandContext commandContext{};
+    commandContext.canMutateAuthoring = true;
+    EditorToolRegistry tools;
+    EditorContext context{};
+    context.commands = &commands;
+    context.commandContext = &commandContext;
+    context.tools = &tools;
+    context.documentManager = &documentManager;
+    context.blenderSceneImportWorkflow = &workflow;
+    context.blenderSceneImportExecution = &executionService;
+    context.selectBlenderLevelJsonFile = [&]() {
+        ++fileSelectionCount;
+        return std::optional<std::filesystem::path>{samplePath};
+    };
+    EditorBlenderSceneImportCommandProvider commandProvider;
+    commandProvider.RegisterCommands(context);
+
+    const EditorCommand* importCommand =
+        commands.Find("scene.blender.import");
+    const EditorCommand* reimportCommand =
+        commands.Find("scene.blender.reimport");
+    runner.Expect(
+        importCommand != nullptr && reimportCommand != nullptr &&
+            commands.IsEnabled(*importCommand) &&
+            !commands.IsEnabled(*reimportCommand),
+        "File commands should enable Import for an active Scene and gate Reimport until provenance exists");
+
+    RegisterDefaultEditorMenu(tools, commands);
+    const auto importMenu = std::find_if(
+        tools.Menu().Items().begin(),
+        tools.Menu().Items().end(),
+        [](const EditorMenuItemDescriptor& item) {
+            return item.commandId == "scene.blender.import";
+        });
+    runner.Expect(
+        importMenu != tools.Menu().Items().end() &&
+            importMenu->sectionId == "menu.file" &&
+            importMenu->contextualDocumentType == EditorDocumentTypes::Scene,
+        "Blender Level Import should appear in File and be contextual to Scene documents");
+
+    const EditorCommandResult imported =
+        commands.Execute("scene.blender.import");
+    const EditorScene* live = sceneProvider.Scene(opened.id);
+    const EditorDocumentRecord* document = documentManager.Find(opened.id);
+    const std::string dirtyId =
+        "scene.blender-import:" + opened.id.assetGuid;
+    runner.Expect(
+        imported.succeeded && fileSelectionCount == 1 &&
+            live != nullptr && live->entities.size() == 3 &&
+            transactions.UndoDepth() == 1 &&
+            document != nullptr && document->dirty &&
+            dirtyState.IsDirty(dirtyId) &&
+            sceneChangedCount == 1,
+        "File selection should import atomically, record one transaction, notify Scene refresh, and mark Dirty");
+    reimportCommand = commands.Find("scene.blender.reimport");
+    runner.Expect(
+        reimportCommand != nullptr && commands.IsEnabled(*reimportCommand),
+        "Reimport should enable after persistent Blender provenance is present");
+
+    const uint64_t revisionAfterImport =
+        live != nullptr ? live->revision : 0;
+    const uint64_t editRevisionAfterImport =
+        document != nullptr ? document->editRevision : 0;
+    EditorExecutionContext execution;
+    EditorError executionError;
+    runner.Expect(
+        execution.Register(executionService, &executionError) &&
+            transactions.Undo(execution, &executionError),
+        "Blender Scene Import should undo through EditorTransactionStack");
+    live = sceneProvider.Scene(opened.id);
+    document = documentManager.Find(opened.id);
+    runner.Expect(
+        live != nullptr && live->entities.empty() &&
+            live->revision > revisionAfterImport &&
+            transactions.RedoDepth() == 1 &&
+            document != nullptr &&
+            document->editRevision > editRevisionAfterImport &&
+            sceneChangedCount == 2,
+        "Import Undo should restore the exact previous Scene and publish Dirty/refresh changes");
+
+    const uint64_t revisionAfterUndo =
+        live != nullptr ? live->revision : 0;
+    runner.Expect(
+        transactions.Redo(execution, &executionError),
+        "Blender Scene Import should redo through EditorTransactionStack");
+    live = sceneProvider.Scene(opened.id);
+    runner.Expect(
+        live != nullptr && live->entities.size() == 3 &&
+            live->revision > revisionAfterUndo &&
+            transactions.UndoDepth() == 1 &&
+            sceneChangedCount == 3,
+        "Import Redo should restore the imported Scene and republish Dirty/refresh changes");
+
+    const EditorDocumentOpenResult budgetOpened = documentManager.Open(
+        EditorDocumentTypes::Scene,
+        std::filesystem::path{"Scenes"} / "budget_failure.scene");
+    EditorTransactionStack tinyTransactions;
+    EditorError budgetError;
+    tinyTransactions.SetMemoryBudgetBytes(1, &budgetError);
+    EditorDirtyStateService budgetDirty;
+    EditorBlenderSceneImportWorkflow budgetWorkflow{
+        sceneProvider,
+        tinyTransactions,
+        &assets,
+        &documentManager,
+        &budgetDirty};
+    const EditorBlenderSceneImportTransactionResult rejected =
+        budgetWorkflow.Execute(
+            EditorBlenderSceneImportMode::Import,
+            budgetOpened.id,
+            samplePath);
+    const EditorScene* budgetScene = sceneProvider.Scene(budgetOpened.id);
+    const EditorDocumentRecord* budgetDocument =
+        documentManager.Find(budgetOpened.id);
+    runner.Expect(
+        budgetOpened.succeeded && !rejected.succeeded &&
+            budgetScene != nullptr && budgetScene->entities.empty() &&
+            tinyTransactions.UndoDepth() == 0 &&
+            budgetDocument != nullptr && !budgetDocument->dirty &&
+            !budgetDirty.HasDirty(),
+        "Transaction budget rejection should leave Scene and Dirty state unchanged");
+
+    RemoveTreeIfPresent(root);
+}
+
+void TestGameplaySpawnRuntimeService(RegressionRunner& runner) {
+    RailPath railPath;
+    railPath.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 100.0f}, 18.0f, 32.0f},
+    });
+
+    EditorScene scene;
+    const std::string rootGuid = "10101010101010101010101010101010";
+    const std::string playerGuid = "20202020202020202020202020202020";
+    const std::string droneGuid = "30303030303030303030303030303030";
+    const std::string turretGuid = "40404040404040404040404040404040";
+    const std::string bossGuid = "50505050505050505050505050505050";
+    scene.CreateEntity(
+        "Spawn Root", {}, "10101010101010101010101010101010");
+    scene.CreateEntity(
+        "PlayerSpawn",
+        rootGuid,
+        "20202020202020202020202020202020");
+    scene.CreateEntity(
+        "DroneSpawn", {}, "30303030303030303030303030303030");
+    scene.CreateEntity(
+        "TurretSpawn", {}, "40404040404040404040404040404040");
+    scene.CreateEntity(
+        "BossSpawn", {}, "50505050505050505050505050505050");
+    EditorSceneEntity* root = scene.FindEntity(rootGuid);
+    EditorSceneEntity* player = scene.FindEntity(playerGuid);
+    EditorSceneEntity* drone = scene.FindEntity(droneGuid);
+    EditorSceneEntity* turret = scene.FindEntity(turretGuid);
+    EditorSceneEntity* boss = scene.FindEntity(bossGuid);
+
+    const auto addTransform = [&scene](EditorSceneEntity* entity, std::string translation) {
+        if (entity == nullptr) return;
+        EditorSceneComponent* component =
+            scene.FindComponent(*entity, kEditorTransformComponentType);
+        if (component == nullptr) return;
+        component->enabled = true;
+        component->properties = {
+            {"translation", std::move(translation)},
+            {"rotation", "0 0 0"},
+            {"scale", "1 1 1"},
+        };
+    };
+    const auto addSpawn = [](
+        EditorSceneEntity* entity,
+        std::string kind,
+        std::string enemyType) {
+        if (entity == nullptr) return;
+        entity->components.push_back(
+            {std::string(kEditorGameplaySpawnPointComponentType),
+             true,
+             {
+                 {"kind", std::move(kind)},
+                 {"enemy_type", std::move(enemyType)},
+             },
+             {}});
+    };
+    addTransform(root, "0 0 10");
+    addTransform(player, "2 4 10");
+    addSpawn(player, "PLAYER", "NONE");
+    addTransform(drone, "-3 5 35");
+    addSpawn(drone, "ENEMY", "DRONE");
+    addTransform(turret, "6 7 50");
+    addSpawn(turret, "ENEMY", "TURRET");
+    addTransform(boss, "0 9 75");
+    addSpawn(boss, "ENEMY", "BOSS");
+
+    EditorGameplaySpawnRuntimeService service;
+    EditorGameplaySpawnPlan plan;
+    const EditorGameplaySpawnRuntimeResult planned =
+        service.BuildPlan(scene, railPath, &plan);
+    const RailPathSample plannedPlayerRail =
+        railPath.Evaluate(plan.player.railDistance);
+    const Vector3 reconstructedPlayer{
+        plannedPlayerRail.position.x +
+            plannedPlayerRail.right.x * plan.player.lateralOffset +
+            plannedPlayerRail.up.x * plan.player.verticalOffset,
+        plannedPlayerRail.position.y +
+            plannedPlayerRail.right.y * plan.player.lateralOffset +
+            plannedPlayerRail.up.y * plan.player.verticalOffset,
+        plannedPlayerRail.position.z +
+            plannedPlayerRail.right.z * plan.player.lateralOffset +
+            plannedPlayerRail.up.z * plan.player.verticalOffset,
+    };
+    runner.Expect(
+        planned.succeeded && planned.applied &&
+            plan.hasSpawnComponents && plan.enemies.size() == 3 &&
+            std::abs(reconstructedPlayer.x - 2.0f) < 0.1f &&
+            std::abs(reconstructedPlayer.y - 4.0f) < 0.1f &&
+            std::abs(reconstructedPlayer.z - 20.0f) < 0.1f,
+        "Runtime Spawn plan should compose parent Transforms and project PlayerSpawn into rail coordinates"
+        " (result=" + planned.message +
+        ", world=" + std::to_string(plan.player.worldPosition.x) + "," +
+        std::to_string(plan.player.worldPosition.y) + "," +
+        std::to_string(plan.player.worldPosition.z) +
+        ", rail=" + std::to_string(plan.player.railDistance) + "," +
+        std::to_string(plan.player.lateralOffset) + "," +
+        std::to_string(plan.player.verticalOffset) +
+        ", reconstructed=" + std::to_string(reconstructedPlayer.x) + "," +
+        std::to_string(reconstructedPlayer.y) + "," +
+        std::to_string(reconstructedPlayer.z) + ")");
+
+    CourseEventDispatcher dispatcher;
+    CourseSpawnRuntime spawnRuntime;
+    float runtimeDistance = 3.0f;
+    float playerLateral = 0.0f;
+    float playerVertical = 4.0f;
+    const auto target = [&]() {
+        return EditorGameplaySpawnRuntimeTarget{
+            &railPath,
+            &dispatcher,
+            &spawnRuntime,
+            runtimeDistance,
+            &playerLateral,
+            &playerVertical,
+            [&](float distance) {
+                runtimeDistance = distance;
+                spawnRuntime.Reset();
+            }};
+    };
+
+    const EditorGameplaySpawnRuntimeResult begun =
+        service.Begin(scene, target());
+    const auto hasActor = [&](std::string_view assetId) {
+        return std::any_of(
+            spawnRuntime.Enemies().begin(),
+            spawnRuntime.Enemies().end(),
+            [&](const CourseEnemyActor& enemy) {
+                return enemy.desc.actorAssetId == assetId;
+            });
+    };
+    runner.Expect(
+        begun.succeeded && begun.applied && service.Active() &&
+            begun.enemyCount == 3 &&
+            std::abs(runtimeDistance - plan.player.railDistance) < 0.01f &&
+            std::abs(playerLateral - 2.0f) < 0.1f &&
+            std::abs(playerVertical - 4.0f) < 0.1f &&
+            spawnRuntime.ActiveEnemyCount() == 3 &&
+            hasActor("drone_basic") &&
+            hasActor("cliff_turret") &&
+            hasActor("gatekeeper_boss"),
+        "Runtime Spawn Begin should teleport Player and instantiate each enemy type through existing actor assets");
+
+    service.Stop(target());
+    runner.Expect(
+        !service.Active() &&
+            std::abs(runtimeDistance - 3.0f) < 0.01f &&
+            std::abs(playerLateral) < 0.01f &&
+            std::abs(playerVertical - 4.0f) < 0.01f &&
+            spawnRuntime.ActiveEnemyCount() == 0,
+        "Runtime Spawn Stop should clear session actors and restore the pre-Play Player position");
+
+    EditorScene missingPlayer;
+    EditorSceneEntity* invalidEnemy = missingPlayer.CreateEntity(
+        "InvalidEnemy", {}, "60606060606060606060606060606060");
+    addTransform(invalidEnemy, "0 0 25");
+    addSpawn(invalidEnemy, "ENEMY", "DRONE");
+    EditorGameplaySpawnPlan invalidPlan;
+    const EditorGameplaySpawnRuntimeResult invalid =
+        service.BuildPlan(missingPlayer, railPath, &invalidPlan);
+    runner.Expect(
+        !invalid.succeeded &&
+            invalid.message.find("no enabled PLAYER") != std::string::npos,
+        "Runtime Spawn validation should reject authored enemies without one PlayerSpawn");
+
+    EditorScene emptyScene;
+    EditorGameplaySpawnPlan emptyPlan;
+    const EditorGameplaySpawnRuntimeResult empty =
+        service.BuildPlan(emptyScene, railPath, &emptyPlan);
+    runner.Expect(
+        empty.succeeded && !empty.applied,
+        "Scenes without gameplay.spawn-point should keep the legacy runtime start unchanged");
+}
+
 void TestSceneEntityComponentFoundation(RegressionRunner& runner) {
     const std::filesystem::path root =
         std::filesystem::path{"generated"} / "editor" / "tests" / "scene_foundation_regression";
@@ -10815,6 +11560,14 @@ int RunEditorCoreRegressionTests() {
         {"generic document model", [&]() { TestGenericDocumentModel(runner); }},
         {"editor world model", [&]() { TestEditorWorldModel(runner); }},
         {"world outliner mutations", [&]() { TestWorldOutlinerMutations(runner); }},
+        {"blender level json loader", [&]() { TestBlenderLevelJsonLoader(runner); }},
+        {"blender scene import reimport", [&]() { TestBlenderSceneImportReimport(runner); }},
+        {"blender scene import editor integration", [&]() {
+             TestBlenderSceneImportEditorIntegration(runner);
+         }},
+        {"gameplay spawn runtime service", [&]() {
+             TestGameplaySpawnRuntimeService(runner);
+         }},
         {"scene entity component foundation", [&]() { TestSceneEntityComponentFoundation(runner); }},
         {"production transform gizmo", [&]() { TestProductionTransformGizmo(runner); }},
         {"viewport overlay layer system", [&]() { TestViewportOverlayLayerSystem(runner); }},

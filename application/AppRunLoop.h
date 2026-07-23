@@ -45,6 +45,7 @@
 #include "editor/EditorTransactionStack.h"
 #include "editor/EditorViewportCameraController.h"
 #include "editor/EditorViewportAuthoringInputGuard.h"
+#include "editor/scene/EditorGameplaySpawnRuntimeService.h"
 
 class AppFrameRenderer;
 class AppImGuiLayer;
@@ -143,6 +144,8 @@ private:
     void ApplyRailShooterCourse();
     bool SaveRailShooterCourse(std::string* errorMessage = nullptr);
     void TeleportRailShooterCourse(float distance);
+    bool BeginEditorGameplaySpawns(std::string* errorMessage);
+    void StopEditorGameplaySpawns();
     void LogCourseEvents(const std::vector<CourseEventMarker>& events);
     void ApplyRailShooterVisualPresets(float distance);
     void DrawRailLockOnDebugPanel();
@@ -294,6 +297,9 @@ private:
     std::ofstream renderGraphDump_;
     D3D12_RESOURCE_STATES sceneDepthState_ = D3D12_RESOURCE_STATE_DEPTH_WRITE;
     float railShooterDistance_ = 0.0f;
+    float railShooterPlayerLateralOffset_ = 0.0f;
+    float railShooterPlayerVerticalOffset_ = 4.0f;
+    editor::EditorGameplaySpawnRuntimeService editorGameplaySpawnRuntime_{};
     uint32_t railShooterFrameIndex_ = 0;
     bool railShooterInitialized_ = false;
     bool gpuDeviceLost_ = false;

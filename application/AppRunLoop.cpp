@@ -1648,6 +1648,59 @@ void AppRunLoop::TeleportRailShooterCourse(float distance) {
     OutputDebugStringA(line.str().c_str());
 }
 
+bool AppRunLoop::BeginEditorGameplaySpawns(std::string* errorMessage) {
+    const editor::EditorScene* scene = imguiLayer_.ActiveEditorScene();
+    if (scene == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Active Editor Scene is unavailable.";
+        }
+        return false;
+    }
+
+    const editor::EditorGameplaySpawnRuntimeResult result =
+        editorGameplaySpawnRuntime_.Begin(
+            *scene,
+            editor::EditorGameplaySpawnRuntimeTarget{
+                &railPath_,
+                &railShooterEventDispatcher_,
+                &railShooterSpawnRuntime_,
+                railShooterDistance_,
+                &railShooterPlayerLateralOffset_,
+                &railShooterPlayerVerticalOffset_,
+                [this](float distance) {
+                    TeleportRailShooterCourse(distance);
+                }});
+    if (!result.succeeded) {
+        if (errorMessage != nullptr) {
+            *errorMessage = result.message;
+        }
+        return false;
+    }
+
+    std::ostringstream line;
+    line << "[RuntimeSpawn] " << result.message;
+    for (const std::string& warning : result.warnings) {
+        line << " warning=\"" << warning << "\"";
+    }
+    line << "\n";
+    OutputDebugStringA(line.str().c_str());
+    return true;
+}
+
+void AppRunLoop::StopEditorGameplaySpawns() {
+    editorGameplaySpawnRuntime_.Stop(
+        editor::EditorGameplaySpawnRuntimeTarget{
+            &railPath_,
+            &railShooterEventDispatcher_,
+            &railShooterSpawnRuntime_,
+            railShooterDistance_,
+            &railShooterPlayerLateralOffset_,
+            &railShooterPlayerVerticalOffset_,
+            [this](float distance) {
+                TeleportRailShooterCourse(distance);
+            }});
+}
+
 void AppRunLoop::LogCourseEvents(const std::vector<CourseEventMarker>& events) {
     if (events.empty()) {
         return;
@@ -4490,8 +4543,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     collisionInput.deltaTime = gameplayDeltaTime;
     collisionInput.course = &railShooterCourse_;
     collisionInput.player.distance = railShooterDistance_;
-    collisionInput.player.lateralOffset = 0.0f;
-    collisionInput.player.verticalOffset = 4.0f;
+    collisionInput.player.lateralOffset = railShooterPlayerLateralOffset_;
+    collisionInput.player.verticalOffset = railShooterPlayerVerticalOffset_;
     collisionInput.player.radius = 1.6f;
     collisionInput.player.hitPoints = 100.0f;
     CourseCollisionWeaponState baseWeapon{};
@@ -7771,7 +7824,13 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             [&](editor::EditorViewportOverlayService& overlay) {
                 BuildRailVisibilityDebugOverlay(overlay);
             },
-            &courseObjectTransactions_});
+            &courseObjectTransactions_,
+            [&](std::string* errorMessage) {
+                return BeginEditorGameplaySpawns(errorMessage);
+            },
+            [&]() {
+                StopEditorGameplaySpawns();
+            }});
     gRailPerfFrame.imguiBuildUiMs = ElapsedMs(imguiBuildUiStart, RailPerfClock::now());
     const auto imguiEndFrameStart = RailPerfClock::now();
     imguiLayer_.EndFrame();

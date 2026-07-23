@@ -61,7 +61,8 @@ std::string_view StandardSectionFor(const EditorCommand& command) {
     if (StartsWith(id, "help.") || StartsWith(id, "editor.help.")) {
         return "menu.help";
     }
-    if (id == "editor.saveAll" || id == "course.save" || id == "course.apply" ||
+    if (StartsWith(id, "scene.blender.") ||
+        id == "editor.saveAll" || id == "course.save" || id == "course.apply" ||
         id == "course.reload" || id == "course.close" || id == "course.reopen") {
         return "menu.file";
     }
@@ -73,9 +74,13 @@ std::string_view StandardSectionFor(const EditorCommand& command) {
 }
 
 std::string ContextualDocumentType(const EditorCommand& command) {
-    return StartsWith(command.id, "course.")
-        ? std::string(EditorDocumentTypes::Course)
-        : std::string{};
+    if (StartsWith(command.id, "course.")) {
+        return std::string(EditorDocumentTypes::Course);
+    }
+    if (StartsWith(command.id, "scene.blender.")) {
+        return std::string(EditorDocumentTypes::Scene);
+    }
+    return {};
 }
 
 bool ContextAllowsItem(

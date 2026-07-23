@@ -181,6 +181,8 @@ struct AppImGuiFrameContext {
     std::function<void()> onDrawRailLockOnDebugPanel;
     std::function<void(editor::EditorViewportOverlayService&)> onBuildEditorViewportOverlay;
     editor::EditorTransactionStack* editorTransactions = nullptr;
+    std::function<bool(std::string*)> onBeginGameplaySpawns;
+    std::function<void()> onStopGameplaySpawns;
 };
 
 class AppImGuiLayer {
@@ -203,6 +205,8 @@ public:
     bool WantsDeveloperDiagnostics() const;
     bool ShouldAdvanceEditorRuntimeFrame() const;
     void CompleteEditorRuntimeFrameAdvance(bool advanced);
+    editor::EditorScene* ActiveEditorScene();
+    const editor::EditorScene* ActiveEditorScene() const;
     const editor::EditorViewportRenderTargetState& EditorViewportRenderTargetState() const;
     const editor::EditorViewportCameraInput& EditorViewportCameraFrameInput() const {
         return editorViewportCameraInput_;

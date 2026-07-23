@@ -391,6 +391,10 @@ const char* DisplayNameForEditorSceneComponent(std::string_view typeId) noexcept
     if (typeId == kEditorAiAgentComponentType) return "AI Agent";
     if (typeId == kEditorAiStimulusComponentType) return "AI Perception Stimulus";
     if (typeId == kEditorSmartObjectComponentType) return "Smart Object";
+    if (typeId == "editor.blender-scene-source") return "Blender Scene Source";
+    if (typeId == "editor.blender-object-source") return "Blender Object Source";
+    if (typeId == "gameplay.spawn-point") return "Gameplay Spawn Point";
+    if (typeId == "engine.box-collider") return "Box Collider";
     return "Component";
 }
 
