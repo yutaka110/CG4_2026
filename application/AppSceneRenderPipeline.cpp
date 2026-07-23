@@ -595,7 +595,7 @@ bool DrawComputeSkinnedModelInstance(
     return true;
 }
 
-void DrawSkinnedModelInstance(
+bool DrawSkinnedModelInstance(
     const AppFrameGraphBuildContext& ctx,
     ge3::graphics::RenderPassContext& passContext,
     SkinnedModelInstance& instance) {
@@ -603,7 +603,7 @@ void DrawSkinnedModelInstance(
         !instance.visible ||
         !instance.transformResource ||
         instance.skinCluster.paletteSrvGpu.ptr == 0) {
-        return;
+        return false;
     }
 
     GetSkinningGpuTimingProbe().Begin(
@@ -616,7 +616,7 @@ void DrawSkinnedModelInstance(
 
     if (!UploadPaletteIfNeeded(passContext.commandList, instance.skinCluster)) {
         GetSkinningGpuTimingProbe().Cancel();
-        return;
+        return false;
     }
 
     const bool skinnedReady = ctx.frameRenderer->PrepareMainPass(
@@ -628,9 +628,10 @@ void DrawSkinnedModelInstance(
         ctx.appPipelines->GetSkinnedPSO());
     if (!skinnedReady) {
         GetSkinningGpuTimingProbe().Cancel();
-        return;
+        return false;
     }
 
+    bool submitted = false;
     for (const SubMeshData& subMesh : instance.model.subMeshes) {
         const AppGpuMaterialResource* material =
             ResolveGpuMaterial(instance.gpuMaterials, subMesh.materialIndex);
@@ -655,8 +656,10 @@ void DrawSkinnedModelInstance(
             ctx.scene->spotLightResource->GetGPUVirtualAddress(),
             subMesh.indexCount,
             subMesh.indexStart);
+        submitted = true;
     }
     GetSkinningGpuTimingProbe().End(passContext.commandList);
+    return submitted;
 }
 
 } // namespace
@@ -1099,6 +1102,8 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 }
             }
 
+            ctx.runtimeState->activeSkinningPath =
+                RuntimeSkinningPath::Unavailable;
             if (ctx.runtimeState->showSkinnedModel) {
                 if (SkinnedModelInstance* activeSkinnedModel =
                         ctx.scene->GetActiveSkinnedModel()) {
@@ -1106,11 +1111,22 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     const bool preferComputeSkinning =
                         needsSkinnedSurfaceVfx ||
                         ctx.runtimeState->submissionShowcase.enabled;
-                    if (preferComputeSkinning &&
-                        !DrawComputeSkinnedModelInstance(ctx, passContext, *activeSkinnedModel)) {
-                        DrawSkinnedModelInstance(ctx, passContext, *activeSkinnedModel);
+                    if (preferComputeSkinning) {
+                        if (DrawComputeSkinnedModelInstance(
+                                ctx, passContext, *activeSkinnedModel)) {
+                            ctx.runtimeState->activeSkinningPath =
+                                RuntimeSkinningPath::ComputeShader;
+                        } else if (DrawSkinnedModelInstance(
+                                       ctx, passContext, *activeSkinnedModel)) {
+                            ctx.runtimeState->activeSkinningPath =
+                                RuntimeSkinningPath::VertexShader;
+                        }
                     } else if (!preferComputeSkinning) {
-                        DrawSkinnedModelInstance(ctx, passContext, *activeSkinnedModel);
+                        if (DrawSkinnedModelInstance(
+                                ctx, passContext, *activeSkinnedModel)) {
+                            ctx.runtimeState->activeSkinningPath =
+                                RuntimeSkinningPath::VertexShader;
+                        }
                     }
                 }
             } else if (RequiresSkinnedSurfaceVfx(ctx.runtimeState)) {

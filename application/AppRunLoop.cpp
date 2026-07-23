@@ -2200,7 +2200,7 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
     }
     // Bake the bundled M PLUS Rounded 1c Medium (weight 500 / 中字) directly
     // into the native HUD atlas. This is not an ImGui font atlas: the TTF is
-    // rasterized once and rendered by UI.SubmissionControlsHud.
+    // rasterized once and rendered by UI.SubmissionLiveVisualizer.
     constexpr int kSubmissionFontFirstCodepoint = 32;
     constexpr int kSubmissionFontGlyphCount = 95;
     constexpr int kSubmissionFontBitmapHeight = 128;
@@ -2864,7 +2864,7 @@ bool AppRunLoop::BuildSubmissionHudQuads() {
         {"SPACE / X", "BLEND ANIMATION"},
         {"K / A", "SKELETON DEBUG"},
         {"R / B", "RESET"},
-        {"H / Y", "TOGGLE CONTROLS"},
+        {"H / Y", "TOGGLE HUD"},
     };
     float lineY = panelY + 78.0f * uiScale;
     for (const ControlLine& line : kLines) {
@@ -2874,6 +2874,113 @@ bool AppRunLoop::BuildSubmissionHudQuads() {
                 0.78f * uiScale, actionColor);
         lineY += 25.0f * uiScale;
     }
+
+    const float statusPanelWidth = 370.0f * uiScale;
+    const float statusPanelHeight = panelHeight;
+    const float panelGap = 12.0f * uiScale;
+    const bool placeStatusBesideControls =
+        panelX + panelWidth + panelGap + statusPanelWidth + 22.0f * uiScale <=
+        static_cast<float>(metrics.width);
+    const float statusPanelX = placeStatusBesideControls
+        ? panelX + panelWidth + panelGap
+        : panelX;
+    const float statusPanelY = placeStatusBesideControls
+        ? panelY
+        : panelY + panelHeight + panelGap;
+
+    addQuad(statusPanelX, statusPanelY, statusPanelWidth, statusPanelHeight,
+            uvWhite, {0.008f, 0.014f, 0.028f, 0.88f});
+    addQuad(statusPanelX, statusPanelY, 5.0f * uiScale, statusPanelHeight,
+            uvWhite, {0.36f, 1.0f, 0.54f, 0.94f});
+    addQuad(statusPanelX, statusPanelY, statusPanelWidth, 2.0f * uiScale,
+            uvWhite, {0.50f, 1.0f, 0.66f, 0.78f});
+
+    const auto animationName = [](uint32_t modelIndex) -> const char* {
+        switch (modelIndex) {
+        case 1u: return "WALK";
+        case 2u: return "SNEAK WALK";
+        default: return "BIND POSE";
+        }
+    };
+    const RuntimeSkinnedAnimationBlendState& blend =
+        runtimeState_.skinnedAnimationBlend;
+    const char* currentAnimation = blend.active
+        ? animationName(blend.fromModelIndex)
+        : animationName(runtimeState_.selectedSkinnedModelIndex);
+    const char* nextAnimation = blend.active
+        ? animationName(blend.toModelIndex)
+        : "--";
+    const float blendProgress = blend.active
+        ? (std::clamp)(blend.alpha, 0.0f, 1.0f)
+        : 1.0f;
+    const std::string blendText = blend.active
+        ? std::to_string(static_cast<int>(std::lround(blendProgress * 100.0f))) + "%"
+        : "READY";
+
+    const char* skinningPath = "WAITING";
+    Vector4 skinningPathColor{0.65f, 0.72f, 0.78f, 1.0f};
+    switch (runtimeState_.activeSkinningPath) {
+    case RuntimeSkinningPath::ComputeShader:
+        skinningPath = "COMPUTE";
+        skinningPathColor = {0.36f, 1.0f, 0.54f, 1.0f};
+        break;
+    case RuntimeSkinningPath::VertexShader:
+        skinningPath = "VERTEX SHADER";
+        skinningPathColor = {1.0f, 0.72f, 0.24f, 1.0f};
+        break;
+    case RuntimeSkinningPath::Unavailable:
+    default:
+        break;
+    }
+
+    const SkinnedModelInstance* activeSkinnedModel =
+        scene_.GetActiveSkinnedModel();
+    const std::string jointCount = activeSkinnedModel != nullptr
+        ? std::to_string(activeSkinnedModel->skeleton.joints.size())
+        : "0";
+
+    const Vector4 statusLabelColor{0.52f, 0.72f, 0.82f, 1.0f};
+    const Vector4 statusValueColor{0.92f, 0.98f, 1.0f, 1.0f};
+    const float statusLabelX = statusPanelX + 20.0f * uiScale;
+    const float statusValueX = statusPanelX + 155.0f * uiScale;
+    float statusLineY = statusPanelY + 78.0f * uiScale;
+    addText("ANIMATION LIVE", statusPanelX + 20.0f * uiScale,
+            statusPanelY + 42.0f * uiScale, 1.12f * uiScale, titleColor);
+    addText("SKINNING", statusLabelX, statusLineY,
+            0.78f * uiScale, statusLabelColor);
+    addText(skinningPath, statusValueX, statusLineY,
+            0.78f * uiScale, skinningPathColor);
+    statusLineY += 25.0f * uiScale;
+    addText("STATE", statusLabelX, statusLineY,
+            0.78f * uiScale, statusLabelColor);
+    addText(currentAnimation, statusValueX, statusLineY,
+            0.78f * uiScale, statusValueColor);
+    statusLineY += 25.0f * uiScale;
+    addText("NEXT", statusLabelX, statusLineY,
+            0.78f * uiScale, statusLabelColor);
+    addText(nextAnimation, statusValueX, statusLineY,
+            0.78f * uiScale, blend.active ? keyColor : actionColor);
+    statusLineY += 25.0f * uiScale;
+    addText("BLEND", statusLabelX, statusLineY,
+            0.78f * uiScale, statusLabelColor);
+    addText(blendText.c_str(), statusValueX, statusLineY,
+            0.78f * uiScale, blend.active ? keyColor : statusValueColor);
+    statusLineY += 25.0f * uiScale;
+    addText("JOINTS", statusLabelX, statusLineY,
+            0.78f * uiScale, statusLabelColor);
+    addText(jointCount.c_str(), statusValueX, statusLineY,
+            0.78f * uiScale, statusValueColor);
+
+    const float progressX = statusPanelX + 20.0f * uiScale;
+    const float progressY = statusPanelY + 199.0f * uiScale;
+    const float progressWidth = statusPanelWidth - 40.0f * uiScale;
+    const float progressHeight = 8.0f * uiScale;
+    addQuad(progressX, progressY, progressWidth, progressHeight, uvWhite,
+            {0.08f, 0.14f, 0.18f, 0.94f});
+    addQuad(progressX, progressY, progressWidth * blendProgress, progressHeight,
+            uvWhite, blend.active
+                ? Vector4{0.20f, 0.78f, 1.0f, 1.0f}
+                : Vector4{0.28f, 0.88f, 0.46f, 0.88f});
     return submissionHudVertexCount_ > 0;
 }
 
@@ -2892,7 +2999,7 @@ void AppRunLoop::RegisterSubmissionHudPass(
     }
 
     renderGraph_.AddPass({
-        "UI.SubmissionControlsHud",
+        "UI.SubmissionLiveVisualizer",
         ge3::graphics::RenderPassLayer::Ui,
         {{targetResourceName, ge3::graphics::RenderResourceAccessType::WriteRtv}},
         "",
@@ -7722,7 +7829,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         commandList.Get(),
         scene_,
         spriteTextureHandle);
-    // Submission controls are a native, final UI pass. It deliberately does
+    // The submission controls and live animation state use one native, final
+    // UI pass. It deliberately does
     // not depend on AppImGuiLayer visibility, so Release can keep editor UI
     // disabled while still presenting the assignment controls.
     RegisterSubmissionHudPass(commandList.Get(), "BackBuffer");

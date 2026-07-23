@@ -42,6 +42,12 @@ struct RuntimeSkinningTimingStats {
     RuntimeSkinningTimingPathStats computeSurfaceOnly{};
 };
 
+enum class RuntimeSkinningPath : uint8_t {
+    Unavailable,
+    ComputeShader,
+    VertexShader,
+};
+
 inline constexpr uint32_t kRuntimeVfxModelObjectCount = 3;
 
 struct RuntimeVfxModelObjectState {
@@ -122,6 +128,7 @@ struct AppRuntimeState {
     RuntimeCameraState camera{};
     RuntimeSubmissionShowcaseState submissionShowcase{};
     RuntimeSkinnedAnimationBlendState skinnedAnimationBlend{};
+    RuntimeSkinningPath activeSkinningPath = RuntimeSkinningPath::Unavailable;
     Vector3 cameraWorldPosition{};
 
     bool useMonsterBall = false;
