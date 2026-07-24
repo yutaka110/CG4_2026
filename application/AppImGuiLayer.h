@@ -38,6 +38,7 @@ class AppPipelines;
 #include "editor/EditorPlaySessionState.h"
 #include "editor/EditorPropertyEditSession.h"
 #include "editor/EditorPropertyEditService.h"
+#include "editor/mesh/EditorProductionMeshAsset.h"
 #include "editor/EditorPropertyClipboardService.h"
 #include "editor/EditorPropertyRegistry.h"
 #include "editor/EditorRailRuntimePause.h"
@@ -71,6 +72,7 @@ class AppPipelines;
 #include "editor/EditorViewportSelectionBridge.h"
 #include "editor/EditorViewportRenderTarget.h"
 #include "editor/tools/EditorModeRegistry.h"
+#include "editor/tools/EditorSplineRouteTool.h"
 #include "editor/tools/EditorToolManager.h"
 #include "editor/terrain/EditorTerrainBrushTools.h"
 #include "editor/terrain/EditorTerrainEditCommand.h"
@@ -100,6 +102,13 @@ class AppPipelines;
 #include "editor/documents/EditorAutosaveService.h"
 #include "editor/documents/EditorCourseDocumentProvider.h"
 #include "editor/documents/EditorSceneDocumentProvider.h"
+#include "editor/scene/EditorGimmickDefinitionRegistry.h"
+#include "editor/scene/EditorGimmickPresentationPhysicsAdapter.h"
+#include "editor/scene/EditorGimmickRuntimeInteractionSystem.h"
+#include "editor/scene/EditorGimmickRuntimeEventRouter.h"
+#include "editor/scene/EditorGimmickRuntimeTriggerSystem.h"
+#include "editor/scene/EditorSceneComponentRegistry.h"
+#include "editor/scene/EditorMeshRendererRuntimeFactory.h"
 #include "editor/documents/EditorPrefabDocumentProvider.h"
 #include "editor/documents/EditorMaterialGraphDocumentProvider.h"
 #include "editor/documents/EditorVfxGraphDocumentProvider.h"
@@ -207,6 +216,38 @@ public:
     void CompleteEditorRuntimeFrameAdvance(bool advanced);
     editor::EditorScene* ActiveEditorScene();
     const editor::EditorScene* ActiveEditorScene() const;
+    const editor::EditorSceneComponentRegistry& SceneComponentRegistry() const {
+        return editorSceneComponentRegistry_;
+    }
+    const editor::EditorGimmickDefinitionRegistry&
+    GimmickDefinitionRegistry() const {
+        return editorGimmickDefinitionRegistry_;
+    }
+    const editor::EditorAssetRegistry& AssetRegistry() const {
+        return editorAssetRegistry_;
+    }
+    editor::EditorMeshRendererRuntimeWorld& MeshRendererRuntimeWorld() {
+        return editorMeshRendererRuntimeWorld_;
+    }
+    const editor::EditorMeshRendererRuntimeWorld& MeshRendererRuntimeWorld() const {
+        return editorMeshRendererRuntimeWorld_;
+    }
+    void BindEditorGimmickRuntimeDebug(
+        const editor::EditorGimmickRuntimeWorld* world,
+          const editor::EditorGimmickPresentationPhysicsAdapter*
+              adapter,
+          const editor::EditorGimmickRuntimeEventRouter*
+              eventRouter,
+          const editor::EditorGimmickRuntimeInteractionSystem*
+              interaction,
+        const editor::EditorGimmickRuntimeTriggerSystem*
+            triggers) noexcept {
+          editorGimmickRuntimeWorld_ = world;
+          editorGimmickRuntimeAdapter_ = adapter;
+          editorGimmickRuntimeEventRouter_ = eventRouter;
+          editorGimmickRuntimeInteraction_ = interaction;
+        editorGimmickRuntimeTriggers_ = triggers;
+    }
     const editor::EditorViewportRenderTargetState& EditorViewportRenderTargetState() const;
     const editor::EditorViewportCameraInput& EditorViewportCameraFrameInput() const {
         return editorViewportCameraInput_;
@@ -263,6 +304,11 @@ private:
     uint32_t beamDedicatedActiveStableFrames_ = 0;
     uint32_t hiddenRuntimeTelemetryFrame_ = 0;
     editor::EditorPropertyRegistry editorPropertyRegistry_{};
+    editor::EditorSceneComponentRegistry editorSceneComponentRegistry_{
+        editor::CreateBuiltInEditorSceneComponentRegistry()};
+    editor::EditorGimmickDefinitionRegistry
+        editorGimmickDefinitionRegistry_{
+            editor::CreateBuiltInEditorGimmickDefinitionRegistry()};
     editor::EditorAssetRegistry editorAssetRegistry_{};
     editor::EditorAssetSelection editorAssetSelection_{};
     editor::EditorAssetD3D12ThumbnailGpuBackend editorAssetThumbnailGpuBackend_{};
@@ -338,7 +384,19 @@ private:
     editor::EditorMeshBakePipeline editorMeshBakePipeline_{};
     editor::EditorMeshBakeToolBinding editorMeshBakeToolBinding_{};
     editor::EditorMeshBakeExecutionService editorMeshBakeExecution_{};
+    editor::EditorMeshAssetChangeTracker editorMeshAssetChangeTracker_{};
     editor::EditorProductionMeshRuntimeCache editorProductionMeshRuntimeCache_{};
+    editor::EditorMeshRendererRuntimeWorld editorMeshRendererRuntimeWorld_{};
+    const editor::EditorGimmickRuntimeWorld*
+        editorGimmickRuntimeWorld_ = nullptr;
+      const editor::EditorGimmickPresentationPhysicsAdapter*
+          editorGimmickRuntimeAdapter_ = nullptr;
+      const editor::EditorGimmickRuntimeEventRouter*
+          editorGimmickRuntimeEventRouter_ = nullptr;
+      const editor::EditorGimmickRuntimeInteractionSystem*
+        editorGimmickRuntimeInteraction_ = nullptr;
+    const editor::EditorGimmickRuntimeTriggerSystem*
+        editorGimmickRuntimeTriggers_ = nullptr;
     editor::EditorProductionScenePipeline editorProductionScenePipeline_{};
     editor::EditorTransientMeshRenderPath editorTransientMeshRenderPath_{};
     editor::EditorProductionMaterialPipeline editorProductionMaterialPipeline_{};

@@ -147,6 +147,7 @@ private:
         uint64_t bytes = 0;
     };
     struct GpuAsset {
+        uint64_t generation = 0;
         uint64_t sourceTimestamp = 0;
         uint64_t sourceGeometryHash = 0;
         uint64_t buildSettingsHash = 0;

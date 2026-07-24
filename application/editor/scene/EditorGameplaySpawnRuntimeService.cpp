@@ -336,7 +336,17 @@ EditorGameplaySpawnRuntimeResult EditorGameplaySpawnRuntimeService::BuildPlan(
     std::unordered_set<std::string> resolving;
     std::vector<EditorGameplayRailSpawnPoint> players;
 
-    for (const EditorSceneEntity& entity : scene.entities) {
+    const std::vector<bool> runtimeActivation =
+        scene.EvaluateRuntimeActivation();
+    for (std::size_t entityIndex = 0;
+         entityIndex < scene.entities.size();
+         ++entityIndex) {
+        const EditorSceneEntity& entity =
+            scene.entities[entityIndex];
+        if (entityIndex >= runtimeActivation.size() ||
+            !runtimeActivation[entityIndex]) {
+            continue;
+        }
         const EditorSceneComponent* component =
             scene.FindComponent(entity, kEditorGameplaySpawnPointComponentType);
         if (component == nullptr || !component->enabled) continue;

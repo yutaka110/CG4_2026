@@ -1649,6 +1649,18 @@ void AppRunLoop::TeleportRailShooterCourse(float distance) {
 }
 
 bool AppRunLoop::BeginEditorGameplaySpawns(std::string* errorMessage) {
+    editorGimmickRuntimeEventRouter_.BindEventBindingRegistry(
+        &editorGimmickRuntimeEventBindings_);
+    editorGimmickRuntimeEventRouter_.BindDelayedEventScheduler(
+        &editorGimmickRuntimeDelayedEvents_);
+    editorGimmickRuntimeEventRouter_.BindEventSequenceRegistry(
+        &editorGimmickRuntimeEventSequences_);
+    imguiLayer_.BindEditorGimmickRuntimeDebug(
+        &editorGimmickRuntimeWorld_,
+        &editorGimmickRuntimeAdapter_,
+        &editorGimmickRuntimeEventRouter_,
+        &editorGimmickRuntimeInteraction_,
+        &editorGimmickRuntimeTriggers_);
     const editor::EditorScene* scene = imguiLayer_.ActiveEditorScene();
     if (scene == nullptr) {
         if (errorMessage != nullptr) {
@@ -1657,28 +1669,229 @@ bool AppRunLoop::BeginEditorGameplaySpawns(std::string* errorMessage) {
         return false;
     }
 
-    const editor::EditorGameplaySpawnRuntimeResult result =
-        editorGameplaySpawnRuntime_.Begin(
-            *scene,
-            editor::EditorGameplaySpawnRuntimeTarget{
-                &railPath_,
-                &railShooterEventDispatcher_,
-                &railShooterSpawnRuntime_,
-                railShooterDistance_,
-                &railShooterPlayerLateralOffset_,
-                &railShooterPlayerVerticalOffset_,
-                [this](float distance) {
-                    TeleportRailShooterCourse(distance);
-                }});
+    std::string registrationError;
+    if (!editor::RegisterBuiltInEditorSceneRuntimeFactories(
+            editorSceneRuntimeFactoryRegistry_,
+            &registrationError)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = registrationError;
+        }
+        return false;
+    }
+    if (!editor::
+            RegisterBuiltInEditorGimmickDefinitionRuntimeFactories(
+                editorGimmickDefinitionRuntimeFactories_,
+                imguiLayer_.GimmickDefinitionRegistry(),
+                &registrationError)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = registrationError;
+        }
+        return false;
+    }
+    std::string bindError;
+    if (!editorSceneRuntimeInstantiation_.Bind(
+            &imguiLayer_.SceneComponentRegistry(),
+            &editorSceneRuntimeFactoryRegistry_,
+            &bindError)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = bindError;
+        }
+        return false;
+    }
+
+    editor::EditorGameplaySpawnRuntimeTarget spawnTarget{
+        &railPath_,
+        &railShooterEventDispatcher_,
+        &railShooterSpawnRuntime_,
+        railShooterDistance_,
+        &railShooterPlayerLateralOffset_,
+        &railShooterPlayerVerticalOffset_,
+        [this](float distance) {
+            TeleportRailShooterCourse(distance);
+        }};
+    editor::EditorSceneRuntimeServiceRegistry runtimeServices;
+    runtimeServices.Bind(
+        std::string(editor::kEditorGameplaySpawnRuntimeTargetServiceId),
+        &spawnTarget);
+    editor::EditorMeshRendererRuntimeTarget meshTarget{
+        &imguiLayer_.AssetRegistry(),
+        &imguiLayer_.MeshRendererRuntimeWorld()};
+    runtimeServices.Bind(
+        std::string(editor::kEditorMeshRendererRuntimeTargetServiceId),
+        &meshTarget);
+    editor::EditorPatrolRuntimeTarget patrolTarget{
+        &editorPatrolRuntimeWorld_,
+        &railShooterSpawnRuntime_,
+        &railPath_};
+    runtimeServices.Bind(
+        std::string(editor::kEditorPatrolRuntimeTargetServiceId),
+        &patrolTarget);
+    editor::EditorGimmickRuntimeTarget gimmickTarget{
+        &imguiLayer_.GimmickDefinitionRegistry(),
+        &editorGimmickDefinitionRuntimeFactories_,
+        &editorGimmickRuntimeWorld_};
+    runtimeServices.Bind(
+        std::string(editor::kEditorGimmickRuntimeTargetServiceId),
+        &gimmickTarget);
+    editor::EditorGimmickEventBindingRuntimeTarget
+        gimmickEventBindingTarget{
+            &editorGimmickRuntimeEventBindings_,
+            &editorGimmickRuntimeWorld_};
+    runtimeServices.Bind(
+        std::string(
+            editor::
+                kEditorGimmickEventBindingRuntimeTargetServiceId),
+        &gimmickEventBindingTarget);
+    editor::EditorGimmickEventSequenceRuntimeTarget
+        gimmickEventSequenceTarget{
+            &editorGimmickRuntimeEventSequences_,
+            &editorGimmickRuntimeWorld_};
+    runtimeServices.Bind(
+        std::string(
+            editor::
+                kEditorGimmickEventSequenceRuntimeTargetServiceId),
+        &gimmickEventSequenceTarget);
+    const editor::EditorSceneRuntimeInstantiationResult result =
+        editorSceneRuntimeInstantiation_.Begin(*scene, runtimeServices);
     if (!result.succeeded) {
         if (errorMessage != nullptr) {
             *errorMessage = result.message;
         }
         return false;
     }
+    editorGimmickRuntimeEventBindings_.FinalizeReconcile();
+    editorGimmickRuntimeEventSequences_.FinalizeReconcile();
+    std::string adapterError;
+    if (!editorGimmickRuntimeAdapter_.Reconcile(
+            *scene,
+            imguiLayer_.MeshRendererRuntimeWorld(),
+            editorGimmickRuntimeWorld_,
+            &adapterError)) {
+        editorSceneRuntimeInstantiation_.Stop();
+        editorGimmickRuntimeWorld_.Clear();
+        if (errorMessage != nullptr) {
+            *errorMessage =
+                "Gimmick Presentation/Physics Adapter rejected "
+                "Runtime Scene: " +
+                adapterError;
+        }
+        return false;
+    }
+    editorGimmickRuntimeEventRouter_.Reconcile(
+        editorGimmickRuntimeWorld_);
+    editorGimmickRuntimeTriggers_.Reconcile(
+        editorGimmickRuntimeWorld_,
+        editorGimmickRuntimeAdapter_);
+    editorSceneRuntimeLastReconcileAttemptRevision_ = result.sourceRevision;
 
     std::ostringstream line;
-    line << "[RuntimeSpawn] " << result.message;
+    line << "[RuntimeScene] " << result.message;
+    for (const std::string& warning : result.warnings) {
+        line << " warning=\"" << warning << "\"";
+    }
+    line << "\n";
+    OutputDebugStringA(line.str().c_str());
+    return true;
+}
+
+bool AppRunLoop::ReconcileEditorSceneRuntime(std::string* errorMessage) {
+    if (!editorSceneRuntimeInstantiation_.Active()) return true;
+    const editor::EditorScene* scene = imguiLayer_.ActiveEditorScene();
+    if (scene == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Active Editor Scene is unavailable during Reconcile.";
+        }
+        return false;
+    }
+    if (scene->revision == editorSceneRuntimeInstantiation_.SourceRevision() ||
+        scene->revision == editorSceneRuntimeLastReconcileAttemptRevision_) {
+        return true;
+    }
+    editorSceneRuntimeLastReconcileAttemptRevision_ = scene->revision;
+
+    editor::EditorGameplaySpawnRuntimeTarget spawnTarget{
+        &railPath_,
+        &railShooterEventDispatcher_,
+        &railShooterSpawnRuntime_,
+        railShooterDistance_,
+        &railShooterPlayerLateralOffset_,
+        &railShooterPlayerVerticalOffset_,
+        [this](float distance) {
+            TeleportRailShooterCourse(distance);
+        }};
+    editor::EditorSceneRuntimeServiceRegistry runtimeServices;
+    runtimeServices.Bind(
+        std::string(editor::kEditorGameplaySpawnRuntimeTargetServiceId),
+        &spawnTarget);
+    editor::EditorMeshRendererRuntimeTarget meshTarget{
+        &imguiLayer_.AssetRegistry(),
+        &imguiLayer_.MeshRendererRuntimeWorld()};
+    runtimeServices.Bind(
+        std::string(editor::kEditorMeshRendererRuntimeTargetServiceId),
+        &meshTarget);
+    editor::EditorPatrolRuntimeTarget patrolTarget{
+        &editorPatrolRuntimeWorld_,
+        &railShooterSpawnRuntime_,
+        &railPath_};
+    runtimeServices.Bind(
+        std::string(editor::kEditorPatrolRuntimeTargetServiceId),
+        &patrolTarget);
+    editor::EditorGimmickRuntimeTarget gimmickTarget{
+        &imguiLayer_.GimmickDefinitionRegistry(),
+        &editorGimmickDefinitionRuntimeFactories_,
+        &editorGimmickRuntimeWorld_};
+    runtimeServices.Bind(
+        std::string(editor::kEditorGimmickRuntimeTargetServiceId),
+        &gimmickTarget);
+    editor::EditorGimmickEventBindingRuntimeTarget
+        gimmickEventBindingTarget{
+            &editorGimmickRuntimeEventBindings_,
+            &editorGimmickRuntimeWorld_};
+    runtimeServices.Bind(
+        std::string(
+            editor::
+                kEditorGimmickEventBindingRuntimeTargetServiceId),
+        &gimmickEventBindingTarget);
+    editor::EditorGimmickEventSequenceRuntimeTarget
+        gimmickEventSequenceTarget{
+            &editorGimmickRuntimeEventSequences_,
+            &editorGimmickRuntimeWorld_};
+    runtimeServices.Bind(
+        std::string(
+            editor::
+                kEditorGimmickEventSequenceRuntimeTargetServiceId),
+        &gimmickEventSequenceTarget);
+    const editor::EditorSceneRuntimeInstantiationResult result =
+        editorSceneRuntimeInstantiation_.Reconcile(*scene, runtimeServices);
+    if (!result.succeeded) {
+        if (errorMessage != nullptr) *errorMessage = result.message;
+        return false;
+    }
+    editorGimmickRuntimeEventBindings_.FinalizeReconcile();
+    editorGimmickRuntimeEventSequences_.FinalizeReconcile();
+    std::string adapterError;
+    if (!editorGimmickRuntimeAdapter_.Reconcile(
+            *scene,
+            imguiLayer_.MeshRendererRuntimeWorld(),
+            editorGimmickRuntimeWorld_,
+            &adapterError)) {
+        StopEditorGameplaySpawns();
+        if (errorMessage != nullptr) {
+            *errorMessage =
+                "Gimmick Presentation/Physics Adapter failed "
+                "during Reconcile: " +
+                adapterError;
+        }
+        return false;
+    }
+    editorGimmickRuntimeEventRouter_.Reconcile(
+        editorGimmickRuntimeWorld_);
+    editorGimmickRuntimeTriggers_.Reconcile(
+        editorGimmickRuntimeWorld_,
+        editorGimmickRuntimeAdapter_);
+
+    std::ostringstream line;
+    line << "[RuntimeScene] " << result.message;
     for (const std::string& warning : result.warnings) {
         line << " warning=\"" << warning << "\"";
     }
@@ -1688,17 +1901,22 @@ bool AppRunLoop::BeginEditorGameplaySpawns(std::string* errorMessage) {
 }
 
 void AppRunLoop::StopEditorGameplaySpawns() {
-    editorGameplaySpawnRuntime_.Stop(
-        editor::EditorGameplaySpawnRuntimeTarget{
-            &railPath_,
-            &railShooterEventDispatcher_,
-            &railShooterSpawnRuntime_,
-            railShooterDistance_,
-            &railShooterPlayerLateralOffset_,
-            &railShooterPlayerVerticalOffset_,
-            [this](float distance) {
-                TeleportRailShooterCourse(distance);
-            }});
+    editorGimmickRuntimeInteraction_.Reset();
+    editorGimmickRuntimeTriggers_.Reset();
+    editorGimmickRuntimeEventRouter_.Reset();
+    editorGimmickRuntimeEventRouter_.
+        BindEventBindingRegistry(nullptr);
+    editorGimmickRuntimeEventRouter_.
+        BindDelayedEventScheduler(nullptr);
+    editorGimmickRuntimeEventRouter_.
+        BindEventSequenceRegistry(nullptr);
+    editorGimmickRuntimeDelayedEvents_.Reset();
+    editorGimmickRuntimeAdapter_.Clear();
+    editorSceneRuntimeInstantiation_.Stop();
+    editorGimmickRuntimeEventBindings_.Clear();
+    editorGimmickRuntimeEventSequences_.Clear();
+    editorGimmickRuntimeWorld_.Clear();
+    editorSceneRuntimeLastReconcileAttemptRevision_ = 0;
 }
 
 void AppRunLoop::LogCourseEvents(const std::vector<CourseEventMarker>& events) {
@@ -4539,6 +4757,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     fireSafetyInput.deltaTime = gameplayDeltaTime;
     fireSafetyInput.cameraReason = previousCameraSafetyFrame.comfortReason;
     railShooterSpawnRuntime_.Update(gameplayDeltaTime, fireSafetyInput);
+    editorPatrolRuntimeWorld_.Update(gameplayDeltaTime);
     CourseCollisionFrameInput collisionInput{};
     collisionInput.deltaTime = gameplayDeltaTime;
     collisionInput.course = &railShooterCourse_;
@@ -4600,6 +4819,91 @@ void AppRunLoop::UpdateRailShooterFrame() {
     frameState_.viewProjectionMatrix = Multiply(frameState_.viewMatrix, frameState_.projMatrix);
     frameState_.cameraWorldPosition = cameraPosition;
     frameState_.deltaTime = gameplayDeltaTime;
+
+    bool gimmickInteractionAllowed =
+        gameplayDeltaTime > 0.0f &&
+        hwnd_ != nullptr &&
+        GetForegroundWindow() == hwnd_;
+#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
+    gimmickInteractionAllowed =
+        gimmickInteractionAllowed &&
+        (!imguiLayer_.IsVisible() ||
+         (!ImGui::GetIO().WantTextInput &&
+          !ImGui::IsAnyItemActive()));
+#endif
+    const bool gimmickInteractionDown =
+        (GetAsyncKeyState('E') & 0x8000) != 0;
+    editorGimmickRuntimeInteraction_.Update(
+        editor::EditorGimmickRuntimeInteractionInput{
+            &editorGimmickRuntimeWorld_,
+            &editorGimmickRuntimeEventRouter_,
+            &editorGimmickRuntimeAdapter_,
+            cameraPosition,
+            forward,
+            "runtime.player",
+            gimmickInteractionDown,
+            gimmickInteractionAllowed});
+
+    if (gameplayDeltaTime > 0.0f) {
+        const Vector3 playerWorld = RailLocalPoint(
+            railPath_,
+            railShooterDistance_,
+            collisionInput.player.lateralOffset,
+            collisionInput.player.verticalOffset,
+            0.0f);
+        const float playerRadius =
+            (std::max)(0.01f, collisionInput.player.radius);
+        editor::EditorGimmickRuntimeTriggerSubject playerSubject{};
+        playerSubject.entityGuid = "runtime.player";
+        playerSubject.boundsMin = {
+            playerWorld.x - playerRadius,
+            playerWorld.y - playerRadius,
+            playerWorld.z - playerRadius};
+        playerSubject.boundsMax = {
+            playerWorld.x + playerRadius,
+            playerWorld.y + playerRadius,
+            playerWorld.z + playerRadius};
+        editor::EditorGimmickRuntimeTriggerInput triggerInput{};
+        triggerInput.world = &editorGimmickRuntimeWorld_;
+        triggerInput.eventRouter =
+            &editorGimmickRuntimeEventRouter_;
+        triggerInput.physics = &editorGimmickRuntimeAdapter_;
+        triggerInput.subjects.push_back(
+            std::move(playerSubject));
+        editorGimmickRuntimeTriggers_.Update(triggerInput);
+    }
+
+    if (gameplayDeltaTime > 0.0f) {
+        std::string delayedEventError;
+        if (!editorGimmickRuntimeDelayedEvents_.Update(
+                gameplayDeltaTime,
+                editorGimmickRuntimeWorld_,
+                editorGimmickRuntimeEventRouter_,
+                &delayedEventError) &&
+            !delayedEventError.empty()) {
+            OutputDebugStringA(
+                ("[RuntimeScene] Delayed Gimmick event: " +
+                 delayedEventError + "\n")
+                    .c_str());
+        }
+    }
+
+    editorGimmickRuntimeWorld_.Update(gameplayDeltaTime);
+    std::string gimmickAdapterError;
+    if (!editorGimmickRuntimeAdapter_.Sync(
+            editorGimmickRuntimeWorld_,
+            &gimmickAdapterError)) {
+        OutputDebugStringA(
+            ("[RuntimeScene] Gimmick Presentation/Physics sync "
+             "failed: " +
+             gimmickAdapterError + "\n")
+                .c_str());
+        editorGimmickRuntimeAdapter_.Clear();
+        editorGimmickRuntimeInteraction_.Reset();
+        editorGimmickRuntimeTriggers_.Reset();
+        editorGimmickRuntimeDelayedEvents_.Reset();
+        editorGimmickRuntimeEventRouter_.Reset();
+    }
 
     RailLockOnFrameInput lockOnInput{};
     lockOnInput.hwnd = hwnd_;
@@ -7835,6 +8139,13 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     const auto imguiEndFrameStart = RailPerfClock::now();
     imguiLayer_.EndFrame();
     imguiFrameOpen = false;
+    std::string runtimeSceneReconcileError;
+    if (!ReconcileEditorSceneRuntime(&runtimeSceneReconcileError) &&
+        !runtimeSceneReconcileError.empty()) {
+        OutputDebugStringA(
+            ("[RuntimeScene] Reconcile failed: " +
+             runtimeSceneReconcileError + "\n").c_str());
+    }
     gRailPerfFrame.imguiEndFrameMs = ElapsedMs(imguiEndFrameStart, RailPerfClock::now());
     gRailPerfFrame.imguiMs = ElapsedMs(imguiStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterImgui");

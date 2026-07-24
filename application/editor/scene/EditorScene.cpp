@@ -1,10 +1,16 @@
 #include "EditorScene.h"
+#include "EditorSceneComponentRegistry.h"
+#include "EditorBlenderSceneImportService.h"
+#include "EditorPatrolComponent.h"
+#include "EditorSplineRouteComponent.h"
 
 #include "../geometry/EditorGeometryMesh.h"
 #include "../mesh/EditorProductionMeshAsset.h"
 #include "../world/EditorWorldObjectRecord.h"
 
 #include <algorithm>
+#include <functional>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -33,17 +39,6 @@ std::string UniqueEntityName(const EditorScene& scene, std::string base) {
         const std::string candidate = base + " " + std::to_string(suffix);
         if (!exists(candidate)) return candidate;
     }
-}
-
-EditorSceneComponent MakeTransformComponent() {
-    EditorSceneComponent component{};
-    component.typeId = std::string(kEditorTransformComponentType);
-    component.properties = {
-        {"translation", "0 0 0"},
-        {"rotation", "0 0 0"},
-        {"scale", "1 1 1"},
-    };
-    return component;
 }
 
 } // namespace
@@ -89,7 +84,9 @@ EditorSceneEntity* EditorScene::CreateEntity(
     entity.guid = std::move(stableGuid);
     entity.parentGuid = std::move(parentGuid);
     entity.name = UniqueEntityName(*this, std::move(name));
-    entity.components.push_back(MakeTransformComponent());
+    entity.components.push_back(
+        BuiltInEditorSceneComponentRegistry().CreateDefault(
+            kEditorTransformComponentType));
     entities.push_back(std::move(entity));
     Touch();
     return &entities.back();
@@ -145,6 +142,60 @@ bool EditorScene::IsDescendant(
     return false;
 }
 
+std::vector<bool> EditorScene::EvaluateRuntimeActivation() const {
+    std::unordered_map<std::string_view, std::size_t> indices;
+    indices.reserve(entities.size());
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        indices.emplace(entities[index].guid, index);
+    }
+
+    enum class ActivationState : uint8_t {
+        Unknown,
+        Visiting,
+        Inactive,
+        Active,
+    };
+    std::vector<ActivationState> states(
+        entities.size(), ActivationState::Unknown);
+    const std::function<bool(std::size_t)> evaluate =
+        [&](std::size_t index) -> bool {
+        ActivationState& state = states[index];
+        if (state == ActivationState::Active) return true;
+        if (state == ActivationState::Inactive ||
+            state == ActivationState::Visiting) {
+            return false;
+        }
+        state = ActivationState::Visiting;
+        const EditorSceneEntity& entity = entities[index];
+        bool active = entity.runtimeEnabled;
+        if (active && !entity.parentGuid.empty()) {
+            const auto parent = indices.find(entity.parentGuid);
+            active =
+                parent != indices.end() &&
+                evaluate(parent->second);
+        }
+        state = active
+            ? ActivationState::Active
+            : ActivationState::Inactive;
+        return active;
+    };
+
+    std::vector<bool> activation(entities.size(), false);
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        activation[index] = evaluate(index);
+    }
+    return activation;
+}
+
+bool EditorScene::IsRuntimeActiveInHierarchy(
+    std::string_view guid) const {
+    const std::vector<bool> activation = EvaluateRuntimeActivation();
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        if (entities[index].guid == guid) return activation[index];
+    }
+    return false;
+}
+
 bool EditorScene::ReparentEntity(std::string_view guid, std::string parentGuid) {
     EditorSceneEntity* entity = FindEntity(guid);
     if (entity == nullptr || parentGuid == guid) return false;
@@ -159,46 +210,21 @@ bool EditorScene::ReparentEntity(std::string_view guid, std::string parentGuid) 
 bool EditorScene::AddComponent(
     std::string_view entityGuid,
     std::string typeId,
-    const EditorSceneObjectReference* initialReference) {
-    EditorSceneEntity* entity = FindEntity(entityGuid);
-    if (entity == nullptr || typeId.empty() || FindComponent(*entity, typeId) != nullptr) return false;
-    EditorSceneComponent component{};
-    component.typeId = std::move(typeId);
-    if (component.typeId == kEditorDirectionalLightComponentType) {
-        component.properties = {{"color", "1 1 1 1"}, {"direction", "0 -1 0"},
-            {"intensity", "1"}, {"priority", "0"}, {"castsShadow", "true"},
-            {"shadowPriority", "0"}};
-    } else if (component.typeId == kEditorPointLightComponentType) {
-        component.properties = {{"color", "1 1 1 1"}, {"intensity", "1"},
-            {"radius", "10"}, {"decay", "2"}, {"priority", "0"},
-            {"castsShadow", "false"}, {"shadowPriority", "0"}};
-    } else if (component.typeId == kEditorSpotLightComponentType) {
-        component.properties = {{"color", "1 1 1 1"}, {"direction", "0 -1 0"},
-            {"intensity", "1"}, {"distance", "10"}, {"decay", "2"},
-            {"angle", "30"}, {"priority", "0"}, {"castsShadow", "true"},
-            {"shadowPriority", "0"}};
-    } else if (component.typeId == kEditorNavigationSurfaceComponentType) {
-        component.properties = {{"walkable", "true"}, {"areaId", "Default"},
-            {"areaCost", "1"}};
-    } else if (component.typeId == kEditorNavigationObstacleComponentType) {
-        component.properties = {{"enabled", "true"}, {"dynamic", "true"},
-            {"carve", "true"}, {"halfExtents", "0.5 0.5 0.5"}};
-    } else if (component.typeId == kEditorAiAgentComponentType) {
-        component.properties = {{"enabled", "true"}, {"team", "0"},
-            {"tickInterval", "0.1"}, {"sightRadius", "30"},
-            {"sightFovDegrees", "90"}, {"hearingRadius", "20"},
-            {"detectSameTeam", "false"}, {"crowdEnabled", "true"},
-            {"agentRadius", "0.5"}, {"maximumSpeed", "3"},
-            {"neighborRadius", "4"}, {"avoidanceWeight", "1.5"}};
-    } else if (component.typeId == kEditorAiStimulusComponentType) {
-        component.properties = {{"enabled", "true"}, {"team", "1"},
-            {"visible", "true"}, {"audible", "true"}, {"loudness", "1"}};
-    } else if (component.typeId == kEditorSmartObjectComponentType) {
-        component.properties = {{"enabled", "true"}, {"slotId", "Primary"},
-            {"type", "Generic"}, {"interactionRadius", "1"},
-            {"priority", "0"}, {"leaseSeconds", "5"}};
-    }
+    const EditorSceneObjectReference* initialReference,
+    const EditorSceneComponentRegistry* registry) {
+    const EditorSceneComponentRegistry& resolvedRegistry =
+        registry != nullptr ? *registry : BuiltInEditorSceneComponentRegistry();
+    EditorSceneComponent component = resolvedRegistry.CreateDefault(typeId);
     if (initialReference != nullptr) component.references.push_back(*initialReference);
+    return AddComponent(entityGuid, std::move(component));
+}
+
+bool EditorScene::AddComponent(
+    std::string_view entityGuid,
+    EditorSceneComponent component) {
+    EditorSceneEntity* entity = FindEntity(entityGuid);
+    if (entity == nullptr || component.typeId.empty() ||
+        FindComponent(*entity, component.typeId) != nullptr) return false;
     entity->components.push_back(std::move(component));
     Touch();
     return true;
@@ -216,8 +242,13 @@ bool EditorScene::RemoveComponent(std::string_view entityGuid, std::string_view 
     return true;
 }
 
-EditorSceneValidationReport EditorScene::Validate() const {
+EditorSceneValidationReport EditorScene::Validate(
+    const EditorSceneComponentRegistry* registry) const {
     EditorSceneValidationReport report{};
+    const EditorSceneComponentRegistry& resolvedRegistry =
+        registry != nullptr
+        ? *registry
+        : BuiltInEditorSceneComponentRegistry();
     if (schemaVersion == 0 || schemaVersion > kEditorSceneSchemaVersion) {
         report.errors.push_back("Scene schema version is unsupported.");
     }
@@ -225,6 +256,16 @@ EditorSceneValidationReport EditorScene::Validate() const {
     for (const EditorSceneEntity& entity : entities) {
         if (entity.guid.empty() || !guids.insert(entity.guid).second) {
             report.errors.push_back("Entity GUID is empty or duplicated: " + entity.guid);
+        }
+    }
+    const std::vector<bool> runtimeActivation =
+        EvaluateRuntimeActivation();
+    std::unordered_set<std::string> runtimeActiveEntities;
+    runtimeActiveEntities.reserve(entities.size());
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        if (index < runtimeActivation.size() &&
+            runtimeActivation[index]) {
+            runtimeActiveEntities.insert(entities[index].guid);
         }
     }
     for (const EditorSceneEntity& entity : entities) {
@@ -240,12 +281,116 @@ EditorSceneValidationReport EditorScene::Validate() const {
             if (component.typeId.empty() || !componentTypes.insert(component.typeId).second) {
                 report.errors.push_back("Component Type ID is empty or duplicated on: " + entity.guid);
             }
+            resolvedRegistry.ValidateComponent(
+                component, report, entity.guid);
+            const EditorSceneComponentDescriptor* componentDescriptor =
+                resolvedRegistry.Find(component.typeId);
+            if (componentDescriptor != nullptr) {
+                for (const EditorSceneComponentPropertyDescriptor& descriptor :
+                     componentDescriptor->properties) {
+                    if (descriptor.kind !=
+                        EditorScenePropertyKind::EntityReference) {
+                        continue;
+                    }
+                    const EditorSceneObjectReference* reference =
+                        FindEditorSceneEntityReference(
+                            component, descriptor.name);
+                    const bool hasExplicitReference =
+                        reference != nullptr &&
+                        !reference->entityGuid.empty();
+                    const EditorSceneEntity* resolved =
+                        ResolveEditorSceneEntityReference(
+                            *this, entity, component, descriptor);
+                    if ((hasExplicitReference ||
+                         descriptor.required ||
+                         descriptor.entityReferenceDefaultsToSelf) &&
+                        resolved == nullptr) {
+                        report.errors.push_back(
+                            "Entity Reference \"" + descriptor.name +
+                            "\" on " + entity.guid +
+                            " does not resolve to an Entity with required "
+                            "Component \"" +
+                            descriptor.entityReferenceTargetComponentType +
+                            "\".");
+                    }
+                }
+            }
             if (component.typeId == kEditorTransformComponentType) hasTransform = true;
+            if (component.typeId == kEditorPatrolComponentType &&
+                component.enabled &&
+                runtimeActiveEntities.contains(entity.guid)) {
+                EditorPatrolComponent patrol{};
+                std::string patrolError;
+                if (EditorPatrolComponent::FromSceneComponent(
+                        component, patrol, &patrolError)) {
+                    const EditorSceneComponent* spawnComponent =
+                        FindComponent(
+                            entity,
+                            kEditorGameplaySpawnPointComponentType);
+                    const auto spawnKind =
+                        spawnComponent != nullptr
+                        ? std::find_if(
+                            spawnComponent->properties.begin(),
+                            spawnComponent->properties.end(),
+                            [](const EditorSceneProperty& property) {
+                                return property.name == "kind";
+                            })
+                        : std::vector<EditorSceneProperty>::
+                            const_iterator{};
+                    if (spawnComponent == nullptr ||
+                        !spawnComponent->enabled ||
+                        spawnKind == spawnComponent->properties.end() ||
+                        spawnKind->value != "ENEMY") {
+                        report.errors.push_back(
+                            "Active Patrol requires an enabled ENEMY "
+                            "Gameplay Spawn Point on the same Entity: " +
+                            entity.guid);
+                    }
+                    const std::string routeGuid =
+                        patrol.routeEntityGuid.empty()
+                        ? entity.guid
+                        : patrol.routeEntityGuid;
+                    const EditorSceneEntity* routeEntity =
+                        FindEntity(routeGuid);
+                    const EditorSceneComponent* routeComponent =
+                        routeEntity != nullptr
+                        ? FindComponent(
+                            *routeEntity,
+                            kEditorSplineRouteComponentType)
+                        : nullptr;
+                    if (routeEntity == nullptr ||
+                        routeComponent == nullptr ||
+                        !routeComponent->enabled ||
+                        !runtimeActiveEntities.contains(routeGuid)) {
+                        report.errors.push_back(
+                            "Active Patrol route is missing, disabled, or "
+                            "inactive in hierarchy on: " + entity.guid);
+                    }
+                }
+            }
             for (const EditorSceneObjectReference& reference : component.references) {
                 if (!reference.entityGuid.empty() && FindEntity(reference.entityGuid) == nullptr) {
                     report.errors.push_back("Object reference target is missing: " + reference.entityGuid);
                 }
-                if (reference.entityGuid.empty() && reference.assetGuid.empty()) {
+                const EditorSceneComponentPropertyDescriptor*
+                    referenceDescriptor =
+                    componentDescriptor != nullptr
+                    ? FindEditorSceneComponentPropertyDescriptor(
+                        *componentDescriptor, reference.property)
+                    : nullptr;
+                const bool registeredEntityReference =
+                    referenceDescriptor != nullptr &&
+                    referenceDescriptor->kind ==
+                        EditorScenePropertyKind::EntityReference;
+                if (registeredEntityReference &&
+                    !reference.assetGuid.empty()) {
+                    report.errors.push_back(
+                        "Entity Reference contains an Asset GUID on: " +
+                        entity.guid);
+                }
+                if (reference.entityGuid.empty() &&
+                    reference.assetGuid.empty() &&
+                    !registeredEntityReference) {
                     report.warnings.push_back("Object reference is unresolved on: " + entity.guid);
                 }
             }
@@ -379,31 +524,16 @@ EditorSceneValidationReport EditorScene::Validate() const {
 }
 
 const char* DisplayNameForEditorSceneComponent(std::string_view typeId) noexcept {
-    if (typeId == kEditorTransformComponentType) return "Transform";
-    if (typeId == kEditorMeshRendererComponentType) return "Mesh Renderer";
-    if (typeId == kEditorVfxComponentType) return "VFX";
-    if (typeId == kEditorAudioSourceComponentType) return "Audio Source";
-    if (typeId == kEditorDirectionalLightComponentType) return "Directional Light";
-    if (typeId == kEditorPointLightComponentType) return "Point Light";
-    if (typeId == kEditorSpotLightComponentType) return "Spot Light";
-    if (typeId == kEditorNavigationSurfaceComponentType) return "Navigation Surface";
-    if (typeId == kEditorNavigationObstacleComponentType) return "Navigation Obstacle";
-    if (typeId == kEditorAiAgentComponentType) return "AI Agent";
-    if (typeId == kEditorAiStimulusComponentType) return "AI Perception Stimulus";
-    if (typeId == kEditorSmartObjectComponentType) return "Smart Object";
-    if (typeId == "editor.blender-scene-source") return "Blender Scene Source";
-    if (typeId == "editor.blender-object-source") return "Blender Object Source";
-    if (typeId == "gameplay.spawn-point") return "Gameplay Spawn Point";
-    if (typeId == "engine.box-collider") return "Box Collider";
+    const EditorSceneComponentDescriptor* descriptor =
+        BuiltInEditorSceneComponentRegistry().Find(typeId);
+    if (descriptor != nullptr) return descriptor->displayName.c_str();
     return "Component";
 }
 
 std::string EditorSceneComponentTypeForAssetKind(std::string_view assetKind) noexcept {
-    if (assetKind == "Mesh") return std::string(kEditorMeshRendererComponentType);
-    if (assetKind == "Effect") return std::string(kEditorVfxComponentType);
-    if (assetKind == "Audio") return std::string(kEditorAudioSourceComponentType);
-    if (assetKind == "BehaviorTree") return std::string(kEditorAiAgentComponentType);
-    return {};
+    const EditorSceneComponentDescriptor* descriptor =
+        BuiltInEditorSceneComponentRegistry().FindForAssetKind(assetKind);
+    return descriptor != nullptr ? descriptor->typeId : std::string{};
 }
 
 } // namespace editor

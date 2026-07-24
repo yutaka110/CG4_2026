@@ -6,11 +6,18 @@
 
 namespace editor {
 
+class EditorSceneComponentRegistry;
+class EditorGimmickDefinitionRegistry;
+
 class SceneWorldObjectProvider final
     : public IEditorWorldObjectProvider,
       public IEditorWorldMutationProvider {
 public:
-    void Bind(EditorScene* scene, EditorDocumentId document);
+    void Bind(
+        EditorScene* scene,
+        EditorDocumentId document,
+        const EditorSceneComponentRegistry* componentRegistry = nullptr,
+        const EditorGimmickDefinitionRegistry* gimmickRegistry = nullptr);
 
     std::string_view ProviderId() const noexcept override { return "world.scene"; }
     int32_t Priority() const noexcept override { return 50; }
@@ -38,6 +45,8 @@ public:
 private:
     EditorScene* scene_ = nullptr;
     EditorDocumentId document_;
+    const EditorSceneComponentRegistry* componentRegistry_ = nullptr;
+    const EditorGimmickDefinitionRegistry* gimmickRegistry_ = nullptr;
 };
 
 } // namespace editor

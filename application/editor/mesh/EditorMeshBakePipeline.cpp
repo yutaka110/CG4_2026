@@ -467,11 +467,12 @@ EditorUndoResult EditorMeshBakeExecutionService::ApplyMeshBake(
 
     const std::string assetGuid = change.after.record.has_value() ? change.after.record->guid : std::string{};
     if (runtimeCache_ != nullptr && !assetGuid.empty()) {
-        runtimeCache_->Invalidate(assetGuid);
         if (target.record.has_value()) {
             EditorAssetRecord runtimeRecord = *target.record;
             runtimeRecord.sourcePath = (projectRoot_ / change.paths.source).generic_string();
             runtimeCache_->Load(runtimeRecord, nullptr);
+        } else {
+            runtimeCache_->Invalidate(assetGuid);
         }
     }
     registry_->ScanDependencies();

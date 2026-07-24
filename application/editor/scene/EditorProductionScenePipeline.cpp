@@ -407,9 +407,10 @@ bool EditorProductionScenePipeline::Sync(
             std::string cacheError;
             if (!runtimeCache.Load(*record, &cacheError)) {
                 diagnostics_.push_back("Mesh Asset '" + record->displayName + "' rejected: " + cacheError);
-                continue;
+                if (resource == nullptr) continue;
+            } else {
+                resource = runtimeCache.Find(assetGuid);
             }
-            resource = runtimeCache.Find(assetGuid);
         }
         if (resource == nullptr || resource->mesh.lods.empty()) continue;
         const EditorSceneComponent* transformComponent =
@@ -527,11 +528,13 @@ bool EditorProductionScenePipeline::EnsureGpuAsset(
     std::string* errorMessage) {
     const uint64_t buildHash = resource.mesh.buildSettingsHash;
     if (const auto found = gpuAssets_.find(resource.assetGuid); found != gpuAssets_.end() &&
+        found->second.generation == resource.generation &&
         found->second.sourceTimestamp == resource.sourceTimestamp &&
         found->second.sourceGeometryHash == resource.mesh.sourceGeometryHash &&
         found->second.buildSettingsHash == buildHash) return true;
 
     GpuAsset built{};
+    built.generation = resource.generation;
     built.sourceTimestamp = resource.sourceTimestamp;
     built.sourceGeometryHash = resource.mesh.sourceGeometryHash;
     built.buildSettingsHash = buildHash;

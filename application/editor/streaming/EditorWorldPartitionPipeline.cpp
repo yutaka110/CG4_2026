@@ -353,8 +353,11 @@ bool EditorWorldPartitionPipeline::QueueHlodBuild(
         const EditorProductionMeshRuntimeResource* resource = runtimeCache.Find(assetGuid);
         if (resource == nullptr || resource->sourceTimestamp != record->sourceTimestamp) {
             std::string ignored;
-            if (!runtimeCache.Load(*record, &ignored)) continue;
-            resource = runtimeCache.Find(assetGuid);
+            if (!runtimeCache.Load(*record, &ignored)) {
+                if (resource == nullptr) continue;
+            } else {
+                resource = runtimeCache.Find(assetGuid);
+            }
         }
         if (resource == nullptr || resource->mesh.lods.empty()) continue;
         const EditorCookedMeshLod& lod = resource->mesh.lods.back();
@@ -586,6 +589,11 @@ bool EditorWorldPartitionPipeline::Sync(
             if (const EditorAssetRecord* record = registry.FindByGuid(assetGuid))
                 cell.sourceFingerprint = HashAppend(
                     cell.sourceFingerprint, record->sourceTimestamp);
+            if (const EditorProductionMeshRuntimeResource* resource =
+                    runtimeCache.Find(assetGuid)) {
+                cell.sourceFingerprint = HashAppend(
+                    cell.sourceFingerprint, resource->generation);
+            }
         }
         entityCells.emplace(entity.guid, key);
     }

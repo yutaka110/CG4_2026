@@ -1313,6 +1313,33 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
                         "Placement Tool",
                         result.message);
                 }});
+        editor::RegisterSplineRouteTools(
+            editorModeRegistry_,
+            editor::EditorSplineRouteToolServices{
+                &editorWorldMutationService_,
+                &editorWorldModel_,
+                &editorSceneWorldProvider_,
+                &editorSelection_,
+                [this](const editor::EditorWorldMutationResult& result) {
+                    editorWorldInputSignature_ =
+                        static_cast<uint64_t>(-1);
+                    editorDirtyState_.MarkDirty(
+                        editor::EditorDirtyDomain::Unknown,
+                        "world:" + result.document.assetGuid,
+                        result.document.type + " World",
+                        result.message,
+                        editorDirtyState_.Revision() + 1);
+                    if (editor::EditorDocumentRecord* document =
+                            editorDocumentManager_.Find(
+                                result.document)) {
+                        editorDocumentManager_.MarkDirty(
+                            document->id, result.message);
+                    }
+                    editorNotifications_.Push(
+                        editor::EditorNotificationSeverity::Info,
+                        "Spline Tool",
+                        result.message);
+                }});
         editor::RegisterProductionTerrainBrushTools(
             editorModeRegistry_, &editorTerrainToolBinding_);
         editorGeometryToolBinding_.workspace = &editorGeometryWorkspace_;
@@ -1989,7 +2016,10 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             }
         });
     editorSceneWorldProvider_.Bind(
-        editorSceneDocumentProvider_.Scene(editorSceneDocumentId_), editorSceneDocumentId_);
+        editorSceneDocumentProvider_.Scene(editorSceneDocumentId_),
+        editorSceneDocumentId_,
+        &editorSceneComponentRegistry_,
+        &editorGimmickDefinitionRegistry_);
     editor::EditorDocumentId activeGeometryDocument{};
     if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active();
         activeDocument != nullptr && activeDocument->id.type == editor::EditorDocumentTypes::Scene) {
@@ -2041,7 +2071,25 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         ? "Production Mesh Bake reverted."
                         : "Production Mesh artifacts and runtime cache updated.");
             });
+        const editor::EditorMeshAssetChangeSet meshAssetChanges =
+            editorMeshAssetChangeTracker_.Poll(editorAssetRegistry_);
+        const editor::EditorProductionMeshRuntimeReconcileResult meshReconcile =
+            editorProductionMeshRuntimeCache_.ReconcileAssets(
+                editorAssetRegistry_, meshAssetChanges);
+        if (meshReconcile.failed != 0 && !meshReconcile.diagnostics.empty()) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Warning,
+                "Mesh Asset Hot Reload",
+                meshReconcile.diagnostics.front());
+        }
         if (context.frameState != nullptr) {
+            const editor::EditorScene& productionMeshScene =
+                editorGimmickRuntimeAdapter_ != nullptr &&
+                    editorGimmickRuntimeAdapter_->Active()
+                ? editorGimmickRuntimeAdapter_->Scene()
+                : editorMeshRendererRuntimeWorld_.Active()
+                ? editorMeshRendererRuntimeWorld_.Scene()
+                : *geometryScene;
             std::string worldPartitionError;
             editorWorldPartitionPipeline_.Sync(
                 *geometryScene,
@@ -2065,7 +2113,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 &editorWorldPartitionPipeline_.SourceResidentEntities());
             std::string productionSceneError;
             editorProductionScenePipeline_.Sync(
-                *geometryScene,
+                productionMeshScene,
                 editorAssetRegistry_,
                 editorProductionMeshRuntimeCache_,
                 context.frameState->cameraWorldPosition,
@@ -3307,7 +3355,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 editorSceneDocumentId_ = document;
                 editorSceneWorldProvider_.Bind(
                     editorSceneDocumentProvider_.Scene(document),
-                    document);
+                    document,
+                    &editorSceneComponentRegistry_,
+                    &editorGimmickDefinitionRegistry_);
             }
             editorWorldInputSignature_ = static_cast<uint64_t>(-1);
             editorSelection_.Clear();
@@ -3397,6 +3447,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         }
         if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_5)) {
             editorInteractiveTools_.ActivateMode("editor.mode.modeling");
+        }
+        if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_6)) {
+            editorInteractiveTools_.ActivateMode("editor.mode.paths");
         }
     }
     editorInteractiveTools_.Tick(
@@ -3673,6 +3726,13 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 editor::DrawEditorDetailsPanel(
                     editor::EditorDetailsPanelContext{
                         &editorSelection_,
+                        &editorSceneComponentRegistry_,
+                        &editorGimmickDefinitionRegistry_,
+                        editorGimmickRuntimeWorld_,
+                        editorGimmickRuntimeAdapter_,
+                        editorGimmickRuntimeEventRouter_,
+                        editorGimmickRuntimeInteraction_,
+                        editorGimmickRuntimeTriggers_,
                         &editorPropertyRegistry_,
                         &editorPropertyAccessor,
                         &editorPreviewPropertyAccessor,
@@ -4332,7 +4392,9 @@ void AppImGuiLayer::Shutdown() {
     editorGeometryWorkspace_.Clear();
     editorMeshBakeExecution_.Clear();
     editorMeshBakePipeline_.Clear();
+    editorMeshAssetChangeTracker_.Reset();
     editorProductionMeshRuntimeCache_.Clear();
+    editorMeshRendererRuntimeWorld_.Clear();
     editorViewportOverlay_.UnregisterProvider(editorProductionNavigationAuthoringPipeline_.Id());
     editorProductionNavigationAuthoringPipeline_.Shutdown();
     editorProductionAiValidationPipeline_.Shutdown();

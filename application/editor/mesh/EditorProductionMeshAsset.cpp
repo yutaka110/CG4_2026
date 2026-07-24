@@ -602,18 +602,92 @@ std::filesystem::path EditorCookedCollisionPath(const std::filesystem::path& sou
     return std::filesystem::path(sourcePath.string() + ".collision");
 }
 
-bool EditorProductionMeshRuntimeCache::Load(
+EditorMeshAssetChangeSet EditorMeshAssetChangeTracker::Poll(
+    const EditorAssetRegistry& registry) {
+    const auto stamp = [](const std::filesystem::path& path) {
+        ArtifactStamp result{};
+        std::error_code error;
+        result.exists = std::filesystem::is_regular_file(path, error);
+        if (!result.exists || error) return result;
+        result.byteSize = static_cast<uint64_t>(std::filesystem::file_size(path, error));
+        if (error) result.byteSize = 0;
+        error.clear();
+        const auto writeTime = std::filesystem::last_write_time(path, error);
+        if (!error) {
+            result.writeTime = static_cast<uint64_t>(
+                writeTime.time_since_epoch().count());
+        }
+        return result;
+    };
+    const auto makeSnapshot = [&](const EditorAssetRecord& record) {
+        Snapshot snapshot{};
+        std::filesystem::path sourcePath(record.sourcePath);
+        if (sourcePath.is_relative()) sourcePath = projectRoot_ / sourcePath;
+        sourcePath = sourcePath.lexically_normal();
+        snapshot.sourcePath = sourcePath.generic_string();
+        snapshot.sourceTimestamp = record.sourceTimestamp;
+        snapshot.missing = record.missing;
+        snapshot.source = stamp(sourcePath);
+        snapshot.cooked = stamp(EditorCookedMeshPath(sourcePath));
+        snapshot.collision = stamp(EditorCookedCollisionPath(sourcePath));
+        return snapshot;
+    };
+
+    EditorMeshAssetChangeSet result{};
+    result.registryRevision = registry.Revision();
+    result.sequence = ++sequence_;
+    std::unordered_map<std::string, Snapshot> current;
+    for (const EditorAssetRecord& record : registry.Records()) {
+        if (record.kind != EditorAssetKind::Mesh || record.guid.empty() ||
+            record.sourcePath.empty()) continue;
+        Snapshot snapshot = makeSnapshot(record);
+        if (record.missing) continue;
+        const auto previous = snapshots_.find(record.guid);
+        if (previous == snapshots_.end()) {
+            result.changes.push_back({
+                EditorMeshAssetChangeKind::Added, record.guid, 0, record.sourceTimestamp});
+        } else if (!(previous->second == snapshot)) {
+            result.changes.push_back({EditorMeshAssetChangeKind::Modified, record.guid,
+                previous->second.sourceTimestamp, record.sourceTimestamp});
+        }
+        current.insert_or_assign(record.guid, std::move(snapshot));
+    }
+    for (const auto& [assetGuid, previous] : snapshots_) {
+        if (current.contains(assetGuid)) continue;
+        result.changes.push_back({EditorMeshAssetChangeKind::Removed, assetGuid,
+            previous.sourceTimestamp, 0});
+    }
+    std::sort(result.changes.begin(), result.changes.end(),
+        [](const EditorMeshAssetChange& left, const EditorMeshAssetChange& right) {
+            if (left.assetGuid != right.assetGuid) return left.assetGuid < right.assetGuid;
+            return left.kind < right.kind;
+        });
+    snapshots_ = std::move(current);
+    return result;
+}
+
+void EditorMeshAssetChangeTracker::Reset() {
+    snapshots_.clear();
+    sequence_ = 0;
+}
+
+bool EditorProductionMeshRuntimeCache::BuildResource(
     const EditorAssetRecord& record,
-    std::string* errorMessage) {
+    EditorProductionMeshRuntimeResource& output,
+    std::string* errorMessage) const {
     if (record.kind != EditorAssetKind::Mesh || !IsDurableEditorAssetGuid(record.guid) ||
-        record.sourcePath.empty() || std::filesystem::path(record.sourcePath).extension() != ".mesh") {
+        record.missing || record.sourcePath.empty() ||
+        std::filesystem::path(record.sourcePath).extension() != ".mesh") {
         SetError(errorMessage, "Runtime Mesh cache requires a durable Production Mesh record.");
         return false;
     }
+    std::filesystem::path sourcePath(record.sourcePath);
+    if (sourcePath.is_relative()) sourcePath = projectRoot_ / sourcePath;
+    sourcePath = sourcePath.lexically_normal();
     std::vector<uint8_t> sourceBytes;
     std::vector<uint8_t> meshBytes;
-    if (!ReadFileBytes(record.sourcePath, sourceBytes, errorMessage) ||
-        !ReadFileBytes(EditorCookedMeshPath(record.sourcePath), meshBytes, errorMessage)) return false;
+    if (!ReadFileBytes(sourcePath, sourceBytes, errorMessage) ||
+        !ReadFileBytes(EditorCookedMeshPath(sourcePath), meshBytes, errorMessage)) return false;
     EditorProductionMeshAssetDocument source{};
     EditorCookedMeshArtifact mesh{};
     if (!EditorProductionMeshAssetDocument::Deserialize(
@@ -631,7 +705,7 @@ bool EditorProductionMeshRuntimeCache::Load(
         collision.sourceGeometryHash = source.sourceGeometryHash;
     } else {
         std::vector<uint8_t> collisionBytes;
-        if (!ReadFileBytes(EditorCookedCollisionPath(record.sourcePath), collisionBytes, errorMessage) ||
+        if (!ReadFileBytes(EditorCookedCollisionPath(sourcePath), collisionBytes, errorMessage) ||
             !EditorCookedCollisionArtifact::Deserialize(collisionBytes, collision, errorMessage) ||
             collision.sourceGeometryHash != source.sourceGeometryHash ||
             collision.mode != source.settings.collisionMode) {
@@ -641,23 +715,140 @@ bool EditorProductionMeshRuntimeCache::Load(
     }
     EditorProductionMeshRuntimeResource resource{};
     resource.assetGuid = record.guid;
+    resource.sourcePath = sourcePath.generic_string();
     resource.sourceTimestamp = record.sourceTimestamp;
     resource.mesh = std::move(mesh);
     resource.collision = std::move(collision);
-    resources_.insert_or_assign(record.guid, std::move(resource));
+    output = std::move(resource);
     return true;
 }
 
-void EditorProductionMeshRuntimeCache::Invalidate(std::string_view assetGuid) {
-    resources_.erase(std::string(assetGuid));
+EditorProductionMeshRuntimeCache::PublishResult
+EditorProductionMeshRuntimeCache::Publish(EditorProductionMeshRuntimeResource resource) {
+    auto existing = resources_.find(resource.assetGuid);
+    if (existing != resources_.end()) {
+        const bool sameContent =
+            existing->second.mesh.sourceGeometryHash == resource.mesh.sourceGeometryHash &&
+            existing->second.mesh.buildSettingsHash == resource.mesh.buildSettingsHash &&
+            existing->second.collision.mode == resource.collision.mode &&
+            existing->second.collision.sourceGeometryHash == resource.collision.sourceGeometryHash;
+        if (sameContent) {
+            const bool metadataChanged =
+                existing->second.sourcePath != resource.sourcePath ||
+                existing->second.sourceTimestamp != resource.sourceTimestamp;
+            existing->second.sourcePath = std::move(resource.sourcePath);
+            existing->second.sourceTimestamp = resource.sourceTimestamp;
+            if (!metadataChanged) return PublishResult::Unchanged;
+            ++revision_;
+            return PublishResult::Refreshed;
+        }
+        resource.generation = nextGeneration_++;
+        existing->second = std::move(resource);
+        ++revision_;
+        return PublishResult::Updated;
+    }
+    resource.generation = nextGeneration_++;
+    resources_.emplace(resource.assetGuid, std::move(resource));
+    ++revision_;
+    return PublishResult::Loaded;
 }
 
-void EditorProductionMeshRuntimeCache::Clear() { resources_.clear(); }
+bool EditorProductionMeshRuntimeCache::Load(
+    const EditorAssetRecord& record,
+    std::string* errorMessage) {
+    EditorProductionMeshRuntimeResource resource{};
+    if (!BuildResource(record, resource, errorMessage)) return false;
+    Publish(std::move(resource));
+    return true;
+}
+
+EditorProductionMeshRuntimeReconcileResult
+EditorProductionMeshRuntimeCache::ReconcileAssets(
+    const EditorAssetRegistry& registry,
+    const EditorMeshAssetChangeSet& changes) {
+    struct PendingPublish {
+        EditorProductionMeshRuntimeResource resource;
+    };
+    std::vector<PendingPublish> pendingPublishes;
+    std::vector<std::string> pendingRemovals;
+    EditorProductionMeshRuntimeReconcileResult result{};
+
+    for (const EditorMeshAssetChange& change : changes.changes) {
+        const EditorAssetRecord* record = registry.FindByGuid(change.assetGuid);
+        const bool removed = change.kind == EditorMeshAssetChangeKind::Removed ||
+            record == nullptr || record->kind != EditorAssetKind::Mesh || record->missing;
+        if (removed) {
+            if (resources_.contains(change.assetGuid)) {
+                pendingRemovals.push_back(change.assetGuid);
+            }
+            continue;
+        }
+
+        const bool resident = resources_.contains(change.assetGuid);
+        if (!resident) {
+            ++result.skippedCold;
+            continue;
+        }
+        EditorProductionMeshRuntimeResource candidate{};
+        std::string loadError;
+        if (!BuildResource(*record, candidate, &loadError)) {
+            ++result.failed;
+            result.diagnostics.push_back(
+                "Mesh Asset '" + record->displayName + "' kept its last-known-good generation: " +
+                (loadError.empty() ? "artifact validation failed." : loadError));
+            continue;
+        }
+        pendingPublishes.push_back({std::move(candidate)});
+    }
+
+    for (const std::string& assetGuid : pendingRemovals) {
+        const auto erased = resources_.erase(assetGuid);
+        if (erased != 0) {
+            ++result.removed;
+            ++revision_;
+        }
+    }
+    for (PendingPublish& pending : pendingPublishes) {
+        switch (Publish(std::move(pending.resource))) {
+        case PublishResult::Loaded: ++result.loaded; break;
+        case PublishResult::Updated: ++result.updated; break;
+        case PublishResult::Refreshed: ++result.refreshed; break;
+        case PublishResult::Unchanged: break;
+        }
+    }
+    result.cacheRevision = revision_;
+    return result;
+}
+
+void EditorProductionMeshRuntimeCache::Invalidate(std::string_view assetGuid) {
+    if (resources_.erase(std::string(assetGuid)) != 0) ++revision_;
+}
+
+void EditorProductionMeshRuntimeCache::Clear() {
+    if (!resources_.empty()) ++revision_;
+    resources_.clear();
+}
 
 const EditorProductionMeshRuntimeResource* EditorProductionMeshRuntimeCache::Find(
     std::string_view assetGuid) const {
     const auto found = resources_.find(std::string(assetGuid));
     return found == resources_.end() ? nullptr : &found->second;
+}
+
+EditorProductionMeshRuntimeHandle EditorProductionMeshRuntimeCache::Handle(
+    std::string_view assetGuid) const {
+    const EditorProductionMeshRuntimeResource* resource = Find(assetGuid);
+    return resource != nullptr
+        ? EditorProductionMeshRuntimeHandle{resource->assetGuid, resource->generation}
+        : EditorProductionMeshRuntimeHandle{};
+}
+
+const EditorProductionMeshRuntimeResource* EditorProductionMeshRuntimeCache::Resolve(
+    const EditorProductionMeshRuntimeHandle& handle) const {
+    if (!handle.Valid()) return nullptr;
+    const EditorProductionMeshRuntimeResource* resource = Find(handle.assetGuid);
+    return resource != nullptr && resource->generation == handle.generation
+        ? resource : nullptr;
 }
 
 EditorMeshRendererResourceView EditorProductionMeshRuntimeCache::ResolveForRenderer(

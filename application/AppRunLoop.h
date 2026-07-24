@@ -45,7 +45,19 @@
 #include "editor/EditorTransactionStack.h"
 #include "editor/EditorViewportCameraController.h"
 #include "editor/EditorViewportAuthoringInputGuard.h"
-#include "editor/scene/EditorGameplaySpawnRuntimeService.h"
+#include "editor/scene/EditorGameplaySpawnRuntimeFactory.h"
+#include "editor/scene/EditorBuiltInRuntimeFactoryRegistration.h"
+#include "editor/scene/EditorGimmickRuntimeFactory.h"
+#include "editor/scene/EditorGimmickPresentationPhysicsAdapter.h"
+#include "editor/scene/EditorGimmickRuntimeEventRouter.h"
+#include "editor/scene/EditorGimmickRuntimeEventBindingRegistry.h"
+#include "editor/scene/EditorGimmickRuntimeDelayedEventScheduler.h"
+#include "editor/scene/EditorGimmickRuntimeEventSequenceRegistry.h"
+#include "editor/scene/EditorGimmickRuntimeInteractionSystem.h"
+#include "editor/scene/EditorGimmickRuntimeTriggerSystem.h"
+#include "editor/scene/EditorMeshRendererRuntimeFactory.h"
+#include "editor/scene/EditorPatrolRuntimeFactory.h"
+#include "editor/scene/EditorSceneRuntimeInstantiation.h"
 
 class AppFrameRenderer;
 class AppImGuiLayer;
@@ -145,6 +157,7 @@ private:
     bool SaveRailShooterCourse(std::string* errorMessage = nullptr);
     void TeleportRailShooterCourse(float distance);
     bool BeginEditorGameplaySpawns(std::string* errorMessage);
+    bool ReconcileEditorSceneRuntime(std::string* errorMessage);
     void StopEditorGameplaySpawns();
     void LogCourseEvents(const std::vector<CourseEventMarker>& events);
     void ApplyRailShooterVisualPresets(float distance);
@@ -299,7 +312,30 @@ private:
     float railShooterDistance_ = 0.0f;
     float railShooterPlayerLateralOffset_ = 0.0f;
     float railShooterPlayerVerticalOffset_ = 4.0f;
-    editor::EditorGameplaySpawnRuntimeService editorGameplaySpawnRuntime_{};
+    editor::EditorPatrolRuntimeWorld editorPatrolRuntimeWorld_{};
+    editor::EditorGimmickRuntimeWorld
+        editorGimmickRuntimeWorld_{};
+    editor::EditorGimmickPresentationPhysicsAdapter
+        editorGimmickRuntimeAdapter_{};
+    editor::EditorGimmickRuntimeEventRouter
+        editorGimmickRuntimeEventRouter_{};
+    editor::EditorGimmickRuntimeEventBindingRegistry
+        editorGimmickRuntimeEventBindings_{};
+    editor::EditorGimmickRuntimeEventSequenceRegistry
+        editorGimmickRuntimeEventSequences_{};
+    editor::EditorGimmickRuntimeDelayedEventScheduler
+        editorGimmickRuntimeDelayedEvents_{};
+    editor::EditorGimmickRuntimeInteractionSystem
+        editorGimmickRuntimeInteraction_{};
+    editor::EditorGimmickRuntimeTriggerSystem
+        editorGimmickRuntimeTriggers_{};
+    editor::EditorGimmickDefinitionRuntimeFactoryRegistry
+        editorGimmickDefinitionRuntimeFactories_{};
+    editor::EditorSceneRuntimeComponentFactoryRegistry
+        editorSceneRuntimeFactoryRegistry_{};
+    editor::EditorSceneRuntimeInstantiationService
+        editorSceneRuntimeInstantiation_{};
+    uint64_t editorSceneRuntimeLastReconcileAttemptRevision_ = 0;
     uint32_t railShooterFrameIndex_ = 0;
     bool railShooterInitialized_ = false;
     bool gpuDeviceLost_ = false;

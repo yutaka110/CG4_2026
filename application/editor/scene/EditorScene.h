@@ -7,7 +7,9 @@
 
 namespace editor {
 
-inline constexpr uint32_t kEditorSceneSchemaVersion = 2;
+class EditorSceneComponentRegistry;
+
+inline constexpr uint32_t kEditorSceneSchemaVersion = 3;
 inline constexpr std::string_view kEditorTransformComponentType = "engine.transform";
 inline constexpr std::string_view kEditorMeshRendererComponentType = "engine.mesh-renderer";
 inline constexpr std::string_view kEditorVfxComponentType = "engine.vfx";
@@ -47,6 +49,7 @@ struct EditorSceneEntity {
     std::string name;
     bool visible = true;
     bool locked = false;
+    bool runtimeEnabled = true;
     std::vector<EditorSceneComponent> components;
 };
 
@@ -121,10 +124,17 @@ public:
     bool AddComponent(
         std::string_view entityGuid,
         std::string typeId,
-        const EditorSceneObjectReference* initialReference = nullptr);
+        const EditorSceneObjectReference* initialReference = nullptr,
+        const EditorSceneComponentRegistry* registry = nullptr);
+    bool AddComponent(
+        std::string_view entityGuid,
+        EditorSceneComponent component);
     bool RemoveComponent(std::string_view entityGuid, std::string_view typeId);
     bool IsDescendant(std::string_view candidateGuid, std::string_view ancestorGuid) const;
-    EditorSceneValidationReport Validate() const;
+    std::vector<bool> EvaluateRuntimeActivation() const;
+    bool IsRuntimeActiveInHierarchy(std::string_view guid) const;
+    EditorSceneValidationReport Validate(
+        const EditorSceneComponentRegistry* registry = nullptr) const;
     void Touch() noexcept { ++revision; }
 };
 

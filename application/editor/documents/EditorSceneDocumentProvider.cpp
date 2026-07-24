@@ -1,4 +1,5 @@
 #include "EditorSceneDocumentProvider.h"
+#include "../scene/EditorPatrolComponent.h"
 
 #include <algorithm>
 #include <fstream>
@@ -112,17 +113,23 @@ bool EditorSceneDocumentProvider::Migrate(
         if (errorMessage != nullptr) *errorMessage = "Scene document has no compatible migration path.";
         return false;
     }
-    if (source.schemaVersion == 1) {
+    if (source.schemaVersion < kEditorSceneSchemaVersion) {
         EditorScene legacy{};
         if (!Decode(source, &legacy, errorMessage) || !Encode(legacy, migrated, errorMessage)) {
             return false;
         }
         if (report != nullptr) {
             report->migrated = true;
-            report->sourceSchemaVersion = 1;
+            report->sourceSchemaVersion = source.schemaVersion;
             report->targetSchemaVersion = kEditorSceneSchemaVersion;
+            if (source.schemaVersion == 1) {
+                report->notes.push_back(
+                    "Scene schema v1 was upgraded with an empty persistent "
+                    "Prefab instance table.");
+            }
             report->notes.push_back(
-                "Scene schema v1 was upgraded with an empty persistent Prefab instance table.");
+                "Legacy Scene Entities were upgraded with Runtime Enabled "
+                "set to true.");
         }
         return true;
     }
@@ -167,7 +174,8 @@ bool EditorSceneDocumentProvider::Encode(
     for (const EditorSceneEntity& entity : scene.entities) {
         output << "ENTITY " << std::quoted(entity.guid) << ' '
                << std::quoted(entity.parentGuid) << ' ' << std::quoted(entity.name) << ' '
-               << (entity.visible ? 1 : 0) << ' ' << (entity.locked ? 1 : 0) << '\n';
+               << (entity.visible ? 1 : 0) << ' ' << (entity.locked ? 1 : 0) << ' '
+               << (entity.runtimeEnabled ? 1 : 0) << '\n';
         for (const EditorSceneComponent& component : entity.components) {
             output << "COMPONENT " << std::quoted(entity.guid) << ' '
                    << std::quoted(component.typeId) << ' ' << (component.enabled ? 1 : 0) << '\n';
@@ -250,13 +258,23 @@ bool EditorSceneDocumentProvider::Decode(
             EditorSceneEntity entity{};
             int visible = 1;
             int locked = 0;
+            int runtimeEnabled = 1;
             if (!(row >> std::quoted(entity.guid) >> std::quoted(entity.parentGuid) >>
                   std::quoted(entity.name) >> visible >> locked)) {
                 if (errorMessage != nullptr) *errorMessage = "Invalid ENTITY at line " + std::to_string(lineNumber);
                 return false;
             }
+            if (schema >= 3 && !(row >> runtimeEnabled)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage =
+                        "Invalid Runtime Enabled state at line " +
+                        std::to_string(lineNumber);
+                }
+                return false;
+            }
             entity.visible = visible != 0;
             entity.locked = locked != 0;
+            entity.runtimeEnabled = runtimeEnabled != 0;
             decoded.entities.push_back(std::move(entity));
             continue;
         }
@@ -369,6 +387,29 @@ bool EditorSceneDocumentProvider::Decode(
     if (!ended) {
         if (errorMessage != nullptr) *errorMessage = "Scene document is missing END.";
         return false;
+    }
+    // In-memory schema migration: legacy Patrol Scenes stored the route as a
+    // scalar routeEntityGuid property. Convert it to the typed "route"
+    // EditorSceneObjectReference before validation and before the Details
+    // Entity Picker sees the document.
+    for (EditorSceneEntity& entity : decoded.entities) {
+        EditorSceneComponent* patrol =
+            decoded.FindComponent(
+                entity, kEditorPatrolComponentType);
+        if (patrol == nullptr) continue;
+        EditorPatrolComponent typedPatrol{};
+        std::string migrationError;
+        if (!EditorPatrolComponent::FromSceneComponent(
+                *patrol, typedPatrol, &migrationError) ||
+            !typedPatrol.WriteToSceneComponent(
+                *patrol, &migrationError)) {
+            if (errorMessage != nullptr) {
+                *errorMessage =
+                    "Could not migrate Patrol Entity Reference: " +
+                    migrationError;
+            }
+            return false;
+        }
     }
     const EditorSceneValidationReport validation = decoded.Validate();
     if (!validation.Succeeded()) {

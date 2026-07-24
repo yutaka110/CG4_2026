@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace editor {
@@ -136,27 +137,138 @@ struct EditorMeshPhysicsResourceView {
 
 struct EditorProductionMeshRuntimeResource {
     std::string assetGuid;
+    std::string sourcePath;
     uint64_t sourceTimestamp = 0;
+    uint64_t generation = 0;
     EditorCookedMeshArtifact mesh;
     EditorCookedCollisionArtifact collision;
 };
 
+enum class EditorMeshAssetChangeKind {
+    Added,
+    Modified,
+    Removed,
+};
+
+struct EditorMeshAssetChange {
+    EditorMeshAssetChangeKind kind = EditorMeshAssetChangeKind::Added;
+    std::string assetGuid;
+    uint64_t previousSourceTimestamp = 0;
+    uint64_t currentSourceTimestamp = 0;
+};
+
+struct EditorMeshAssetChangeSet {
+    uint32_t registryRevision = 0;
+    uint64_t sequence = 0;
+    std::vector<EditorMeshAssetChange> changes;
+
+    bool Empty() const noexcept { return changes.empty(); }
+};
+
+class EditorMeshAssetChangeTracker {
+public:
+    explicit EditorMeshAssetChangeTracker(
+        std::filesystem::path projectRoot = std::filesystem::current_path())
+        : projectRoot_(std::move(projectRoot)) {}
+
+    EditorMeshAssetChangeSet Poll(const EditorAssetRegistry& registry);
+    void Reset();
+
+    uint64_t Sequence() const noexcept { return sequence_; }
+    std::size_t TrackedAssetCount() const noexcept { return snapshots_.size(); }
+
+private:
+    struct ArtifactStamp {
+        bool exists = false;
+        uint64_t byteSize = 0;
+        uint64_t writeTime = 0;
+
+        bool operator==(const ArtifactStamp&) const = default;
+    };
+
+    struct Snapshot {
+        std::string sourcePath;
+        uint64_t sourceTimestamp = 0;
+        bool missing = false;
+        ArtifactStamp source;
+        ArtifactStamp cooked;
+        ArtifactStamp collision;
+
+        bool operator==(const Snapshot&) const = default;
+    };
+
+    std::unordered_map<std::string, Snapshot> snapshots_;
+    std::filesystem::path projectRoot_;
+    uint64_t sequence_ = 0;
+};
+
+struct EditorProductionMeshRuntimeHandle {
+    std::string assetGuid;
+    uint64_t generation = 0;
+
+    bool Valid() const noexcept { return !assetGuid.empty() && generation != 0; }
+};
+
+struct EditorProductionMeshRuntimeReconcileResult {
+    uint64_t cacheRevision = 0;
+    uint32_t loaded = 0;
+    uint32_t updated = 0;
+    uint32_t refreshed = 0;
+    uint32_t removed = 0;
+    uint32_t skippedCold = 0;
+    uint32_t failed = 0;
+    std::vector<std::string> diagnostics;
+
+    bool Succeeded() const noexcept { return failed == 0; }
+    bool Changed() const noexcept {
+        return loaded != 0 || updated != 0 || refreshed != 0 || removed != 0;
+    }
+};
+
 class EditorProductionMeshRuntimeCache {
 public:
+    explicit EditorProductionMeshRuntimeCache(
+        std::filesystem::path projectRoot = std::filesystem::current_path())
+        : projectRoot_(std::move(projectRoot)) {}
+
     bool Load(
         const EditorAssetRecord& record,
         std::string* errorMessage = nullptr);
+    EditorProductionMeshRuntimeReconcileResult ReconcileAssets(
+        const EditorAssetRegistry& registry,
+        const EditorMeshAssetChangeSet& changes);
     void Invalidate(std::string_view assetGuid);
     void Clear();
 
     const EditorProductionMeshRuntimeResource* Find(std::string_view assetGuid) const;
+    EditorProductionMeshRuntimeHandle Handle(std::string_view assetGuid) const;
+    const EditorProductionMeshRuntimeResource* Resolve(
+        const EditorProductionMeshRuntimeHandle& handle) const;
     EditorMeshRendererResourceView ResolveForRenderer(
         std::string_view assetGuid,
         uint32_t lodIndex) const;
     EditorMeshPhysicsResourceView ResolveForPhysics(std::string_view assetGuid) const;
+    uint64_t Revision() const noexcept { return revision_; }
+    std::size_t Count() const noexcept { return resources_.size(); }
 
 private:
+    enum class PublishResult {
+        Loaded,
+        Updated,
+        Refreshed,
+        Unchanged,
+    };
+
+    bool BuildResource(
+        const EditorAssetRecord& record,
+        EditorProductionMeshRuntimeResource& output,
+        std::string* errorMessage) const;
+    PublishResult Publish(EditorProductionMeshRuntimeResource resource);
+
     std::unordered_map<std::string, EditorProductionMeshRuntimeResource> resources_;
+    std::filesystem::path projectRoot_;
+    uint64_t nextGeneration_ = 1;
+    uint64_t revision_ = 0;
 };
 
 const char* ToString(EditorMeshCollisionBuildMode mode) noexcept;

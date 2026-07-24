@@ -113,11 +113,16 @@ bool EditorWorldMutationService::Prepare(
     providerRequest.kind = request.kind;
     providerRequest.name = request.name;
     providerRequest.assetGuid = request.assetGuid;
+    providerRequest.entityGuid = request.entityGuid;
     providerRequest.assetType = request.assetType;
     providerRequest.componentType = request.componentType;
     providerRequest.property = request.property;
     providerRequest.propertyValue = request.propertyValue;
     providerRequest.placements = request.placements;
+    providerRequest.eventBindingMutation =
+        request.eventBindingMutation;
+    providerRequest.eventSequenceMutation =
+        request.eventSequenceMutation;
     providerRequest.value = request.value;
     std::string providerId;
     EditorDocumentId document;

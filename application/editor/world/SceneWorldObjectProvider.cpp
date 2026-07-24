@@ -1,5 +1,9 @@
 #include "SceneWorldObjectProvider.h"
 #include "../EditorAssetRegistry.h"
+#include "../scene/EditorGimmickComponent.h"
+#include "../scene/EditorGimmickEventBindingMutation.h"
+#include "../scene/EditorGimmickEventSequenceMutation.h"
+#include "../scene/EditorSceneComponentRegistry.h"
 
 #include <algorithm>
 #include <memory>
@@ -73,9 +77,15 @@ bool HasTarget(
 
 } // namespace
 
-void SceneWorldObjectProvider::Bind(EditorScene* scene, EditorDocumentId document) {
+void SceneWorldObjectProvider::Bind(
+    EditorScene* scene,
+    EditorDocumentId document,
+    const EditorSceneComponentRegistry* componentRegistry,
+    const EditorGimmickDefinitionRegistry* gimmickRegistry) {
     scene_ = scene;
     document_ = std::move(document);
+    componentRegistry_ = componentRegistry;
+    gimmickRegistry_ = gimmickRegistry;
 }
 
 EditorObjectHandle SceneWorldObjectProvider::RootHandle() const {
@@ -94,7 +104,8 @@ bool SceneWorldObjectProvider::Enumerate(
     output->objects.clear();
     output->diagnostics.clear();
     if (scene_ == nullptr || !document_.IsValid()) return true;
-    const EditorSceneValidationReport validation = scene_->Validate();
+    const EditorSceneValidationReport validation =
+        scene_->Validate(componentRegistry_);
     output->diagnostics.insert(output->diagnostics.end(),
         validation.errors.begin(), validation.errors.end());
     output->diagnostics.insert(output->diagnostics.end(),
@@ -113,6 +124,8 @@ bool SceneWorldObjectProvider::Enumerate(
     output->objects.push_back(std::move(root));
 
     const EditorObjectHandle rootHandle = output->objects.front().handle;
+    const std::vector<bool> runtimeActivation =
+        scene_->EvaluateRuntimeActivation();
     for (std::size_t index = 0; index < scene_->entities.size(); ++index) {
         const EditorSceneEntity& entity = scene_->entities[index];
         EditorWorldObjectRecord record{};
@@ -128,12 +141,17 @@ bool SceneWorldObjectProvider::Enumerate(
             : MakeHandle(document_, ProviderId(), entity.parentGuid, {}, 0);
         record.visible = entity.visible;
         record.locked = entity.locked;
+        record.runtimeEnabled = entity.runtimeEnabled;
+        record.runtimeActiveInHierarchy =
+            index < runtimeActivation.size() &&
+            runtimeActivation[index];
         record.capabilities = EditorWorldObjectCapability::Rename |
             EditorWorldObjectCapability::Reparent |
             EditorWorldObjectCapability::Duplicate |
             EditorWorldObjectCapability::Delete |
             EditorWorldObjectCapability::Visibility |
             EditorWorldObjectCapability::Lock |
+            EditorWorldObjectCapability::RuntimeActivation |
             EditorWorldObjectCapability::Transform |
             EditorWorldObjectCapability::Components;
         const auto prefabRoot = std::find_if(
@@ -241,7 +259,11 @@ bool SceneWorldObjectProvider::BuildMutation(
             const std::string createdGuid = created->guid;
             if (!request.assetGuid.empty() && !componentType.empty()) {
                 const EditorSceneObjectReference reference{"asset", {}, request.assetGuid};
-                if (!working.AddComponent(createdGuid, componentType, &reference)) {
+                if (!working.AddComponent(
+                        createdGuid,
+                        componentType,
+                        &reference,
+                        componentRegistry_)) {
                     if (errorMessage != nullptr) *errorMessage = "Scene placement could not attach the selected Asset component.";
                     return false;
                 }
@@ -316,14 +338,20 @@ bool SceneWorldObjectProvider::BuildMutation(
         break;
     case EditorWorldMutationKind::SetVisibility:
     case EditorWorldMutationKind::SetLocked:
+    case EditorWorldMutationKind::SetRuntimeEnabled:
         for (const auto& target : request.targets) {
             EditorSceneEntity* entity = targetEntity(target);
             if (entity == nullptr) continue;
-            bool& value = request.kind == EditorWorldMutationKind::SetVisibility
-                ? entity->visible
-                : entity->locked;
-            if (value != request.value) {
-                value = request.value;
+            bool* value = nullptr;
+            if (request.kind == EditorWorldMutationKind::SetVisibility) {
+                value = &entity->visible;
+            } else if (request.kind == EditorWorldMutationKind::SetLocked) {
+                value = &entity->locked;
+            } else {
+                value = &entity->runtimeEnabled;
+            }
+            if (*value != request.value) {
+                *value = request.value;
                 working.Touch();
                 changed = true;
             }
@@ -332,7 +360,11 @@ bool SceneWorldObjectProvider::BuildMutation(
         break;
     case EditorWorldMutationKind::AddComponent: {
         const auto& target = request.targets.front();
-        changed = working.AddComponent(target.objectGuid, request.name);
+        changed = working.AddComponent(
+            target.objectGuid,
+            request.name,
+            nullptr,
+            componentRegistry_);
         if (changed) selection.push_back(target);
         break;
     }
@@ -340,6 +372,35 @@ bool SceneWorldObjectProvider::BuildMutation(
         const auto& target = request.targets.front();
         changed = working.RemoveComponent(target.objectGuid, request.name);
         if (changed) selection.push_back(target);
+        break;
+    }
+    case EditorWorldMutationKind::SetComponentEnabled: {
+        const auto& target = request.targets.front();
+        EditorSceneEntity* entity = targetEntity(target);
+        EditorSceneComponent* component = entity != nullptr
+            ? working.FindComponent(*entity, request.componentType)
+            : nullptr;
+        const EditorSceneComponentDescriptor* descriptor =
+            componentRegistry_ != nullptr
+            ? componentRegistry_->Find(request.componentType)
+            : BuiltInEditorSceneComponentRegistry().Find(request.componentType);
+        if (component == nullptr || request.componentType.empty()) {
+            if (errorMessage != nullptr) {
+                *errorMessage = "Scene Component enabled target does not exist.";
+            }
+            return false;
+        }
+        if (descriptor != nullptr && !descriptor->canDisable && !request.value) {
+            if (errorMessage != nullptr) {
+                *errorMessage = descriptor->displayName + " cannot be disabled.";
+            }
+            return false;
+        }
+        if (component->enabled == request.value) return false;
+        component->enabled = request.value;
+        working.Touch();
+        selection.push_back(target);
+        changed = true;
         break;
     }
     case EditorWorldMutationKind::SetComponentProperty: {
@@ -400,12 +461,246 @@ bool SceneWorldObjectProvider::BuildMutation(
         changed = true;
         break;
     }
+    case EditorWorldMutationKind::SetComponentEntityReference: {
+        const auto& target = request.targets.front();
+        EditorSceneEntity* entity = targetEntity(target);
+        EditorSceneComponent* component = entity != nullptr
+            ? working.FindComponent(*entity, request.componentType)
+            : nullptr;
+        const EditorSceneComponentRegistry& registry =
+            componentRegistry_ != nullptr
+            ? *componentRegistry_
+            : BuiltInEditorSceneComponentRegistry();
+        const EditorSceneComponentDescriptor* componentDescriptor =
+            registry.Find(request.componentType);
+        const EditorSceneComponentPropertyDescriptor* descriptor =
+            componentDescriptor != nullptr
+            ? FindEditorSceneComponentPropertyDescriptor(
+                *componentDescriptor, request.property)
+            : nullptr;
+        if (component == nullptr || request.property.empty() ||
+            descriptor == nullptr ||
+            descriptor->kind != EditorScenePropertyKind::EntityReference) {
+            if (errorMessage != nullptr) {
+                *errorMessage =
+                    "Scene Component Entity reference target is not a "
+                    "registered Entity Reference property.";
+            }
+            return false;
+        }
+        if (!request.entityGuid.empty()) {
+            const EditorSceneEntity* referenced =
+                working.FindEntity(request.entityGuid);
+            if (referenced == nullptr ||
+                !MatchesEditorSceneEntityReferenceTarget(
+                    working, *referenced, *descriptor)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage =
+                        "Scene Entity reference does not resolve to an "
+                        "Entity with the required Component type.";
+                }
+                return false;
+            }
+        } else if (descriptor->required &&
+            !descriptor->entityReferenceDefaultsToSelf) {
+            if (errorMessage != nullptr) {
+                *errorMessage =
+                    "Required Scene Entity reference cannot be cleared.";
+            }
+            return false;
+        }
+
+        const auto reference = std::find_if(
+            component->references.begin(), component->references.end(),
+            [&](const EditorSceneObjectReference& value) {
+                return value.property == request.property;
+            });
+        if (request.entityGuid.empty()) {
+            if (reference == component->references.end()) return false;
+            component->references.erase(reference);
+        } else if (reference != component->references.end()) {
+            if (reference->entityGuid == request.entityGuid &&
+                reference->assetGuid.empty()) {
+                return false;
+            }
+            reference->entityGuid = request.entityGuid;
+            reference->assetGuid.clear();
+        } else {
+            component->references.push_back(
+                {request.property, request.entityGuid, {}});
+        }
+        working.Touch();
+        selection.push_back(target);
+        changed = true;
+        break;
+    }
+    case EditorWorldMutationKind::SetGimmickDefinition: {
+        const auto& target = request.targets.front();
+        EditorSceneEntity* entity = targetEntity(target);
+        EditorSceneComponent* component = entity != nullptr
+            ? working.FindComponent(
+                *entity, kEditorGimmickComponentType)
+            : nullptr;
+        const EditorGimmickDefinitionRegistry& registry =
+            gimmickRegistry_ != nullptr
+            ? *gimmickRegistry_
+            : BuiltInEditorGimmickDefinitionRegistry();
+        if (component == nullptr ||
+            request.propertyValue.empty() ||
+            registry.Find(request.propertyValue) == nullptr) {
+            if (errorMessage != nullptr) {
+                *errorMessage =
+                    "Gimmick Definition mutation target or Type ID "
+                    "is invalid.";
+            }
+            return false;
+        }
+        EditorGimmickComponent gimmick{};
+        std::string gimmickError;
+        if (!EditorGimmickComponent::FromSceneComponent(
+                *component,
+                gimmick,
+                registry,
+                &gimmickError,
+                EditorGimmickValidationPolicy::Authoring)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = gimmickError;
+            }
+            return false;
+        }
+        if (gimmick.definitionId == request.propertyValue) {
+            return false;
+        }
+        if (!gimmick.RebuildForDefinition(
+                request.propertyValue,
+                registry,
+                &gimmickError) ||
+            !gimmick.WriteToSceneComponent(
+                *component,
+                registry,
+                &gimmickError,
+                EditorGimmickValidationPolicy::Authoring)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = gimmickError;
+            }
+            return false;
+        }
+        working.Touch();
+        selection.push_back(target);
+        changed = true;
+        break;
+    }
+    case EditorWorldMutationKind::SetGimmickParameter: {
+        const auto& target = request.targets.front();
+        EditorSceneEntity* entity = targetEntity(target);
+        EditorSceneComponent* component = entity != nullptr
+            ? working.FindComponent(
+                *entity, kEditorGimmickComponentType)
+            : nullptr;
+        const EditorGimmickDefinitionRegistry& registry =
+            gimmickRegistry_ != nullptr
+            ? *gimmickRegistry_
+            : BuiltInEditorGimmickDefinitionRegistry();
+        if (component == nullptr || request.property.empty()) {
+            if (errorMessage != nullptr) {
+                *errorMessage =
+                    "Gimmick parameter mutation target is invalid.";
+            }
+            return false;
+        }
+        EditorGimmickComponent gimmick{};
+        std::string gimmickError;
+        if (!EditorGimmickComponent::FromSceneComponent(
+                *component,
+                gimmick,
+                registry,
+                &gimmickError,
+                EditorGimmickValidationPolicy::Authoring)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = gimmickError;
+            }
+            return false;
+        }
+        const EditorGimmickParameterDefinition* parameter =
+            registry.FindParameter(
+                gimmick.definitionId, request.property);
+        if (parameter == nullptr ||
+            parameter->kind ==
+                EditorGimmickParameterKind::EntityReference ||
+            !registry.ValidateValue(
+                *parameter,
+                request.propertyValue,
+                &gimmickError)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = gimmickError.empty()
+                    ? "Gimmick scalar parameter is not registered."
+                    : gimmickError;
+            }
+            return false;
+        }
+        const auto value = std::find_if(
+            gimmick.parameters.begin(),
+            gimmick.parameters.end(),
+            [&](const EditorGimmickParameterValue& candidate) {
+                return candidate.id == request.property;
+            });
+        if (value == gimmick.parameters.end()) {
+            if (errorMessage != nullptr) {
+                *errorMessage =
+                    "Gimmick scalar parameter storage is missing.";
+            }
+            return false;
+        }
+        if (value->value == request.propertyValue) return false;
+        value->value = request.propertyValue;
+        if (!gimmick.WriteToSceneComponent(
+                *component,
+                registry,
+                &gimmickError,
+                EditorGimmickValidationPolicy::Authoring)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = gimmickError;
+            }
+            return false;
+        }
+        working.Touch();
+        selection.push_back(target);
+        changed = true;
+        break;
+    }
+    case EditorWorldMutationKind::MutateGimmickEventBinding: {
+        const auto& target = request.targets.front();
+        if (!ApplyEditorGimmickEventBindingMutation(
+                working,
+                target.objectGuid,
+                request.eventBindingMutation,
+                errorMessage)) {
+            return false;
+        }
+        selection.push_back(target);
+        changed = true;
+        break;
+    }
+    case EditorWorldMutationKind::MutateGimmickEventSequence: {
+        const auto& target = request.targets.front();
+        if (!ApplyEditorGimmickEventSequenceMutation(
+                working,
+                target.objectGuid,
+                request.eventSequenceMutation,
+                errorMessage)) {
+            return false;
+        }
+        selection.push_back(target);
+        changed = true;
+        break;
+    }
     }
     if (!changed) {
         if (errorMessage != nullptr) *errorMessage = "Scene mutation did not change the document.";
         return false;
     }
-    const EditorSceneValidationReport validation = working.Validate();
+    const EditorSceneValidationReport validation =
+        working.Validate(componentRegistry_);
     if (!validation.Succeeded()) {
         if (errorMessage != nullptr) *errorMessage = validation.errors.front();
         return false;

@@ -15,10 +15,28 @@ namespace editor {
 
 class EditorWorldMutationService;
 class SceneWorldObjectProvider;
+class EditorSceneComponentRegistry;
+class EditorGimmickDefinitionRegistry;
+class EditorGimmickRuntimeWorld;
+class EditorGimmickPresentationPhysicsAdapter;
+class EditorGimmickRuntimeEventRouter;
+class EditorGimmickRuntimeInteractionSystem;
+class EditorGimmickRuntimeTriggerSystem;
 struct EditorWorldMutationResult;
 
 struct EditorDetailsSectionContext {
     const std::vector<EditorObjectHandle>* selectedObjects = nullptr;
+    const EditorSceneComponentRegistry* sceneComponentRegistry = nullptr;
+    const EditorGimmickDefinitionRegistry* gimmickDefinitionRegistry = nullptr;
+    const EditorGimmickRuntimeWorld* gimmickRuntimeWorld = nullptr;
+    const EditorGimmickPresentationPhysicsAdapter*
+        gimmickRuntimeAdapter = nullptr;
+    const EditorGimmickRuntimeEventRouter*
+        gimmickRuntimeEventRouter = nullptr;
+    const EditorGimmickRuntimeInteractionSystem*
+        gimmickRuntimeInteraction = nullptr;
+    const EditorGimmickRuntimeTriggerSystem*
+        gimmickRuntimeTriggers = nullptr;
     const EditorPropertyRegistry* propertyRegistry = nullptr;
     EditorPropertyAccessor* propertyAccessor = nullptr;
     EditorPropertyEditSession* propertyEditSession = nullptr;

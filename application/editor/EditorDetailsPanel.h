@@ -15,9 +15,27 @@
 namespace editor {
 
 class EditorPrefabService;
+class EditorSceneComponentRegistry;
+class EditorGimmickDefinitionRegistry;
+class EditorGimmickRuntimeWorld;
+class EditorGimmickPresentationPhysicsAdapter;
+class EditorGimmickRuntimeEventRouter;
+class EditorGimmickRuntimeInteractionSystem;
+class EditorGimmickRuntimeTriggerSystem;
 
 struct EditorDetailsPanelContext {
     const EditorSelection* selection = nullptr;
+    const EditorSceneComponentRegistry* sceneComponentRegistry = nullptr;
+    const EditorGimmickDefinitionRegistry* gimmickDefinitionRegistry = nullptr;
+    const EditorGimmickRuntimeWorld* gimmickRuntimeWorld = nullptr;
+    const EditorGimmickPresentationPhysicsAdapter*
+        gimmickRuntimeAdapter = nullptr;
+    const EditorGimmickRuntimeEventRouter*
+        gimmickRuntimeEventRouter = nullptr;
+    const EditorGimmickRuntimeInteractionSystem*
+        gimmickRuntimeInteraction = nullptr;
+    const EditorGimmickRuntimeTriggerSystem*
+        gimmickRuntimeTriggers = nullptr;
     const EditorPropertyRegistry* propertyRegistry = nullptr;
     EditorPropertyAccessor* propertyAccessor = nullptr;
     EditorPropertyAccessor* previewPropertyAccessor = nullptr;
