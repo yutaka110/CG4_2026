@@ -44,15 +44,22 @@ void DrawEnabledTooltip(const EditorCommand& command) {
     }
 }
 
-bool ContextAllowsItem(
+} // namespace
+
+bool EditorToolbarItemMatchesContext(
     const EditorContext& context,
     const EditorToolbarItemDescriptor& item) {
+    if (item.requiresCoursePreview && !context.coursePreviewVisible) {
+        return false;
+    }
     if (item.contextualDocumentType.empty()) return true;
     const EditorDocumentRecord* active =
         context.documentManager != nullptr ? context.documentManager->Active() : nullptr;
     return active != nullptr && active->open &&
         active->id.type == item.contextualDocumentType;
 }
+
+namespace {
 
 std::string ToolbarLabel(
     const EditorContext& context,
@@ -160,6 +167,10 @@ void RegisterDefaultEditorToolbar(EditorToolRegistry& registry) {
         if (std::string_view(command.id).find("toolbar.course.") == 0) {
             item.contextualDocumentType = std::string(EditorDocumentTypes::Course);
         }
+        if (std::string_view(command.id) == "toolbar.course.previewFreeze") {
+            item.contextualDocumentType.clear();
+            item.requiresCoursePreview = true;
+        }
         registry.RegisterToolbarItem(std::move(item));
     }
 }
@@ -233,7 +244,10 @@ void DrawEditorToolbar(EditorContext& context) {
     }
     std::vector<const EditorToolbarItemDescriptor*> toolbarItems;
     for (const EditorToolbarItemDescriptor* item : context.tools->Toolbar().VisibleItems()) {
-        if (item != nullptr && ContextAllowsItem(context, *item)) toolbarItems.push_back(item);
+        if (item != nullptr &&
+            EditorToolbarItemMatchesContext(context, *item)) {
+            toolbarItems.push_back(item);
+        }
     }
 
     std::vector<const EditorToolbarItemDescriptor*> overflowItems;

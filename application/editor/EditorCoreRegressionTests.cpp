@@ -34,6 +34,7 @@
 #include "EditorLayoutPersistenceService.h"
 #include "EditorPanelLayoutService.h"
 #include "EditorContentDrawerService.h"
+#include "EditorFramePacingService.h"
 #include "EditorPanelRegistry.h"
 #include "EditorPlaySessionLifecycleService.h"
 #include "EditorPlaySessionRuntimeControlService.h"
@@ -53,6 +54,7 @@
 #include "EditorTransactionStack.h"
 #include "EditorTransformGizmoMath.h"
 #include "EditorTransformGizmoService.h"
+#include "EditorViewportRealtimePolicy.h"
 #include "EditorViewportCameraController.h"
 #include "EditorViewportCoordinateService.h"
 #include "EditorViewportInteractionService.h"
@@ -4517,6 +4519,12 @@ void TestMenuToolbarStatusEvolution(RegressionRunner& runner) {
         toolbarItem("course.apply") != tools.Toolbar().Items().end() &&
             toolbarItem("course.apply")->contextualDocumentType == EditorDocumentTypes::Course,
         "Course toolbar commands should be contextual rather than globally permanent");
+    const auto freezeItem = toolbarItem("course.previewFreeze");
+    runner.Expect(
+        freezeItem != tools.Toolbar().Items().end() &&
+            freezeItem->contextualDocumentType.empty() &&
+            freezeItem->requiresCoursePreview,
+        "Course Preview Freeze should follow Viewport preview presence instead of the active document type");
 
     EditorValidationReport validation;
     validation.errorCount = 2;
@@ -4529,6 +4537,15 @@ void TestMenuToolbarStatusEvolution(RegressionRunner& runner) {
     EditorContext context;
     context.validationReport = &validation;
     context.commands = &commands;
+    if (freezeItem != tools.Toolbar().Items().end()) {
+        runner.Expect(
+            !EditorToolbarItemMatchesContext(context, *freezeItem),
+            "Freeze should be hidden when no Course Preview is visible");
+        context.coursePreviewVisible = true;
+        runner.Expect(
+            EditorToolbarItemMatchesContext(context, *freezeItem),
+            "Freeze should remain visible over a Scene document while the Viewport shows a Course Preview");
+    }
     const EditorStatusBarSnapshot snapshot = BuildEditorStatusBarSnapshot(context);
     runner.Expect(
         snapshot.errorCount == 2 && snapshot.warningCount == 3 &&
@@ -14153,6 +14170,71 @@ void TestPanelLayoutGeometry(RegressionRunner& runner) {
         "viewport input coordinates should use the fitted render surface instead of letterbox bars");
 }
 
+void TestEditorFramePacingAndViewportRealtime(RegressionRunner& runner) {
+    EditorFramePacingSettings settings{};
+    runner.Expect(
+        EditorFramePacingService::Resolve(
+            EditorFramePacingInput{
+                false, false, true, true, false, true},
+            settings).mode == EditorFramePacingMode::PlaySession,
+        "Play/Sim should select the interactive 60 FPS pacing tier");
+    runner.Expect(
+        EditorFramePacingService::Resolve(
+            EditorFramePacingInput{
+                false, false, true, false, false, false},
+            settings).mode == EditorFramePacingMode::IdleEditor,
+        "a stopped non-realtime Viewport should select the idle pacing tier");
+    runner.Expect(
+        EditorFramePacingService::Resolve(
+            EditorFramePacingInput{
+                false, false, false, true, true, true},
+            settings).mode == EditorFramePacingMode::Background,
+        "background throttling should take precedence over active editor work");
+    runner.Expect(
+        EditorFramePacingService::Resolve(
+            EditorFramePacingInput{
+                false, true, false, true, true, true},
+            settings).mode == EditorFramePacingMode::Minimized,
+        "minimized throttling should take precedence over background throttling");
+    const EditorFramePacingDecision profiling =
+        EditorFramePacingService::Resolve(
+            EditorFramePacingInput{
+                true, true, false, true, true, true},
+            settings);
+    runner.Expect(
+        profiling.mode == EditorFramePacingMode::ProfilingUncapped &&
+            profiling.targetFps == 0,
+        "explicit profiling mode should be the only uncapped editor tier");
+
+    EditorViewportRealtimePolicy realtime;
+    runner.Expect(
+        realtime.Evaluate({}).continuous,
+        "Viewport Realtime should start enabled");
+    runner.Expect(
+        realtime.SetRealtimeEnabled(false) &&
+            !realtime.Evaluate({}).continuous &&
+            realtime.RedrawRequested(),
+        "disabling Realtime should stop continuous redraw and request one final redraw");
+    realtime.AcknowledgeViewportRendered();
+    runner.Expect(
+        !realtime.RedrawRequested(),
+        "render acknowledgement should consume the one-shot redraw request");
+    runner.Expect(
+        realtime.Evaluate(
+            EditorViewportRealtimeInput{true, false, false}).continuous &&
+            realtime.Evaluate(
+                EditorViewportRealtimeInput{false, true, false}).continuous &&
+            realtime.Evaluate(
+                EditorViewportRealtimeInput{false, false, true}).continuous,
+        "Play/Sim, Viewport capture, and interactive tools should override Realtime Off");
+    runner.Expect(
+        realtime.ToggleRealtime() &&
+            realtime.RealtimeEnabled() &&
+            realtime.Evaluate({}).reason ==
+                EditorViewportRealtimeReason::UserEnabled,
+        "Realtime toggle should restore continuous Viewport updates");
+}
+
 void TestTerrainChunkPresentationContinuityPolicy(RegressionRunner& runner) {
     TerrainChunkDebugInfo requested{};
     requested.startDistance = 128.0f;
@@ -15848,6 +15930,9 @@ int RunEditorCoreRegressionTests() {
         {"production modeling geometry framework", [&]() { TestProductionModelingGeometryFramework(runner); }},
         {"production mesh bake asset pipeline", [&]() { TestProductionMeshBakeAssetPipeline(runner); }},
         {"panel layout geometry", [&]() { TestPanelLayoutGeometry(runner); }},
+        {"editor frame pacing and viewport realtime", [&]() {
+             TestEditorFramePacingAndViewportRealtime(runner);
+         }},
         {"viewport input ownership routing", [&]() { TestViewportInputOwnershipRouting(runner); }},
         {"editor viewport fly camera", [&]() { TestEditorViewportFlyCamera(runner); }},
         {"bone socket foundation", [&]() { TestBoneSocketFoundation(runner); }},

@@ -15,6 +15,7 @@ class EditorCommandInputRouter;
 class EditorCommandPalette;
 class EditorCommandRegistry;
 class EditorContentDrawerService;
+class EditorFramePacingService;
 class EditorDirtyStateService;
 class EditorDocumentLifecycleService;
 class EditorDocumentManager;
@@ -45,6 +46,7 @@ class EditorTransactionStack;
 class EditorViewportInteractionService;
 class EditorViewportCoordinateService;
 class EditorViewportOverlayService;
+class EditorViewportRealtimePolicy;
 class EditorViewportSelectionBridge;
 class EditorWorldModel;
 class EditorWorldMutationService;
@@ -96,8 +98,11 @@ struct EditorContext {
     EditorCommandPalette* commandPalette = nullptr;
 
     bool developerToolsVisible = false;
+    bool coursePreviewVisible = false;
     EditorContentDrawerService* contentDrawer = nullptr;
+    EditorFramePacingService* framePacing = nullptr;
     EditorViewportOverlayService* viewportOverlay = nullptr;
+    EditorViewportRealtimePolicy* viewportRealtimePolicy = nullptr;
     EditorLayoutPersistenceService* layoutPersistence = nullptr;
     EditorWorldMutationService* worldMutations = nullptr;
     SceneWorldObjectProvider* sceneWorldProvider = nullptr;

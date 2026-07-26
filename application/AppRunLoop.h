@@ -217,6 +217,7 @@ private:
     FrameLoopState& frameState_;
     ID3D12CommandQueue* commandQueue_;
     AppFrameCoordinator frameCoordinator_;
+    bool editorFramePacingProfilingMode_ = false;
     AppSceneStateManager sceneStateManager_;
     VfxEngine vfxEngine_;
     HandParticleAttachment handParticleAttachment_{};

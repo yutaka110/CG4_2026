@@ -20,6 +20,7 @@ class AppPipelines;
 #include "editor/EditorCommandRegistry.h"
 #include "editor/EditorContentDrawerService.h"
 #include "editor/EditorContentBrowserState.h"
+#include "editor/EditorFramePacingService.h"
 #include "editor/CourseDocumentAdapter.h"
 #include "editor/EditorDirtyStateService.h"
 #include "editor/EditorDetailsViewState.h"
@@ -68,6 +69,7 @@ class AppPipelines;
 #include "editor/EditorTransactionStack.h"
 #include "editor/EditorViewportCoordinateService.h"
 #include "editor/EditorViewportCameraInput.h"
+#include "editor/EditorViewportRealtimePolicy.h"
 #include "editor/EditorViewportInteractionService.h"
 #include "editor/EditorViewportOverlay.h"
 #include "editor/EditorViewportSelectionBridge.h"
@@ -215,6 +217,27 @@ public:
     bool WantsDeveloperDiagnostics() const;
     bool ShouldAdvanceEditorRuntimeFrame() const;
     void CompleteEditorRuntimeFrameAdvance(bool advanced);
+    editor::EditorFramePacingService& FramePacingService() {
+        return editorFramePacing_;
+    }
+    const editor::EditorFramePacingService& FramePacingService() const {
+        return editorFramePacing_;
+    }
+    editor::EditorViewportRealtimePolicy& ViewportRealtimePolicy() {
+        return editorViewportRealtimePolicy_;
+    }
+    const editor::EditorViewportRealtimePolicy& ViewportRealtimePolicy() const {
+        return editorViewportRealtimePolicy_;
+    }
+    bool EditorPlaySessionActive() const {
+        return editorPlaySession_.IsActive();
+    }
+    bool EditorViewportInteractionActive() const {
+        return editorViewportInteraction_.HasAnyCapture();
+    }
+    bool EditorInteractiveToolActive() const {
+        return editorInteractiveTools_.HasActiveTool();
+    }
     editor::EditorScene* ActiveEditorScene();
     const editor::EditorScene* ActiveEditorScene() const;
     const editor::EditorSceneComponentRegistry& SceneComponentRegistry() const {
@@ -370,6 +393,8 @@ private:
     editor::EditorPanelLayoutService editorPanelLayout_{};
     editor::EditorPanelRegistry editorPanelRegistry_{};
     editor::EditorContentDrawerService editorContentDrawer_{};
+    editor::EditorFramePacingService editorFramePacing_{};
+    editor::EditorViewportRealtimePolicy editorViewportRealtimePolicy_{};
     bool editorContentBrowserMaximized_ = false;
     editor::EditorDetailsSectionProviderRegistry editorDetailsSectionProviders_{};
     editor::EditorViewportCoordinateService editorViewportCoordinates_{};

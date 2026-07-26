@@ -3370,8 +3370,11 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &editorCommandInputRouter_,
         &editorCommandPalette_,
         showDeveloperTools_};
+    editorContext.coursePreviewVisible = context.course != nullptr;
     editorContext.contentDrawer = &editorContentDrawer_;
+    editorContext.framePacing = &editorFramePacing_;
     editorContext.viewportOverlay = &editorViewportOverlay_;
+    editorContext.viewportRealtimePolicy = &editorViewportRealtimePolicy_;
     editorContext.layoutPersistence = &editorLayoutPersistence_;
     editorContext.worldMutations = &editorWorldMutationService_;
     editorContext.sceneWorldProvider = &editorSceneWorldProvider_;

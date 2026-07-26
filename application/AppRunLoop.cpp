@@ -1482,6 +1482,25 @@ AppRunLoop::AppRunLoop(
       frameState_(frameState),
       commandQueue_(commandQueue),
       frameCoordinator_(swapChain, engineContext, dev, commandQueue, fence, fenceEvent) {
+    editor::EditorFramePacingSettings framePacingSettings{};
+    framePacingSettings.enabled =
+        ReadEnvironmentUInt("GE3_EDITOR_FRAME_PACING", 1) != 0;
+    framePacingSettings.playFps =
+        ReadEnvironmentUInt("GE3_EDITOR_PLAY_FPS", 60);
+    framePacingSettings.interactionFps =
+        ReadEnvironmentUInt("GE3_EDITOR_INTERACTION_FPS", 60);
+    framePacingSettings.realtimeViewportFps =
+        ReadEnvironmentUInt("GE3_EDITOR_REALTIME_FPS", 60);
+    framePacingSettings.idleEditorFps =
+        ReadEnvironmentUInt("GE3_EDITOR_IDLE_FPS", 30);
+    framePacingSettings.backgroundFps =
+        ReadEnvironmentUInt("GE3_EDITOR_BACKGROUND_FPS", 15);
+    framePacingSettings.minimizedFps =
+        ReadEnvironmentUInt("GE3_EDITOR_MINIMIZED_FPS", 5);
+    imguiLayer_.FramePacingService().SetSettings(framePacingSettings);
+    editorFramePacingProfilingMode_ =
+        ReadEnvironmentUInt("GE3_EDITOR_UNCAPPED_FRAME_RATE", 0) != 0;
+
     const editor::EditorFileRecoveryReport recovery =
         editor::EditorFileRecoveryService(std::filesystem::current_path()).Recover();
     if (!recovery.succeeded || recovery.recoveredPreparedCount > 0) {
@@ -5629,6 +5648,25 @@ void AppRunLoop::RenderFrame() {
     if (gpuDeviceLost_) {
         return;
     }
+    editor::EditorViewportRealtimePolicy& realtimePolicy =
+        imguiLayer_.ViewportRealtimePolicy();
+    const editor::EditorViewportRealtimeSnapshot realtime =
+        realtimePolicy.Evaluate(
+            editor::EditorViewportRealtimeInput{
+                imguiLayer_.EditorPlaySessionActive(),
+                imguiLayer_.EditorViewportInteractionActive(),
+                imguiLayer_.EditorInteractiveToolActive()});
+    imguiLayer_.FramePacingService().Pace(
+        editor::EditorFramePacingInput{
+            editorFramePacingProfilingMode_,
+            hwnd_ != nullptr && IsIconic(hwnd_) != FALSE,
+            hwnd_ == nullptr || GetForegroundWindow() == hwnd_,
+            !imguiLayer_.IsVisible() ||
+                imguiLayer_.EditorPlaySessionActive(),
+            imguiLayer_.EditorViewportInteractionActive() ||
+                imguiLayer_.EditorInteractiveToolActive(),
+            realtime.continuous});
+    realtimePolicy.AcknowledgeViewportRendered();
     sceneStateManager_.Update(*this);
     sceneStateManager_.Render(*this);
 }

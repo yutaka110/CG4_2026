@@ -29,6 +29,7 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
     EditorDocumentLifecycleService* documentLifecycle = context.documentLifecycle;
     EditorDocumentManager* documentManager = context.documentManager;
     EditorDocumentSaveService* documentSaveService = context.documentSaveService;
+    const bool coursePreviewVisible = context.coursePreviewVisible;
     const CourseEditorCommandProviderInput input = input_;
     const EditorSaveApplyPolicyInput policyInput{
         commandContext.developerToolsVisible,
@@ -291,14 +292,19 @@ void CourseEditorCommandProvider::RegisterCommands(EditorContext& context) const
             "Freeze Course Preview",
             "Course",
             "",
-            [input, &commandContext]() {
+            [input, coursePreviewVisible, &commandContext]() {
                 return commandContext.developerToolsVisible &&
+                    coursePreviewVisible &&
                     static_cast<bool>(input.isCoursePreviewFrozen) &&
                     static_cast<bool>(input.setCoursePreviewFrozen);
             },
-            [input, &commandContext]() {
+            [input, coursePreviewVisible, &commandContext]() {
                 if (!commandContext.developerToolsVisible) {
                     return std::string("Developer tools are hidden.");
+                }
+                if (!coursePreviewVisible) {
+                    return std::string(
+                        "No Course Preview is visible in the Viewport.");
                 }
                 if (!input.isCoursePreviewFrozen || !input.setCoursePreviewFrozen) {
                     return std::string("Course preview freeze callback is unavailable.");

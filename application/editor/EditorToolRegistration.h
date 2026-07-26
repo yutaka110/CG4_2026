@@ -91,6 +91,7 @@ struct EditorToolbarItemDescriptor {
     EditorToolFeatureGate feature{};
     std::string contextualDocumentType;
     std::string compactLabel;
+    bool requiresCoursePreview = false;
 };
 
 struct EditorMenuSectionDescriptor {

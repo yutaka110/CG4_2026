@@ -396,9 +396,15 @@
     <ClCompile Include="application\editor\EditorPanelHost.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
-    <ClCompile Include="application\editor\EditorContentDrawerService.cpp">
-      <Filter>ソース ファイル\application\editor</Filter>
-    </ClCompile>
+      <ClCompile Include="application\editor\EditorContentDrawerService.cpp">
+        <Filter>ソース ファイル\application\editor</Filter>
+      </ClCompile>
+      <ClCompile Include="application\editor\EditorFramePacingService.cpp">
+        <Filter>ソース ファイル\application\editor</Filter>
+      </ClCompile>
+      <ClCompile Include="application\editor\EditorViewportRealtimePolicy.cpp">
+        <Filter>ソース ファイル\application\editor</Filter>
+      </ClCompile>
     <ClCompile Include="application\editor\EditorPanelLayoutService.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
@@ -1616,9 +1622,15 @@
     <ClInclude Include="application\editor\EditorPanelHost.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
-    <ClInclude Include="application\editor\EditorContentDrawerService.h">
-      <Filter>ヘッダー ファイル\application\editor</Filter>
-    </ClInclude>
+      <ClInclude Include="application\editor\EditorContentDrawerService.h">
+        <Filter>ヘッダー ファイル\application\editor</Filter>
+      </ClInclude>
+      <ClInclude Include="application\editor\EditorFramePacingService.h">
+        <Filter>ヘッダー ファイル\application\editor</Filter>
+      </ClInclude>
+      <ClInclude Include="application\editor\EditorViewportRealtimePolicy.h">
+        <Filter>ヘッダー ファイル\application\editor</Filter>
+      </ClInclude>
     <ClInclude Include="application\editor\EditorPanelLayoutService.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>

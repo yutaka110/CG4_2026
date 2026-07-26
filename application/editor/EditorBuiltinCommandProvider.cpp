@@ -10,6 +10,7 @@
 #include "EditorSaveApplyPolicy.h"
 #include "EditorToolRegistration.h"
 #include "EditorViewportInteractionService.h"
+#include "EditorViewportRealtimePolicy.h"
 #include "documents/EditorDocumentManager.h"
 #include "documents/EditorDocumentSaveService.h"
 
@@ -127,6 +128,43 @@ void EditorBuiltinCommandProvider::RegisterCommands(EditorContext& context) cons
                     closing
                         ? "Closed Content Drawer."
                         : "Opened Content Drawer."};
+            }});
+
+    EditorViewportRealtimePolicy* viewportRealtime =
+        context.viewportRealtimePolicy;
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
+            "viewport.toggleRealtime",
+            "Toggle Realtime Viewport",
+            "Viewport",
+            "Ctrl+R",
+            [viewportRealtime, &commandContext]() {
+                return commandContext.developerToolsVisible &&
+                    viewportRealtime != nullptr;
+            },
+            [viewportRealtime, &commandContext]() {
+                if (!commandContext.developerToolsVisible) {
+                    return std::string("Developer tools are hidden.");
+                }
+                if (viewportRealtime == nullptr) {
+                    return std::string(
+                        "Viewport Realtime policy is unavailable.");
+                }
+                return std::string();
+            },
+            [viewportRealtime]() {
+                if (viewportRealtime == nullptr) {
+                    return EditorCommandResult{
+                        false,
+                        "Viewport Realtime policy is unavailable."};
+                }
+                viewportRealtime->ToggleRealtime();
+                return EditorCommandResult{
+                    true,
+                    viewportRealtime->RealtimeEnabled()
+                        ? "Realtime Viewport enabled."
+                        : "Realtime Viewport disabled."};
             }});
 
     RegisterEditorToolCommand(
