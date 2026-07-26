@@ -2,11 +2,14 @@
 
 #include "EditorCommandContext.h"
 #include "EditorCommandPalette.h"
+#include "EditorContentDrawerService.h"
 #include "EditorContext.h"
 #include "EditorLayoutPersistenceService.h"
+#include "EditorModalConfirmService.h"
 #include "EditorPlaySessionState.h"
 #include "EditorSaveApplyPolicy.h"
 #include "EditorToolRegistration.h"
+#include "EditorViewportInteractionService.h"
 #include "documents/EditorDocumentManager.h"
 #include "documents/EditorDocumentSaveService.h"
 
@@ -51,6 +54,79 @@ void EditorBuiltinCommandProvider::RegisterCommands(EditorContext& context) cons
                 }
                 commandPalette->Open();
                 return EditorCommandResult{true, "Opened command palette."};
+            }});
+
+    EditorContentDrawerService* contentDrawer = context.contentDrawer;
+    EditorLayoutPersistenceService* contentDrawerLayout =
+        context.layoutPersistence;
+    EditorModalConfirmService* contentDrawerConfirm = context.confirmService;
+    EditorViewportInteractionService* contentDrawerViewport =
+        context.viewportInteraction;
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
+            "window.contentDrawer",
+            "Content Drawer",
+            "Window",
+            "Ctrl+Space",
+            [contentDrawer,
+             contentDrawerConfirm,
+             contentDrawerViewport,
+             &commandContext]() {
+                if (!commandContext.developerToolsVisible ||
+                    contentDrawer == nullptr) {
+                    return false;
+                }
+                if (contentDrawer->IsVisible()) {
+                    return true;
+                }
+                return (contentDrawerConfirm == nullptr ||
+                        !contentDrawerConfirm->HasPending()) &&
+                    (contentDrawerViewport == nullptr ||
+                        !contentDrawerViewport->HasAnyCapture());
+            },
+            [contentDrawer,
+             contentDrawerConfirm,
+             contentDrawerViewport,
+             &commandContext]() {
+                if (!commandContext.developerToolsVisible) {
+                    return std::string("Developer tools are hidden.");
+                }
+                if (contentDrawer == nullptr) {
+                    return std::string("Content Drawer service is unavailable.");
+                }
+                if (contentDrawerConfirm != nullptr &&
+                    contentDrawerConfirm->HasPending()) {
+                    return std::string("Close the active confirmation dialog first.");
+                }
+                if (contentDrawerViewport != nullptr &&
+                    contentDrawerViewport->HasAnyCapture()) {
+                    return std::string("Release the active Viewport capture first.");
+                }
+                return std::string();
+            },
+            [contentDrawer, contentDrawerLayout]() {
+                if (contentDrawer == nullptr) {
+                    return EditorCommandResult{
+                        false, "Content Drawer service is unavailable."};
+                }
+                const bool closing =
+                    contentDrawer->IsVisible() &&
+                    contentDrawer->State() !=
+                        EditorContentDrawerState::Closing;
+                if (!closing && contentDrawerLayout != nullptr) {
+                    contentDrawerLayout->SetPanelVisible(
+                        "editor.assets", true);
+                    contentDrawerLayout->SetActivePanelFromUser(
+                        EditorPanelHostArea::ContentBrowser,
+                        "editor.assets");
+                }
+                const bool changed = contentDrawer->Toggle();
+                return EditorCommandResult{
+                    changed,
+                    closing
+                        ? "Closed Content Drawer."
+                        : "Opened Content Drawer."};
             }});
 
     RegisterEditorToolCommand(

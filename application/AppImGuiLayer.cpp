@@ -2583,6 +2583,14 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             static_cast<uint32_t>((std::max)(1.0f, editorWorkSize.x)),
             static_cast<uint32_t>((std::max)(1.0f, editorWorkSize.y))});
     const ImGuiIO& imguiIO = ImGui::GetIO();
+    if (!showDeveloperTools_ && editorContentDrawer_.IsVisible()) {
+        editorContentDrawer_.DockInLayout();
+    }
+    editorContentDrawer_.Tick(imguiIO.DeltaTime);
+    const editor::EditorPanelRect contentDrawerWorkspace =
+        editorPanelLayout_.ContentBrowserPresentationRect(true);
+    const editor::EditorPanelRect contentDrawerPresentationRect =
+        editorContentDrawer_.ResolvePresentationRect(contentDrawerWorkspace);
     const editor::EditorViewportRenderTargetState& editorViewportTarget =
         editorViewportRenderTarget_.State();
     const editor::EditorViewportPanelRenderInput viewportSurfaceInput{
@@ -2688,11 +2696,36 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     const bool popupOrModalActive = ImGui::IsPopupOpen(
         nullptr,
         ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    const bool contentDrawerWasVisible = editorContentDrawer_.IsVisible();
+    editorContentDrawer_.HandleOutsidePointerPress(
+        contentDrawerPresentationRect,
+        imguiIO.MousePos.x,
+        imguiIO.MousePos.y,
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left),
+        popupOrModalActive || editorConfirmService_.HasPending());
+    const bool contentDrawerBlocksViewport =
+        contentDrawerWasVisible &&
+        editorContentDrawer_.BlocksViewportPointer(
+            contentDrawerPresentationRect,
+            imguiIO.MousePos.x,
+            imguiIO.MousePos.y,
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left));
+    const bool contentDrawerEscapeRequested =
+        editorContentDrawer_.IsVisible() &&
+        !imguiIO.WantTextInput &&
+        !popupOrModalActive &&
+        !editorConfirmService_.HasPending() &&
+        ImGui::IsKeyPressed(ImGuiKey_Escape);
+    if (contentDrawerEscapeRequested) {
+        editorContentDrawer_.Close();
+    }
     const bool cameraCancelRequested =
         editorViewportInteraction_.HasViewportCameraCapture() &&
+        !contentDrawerEscapeRequested &&
         !imguiIO.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Escape);
     editor::EditorViewportInteractionInput viewportInteractionInput{};
-    viewportInteractionInput.viewportRect = viewportSurfaceRect;
+    viewportInteractionInput.viewportRect =
+        editorContentBrowserMaximized_ ? editor::EditorPanelRect{} : viewportSurfaceRect;
     viewportInteractionInput.renderWidth = editorViewportTarget.renderWidth;
     viewportInteractionInput.renderHeight = editorViewportTarget.renderHeight;
     viewportInteractionInput.mouseX = imguiIO.MousePos.x;
@@ -2705,8 +2738,11 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     viewportInteractionInput.documentEditable = editableCourse != nullptr;
     viewportInteractionInput.authoringMutationAllowed = !editorPlaySession_.IsActive();
     viewportInteractionInput.playSessionActive = editorPlaySession_.IsActive();
-    viewportInteractionInput.viewportOwnsMouse = true;
-    viewportInteractionInput.viewportUiBlocked = viewportOverlayUiBlocked;
+    viewportInteractionInput.viewportOwnsMouse = !editorContentBrowserMaximized_;
+    viewportInteractionInput.viewportUiBlocked =
+        editorContentBrowserMaximized_ ||
+        contentDrawerBlocksViewport ||
+        viewportOverlayUiBlocked;
     viewportInteractionInput.popupOrModalActive = popupOrModalActive;
     viewportInteractionInput.interactiveToolActive = interactiveToolConsumesViewport;
     viewportInteractionInput.primaryPressed = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
@@ -3334,6 +3370,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &editorCommandInputRouter_,
         &editorCommandPalette_,
         showDeveloperTools_};
+    editorContext.contentDrawer = &editorContentDrawer_;
     editorContext.viewportOverlay = &editorViewportOverlay_;
     editorContext.layoutPersistence = &editorLayoutPersistence_;
     editorContext.worldMutations = &editorWorldMutationService_;
@@ -3429,7 +3466,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     interactiveInput.viewportPrimaryCancelled =
         editorViewportInteraction_.State().primaryCaptureCancelled;
     if (!ImGui::GetIO().WantTextInput) {
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !cameraCancelRequested) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape) &&
+            !cameraCancelRequested &&
+            !contentDrawerEscapeRequested) {
             editorInteractiveTools_.RequestCancel();
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Enter)) editorInteractiveTools_.RequestAccept();
@@ -3497,6 +3536,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editor::EditorCommandInputRouterOptions{
             showDeveloperTools_,
             true});
+    if (editorContentDrawer_.IsVisible()) {
+        editorContentBrowserMaximized_ = false;
+    }
     editorCommandPalette_.Draw(editorContext);
     editor::DrawEditorMenuBar(editorContext);
     editor::DrawEditorToolbar(editorContext);
@@ -4294,12 +4336,16 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     const auto panelDrawStart = EditorUiTimingClock::now();
     editorLayoutPersistence_.CaptureRegistryDefaults(editorPanelRegistry_);
     editorLayoutPersistence_.ValidateActivePanels(editorPanelRegistry_);
-    editorPanelHost_.DrawArea(
-        editorPanelRegistry_,
-        editor::EditorPanelHostArea::Viewport,
-        editorPanelLayout_.ViewportRect(),
-        "Editor Viewport Host",
-        &editorLayoutPersistence_);
+    const bool contentBrowserMaximized =
+        showDeveloperTools_ && editorContentBrowserMaximized_;
+    if (!contentBrowserMaximized) {
+        editorPanelHost_.DrawArea(
+            editorPanelRegistry_,
+            editor::EditorPanelHostArea::Viewport,
+            editorPanelLayout_.ViewportRect(),
+            "Editor Viewport Host",
+            &editorLayoutPersistence_);
+    }
     editorPanelHost_.DrawArea(
         editorPanelRegistry_,
         editor::EditorPanelHostArea::LeftSidebar,
@@ -4312,18 +4358,80 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorPanelLayout_.InspectorRect(),
         "Editor Right Inspector",
         &editorLayoutPersistence_);
+    const std::vector<editor::EditorPanelHostAction>
+        contentBrowserLayoutActions{{
+            contentBrowserMaximized ? "Restore" : "Maximize",
+            contentBrowserMaximized
+                ? "Restore the Viewport and Bottom Dock."
+                : "Expand Content Browser across the central editor workspace.",
+            [this]() {
+                if (!editorContentBrowserMaximized_) {
+                    editorContentDrawer_.DockInLayout();
+                }
+                editorContentBrowserMaximized_ =
+                    !editorContentBrowserMaximized_;
+            }}};
     editorPanelHost_.DrawArea(
         editorPanelRegistry_,
         editor::EditorPanelHostArea::ContentBrowser,
-        editorPanelLayout_.ContentBrowserRect(),
+        editorPanelLayout_.ContentBrowserPresentationRect(contentBrowserMaximized),
         "Editor Content Browser",
-        &editorLayoutPersistence_);
-    editorPanelHost_.DrawArea(
-        editorPanelRegistry_,
-        editor::EditorPanelHostArea::BottomDock,
-        editorPanelLayout_.DiagnosticsRect(),
-        "Editor Bottom Dock",
-        &editorLayoutPersistence_);
+        &editorLayoutPersistence_,
+        &contentBrowserLayoutActions);
+    if (!contentBrowserMaximized) {
+        editorPanelHost_.DrawArea(
+            editorPanelRegistry_,
+            editor::EditorPanelHostArea::BottomDock,
+            editorPanelLayout_.DiagnosticsRect(),
+            "Editor Bottom Dock",
+            &editorLayoutPersistence_);
+    }
+    if (showDeveloperTools_ &&
+        contentDrawerPresentationRect.Valid() &&
+        editorContentDrawer_.IsVisible()) {
+        if (editorContentDrawer_.ConsumeFocusRequest()) {
+            editorInteractiveTools_.RequestCancel();
+            ImGui::SetNextWindowFocus();
+        }
+        const std::vector<editor::EditorPanelHostAction>
+            contentDrawerActions{
+                {
+                    editorContentDrawer_.IsPinned() ? "Unpin" : "Pin",
+                    editorContentDrawer_.IsPinned()
+                        ? "Return to transient Content Drawer behavior."
+                        : "Keep the Content Drawer open while working elsewhere.",
+                    [this]() {
+                        editorContentDrawer_.SetPinned(
+                            !editorContentDrawer_.IsPinned());
+                    },
+                },
+                {
+                    "Dock in Layout",
+                    "Close the Drawer and focus the docked Content Browser.",
+                    [this]() {
+                        editorLayoutPersistence_.SetPanelVisible(
+                            "editor.assets", true);
+                        editorLayoutPersistence_.SetActivePanelFromUser(
+                            editor::EditorPanelHostArea::ContentBrowser,
+                            "editor.assets");
+                        editorContentDrawer_.DockInLayout();
+                    },
+                },
+                {
+                    "Close",
+                    "Close Content Drawer (Ctrl+Space or Escape).",
+                    [this]() {
+                        editorContentDrawer_.Close();
+                    },
+                }};
+        editorPanelHost_.DrawArea(
+            editorPanelRegistry_,
+            editor::EditorPanelHostArea::ContentBrowser,
+            contentDrawerPresentationRect,
+            "Editor Content Drawer",
+            &editorLayoutPersistence_,
+            &contentDrawerActions);
+    }
     interactiveEnvironment.selectionRevision = editorSelection_.Revision();
     interactiveEnvironment.documentEditRevision = 0;
     interactiveEnvironment.documentGeneration = 0;
@@ -4342,7 +4450,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     imguiTiming.panelDrawMs = EditorUiElapsedMs(panelDrawStart, EditorUiTimingClock::now());
 
     const auto layoutPersistenceStart = EditorUiTimingClock::now();
-    if (DrawEditorWorkspaceSplitters(editorPanelLayoutConfig, editorPanelLayout_)) {
+    if (!contentBrowserMaximized &&
+        DrawEditorWorkspaceSplitters(editorPanelLayoutConfig, editorPanelLayout_)) {
         editorPanelLayout_.Configure(editorPanelLayoutConfig);
         editorLayoutPersistence_.CaptureLayout(editorPanelLayoutConfig);
         editorViewportRenderTarget_.Update(

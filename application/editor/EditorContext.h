@@ -14,6 +14,7 @@ class IEditorAssetWorkspaceStatusProvider;
 class EditorCommandInputRouter;
 class EditorCommandPalette;
 class EditorCommandRegistry;
+class EditorContentDrawerService;
 class EditorDirtyStateService;
 class EditorDocumentLifecycleService;
 class EditorDocumentManager;
@@ -95,6 +96,7 @@ struct EditorContext {
     EditorCommandPalette* commandPalette = nullptr;
 
     bool developerToolsVisible = false;
+    EditorContentDrawerService* contentDrawer = nullptr;
     EditorViewportOverlayService* viewportOverlay = nullptr;
     EditorLayoutPersistenceService* layoutPersistence = nullptr;
     EditorWorldMutationService* worldMutations = nullptr;

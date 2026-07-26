@@ -18,6 +18,7 @@ class AppPipelines;
 #include "editor/EditorCommandInputRouter.h"
 #include "editor/EditorCommandPalette.h"
 #include "editor/EditorCommandRegistry.h"
+#include "editor/EditorContentDrawerService.h"
 #include "editor/EditorContentBrowserState.h"
 #include "editor/CourseDocumentAdapter.h"
 #include "editor/EditorDirtyStateService.h"
@@ -368,6 +369,8 @@ private:
     editor::EditorPanelHost editorPanelHost_{};
     editor::EditorPanelLayoutService editorPanelLayout_{};
     editor::EditorPanelRegistry editorPanelRegistry_{};
+    editor::EditorContentDrawerService editorContentDrawer_{};
+    bool editorContentBrowserMaximized_ = false;
     editor::EditorDetailsSectionProviderRegistry editorDetailsSectionProviders_{};
     editor::EditorViewportCoordinateService editorViewportCoordinates_{};
     editor::EditorViewportInteractionService editorViewportInteraction_{};

@@ -2,6 +2,7 @@
 
 #include "EditorAssetMutationExecutor.h"
 #include "EditorAssetMutationSafety.h"
+#include "EditorAssetBrowserPanel.h"
 #include "EditorAssetFallbackIconAtlas.h"
 #include "EditorAssetFolderIndexer.h"
 #include "EditorAssetImportService.h"
@@ -32,6 +33,7 @@
 #include "EditorFontService.h"
 #include "EditorLayoutPersistenceService.h"
 #include "EditorPanelLayoutService.h"
+#include "EditorContentDrawerService.h"
 #include "EditorPanelRegistry.h"
 #include "EditorPlaySessionLifecycleService.h"
 #include "EditorPlaySessionRuntimeControlService.h"
@@ -14046,6 +14048,99 @@ void TestPanelLayoutGeometry(RegressionRunner& runner) {
     runner.Expect(
         layout.BottomDockRect().y >= layout.ViewportRect().y + layout.ViewportRect().height,
         "bottom dock should be below viewport");
+    const EditorPanelRect normalContentBrowser =
+        layout.ContentBrowserPresentationRect(false);
+    const EditorPanelRect maximizedContentBrowser =
+        layout.ContentBrowserPresentationRect(true);
+    runner.Expect(
+        normalContentBrowser.x == layout.ContentBrowserRect().x &&
+            normalContentBrowser.y == layout.ContentBrowserRect().y &&
+            normalContentBrowser.width == layout.ContentBrowserRect().width &&
+            normalContentBrowser.height == layout.ContentBrowserRect().height,
+        "restored Content Browser presentation should use its docked panel rect");
+    runner.Expect(
+        maximizedContentBrowser.x == layout.ViewportRect().x &&
+            maximizedContentBrowser.y == layout.ViewportRect().y &&
+            maximizedContentBrowser.width == layout.BottomDockRect().width &&
+            maximizedContentBrowser.height ==
+                layout.ViewportRect().height + layout.BottomDockRect().height,
+        "maximized Content Browser should cover the central editor workspace");
+    runner.Expect(
+        ResolveEditorAssetViewHeight(0.0f) == 180.0f &&
+            ResolveEditorAssetViewHeight(72.0f) == 180.0f,
+        "Content Browser should preserve a 180 px minimum Asset View");
+    runner.Expect(
+        ResolveEditorAssetViewHeight(420.0f) == 420.0f,
+        "Content Browser should allow Asset View to consume additional available height");
+
+    EditorContentDrawerService contentDrawer;
+    runner.Expect(
+        !contentDrawer.IsVisible() &&
+            contentDrawer.State() == EditorContentDrawerState::Closed,
+        "Content Drawer should start closed");
+    runner.Expect(
+        contentDrawer.Open() && contentDrawer.ConsumeFocusRequest(),
+        "opening Content Drawer should request keyboard focus");
+    contentDrawer.Tick(0.16f);
+    const EditorPanelRect drawerRect =
+        contentDrawer.ResolvePresentationRect(maximizedContentBrowser);
+    runner.Expect(
+        contentDrawer.State() == EditorContentDrawerState::Open &&
+            drawerRect.Valid() &&
+            drawerRect.width == maximizedContentBrowser.width &&
+            drawerRect.height >= 300.0f &&
+            std::abs(
+                drawerRect.y + drawerRect.height -
+                maximizedContentBrowser.y -
+                maximizedContentBrowser.height) < 0.001f,
+        "open Content Drawer should overlay the bottom of the central workspace");
+    runner.Expect(
+        contentDrawer.Contains(
+            drawerRect,
+            drawerRect.x + 1.0f,
+            drawerRect.y + 1.0f) &&
+            contentDrawer.BlocksViewportPointer(
+                drawerRect,
+                drawerRect.x + 1.0f,
+                drawerRect.y + 1.0f,
+                false),
+        "Content Drawer should own pointer input inside its overlay");
+    runner.Expect(
+        contentDrawer.SetPinned(true) &&
+            !contentDrawer.HandleOutsidePointerPress(
+                drawerRect,
+                drawerRect.x - 1.0f,
+                drawerRect.y - 1.0f,
+                true,
+                false) &&
+            !contentDrawer.BlocksViewportPointer(
+                drawerRect,
+                drawerRect.x - 1.0f,
+                drawerRect.y - 1.0f,
+                true),
+        "pinned Content Drawer should allow interaction outside its overlay");
+    runner.Expect(
+        contentDrawer.SetPinned(false) &&
+            contentDrawer.HandleOutsidePointerPress(
+                drawerRect,
+                drawerRect.x - 1.0f,
+                drawerRect.y - 1.0f,
+                true,
+                false) &&
+            contentDrawer.State() == EditorContentDrawerState::Closing,
+        "transient Content Drawer should close on an outside pointer press");
+    contentDrawer.Tick(0.16f);
+    runner.Expect(
+        !contentDrawer.IsVisible() &&
+            contentDrawer.State() == EditorContentDrawerState::Closed,
+        "Content Drawer close transition should reach the closed state");
+    contentDrawer.Open();
+    contentDrawer.Tick(0.16f);
+    runner.Expect(
+        contentDrawer.DockInLayout() &&
+            !contentDrawer.IsVisible() &&
+            contentDrawer.Openness() == 0.0f,
+        "Dock in Layout should close Content Drawer immediately");
 
     const EditorPanelRect squarePanel{100.0f, 50.0f, 800.0f, 800.0f};
     const EditorPanelRect widescreenSurface = ResolveEditorViewportRenderSurfaceRect(

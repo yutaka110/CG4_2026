@@ -4,10 +4,18 @@
 #include "EditorLayoutPersistenceService.h"
 #include "EditorPanelRegistry.h"
 
+#include <functional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace editor {
+
+struct EditorPanelHostAction {
+    std::string label;
+    std::string tooltip;
+    std::function<void()> execute;
+};
 
 class EditorPanelHost {
 public:
@@ -20,7 +28,8 @@ public:
         EditorPanelHostArea area,
         const EditorPanelRect& rect,
         const char* windowId,
-        EditorLayoutPersistenceService* persistence = nullptr);
+        EditorLayoutPersistenceService* persistence = nullptr,
+        const std::vector<EditorPanelHostAction>* actions = nullptr);
 
 private:
     void DrawBottomDock(

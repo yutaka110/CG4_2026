@@ -26,6 +26,7 @@ struct EditorAssetBrowserPanelContext {
     std::vector<std::filesystem::path>* pendingExternalImportPaths = nullptr;
 };
 
+float ResolveEditorAssetViewHeight(float availableHeight);
 void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context);
 
 } // namespace editor

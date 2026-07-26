@@ -943,7 +943,8 @@ void DrawAssetGrid(
     EditorAssetSelection* assetSelection,
     const EditorAssetHandle* selectedAsset,
     EditorAssetThumbnailService* thumbnails,
-    EditorContentBrowserState* browserState) {
+    EditorContentBrowserState* browserState,
+    float height) {
     const float tileWidth = 124.0f;
     const float availableWidth = (std::max)(tileWidth, ImGui::GetContentRegionAvail().x);
     const int columns = (std::max)(1, static_cast<int>(availableWidth / tileWidth));
@@ -951,7 +952,7 @@ void DrawAssetGrid(
             "EditorAssetBrowserGrid",
             columns,
             ImGuiTableFlags_ScrollY,
-            ImVec2(0.0f, 0.0f))) {
+            ImVec2(0.0f, height))) {
         return;
     }
 
@@ -1034,6 +1035,11 @@ void DrawContentBrowserNavigation(
 
 } // namespace
 
+float ResolveEditorAssetViewHeight(float availableHeight) {
+    constexpr float kMinimumAssetViewHeight = 180.0f;
+    return (std::max)(kMinimumAssetViewHeight, availableHeight);
+}
+
 void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) {
     if (context.registry == nullptr) {
         ImGui::TextUnformatted("Asset registry unavailable.");
@@ -1062,6 +1068,23 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
     }
 
     EditorAssetThumbnailService* thumbnails = context.thumbnails;
+    const EditorAssetHandle* selectedAsset =
+        context.assetSelection != nullptr ? context.assetSelection->Primary() : nullptr;
+    if (selectedAsset != nullptr && !selectedAsset->guid.empty() &&
+        browserState.SelectedAssetGuid() != selectedAsset->guid) {
+        browserState.SetSelectedAssetGuid(selectedAsset->guid);
+    }
+    if (selectedAsset != nullptr) {
+        ImGui::Text(
+            "Selected  %s:%s  GUID %s",
+            ToString(selectedAsset->kind),
+            selectedAsset->id.c_str(),
+            selectedAsset->guid.empty() ? "-" : selectedAsset->guid.c_str());
+    } else {
+        ImGui::TextUnformatted("Selected  none");
+    }
+
+    if (ImGui::CollapsingHeader("Asset Diagnostics & Operations")) {
     ImGui::Text(
         "Registry  Assets %u  Mesh %u  Durable %u/%u (%.1f%%)  Redirects %u  Auto GUID %u  Deps %u  Missing %u  Revision %u",
         static_cast<unsigned int>(registry.Count()),
@@ -1139,12 +1162,6 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
         ImGui::TextUnformatted("Preview Cache  unavailable");
     }
 
-    const EditorAssetHandle* selectedAsset =
-        context.assetSelection != nullptr ? context.assetSelection->Primary() : nullptr;
-    if (selectedAsset != nullptr && !selectedAsset->guid.empty() &&
-        browserState.SelectedAssetGuid() != selectedAsset->guid) {
-        browserState.SetSelectedAssetGuid(selectedAsset->guid);
-    }
     const EditorAssetRecord* activeSelectedRecord = nullptr;
     if (selectedAsset != nullptr) {
         const EditorAssetHandleResolveResult selectedResolve =
@@ -1255,8 +1272,22 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
         context.nativeDialogOwner,
         context.pendingExternalImportPaths,
         activeSelectedRecord);
+    }
 
-    ImGui::BeginChild("ContentBrowserNavigation", ImVec2(210.0f, 190.0f), true);
+    const float minimumAssetViewHeight = ResolveEditorAssetViewHeight(0.0f);
+    constexpr float kMinimumNavigationHeight = 112.0f;
+    constexpr float kMaximumNavigationHeight = 190.0f;
+    const float availableBeforeNavigation =
+        (std::max)(0.0f, ImGui::GetContentRegionAvail().y);
+    const float navigationHeight = (std::clamp)(
+        availableBeforeNavigation - minimumAssetViewHeight - ImGui::GetFrameHeightWithSpacing(),
+        kMinimumNavigationHeight,
+        kMaximumNavigationHeight);
+
+    ImGui::BeginChild(
+        "ContentBrowserNavigation",
+        ImVec2(210.0f, navigationHeight),
+        true);
     DrawContentBrowserNavigation(browserState, registry);
     ImGui::EndChild();
     ImGui::SameLine();
@@ -1321,6 +1352,8 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
 
     const std::vector<const EditorAssetRecord*> visibleAssets =
         browserState.FilterAssets(registry);
+    const float assetViewHeight =
+        ResolveEditorAssetViewHeight(ImGui::GetContentRegionAvail().y);
     if (browserState.ViewMode() == EditorContentBrowserViewMode::Grid) {
         DrawAssetGrid(
             visibleAssets,
@@ -1328,7 +1361,8 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
             context.assetSelection,
             selectedAsset,
             thumbnails,
-            &browserState);
+            &browserState,
+            assetViewHeight);
         return;
     }
 
@@ -1339,7 +1373,7 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
                 ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_Resizable |
                 ImGuiTableFlags_ScrollY,
-            ImVec2(0.0f, 0.0f))) {
+            ImVec2(0.0f, assetViewHeight))) {
         return;
     }
 

@@ -112,7 +112,8 @@ void EditorPanelHost::DrawArea(
     EditorPanelHostArea area,
     const EditorPanelRect& rect,
     const char* windowId,
-    EditorLayoutPersistenceService* persistence) {
+    EditorLayoutPersistenceService* persistence,
+    const std::vector<EditorPanelHostAction>* actions) {
     if (!rect.Valid() || registry.Count(area) == 0 || windowId == nullptr) {
         return;
     }
@@ -144,6 +145,40 @@ void EditorPanelHost::DrawArea(
         DrawBottomDock(registry, *persistence, windowId);
         ImGui::End();
         return;
+    }
+
+    if (actions != nullptr && !actions->empty()) {
+        float actionsWidth = 0.0f;
+        for (const EditorPanelHostAction& action : *actions) {
+            const char* label = action.label.empty() ? "Action" : action.label.c_str();
+            actionsWidth +=
+                ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        }
+        actionsWidth += ImGui::GetStyle().ItemSpacing.x *
+            static_cast<float>(actions->size() - 1);
+        ImGui::SetCursorPosX(
+            (std::max)(ImGui::GetCursorPosX(),
+                ImGui::GetWindowContentRegionMax().x - actionsWidth));
+        for (std::size_t index = 0; index < actions->size(); ++index) {
+            if (index > 0) {
+                ImGui::SameLine();
+            }
+            const EditorPanelHostAction& action = (*actions)[index];
+            const char* label = action.label.empty() ? "Action" : action.label.c_str();
+            const bool enabled = static_cast<bool>(action.execute);
+            if (!enabled) {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::Button(label) && action.execute) {
+                action.execute();
+            }
+            if (!enabled) {
+                ImGui::EndDisabled();
+            }
+            if (!action.tooltip.empty() && ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", action.tooltip.c_str());
+            }
+        }
     }
 
     const std::string tabBarId =
