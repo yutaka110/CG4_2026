@@ -1,0 +1,7 @@
+# Terrain PBR material set.
+# Layer order is part of the runtime contract:
+# 0 = dry wall, 1 = wet/cavity rock, 2 = upward-facing floor sediment.
+version=1
+material=dry_strata.terrainmaterial
+material=wet_organic.terrainmaterial
+material=floor_sand.terrainmaterial

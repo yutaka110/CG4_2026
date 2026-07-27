@@ -2193,6 +2193,10 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             const auto& hlodPackets = editorWorldPartitionPipeline_.HlodPackets();
             streamingCandidates.insert(
                 streamingCandidates.end(), hlodPackets.begin(), hlodPackets.end());
+            if (editorProductionScenePipeline_.DrawMode() ==
+                editor::EditorProductionMeshDrawMode::ForceDirect) {
+                streamingCandidates.clear();
+            }
             editorProductionGpuDrivenPipeline_.Sync(
                 streamingCandidates,
                 editorProductionMaterialPipeline_,
@@ -2202,6 +2206,28 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 context.editorCompletedFenceValue,
                 context.editorScheduledFenceValue,
                 &productionVisibilityError);
+            const editor::EditorProductionGpuDrivenStats&
+                gpuDrivenStats =
+                    editorProductionGpuDrivenPipeline_.Stats();
+            editorProductionScenePipeline_.UpdatePresentationRouting(
+                editor::EditorProductionMeshGpuRoutingState{
+                    editorProductionGpuDrivenPipeline_.Ready(),
+                    gpuDrivenStats.dispatchSucceeded,
+                    gpuDrivenStats.readbackAvailable,
+                    gpuDrivenStats.commandLayoutValidated,
+                    editorProductionGpuDrivenPipeline_
+                        .AutoValidationReady(),
+                    gpuDrivenStats.hiZFresh,
+                    gpuDrivenStats.frustumOnlyRetry,
+                    gpuDrivenStats.occlusionQuarantined,
+                    gpuDrivenStats.gpuVisibleInstances,
+                    gpuDrivenStats.frustumRejectedInstances,
+                    gpuDrivenStats.hiZRejectedInstances,
+                    gpuDrivenStats.invalidBatchInstances,
+                    gpuDrivenStats.preparedBatches,
+                    gpuDrivenStats.executedBatches,
+                    editorProductionGpuDrivenPipeline_
+                        .AutoFallbackReason()});
         }
     } else {
         editorGeometryExecution_.Clear();
@@ -3042,8 +3068,21 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                << "/" << visibilityStats.rejectedByBatchBudget
                << " dispatch/readback=" << visibilityStats.dispatches
                << "/" << visibilityStats.readbacks
+               << " reject(frustum/hiz/batch)="
+               << visibilityStats.frustumRejectedInstances
+               << "/" << visibilityStats.hiZRejectedInstances
+               << "/" << visibilityStats.invalidBatchInstances
+               << " prepare/submit=" << visibilityStats.preparedBatches
+               << "/" << visibilityStats.executedBatches
+               << " capacity=" << visibilityStats.submittedCommandCapacity
                << " command=" << (visibilityStats.commandLayoutValidated ? "valid" : "pending")
-               << " occlusion=" << (visibilityStats.occlusionEnabled ? "Hi-Z" : "frustum");
+               << " auto=" << (editorProductionGpuDrivenPipeline_.AutoValidationReady()
+                                      ? "indirect"
+                                      : "direct-fallback")
+               << " occlusion=" << (visibilityStats.occlusionEnabled ? "Hi-Z" : "frustum")
+               << " hizFresh=" << (visibilityStats.hiZFresh ? "yes" : "no")
+               << " retry=" << (visibilityStats.frustumOnlyRetry ? "yes" : "no")
+               << " quarantine=" << (visibilityStats.occlusionQuarantined ? "yes" : "no");
         const bool constrained = !visibilityStats.ready ||
             visibilityStats.cpuFallbackPackets != 0 || visibilityStats.ringStalls != 0;
         editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
@@ -3797,7 +3836,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         editorCommandContext.canMutateAuthoring,
                         &editorWorldMutationService_,
                         &editorSceneWorldProvider_,
-                        editorContext.onWorldMutated});
+                        editorContext.onWorldMutated,
+                        &editorProductionScenePipeline_});
             }});
     registerPanel(
         editor::EditorPanelDescriptor{
@@ -4007,7 +4047,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         &editorContentBrowserState_,
                         &editorAssetWorkspaceStatus_,
                         hwnd_,
-                        &pendingExternalAssetImportPaths_});
+                        &pendingExternalAssetImportPaths_,
+                        &editorProductionMeshRuntimeCache_});
             }});
     registerPanel(
         editor::EditorPanelDescriptor{

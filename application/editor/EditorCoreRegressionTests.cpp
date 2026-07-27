@@ -27,6 +27,7 @@
 #include "EditorCommandContext.h"
 #include "EditorContext.h"
 #include "CourseObjectPropertyAdapter.h"
+#include "CourseMeshAssetAdapter.h"
 #include "EditorBuiltinDetailsSectionProviders.h"
 #include "EditorDetailsSectionProvider.h"
 #include "EditorDetailsViewState.h"
@@ -130,6 +131,7 @@
 #include "mesh/EditorProductionMeshAsset.h"
 #include "mesh/EditorMeshBakePipeline.h"
 #include "mesh/EditorMeshBakeTools.h"
+#include "mesh/EditorObjProductionImportBridge.h"
 #include "scene/EditorBlenderSceneImportService.h"
 #include "scene/EditorBlenderSceneImportCommandProvider.h"
 #include "scene/EditorBlenderSceneImportTransaction.h"
@@ -5310,6 +5312,31 @@ void TestProductionGpuDrivenVisibilityPipeline(RegressionRunner& runner) {
         empty.size() == 2 && empty[0].commandOffset == 0 &&
             empty[0].commandCapacity == 0 && empty[1].commandCapacity == 0,
         "E-11 should preserve zero-capacity batches without overlapping command ranges");
+    runner.Expect(
+        !EditorProductionGpuDrivenPipeline::ShouldSubmitIndirect(
+            EditorProductionMeshDrawMode::Auto, true, true, false) &&
+            EditorProductionGpuDrivenPipeline::ShouldSubmitIndirect(
+                EditorProductionMeshDrawMode::Auto, true, true, true) &&
+            !EditorProductionGpuDrivenPipeline::ShouldSubmitIndirect(
+                EditorProductionMeshDrawMode::Auto, true, false, true) &&
+            EditorProductionGpuDrivenPipeline::ShouldSubmitIndirect(
+                EditorProductionMeshDrawMode::ForceGpuDriven, true, true,
+                false) &&
+            !EditorProductionGpuDrivenPipeline::ShouldSubmitIndirect(
+                EditorProductionMeshDrawMode::ForceDirect, true, true, true),
+        "E-11 Auto should retain Direct presentation until dispatch and "
+        "indirect-command readback are validated");
+    runner.Expect(
+        EditorProductionGpuDrivenPipeline::ShouldEnableOcclusion(
+            true, true, false, false) &&
+            !EditorProductionGpuDrivenPipeline::ShouldEnableOcclusion(
+                true, false, false, false) &&
+            !EditorProductionGpuDrivenPipeline::ShouldEnableOcclusion(
+                true, true, true, false) &&
+            !EditorProductionGpuDrivenPipeline::ShouldEnableOcclusion(
+                true, true, false, true),
+        "E-11 should consume only fresh Hi-Z and force Frustum-only culling "
+        "during retry or occlusion quarantine");
 }
 
 void TestWorldPartitionCellPolicy(RegressionRunner& runner) {
@@ -13900,6 +13927,39 @@ void TestProductionMeshBakeAssetPipeline(RegressionRunner& runner) {
             scenePipeline.RenderPackets().empty() &&
             scenePipeline.Stats().visibleInstances == 1,
         "E-6 should derive CPU render/physics instances without requiring a GPU device");
+    const EditorProductionMeshPresentationDiagnostic* presentation =
+        scenePipeline.FindPresentationDiagnostic(entity->guid);
+    runner.Expect(
+        presentation != nullptr &&
+            presentation->assetResolved &&
+            presentation->runtimeCacheReady &&
+            presentation->hierarchyVisible &&
+            presentation->frustumVisible &&
+            !presentation->gpuAssetReady &&
+            presentation->renderPacketCount == 0 &&
+            !presentation->lastFailure.empty(),
+        "Production Mesh Presentation diagnostics should identify the exact "
+        "stage that prevented a draw submission");
+    scenePipeline.SetDrawMode(
+        EditorProductionMeshDrawMode::ForceDirect);
+    runner.Expect(
+        scenePipeline.DrawMode() ==
+                EditorProductionMeshDrawMode::ForceDirect &&
+            !EditorProductionScenePipeline::ShouldUseGpuDriven(
+                EditorProductionMeshDrawMode::ForceDirect,
+                true) &&
+            EditorProductionScenePipeline::ShouldUseGpuDriven(
+                EditorProductionMeshDrawMode::Auto,
+                true) &&
+            !EditorProductionScenePipeline::ShouldUseGpuDriven(
+                EditorProductionMeshDrawMode::Auto,
+                false) &&
+            EditorProductionScenePipeline::ShouldUseGpuDriven(
+                EditorProductionMeshDrawMode::ForceGpuDriven,
+                false),
+        "Production Mesh Draw Mode should deterministically select Direct, "
+        "Auto fallback, or forced GPU-driven presentation");
+    scenePipeline.SetDrawMode(EditorProductionMeshDrawMode::Auto);
     const EditorProductionSceneRayHit sceneHit = scenePipeline.Raycast(
         {0.0f, 0.0f, -10.0f}, {0.0f, 0.0f, 1.0f}, 100.0f);
     runner.Expect(sceneHit.valid && sceneHit.entityGuid == entity->guid &&
@@ -14037,6 +14097,157 @@ void TestProductionMeshBakeAssetPipeline(RegressionRunner& runner) {
             removedReconcile.removed == 1 &&
             reconciledCache.Resolve(rebakedMeshHandle) == nullptr,
         "ReconcileAssets should retire resident generations when a Mesh Asset is removed");
+
+    RemoveTreeIfPresent(root);
+}
+
+void TestObjProductionImportBridge(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} /
+        "editor" /
+        "tests" /
+        "obj_production_import";
+    RemoveTreeIfPresent(root);
+    const std::filesystem::path sourceRelative =
+        std::filesystem::path{"Resources"} /
+        "Source" /
+        "bridge_cube.obj";
+    const std::filesystem::path sourceAbsolute = root / sourceRelative;
+    const std::string cubeObj =
+        "o BridgeCube\n"
+        "v -1 -1 -1\n"
+        "v 1 -1 -1\n"
+        "v 1 1 -1\n"
+        "v -1 1 -1\n"
+        "v -1 -1 1\n"
+        "v 1 -1 1\n"
+        "v 1 1 1\n"
+        "v -1 1 1\n"
+        "f 1 3 2\n"
+        "f 1 4 3\n"
+        "f 5 6 7\n"
+        "f 5 7 8\n"
+        "f 1 2 6\n"
+        "f 1 6 5\n"
+        "f 4 8 7\n"
+        "f 4 7 3\n"
+        "f 1 5 8\n"
+        "f 1 8 4\n"
+        "f 2 3 7\n"
+        "f 2 7 6\n";
+    WriteTextFile(sourceAbsolute, cubeObj);
+
+    EditorAssetRegistry registry;
+    EditorAssetRecord source{};
+    source.kind = EditorAssetKind::Mesh;
+    source.id = "bridge_cube";
+    source.guid = "obj-production-source-guid";
+    source.displayName = "Bridge Cube";
+    source.sourcePath = sourceRelative.generic_string();
+    source.logicalPath = source.sourcePath;
+    source.metadataPath = source.sourcePath + ".meta";
+    source.referenceable = true;
+    source.hasMetadata = true;
+    source.provisionalGuid = false;
+    runner.Expect(
+        registry.Register(source),
+        "OBJ Production Import test source should register with durable identity");
+
+    EditorProductionMeshRuntimeCache runtimeCache(root);
+    EditorObjProductionImportBridge bridge(registry, &runtimeCache, root);
+    EditorObjProductionImportRequest request{};
+    request.sourceAssetGuid = source.guid;
+    request.outputAssetName = "bridge_cube_production";
+    request.settings.lodCount = 3;
+    request.settings.collisionMode = EditorMeshCollisionBuildMode::Box;
+    const EditorObjProductionImportResult imported =
+        bridge.ImportAndBake(request);
+    const EditorAssetRecord* production =
+        registry.Find(EditorAssetKind::Mesh, request.outputAssetName);
+    const std::filesystem::path productionSource =
+        production != nullptr
+        ? root / production->sourcePath
+        : std::filesystem::path{};
+    const std::filesystem::path productionCooked =
+        production != nullptr
+        ? root / EditorCookedMeshPath(production->sourcePath)
+        : std::filesystem::path{};
+    const std::filesystem::path productionCollision =
+        production != nullptr
+        ? root / EditorCookedCollisionPath(production->sourcePath)
+        : std::filesystem::path{};
+    const bool initialImportValid =
+        imported.succeeded &&
+            !imported.reimported &&
+            imported.vertexCount >= 8 &&
+            imported.triangleCount == 12 &&
+            imported.lodCount == 3 &&
+            production != nullptr &&
+            IsDurableEditorAssetGuid(production->guid) &&
+            std::filesystem::path(production->sourcePath).extension() ==
+                ".mesh" &&
+            std::filesystem::exists(productionSource) &&
+            std::filesystem::exists(productionCooked) &&
+            std::filesystem::exists(productionCollision) &&
+            std::filesystem::exists(root / production->metadataPath);
+    runner.Expect(
+        initialImportValid,
+        "selected OBJ should atomically publish durable Production source, LOD, "
+        "Collision, and metadata artifacts; result='" + imported.message +
+            "' vertices=" + std::to_string(imported.vertexCount) +
+            " triangles=" + std::to_string(imported.triangleCount) +
+            " lods=" + std::to_string(imported.lodCount));
+    const std::string productionGuid =
+        production != nullptr ? production->guid : std::string{};
+    const EditorProductionMeshRuntimeHandle initialHandle =
+        runtimeCache.Handle(productionGuid);
+    runner.Expect(
+        initialHandle.Valid() &&
+            runtimeCache.ResolveForRenderer(productionGuid, 0).Valid() &&
+            runtimeCache.ResolveForPhysics(productionGuid).Valid(),
+        "OBJ Production Import should publish immediately consumable Renderer and Physics views");
+
+    WriteTextFile(
+        sourceAbsolute,
+        cubeObj + "v 0 2 0\nf 4 8 9\nf 8 7 9\nf 7 3 9\nf 3 4 9\n");
+    const EditorObjProductionImportResult reimported =
+        bridge.ImportAndBake(request);
+    const EditorAssetRecord* productionAfter =
+        registry.Find(EditorAssetKind::Mesh, request.outputAssetName);
+    const EditorProductionMeshRuntimeHandle reimportedHandle =
+        runtimeCache.Handle(productionGuid);
+    runner.Expect(
+        reimported.succeeded &&
+            reimported.reimported &&
+            productionAfter != nullptr &&
+            productionAfter->guid == productionGuid &&
+            reimported.triangleCount == 16 &&
+            reimportedHandle.Valid() &&
+            reimportedHandle.generation > initialHandle.generation &&
+            runtimeCache.Resolve(initialHandle) == nullptr &&
+            runtimeCache.Resolve(reimportedHandle) != nullptr,
+        "OBJ Reimport should preserve durable GUID while atomically replacing the runtime generation");
+
+    EditorAssetRegistry compatibilityRegistry;
+    EditorAssetRecord durableBall{};
+    durableBall.kind = EditorAssetKind::Mesh;
+    durableBall.id = "ball";
+    durableBall.guid = "durable-ball-guid";
+    durableBall.sourcePath = "Resources/ball/ball.obj";
+    durableBall.logicalPath = durableBall.sourcePath;
+    durableBall.metadataPath = durableBall.sourcePath + ".meta";
+    durableBall.referenceable = true;
+    durableBall.hasMetadata = true;
+    compatibilityRegistry.Register(durableBall);
+    CourseMeshAssetAdapter{}.RegisterAssets(compatibilityRegistry);
+    const EditorAssetRecord* preservedBall =
+        compatibilityRegistry.Find(EditorAssetKind::Mesh, "ball");
+    runner.Expect(
+        preservedBall != nullptr &&
+            preservedBall->guid == durableBall.guid &&
+            preservedBall->hasMetadata &&
+            !preservedBall->provisionalGuid,
+        "Course compatibility Asset registration must preserve Folder Indexer durable metadata");
 
     RemoveTreeIfPresent(root);
 }
@@ -15929,6 +16140,7 @@ int RunEditorCoreRegressionTests() {
         {"editor notification toast lifecycle", [&]() { TestEditorNotificationToastLifecycle(runner); }},
         {"production modeling geometry framework", [&]() { TestProductionModelingGeometryFramework(runner); }},
         {"production mesh bake asset pipeline", [&]() { TestProductionMeshBakeAssetPipeline(runner); }},
+        {"obj production import bake bridge", [&]() { TestObjProductionImportBridge(runner); }},
         {"panel layout geometry", [&]() { TestPanelLayoutGeometry(runner); }},
         {"editor frame pacing and viewport realtime", [&]() {
              TestEditorFramePacingAndViewportRealtime(runner);

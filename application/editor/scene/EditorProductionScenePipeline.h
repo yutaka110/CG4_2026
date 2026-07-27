@@ -19,6 +19,24 @@
 
 namespace editor {
 
+enum class EditorProductionMeshDrawMode {
+    Auto,
+    ForceDirect,
+    ForceGpuDriven,
+};
+
+const char* EditorProductionMeshDrawModeLabel(
+    EditorProductionMeshDrawMode mode) noexcept;
+
+enum class EditorProductionMeshPresentationPath {
+    None,
+    Direct,
+    GpuDriven,
+};
+
+const char* EditorProductionMeshPresentationPathLabel(
+    EditorProductionMeshPresentationPath path) noexcept;
+
 struct EditorProductionSceneInstance {
     std::string entityGuid;
     std::string assetGuid;
@@ -80,6 +98,59 @@ struct EditorProductionScenePipelineStats {
     std::array<uint32_t, EditorMeshBuildSettings::kMaxLods> selectedLods{};
 };
 
+struct EditorProductionMeshPresentationDiagnostic {
+    std::string entityGuid;
+    std::string assetGuid;
+    EditorProductionMeshDrawMode drawMode =
+        EditorProductionMeshDrawMode::Auto;
+    EditorProductionMeshPresentationPath resolvedPath =
+        EditorProductionMeshPresentationPath::None;
+    uint32_t selectedLod = 0;
+    uint32_t renderPacketCount = 0;
+    bool assetResolved = false;
+    bool runtimeCacheReady = false;
+    bool hierarchyVisible = false;
+    bool frustumVisible = false;
+    bool gpuAssetReady = false;
+    bool transformReady = false;
+    bool gpuPipelineReady = false;
+    bool visibilityDispatchSucceeded = false;
+    bool commandReadbackAvailable = false;
+    bool commandGenerated = false;
+    bool commandLayoutValidated = false;
+    bool batchPrepared = false;
+    bool batchSubmitted = false;
+    bool autoDirectFallback = false;
+    bool hiZFresh = false;
+    bool frustumOnlyRetry = false;
+    bool occlusionQuarantined = false;
+    uint32_t gpuVisibleInstances = 0;
+    uint32_t frustumRejectedInstances = 0;
+    uint32_t hiZRejectedInstances = 0;
+    uint32_t invalidBatchInstances = 0;
+    uint32_t preparedBatches = 0;
+    uint32_t executedBatches = 0;
+    std::string lastFailure;
+};
+
+struct EditorProductionMeshGpuRoutingState {
+    bool pipelineReady = false;
+    bool visibilityDispatchSucceeded = false;
+    bool commandReadbackAvailable = false;
+    bool commandLayoutValidated = false;
+    bool autoSubmissionValidated = false;
+    bool hiZFresh = false;
+    bool frustumOnlyRetry = false;
+    bool occlusionQuarantined = false;
+    uint32_t gpuVisibleInstances = 0;
+    uint32_t frustumRejectedInstances = 0;
+    uint32_t hiZRejectedInstances = 0;
+    uint32_t invalidBatchInstances = 0;
+    uint32_t preparedBatches = 0;
+    uint32_t executedBatches = 0;
+    std::string fallbackReason;
+};
+
 // E-6 transient bridge. Scene files retain authoring state only; all render and
 // physics instances are rebuilt from durable Asset GUIDs and validated E-5 data.
 class EditorProductionScenePipeline {
@@ -125,6 +196,24 @@ public:
     }
     const EditorProductionScenePipelineStats& Stats() const noexcept { return stats_; }
     const std::vector<std::string>& Diagnostics() const noexcept { return diagnostics_; }
+    const std::vector<EditorProductionMeshPresentationDiagnostic>&
+        PresentationDiagnostics() const noexcept {
+        return presentationDiagnostics_;
+    }
+    const EditorProductionMeshPresentationDiagnostic* FindPresentationDiagnostic(
+        std::string_view entityGuid) const noexcept;
+    void UpdatePresentationRouting(
+        const EditorProductionMeshGpuRoutingState& gpuState);
+
+    void SetDrawMode(EditorProductionMeshDrawMode mode) noexcept {
+        drawMode_ = mode;
+    }
+    EditorProductionMeshDrawMode DrawMode() const noexcept {
+        return drawMode_;
+    }
+    static bool ShouldUseGpuDriven(
+        EditorProductionMeshDrawMode mode,
+        bool gpuPipelineReady) noexcept;
 
     static uint32_t SelectLod(
         float distance,
@@ -187,6 +276,10 @@ private:
     std::vector<EditorProductionScenePhysicsInstance> physicsInstances_;
     EditorProductionScenePipelineStats stats_{};
     std::vector<std::string> diagnostics_;
+    std::vector<EditorProductionMeshPresentationDiagnostic>
+        presentationDiagnostics_;
+    EditorProductionMeshDrawMode drawMode_ =
+        EditorProductionMeshDrawMode::Auto;
 };
 
 } // namespace editor

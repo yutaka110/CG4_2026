@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "AppLogFile.h"
 #include "AppRenderResources.h"
 #include "AppRuntimeConfig.h"
 #include "AppRuntimeUtils.h"
@@ -236,6 +237,309 @@ namespace {
         }
 
         return true;
+    }
+
+    enum class TerrainPbrTextureKind {
+        BaseColor,
+        Normal,
+        Orm,
+        Height,
+    };
+
+    DirectX::ScratchImage CreateSolidColorTextureSized(
+        uint32_t width,
+        uint32_t height,
+        const std::array<uint8_t, 4>& color) {
+        DirectX::ScratchImage image;
+        const HRESULT hr = image.Initialize2D(
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            width,
+            height,
+            1,
+            1);
+        assert(SUCCEEDED(hr));
+        const DirectX::Image* baseImage = image.GetImage(0, 0, 0);
+        assert(baseImage != nullptr && baseImage->pixels != nullptr);
+        for (uint32_t y = 0; y < height; ++y) {
+            uint8_t* row = baseImage->pixels + static_cast<size_t>(y) * baseImage->rowPitch;
+            for (uint32_t x = 0; x < width; ++x) {
+                uint8_t* destination = row + static_cast<size_t>(x) * 4u;
+                destination[0] = color[0];
+                destination[1] = color[1];
+                destination[2] = color[2];
+                destination[3] = color[3];
+            }
+        }
+        return image;
+    }
+
+    const std::filesystem::path& TerrainPbrTexturePath(
+        const TerrainPbrMaterialDefinition& material,
+        TerrainPbrTextureKind kind) {
+        switch (kind) {
+        case TerrainPbrTextureKind::BaseColor:
+            return material.baseColorPath;
+        case TerrainPbrTextureKind::Normal:
+            return material.normalPath;
+        case TerrainPbrTextureKind::Orm:
+            return material.ormPath;
+        case TerrainPbrTextureKind::Height:
+            return material.heightPath;
+        }
+        return material.baseColorPath;
+    }
+
+    std::array<uint8_t, 4> TerrainPbrFallbackColor(
+        const TerrainPbrMaterialDefinition& material,
+        size_t layerIndex,
+        TerrainPbrTextureKind kind) {
+        switch (kind) {
+        case TerrainPbrTextureKind::BaseColor: {
+            constexpr std::array<std::array<uint8_t, 4>, TerrainMaterialLibrary::kLayerCount>
+                colors = {{
+                    {{184, 137, 88, 255}},
+                    {{92, 82, 76, 255}},
+                    {{198, 158, 98, 255}},
+                }};
+            return colors[(std::min)(layerIndex, colors.size() - 1u)];
+        }
+        case TerrainPbrTextureKind::Normal:
+            return {{128, 128, 255, 255}};
+        case TerrainPbrTextureKind::Orm:
+            return {{
+                255,
+                255,
+                0,
+                255,
+            }};
+        case TerrainPbrTextureKind::Height:
+            return {{128, 128, 128, 255}};
+        }
+        return {{255, 255, 255, 255}};
+    }
+
+    bool NormalizeTerrainPbrLayer(
+        const TerrainPbrMaterialDefinition& material,
+        size_t layerIndex,
+        TerrainPbrTextureKind kind,
+        uint32_t targetSize,
+        DirectX::ScratchImage& output,
+        bool& loadedFromFile) {
+        loadedFromFile = false;
+        DirectX::ScratchImage source;
+        const std::filesystem::path& path = TerrainPbrTexturePath(material, kind);
+        if (!path.empty() &&
+            std::filesystem::exists(path) &&
+            LoadLinearTextureFile(path, source)) {
+            loadedFromFile = true;
+        } else {
+            source = CreateSolidColorTextureSized(
+                targetSize,
+                targetSize,
+                TerrainPbrFallbackColor(material, layerIndex, kind));
+        }
+
+        const DirectX::Image* baseImage = source.GetImage(0, 0, 0);
+        if (baseImage == nullptr || baseImage->pixels == nullptr) {
+            return false;
+        }
+
+        DirectX::ScratchImage converted;
+        const DirectX::Image* rgbaImage = baseImage;
+        if (baseImage->format != DXGI_FORMAT_R8G8B8A8_UNORM) {
+            const HRESULT convertHr = DirectX::Convert(
+                *baseImage,
+                DXGI_FORMAT_R8G8B8A8_UNORM,
+                DirectX::TEX_FILTER_DEFAULT,
+                DirectX::TEX_THRESHOLD_DEFAULT,
+                converted);
+            if (FAILED(convertHr)) {
+                return false;
+            }
+            rgbaImage = converted.GetImage(0, 0, 0);
+        }
+
+        DirectX::ScratchImage resized;
+        const DirectX::Image* sizedImage = rgbaImage;
+        if (rgbaImage == nullptr) {
+            return false;
+        }
+        if (rgbaImage->width != targetSize || rgbaImage->height != targetSize) {
+            const HRESULT resizeHr = DirectX::Resize(
+                *rgbaImage,
+                targetSize,
+                targetSize,
+                DirectX::TEX_FILTER_DEFAULT,
+                resized);
+            if (FAILED(resizeHr)) {
+                return false;
+            }
+            sizedImage = resized.GetImage(0, 0, 0);
+        }
+
+        if (sizedImage == nullptr) {
+            return false;
+        }
+        const HRESULT mipHr = DirectX::GenerateMipMaps(
+            *sizedImage,
+            DirectX::TEX_FILTER_DEFAULT,
+            0,
+            output);
+        if (FAILED(mipHr)) {
+            return false;
+        }
+        return true;
+    }
+
+    bool BuildTerrainPbrTextureArray(
+        const std::array<TerrainPbrMaterialDefinition, TerrainMaterialLibrary::kLayerCount>& materials,
+        TerrainPbrTextureKind kind,
+        DirectX::ScratchImage& output,
+        std::string& diagnostics) {
+        constexpr uint32_t kTextureSize = 512;
+        std::array<DirectX::ScratchImage, TerrainMaterialLibrary::kLayerCount> layers;
+        std::array<bool, TerrainMaterialLibrary::kLayerCount> loadedFromFile{};
+        for (size_t index = 0; index < layers.size(); ++index) {
+            if (!NormalizeTerrainPbrLayer(
+                    materials[index],
+                    index,
+                    kind,
+                    kTextureSize,
+                    layers[index],
+                    loadedFromFile[index])) {
+                return false;
+            }
+        }
+
+        const DirectX::TexMetadata& metadata = layers.front().GetMetadata();
+        const HRESULT initializeHr = output.Initialize2D(
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            metadata.width,
+            metadata.height,
+            TerrainMaterialLibrary::kLayerCount,
+            metadata.mipLevels);
+        if (FAILED(initializeHr)) {
+            return false;
+        }
+
+        for (size_t layerIndex = 0; layerIndex < layers.size(); ++layerIndex) {
+            const DirectX::TexMetadata& layerMetadata = layers[layerIndex].GetMetadata();
+            if (layerMetadata.width != metadata.width ||
+                layerMetadata.height != metadata.height ||
+                layerMetadata.mipLevels != metadata.mipLevels ||
+                layerMetadata.format != metadata.format) {
+                return false;
+            }
+            for (size_t mipLevel = 0; mipLevel < metadata.mipLevels; ++mipLevel) {
+                const DirectX::Image* source =
+                    layers[layerIndex].GetImage(mipLevel, 0, 0);
+                const DirectX::Image* destination =
+                    output.GetImage(mipLevel, layerIndex, 0);
+                if (source == nullptr || destination == nullptr ||
+                    source->pixels == nullptr || destination->pixels == nullptr) {
+                    return false;
+                }
+                std::memcpy(
+                    destination->pixels,
+                    source->pixels,
+                    (std::min)(destination->slicePitch, source->slicePitch));
+            }
+            if (!diagnostics.empty()) {
+                diagnostics += ", ";
+            }
+            diagnostics += materials[layerIndex].id;
+            diagnostics += loadedFromFile[layerIndex] ? "=file" : "=fallback";
+        }
+        return true;
+    }
+
+    TerrainPbrLibraryGpuConstants BuildTerrainPbrGpuConstants(
+        const std::array<TerrainPbrMaterialDefinition, TerrainMaterialLibrary::kLayerCount>& layers) {
+        TerrainPbrLibraryGpuConstants constants{};
+        float heightBlendSharpness = 0.0f;
+        for (size_t layerIndex = 0; layerIndex < layers.size(); ++layerIndex) {
+            const TerrainPbrMaterialDefinition& source = layers[layerIndex];
+            TerrainPbrLayerGpuConstants& destination =
+                constants.layers[layerIndex];
+            destination.baseColorTintAndNormalStrength = {
+                source.baseColorTint.x,
+                source.baseColorTint.y,
+                source.baseColorTint.z,
+                source.normalStrength,
+            };
+            destination.surfaceParameters = {
+                source.roughnessScale,
+                source.roughnessBias,
+                source.aoStrength,
+                source.heightScale,
+            };
+            destination.scaleParameters = {
+                source.worldTileSize,
+                source.detailNormalStrength,
+                source.macroVariationStrength,
+                source.wetnessResponse,
+            };
+            heightBlendSharpness += source.heightBlendSharpness;
+        }
+        heightBlendSharpness /= static_cast<float>(layers.size());
+        constants.blendParameters = {
+            0.38f,
+            0.82f,
+            heightBlendSharpness,
+            static_cast<float>(layers.size()),
+        };
+        return constants;
+    }
+
+    void HashTerrainWatchBytes(uint64_t& hash, const void* data, size_t size) {
+        constexpr uint64_t kFnvPrime = 1099511628211ull;
+        const uint8_t* bytes = static_cast<const uint8_t*>(data);
+        for (size_t index = 0; index < size; ++index) {
+            hash ^= bytes[index];
+            hash *= kFnvPrime;
+        }
+    }
+
+    void HashTerrainWatchPath(
+        uint64_t& hash,
+        const std::filesystem::path& path) {
+        const std::string normalized = path.lexically_normal().generic_string();
+        HashTerrainWatchBytes(hash, normalized.data(), normalized.size());
+
+        std::error_code error;
+        const bool exists = !path.empty() && std::filesystem::exists(path, error);
+        HashTerrainWatchBytes(hash, &exists, sizeof(exists));
+        if (!exists || error) {
+            return;
+        }
+
+        const uintmax_t size = std::filesystem::is_regular_file(path, error)
+            ? std::filesystem::file_size(path, error)
+            : 0;
+        if (!error) {
+            HashTerrainWatchBytes(hash, &size, sizeof(size));
+        }
+        error.clear();
+        const auto writeTime = std::filesystem::last_write_time(path, error);
+        if (!error) {
+            const auto ticks = writeTime.time_since_epoch().count();
+            HashTerrainWatchBytes(hash, &ticks, sizeof(ticks));
+        }
+    }
+
+    uint64_t ComputeTerrainMaterialWatchSignature(
+        const std::filesystem::path& setPath,
+        const TerrainMaterialLibrary& library) {
+        uint64_t hash = 1469598103934665603ull;
+        HashTerrainWatchPath(hash, setPath);
+        for (const TerrainPbrMaterialDefinition& layer : library.Layers()) {
+            HashTerrainWatchPath(hash, layer.sourcePath);
+            HashTerrainWatchPath(hash, layer.baseColorPath);
+            HashTerrainWatchPath(hash, layer.normalPath);
+            HashTerrainWatchPath(hash, layer.ormPath);
+            HashTerrainWatchPath(hash, layer.heightPath);
+        }
+        return hash;
     }
 
     bool TryLoadTerrainDetailNormalMapAsset(DirectX::ScratchImage& output, std::string& sourcePath) {
@@ -1332,6 +1636,9 @@ bool AppSceneResources::Initialize(
     ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap,
     uint32_t descriptorSizeSRV) {
     assert(uploadCommandList != nullptr);
+    terrainPbrDevice_ = device;
+    terrainPbrSrvHeap_ = srvDescriptorHeap;
+    terrainPbrDescriptorSize_ = descriptorSizeSRV;
 
     // =========================================================
     // Sprite geometry
@@ -1415,6 +1722,14 @@ bool AppSceneResources::Initialize(
     terrainMaterialData->environmentCoefficient = 0.0f;
     terrainMaterialData->specularMode = 1;
     terrainMaterialData->uvTransform = MakeIdentity4x4();
+
+    terrainPbrMaterialResource =
+        CreateBufferResource(device, sizeof(TerrainPbrLibraryGpuConstants));
+    terrainPbrMaterialResource->Map(
+        0,
+        nullptr,
+        reinterpret_cast<void**>(&terrainPbrMaterialData));
+    *terrainPbrMaterialData = {};
 
     materialResourceSprite = CreateBufferResource(device, sizeof(Material));
     materialResourceSprite->Map(
@@ -1602,30 +1917,132 @@ bool AppSceneResources::Initialize(
     textureSrvHandleGPU2 = AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 2);
     device->CreateShaderResourceView(textureResource2.Get(), &srvDesc2, textureSrvHandleCPU2);
 
-    DirectX::ScratchImage terrainAlbedoImages = CreateSolidColorTexture(184, 137, 88, 255);
+    std::string terrainMaterialLibraryError;
+    if (!terrainMaterialLibrary.LoadFromSet(
+            DefaultTerrainMaterialSetPath(),
+            &terrainMaterialLibraryError)) {
+        terrainMaterialLibrary.BuildFallback();
+        OutputDebugStringA(
+            ("[AppSceneResources] Terrain PBR definitions: " +
+             terrainMaterialLibraryError +
+             " -- using built-in fallback definitions.\n")
+                .c_str());
+    }
+
+    const auto& terrainPbrLayers = terrainMaterialLibrary.Layers();
+    *terrainPbrMaterialData = BuildTerrainPbrGpuConstants(terrainPbrLayers);
+    terrainMaterialWatchSignature_ =
+        ComputeTerrainMaterialWatchSignature(
+            DefaultTerrainMaterialSetPath(),
+            terrainMaterialLibrary);
+
+    DirectX::ScratchImage terrainAlbedoImages;
+    DirectX::ScratchImage terrainPbrNormalImages;
+    DirectX::ScratchImage terrainPbrOrmImages;
+    DirectX::ScratchImage terrainPbrHeightImages;
+    std::string terrainAlbedoDiagnostics;
+    std::string terrainNormalDiagnostics;
+    std::string terrainOrmDiagnostics;
+    std::string terrainHeightDiagnostics;
+    if (!BuildTerrainPbrTextureArray(
+            terrainPbrLayers,
+            TerrainPbrTextureKind::BaseColor,
+            terrainAlbedoImages,
+            terrainAlbedoDiagnostics) ||
+        !BuildTerrainPbrTextureArray(
+            terrainPbrLayers,
+            TerrainPbrTextureKind::Normal,
+            terrainPbrNormalImages,
+            terrainNormalDiagnostics) ||
+        !BuildTerrainPbrTextureArray(
+            terrainPbrLayers,
+            TerrainPbrTextureKind::Orm,
+            terrainPbrOrmImages,
+            terrainOrmDiagnostics) ||
+        !BuildTerrainPbrTextureArray(
+            terrainPbrLayers,
+            TerrainPbrTextureKind::Height,
+            terrainPbrHeightImages,
+            terrainHeightDiagnostics)) {
+        OutputDebugStringA("[AppSceneResources] Failed to build terrain PBR texture arrays.\n");
+        return false;
+    }
+    terrainAlbedoImages.OverrideFormat(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+
+    auto uploadTerrainArray = [&](
+                                  DirectX::ScratchImage& images,
+                                  uint32_t descriptorIndex,
+                                  ComPtr<ID3D12Resource>& resource,
+                                  D3D12_CPU_DESCRIPTOR_HANDLE& cpuHandle,
+                                  D3D12_GPU_DESCRIPTOR_HANDLE& gpuHandle) {
+        const DirectX::TexMetadata& arrayMetadata = images.GetMetadata();
+        resource = AppRenderResources::CreateTextureResource(device, arrayMetadata);
+        if (resource == nullptr) {
+            return false;
+        }
+        AppRenderResources::UploadTextureData(
+            device,
+            uploadCommandList,
+            resource,
+            images,
+            initialUploadResources_);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC arraySrvDesc{};
+        arraySrvDesc.Format = arrayMetadata.format;
+        arraySrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        arraySrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+        arraySrvDesc.Texture2DArray.MipLevels = UINT(arrayMetadata.mipLevels);
+        arraySrvDesc.Texture2DArray.ArraySize = UINT(arrayMetadata.arraySize);
+        cpuHandle = AppRenderResources::GetCPUDescriptorHandle(
+            srvDescriptorHeap,
+            descriptorSizeSRV,
+            descriptorIndex);
+        gpuHandle = AppRenderResources::GetGPUDescriptorHandle(
+            srvDescriptorHeap,
+            descriptorSizeSRV,
+            descriptorIndex);
+        device->CreateShaderResourceView(resource.Get(), &arraySrvDesc, cpuHandle);
+        return true;
+    };
+
+    if (!uploadTerrainArray(
+            terrainAlbedoImages,
+            8,
+            terrainAlbedoTextureResource,
+            terrainAlbedoTextureSrvHandleCPU,
+            terrainAlbedoTextureSrvHandleGPU) ||
+        !uploadTerrainArray(
+            terrainPbrNormalImages,
+            kTerrainPbrSrvBaseIndex,
+            terrainPbrNormalTextureResource,
+            terrainPbrNormalTextureSrvHandleCPU,
+            terrainPbrNormalTextureSrvHandleGPU) ||
+        !uploadTerrainArray(
+            terrainPbrOrmImages,
+            kTerrainPbrSrvBaseIndex + 1u,
+            terrainPbrOrmTextureResource,
+            terrainPbrOrmTextureSrvHandleCPU,
+            terrainPbrOrmTextureSrvHandleGPU) ||
+        !uploadTerrainArray(
+            terrainPbrHeightImages,
+            kTerrainPbrSrvBaseIndex + 2u,
+            terrainPbrHeightTextureResource,
+            terrainPbrHeightTextureSrvHandleCPU,
+            terrainPbrHeightTextureSrvHandleGPU)) {
+        OutputDebugStringA("[AppSceneResources] Failed to upload terrain PBR texture arrays.\n");
+        return false;
+    }
+
     const DirectX::TexMetadata& terrainAlbedoMetadata = terrainAlbedoImages.GetMetadata();
-    terrainAlbedoTextureResource = AppRenderResources::CreateTextureResource(device, terrainAlbedoMetadata);
-    AppRenderResources::UploadTextureData(
-        device,
-        uploadCommandList,
-        terrainAlbedoTextureResource,
-        terrainAlbedoImages,
-        initialUploadResources_);
-
-    D3D12_SHADER_RESOURCE_VIEW_DESC terrainAlbedoSrvDesc{};
-    terrainAlbedoSrvDesc.Format = terrainAlbedoMetadata.format;
-    terrainAlbedoSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    terrainAlbedoSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    terrainAlbedoSrvDesc.Texture2D.MipLevels = UINT(terrainAlbedoMetadata.mipLevels);
-
-    terrainAlbedoTextureSrvHandleCPU =
-        AppRenderResources::GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 8);
-    terrainAlbedoTextureSrvHandleGPU =
-        AppRenderResources::GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 8);
-    device->CreateShaderResourceView(
-        terrainAlbedoTextureResource.Get(),
-        &terrainAlbedoSrvDesc,
-        terrainAlbedoTextureSrvHandleCPU);
+    const DirectX::TexMetadata& terrainPbrNormalMetadata = terrainPbrNormalImages.GetMetadata();
+    const DirectX::TexMetadata& terrainPbrOrmMetadata = terrainPbrOrmImages.GetMetadata();
+    const DirectX::TexMetadata& terrainPbrHeightMetadata = terrainPbrHeightImages.GetMetadata();
+    OutputDebugStringA(
+        ("[AppSceneResources] Terrain PBR arrays: base{" + terrainAlbedoDiagnostics +
+         "} normal{" + terrainNormalDiagnostics +
+         "} orm{" + terrainOrmDiagnostics +
+         "} height{" + terrainHeightDiagnostics + "}\n")
+            .c_str());
 
     DirectX::ScratchImage terrainDetailCacheImages = CreateTerrainDetailCacheTexture();
     const DirectX::TexMetadata& terrainDetailCacheMetadata = terrainDetailCacheImages.GetMetadata();
@@ -1884,13 +2301,37 @@ bool AppSceneResources::Initialize(
         6,
         gradationLineMetadata);
     registerExistingVfxTexture(
-        "terrainFlatRock",
-        "generated://terrain-flat-rock",
+        "terrainPbrBaseColorArray",
+        DefaultTerrainMaterialSetPath().string(),
         terrainAlbedoTextureResource,
         terrainAlbedoTextureSrvHandleCPU,
         terrainAlbedoTextureSrvHandleGPU,
         8,
         terrainAlbedoMetadata);
+    registerExistingVfxTexture(
+        "terrainPbrNormalArray",
+        DefaultTerrainMaterialSetPath().string(),
+        terrainPbrNormalTextureResource,
+        terrainPbrNormalTextureSrvHandleCPU,
+        terrainPbrNormalTextureSrvHandleGPU,
+        kTerrainPbrSrvBaseIndex,
+        terrainPbrNormalMetadata);
+    registerExistingVfxTexture(
+        "terrainPbrOrmArray",
+        DefaultTerrainMaterialSetPath().string(),
+        terrainPbrOrmTextureResource,
+        terrainPbrOrmTextureSrvHandleCPU,
+        terrainPbrOrmTextureSrvHandleGPU,
+        kTerrainPbrSrvBaseIndex + 1u,
+        terrainPbrOrmMetadata);
+    registerExistingVfxTexture(
+        "terrainPbrHeightArray",
+        DefaultTerrainMaterialSetPath().string(),
+        terrainPbrHeightTextureResource,
+        terrainPbrHeightTextureSrvHandleCPU,
+        terrainPbrHeightTextureSrvHandleGPU,
+        kTerrainPbrSrvBaseIndex + 2u,
+        terrainPbrHeightMetadata);
     registerExistingVfxTexture(
         "terrainDetailCache",
         "generated://terrain-detail-cache",
@@ -2509,6 +2950,261 @@ bool AppSceneResources::Initialize(
         return false;
     }
 
+    return true;
+}
+
+bool AppSceneResources::PollTerrainMaterialHotReload() {
+    constexpr uint64_t kPollIntervalMs = 250;
+    constexpr uint64_t kStableWriteWindowMs = 200;
+    const uint64_t now = GetTickCount64();
+    if (now < terrainMaterialNextPollMs_) {
+        return false;
+    }
+    terrainMaterialNextPollMs_ = now + kPollIntervalMs;
+
+    const uint64_t observedSignature =
+        ComputeTerrainMaterialWatchSignature(
+            DefaultTerrainMaterialSetPath(),
+            terrainMaterialLibrary);
+    if (observedSignature == terrainMaterialWatchSignature_) {
+        terrainMaterialPendingSignature_ = 0;
+        terrainMaterialPendingSinceMs_ = 0;
+        return false;
+    }
+    if (observedSignature != terrainMaterialPendingSignature_) {
+        terrainMaterialPendingSignature_ = observedSignature;
+        terrainMaterialPendingSinceMs_ = now;
+        return false;
+    }
+    return now - terrainMaterialPendingSinceMs_ >= kStableWriteWindowMs;
+}
+
+bool AppSceneResources::ReloadTerrainMaterialAssets(
+    ID3D12GraphicsCommandList* uploadCommandList,
+    std::string* errorMessage) {
+    auto fail = [&](const std::string& message) {
+        if (errorMessage != nullptr) {
+            *errorMessage = message;
+        }
+        // A failed parse/load remains on the old GPU resources. A later file
+        // save changes the signature and schedules another attempt.
+        terrainMaterialWatchSignature_ = terrainMaterialPendingSignature_;
+        terrainMaterialPendingSignature_ = 0;
+        terrainMaterialPendingSinceMs_ = 0;
+        return false;
+    };
+
+    if (uploadCommandList == nullptr ||
+        terrainPbrDevice_ == nullptr ||
+        terrainPbrSrvHeap_ == nullptr ||
+        terrainPbrDescriptorSize_ == 0 ||
+        terrainPbrMaterialData == nullptr) {
+        return fail("terrain PBR hot reload is not initialized");
+    }
+
+    TerrainMaterialLibrary reloadedLibrary;
+    std::string definitionError;
+    if (!reloadedLibrary.LoadFromSet(
+            DefaultTerrainMaterialSetPath(),
+            &definitionError)) {
+        return fail(definitionError);
+    }
+
+    const auto& layers = reloadedLibrary.Layers();
+    DirectX::ScratchImage baseColorImages;
+    DirectX::ScratchImage normalImages;
+    DirectX::ScratchImage ormImages;
+    DirectX::ScratchImage heightImages;
+    std::string baseColorDiagnostics;
+    std::string normalDiagnostics;
+    std::string ormDiagnostics;
+    std::string heightDiagnostics;
+    if (!BuildTerrainPbrTextureArray(
+            layers,
+            TerrainPbrTextureKind::BaseColor,
+            baseColorImages,
+            baseColorDiagnostics) ||
+        !BuildTerrainPbrTextureArray(
+            layers,
+            TerrainPbrTextureKind::Normal,
+            normalImages,
+            normalDiagnostics) ||
+        !BuildTerrainPbrTextureArray(
+            layers,
+            TerrainPbrTextureKind::Orm,
+            ormImages,
+            ormDiagnostics) ||
+        !BuildTerrainPbrTextureArray(
+            layers,
+            TerrainPbrTextureKind::Height,
+            heightImages,
+            heightDiagnostics)) {
+        return fail("failed to rebuild one or more terrain PBR texture arrays");
+    }
+    baseColorImages.OverrideFormat(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+
+    ComPtr<ID3D12Resource> newBaseColor =
+        AppRenderResources::CreateTextureResource(
+            terrainPbrDevice_,
+            baseColorImages.GetMetadata());
+    ComPtr<ID3D12Resource> newNormal =
+        AppRenderResources::CreateTextureResource(
+            terrainPbrDevice_,
+            normalImages.GetMetadata());
+    ComPtr<ID3D12Resource> newOrm =
+        AppRenderResources::CreateTextureResource(
+            terrainPbrDevice_,
+            ormImages.GetMetadata());
+    ComPtr<ID3D12Resource> newHeight =
+        AppRenderResources::CreateTextureResource(
+            terrainPbrDevice_,
+            heightImages.GetMetadata());
+    if (!newBaseColor || !newNormal || !newOrm || !newHeight) {
+        return fail("failed to allocate terrain PBR GPU texture arrays");
+    }
+
+    // The caller flushes the GPU before entering this method, so uploads and
+    // descriptors from the previous reload can now be retired safely.
+    terrainRuntimeUploadResources_.clear();
+    AppRenderResources::UploadTextureData(
+        terrainPbrDevice_,
+        uploadCommandList,
+        newBaseColor,
+        baseColorImages,
+        terrainRuntimeUploadResources_);
+    AppRenderResources::UploadTextureData(
+        terrainPbrDevice_,
+        uploadCommandList,
+        newNormal,
+        normalImages,
+        terrainRuntimeUploadResources_);
+    AppRenderResources::UploadTextureData(
+        terrainPbrDevice_,
+        uploadCommandList,
+        newOrm,
+        ormImages,
+        terrainRuntimeUploadResources_);
+    AppRenderResources::UploadTextureData(
+        terrainPbrDevice_,
+        uploadCommandList,
+        newHeight,
+        heightImages,
+        terrainRuntimeUploadResources_);
+
+    auto replaceArrayDescriptor = [&](
+                                      uint32_t descriptorIndex,
+                                      const DirectX::TexMetadata& metadata,
+                                      ID3D12Resource* resource,
+                                      D3D12_CPU_DESCRIPTOR_HANDLE& cpu,
+                                      D3D12_GPU_DESCRIPTOR_HANDLE& gpu) {
+        D3D12_SHADER_RESOURCE_VIEW_DESC description{};
+        description.Format = metadata.format;
+        description.Shader4ComponentMapping =
+            D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        description.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+        description.Texture2DArray.MipLevels =
+            static_cast<UINT>(metadata.mipLevels);
+        description.Texture2DArray.ArraySize =
+            static_cast<UINT>(metadata.arraySize);
+        cpu = AppRenderResources::GetCPUDescriptorHandle(
+            terrainPbrSrvHeap_,
+            terrainPbrDescriptorSize_,
+            descriptorIndex);
+        gpu = AppRenderResources::GetGPUDescriptorHandle(
+            terrainPbrSrvHeap_,
+            terrainPbrDescriptorSize_,
+            descriptorIndex);
+        terrainPbrDevice_->CreateShaderResourceView(resource, &description, cpu);
+    };
+
+    replaceArrayDescriptor(
+        8,
+        baseColorImages.GetMetadata(),
+        newBaseColor.Get(),
+        terrainAlbedoTextureSrvHandleCPU,
+        terrainAlbedoTextureSrvHandleGPU);
+    replaceArrayDescriptor(
+        kTerrainPbrSrvBaseIndex,
+        normalImages.GetMetadata(),
+        newNormal.Get(),
+        terrainPbrNormalTextureSrvHandleCPU,
+        terrainPbrNormalTextureSrvHandleGPU);
+    replaceArrayDescriptor(
+        kTerrainPbrSrvBaseIndex + 1u,
+        ormImages.GetMetadata(),
+        newOrm.Get(),
+        terrainPbrOrmTextureSrvHandleCPU,
+        terrainPbrOrmTextureSrvHandleGPU);
+    replaceArrayDescriptor(
+        kTerrainPbrSrvBaseIndex + 2u,
+        heightImages.GetMetadata(),
+        newHeight.Get(),
+        terrainPbrHeightTextureSrvHandleCPU,
+        terrainPbrHeightTextureSrvHandleGPU);
+
+    terrainAlbedoTextureResource = std::move(newBaseColor);
+    terrainPbrNormalTextureResource = std::move(newNormal);
+    terrainPbrOrmTextureResource = std::move(newOrm);
+    terrainPbrHeightTextureResource = std::move(newHeight);
+    terrainMaterialLibrary = std::move(reloadedLibrary);
+    *terrainPbrMaterialData =
+        BuildTerrainPbrGpuConstants(terrainMaterialLibrary.Layers());
+
+    auto refreshManagedTexture = [&](
+                                     const char* name,
+                                     const ComPtr<ID3D12Resource>& resource,
+                                     const DirectX::TexMetadata& metadata) {
+        auto found = std::find_if(
+            vfxTextureLibrary.begin(),
+            vfxTextureLibrary.end(),
+            [&](const AppManagedTextureResource& entry) {
+                return entry.name == name;
+            });
+        if (found == vfxTextureLibrary.end()) {
+            return;
+        }
+        found->resource = resource;
+        found->width = static_cast<uint32_t>(metadata.width);
+        found->height = static_cast<uint32_t>(metadata.height);
+    };
+    refreshManagedTexture(
+        "terrainPbrBaseColorArray",
+        terrainAlbedoTextureResource,
+        baseColorImages.GetMetadata());
+    refreshManagedTexture(
+        "terrainPbrNormalArray",
+        terrainPbrNormalTextureResource,
+        normalImages.GetMetadata());
+    refreshManagedTexture(
+        "terrainPbrOrmArray",
+        terrainPbrOrmTextureResource,
+        ormImages.GetMetadata());
+    refreshManagedTexture(
+        "terrainPbrHeightArray",
+        terrainPbrHeightTextureResource,
+        heightImages.GetMetadata());
+
+    terrainMaterialWatchSignature_ =
+        ComputeTerrainMaterialWatchSignature(
+            DefaultTerrainMaterialSetPath(),
+            terrainMaterialLibrary);
+    terrainMaterialPendingSignature_ = 0;
+    terrainMaterialPendingSinceMs_ = 0;
+
+    const std::string message =
+        "[TerrainMaterialHotReload] reloaded base{" +
+        baseColorDiagnostics + "} normal{" + normalDiagnostics +
+        "} orm{" + ormDiagnostics + "} height{" +
+        heightDiagnostics + "}\n";
+    OutputDebugStringA(message.c_str());
+    std::ofstream reloadLog =
+        app::OpenRotatingLog("logs/terrain_material_hot_reload.log");
+    if (reloadLog) {
+        reloadLog << message;
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
     return true;
 }
 

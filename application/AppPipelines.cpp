@@ -385,11 +385,12 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     D3D12_ROOT_SIGNATURE_DESC descriptionRootSignature{};
 
     D3D12_STATIC_SAMPLER_DESC staticSamplers[2] = {};
-    staticSamplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    staticSamplers[0].Filter = D3D12_FILTER_ANISOTROPIC;
     staticSamplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     staticSamplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     staticSamplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     staticSamplers[0].ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+    staticSamplers[0].MaxAnisotropy = 16;
     staticSamplers[0].MaxLOD = D3D12_FLOAT32_MAX;
     staticSamplers[0].ShaderRegister = 0;
     staticSamplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -443,7 +444,13 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     productionShadowRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     productionShadowRange.OffsetInDescriptorsFromTableStart = 0;
 
-    D3D12_ROOT_PARAMETER rootParameters[18] = {};
+    D3D12_DESCRIPTOR_RANGE terrainPbrRange = {};
+    terrainPbrRange.BaseShaderRegister = 5;
+    terrainPbrRange.NumDescriptors = 3;
+    terrainPbrRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    terrainPbrRange.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_ROOT_PARAMETER rootParameters[20] = {};
     rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     rootParameters[0].Descriptor.ShaderRegister = 0;
@@ -522,6 +529,15 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     rootParameters[17].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
     rootParameters[17].Descriptor.ShaderRegister = 7;
 
+    rootParameters[18].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParameters[18].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParameters[18].DescriptorTable.NumDescriptorRanges = 1;
+    rootParameters[18].DescriptorTable.pDescriptorRanges = &terrainPbrRange;
+
+    rootParameters[19].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParameters[19].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParameters[19].Descriptor.ShaderRegister = 8;
+
     descriptionRootSignature.pParameters = rootParameters;
     descriptionRootSignature.NumParameters = _countof(rootParameters);
 
@@ -546,14 +562,14 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     matrixPaletteRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     matrixPaletteRange.OffsetInDescriptorsFromTableStart = 0;
 
-    D3D12_ROOT_PARAMETER skinnedRootParameters[19] = {};
+    D3D12_ROOT_PARAMETER skinnedRootParameters[21] = {};
     for (uint32_t index = 0; index < _countof(rootParameters); ++index) {
         skinnedRootParameters[index] = rootParameters[index];
     }
-    skinnedRootParameters[18].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    skinnedRootParameters[18].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-    skinnedRootParameters[18].DescriptorTable.NumDescriptorRanges = 1;
-    skinnedRootParameters[18].DescriptorTable.pDescriptorRanges = &matrixPaletteRange;
+    skinnedRootParameters[20].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    skinnedRootParameters[20].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    skinnedRootParameters[20].DescriptorTable.NumDescriptorRanges = 1;
+    skinnedRootParameters[20].DescriptorTable.pDescriptorRanges = &matrixPaletteRange;
 
     D3D12_ROOT_SIGNATURE_DESC skinnedRootSignatureDesc = descriptionRootSignature;
     skinnedRootSignatureDesc.pParameters = skinnedRootParameters;

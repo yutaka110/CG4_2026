@@ -12,6 +12,7 @@
 namespace editor {
 
 class EditorNotificationCenter;
+class EditorProductionMeshRuntimeCache;
 class EditorTransactionStack;
 
 struct EditorAssetBrowserPanelContext {
@@ -24,6 +25,7 @@ struct EditorAssetBrowserPanelContext {
     const IEditorAssetWorkspaceStatusProvider* workspaceStatus = nullptr;
     HWND nativeDialogOwner = nullptr;
     std::vector<std::filesystem::path>* pendingExternalImportPaths = nullptr;
+    EditorProductionMeshRuntimeCache* productionMeshRuntimeCache = nullptr;
 };
 
 float ResolveEditorAssetViewHeight(float availableHeight);

@@ -1,0 +1,16 @@
+SCENE 3
+ENTITY "154caef375002f7cb4eace36def0a56c" "" "Demo_Mesh" 1 0 1
+COMPONENT "154caef375002f7cb4eace36def0a56c" "engine.transform" 1
+PROPERTY "154caef375002f7cb4eace36def0a56c" "engine.transform" "translation" "21.000 0.000 -29.000"
+PROPERTY "154caef375002f7cb4eace36def0a56c" "engine.transform" "rotation" "0 0.000 0"
+PROPERTY "154caef375002f7cb4eace36def0a56c" "engine.transform" "scale" "20.000 20.000 20.000"
+COMPONENT "154caef375002f7cb4eace36def0a56c" "engine.mesh-renderer" 1
+REFERENCE "154caef375002f7cb4eace36def0a56c" "engine.mesh-renderer" "asset" "" "auto-07389eac-7cbf-6a54-64d2-798a036f83b2"
+ENTITY "2b2660c8826041630189a10f38be0fd3" "" "ball_production" 1 0 1
+COMPONENT "2b2660c8826041630189a10f38be0fd3" "engine.transform" 1
+PROPERTY "2b2660c8826041630189a10f38be0fd3" "engine.transform" "translation" "0.000 20.000 25.000"
+PROPERTY "2b2660c8826041630189a10f38be0fd3" "engine.transform" "rotation" "0 0.000 0"
+PROPERTY "2b2660c8826041630189a10f38be0fd3" "engine.transform" "scale" "20.000 20.000 20.000"
+COMPONENT "2b2660c8826041630189a10f38be0fd3" "engine.mesh-renderer" 1
+REFERENCE "2b2660c8826041630189a10f38be0fd3" "engine.mesh-renderer" "asset" "" "a7853409f86661149beaecb724ea5104"
+END

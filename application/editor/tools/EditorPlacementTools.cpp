@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <iomanip>
 #include <sstream>
 #include <utility>
@@ -80,6 +81,22 @@ public:
                 !resolved.record->referenceable || resolved.record->guid.empty()) {
                 outError = "Selected Asset is missing or cannot be referenced by a Scene Entity.";
                 return false;
+            }
+            if (resolved.record->kind == EditorAssetKind::Mesh) {
+                const std::string extension =
+                    std::filesystem::path(resolved.record->sourcePath)
+                        .extension()
+                        .string();
+                if (!resolved.record->hasMetadata ||
+                    resolved.record->provisionalGuid ||
+                    !IsDurableEditorAssetGuid(resolved.record->guid) ||
+                    extension != ".mesh") {
+                    outError =
+                        "Selected Mesh is a source-only Asset. Use Content Browser "
+                        "\"Import & Bake OBJ\" and place the generated Production "
+                        ".mesh Asset.";
+                    return false;
+                }
             }
             assetGuid_ = resolved.record->guid;
             assetType_ = ToString(resolved.record->kind);

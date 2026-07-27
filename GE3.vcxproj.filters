@@ -653,6 +653,7 @@
     <ClCompile Include="application\editor\scene\EditorProductionScenePipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\geometry\EditorTransientMeshRenderPath.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\mesh\EditorMeshBakePipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\mesh\EditorObjProductionImportBridge.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\mesh\EditorMeshBakeTools.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\EditorTransactionPanel.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
@@ -708,6 +709,9 @@
       <Filter>ソース ファイル\application\terrain</Filter>
     </ClCompile>
     <ClCompile Include="application\terrain\TerrainChunkManager.cpp">
+      <Filter>ソース ファイル\application\terrain</Filter>
+    </ClCompile>
+    <ClCompile Include="application\terrain\TerrainMaterialLibrary.cpp">
       <Filter>ソース ファイル\application\terrain</Filter>
     </ClCompile>
     <ClCompile Include="application\terrain\TerrainPresetStore.cpp">
@@ -1822,6 +1826,7 @@
     <ClInclude Include="application\editor\scene\EditorProductionScenePipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\geometry\EditorTransientMeshRenderPath.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\mesh\EditorMeshBakePipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\mesh\EditorObjProductionImportBridge.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\mesh\EditorMeshBakeTools.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\AnimationStateMachine.h"><Filter>ヘッダー ファイル\application</Filter></ClInclude>
     <ClInclude Include="application\GameplayVisualScript.h"><Filter>ヘッダー ファイル\application</Filter></ClInclude>
@@ -1983,6 +1988,9 @@
       <Filter>ヘッダー ファイル\application\terrain</Filter>
     </ClInclude>
     <ClInclude Include="application\terrain\TerrainGenerationSettings.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="application\terrain\TerrainMaterialLibrary.h">
       <Filter>ヘッダー ファイル\application\terrain</Filter>
     </ClInclude>
     <ClInclude Include="application\terrain\TerrainPresetStore.h">

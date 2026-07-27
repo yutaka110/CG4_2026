@@ -41,11 +41,18 @@ StructuredBuffer<VisibilityBatch> gBatches : register(t1);
 Texture2D<float> gHiZ : register(t2);
 RWStructuredBuffer<VisibilityCommand> gCommands : register(u0);
 RWStructuredBuffer<uint> gCounts : register(u1);
+RWStructuredBuffer<uint> gDiagnostics : register(u2);
+
+static const uint kFrustumRejectedCounter = 0u;
+static const uint kHiZRejectedCounter = 1u;
+static const uint kInvalidBatchCounter = 2u;
+static const uint kGeneratedCommandCounter = 3u;
 
 [numthreads(64, 1, 1)]
 void ResetCounts(uint3 id : SV_DispatchThreadID)
 {
     if (id.x < gBatchCount) gCounts[id.x] = 0u;
+    if (id.x < 4u) gDiagnostics[id.x] = 0u;
 }
 
 bool FrustumVisible(float3 center, float radius, out float3 ndc)
@@ -84,15 +91,31 @@ void CullAndBuildCommands(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= gInstanceCount) return;
     VisibilityInstance instanceData = gInstances[id.x];
-    if (instanceData.batchIndex >= gBatchCount) return;
+    if (instanceData.batchIndex >= gBatchCount)
+    {
+        InterlockedAdd(gDiagnostics[kInvalidBatchCounter], 1u);
+        return;
+    }
     float3 ndc;
-    if (!FrustumVisible(instanceData.boundsCenterRadius.xyz, instanceData.boundsCenterRadius.w, ndc) ||
-        !OcclusionVisible(ndc, instanceData.boundsCenterRadius.w)) return;
+    if (!FrustumVisible(instanceData.boundsCenterRadius.xyz, instanceData.boundsCenterRadius.w, ndc))
+    {
+        InterlockedAdd(gDiagnostics[kFrustumRejectedCounter], 1u);
+        return;
+    }
+    if (!OcclusionVisible(ndc, instanceData.boundsCenterRadius.w))
+    {
+        InterlockedAdd(gDiagnostics[kHiZRejectedCounter], 1u);
+        return;
+    }
 
     VisibilityBatch batch = gBatches[instanceData.batchIndex];
     uint slot = 0u;
     InterlockedAdd(gCounts[instanceData.batchIndex], 1u, slot);
-    if (slot >= batch.commandCapacity) return;
+    if (slot >= batch.commandCapacity)
+    {
+        InterlockedAdd(gDiagnostics[kInvalidBatchCounter], 1u);
+        return;
+    }
     VisibilityCommand command;
     command.transformAddress = instanceData.transformAddress;
     command.indexCountPerInstance = batch.indexCount;
@@ -102,4 +125,5 @@ void CullAndBuildCommands(uint3 id : SV_DispatchThreadID)
     command.startInstanceLocation = 0u;
     command.stridePadding = 0u;
     gCommands[batch.commandOffset + slot] = command;
+    InterlockedAdd(gDiagnostics[kGeneratedCommandCounter], 1u);
 }

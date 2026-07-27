@@ -28,6 +28,7 @@
 #include "scene/EditorGimmickRuntimeEventSequenceRegistry.h"
 #include "scene/EditorGimmickRuntimeInteractionSystem.h"
 #include "scene/EditorGimmickRuntimeTriggerSystem.h"
+#include "scene/EditorProductionScenePipeline.h"
 
 namespace editor {
 namespace {
@@ -299,6 +300,8 @@ public:
         ImGui::TextDisabled(
             "Active in Hierarchy: %s",
             runtimeActive ? "true" : "false");
+        DrawProductionMeshPresentationDebugger(
+            context, *entity, scene);
         DrawGimmickRuntimeDebugger(
             context, *entity, scene);
         ImGui::Separator();
@@ -583,6 +586,223 @@ private:
             value.x,
             value.y,
             value.z);
+    }
+
+    static void DrawProductionMeshPresentationDebugger(
+        const EditorDetailsSectionContext& context,
+        const EditorSceneEntity& entity,
+        const EditorScene* scene) {
+        const EditorSceneComponent* meshRenderer =
+            scene != nullptr
+                ? scene->FindComponent(
+                      entity,
+                      kEditorMeshRendererComponentType)
+                : nullptr;
+        if (meshRenderer == nullptr ||
+            context.productionScenePipeline == nullptr) {
+            return;
+        }
+
+        ImGui::Spacing();
+        if (!ImGui::CollapsingHeader(
+                "Production Mesh Presentation",
+                ImGuiTreeNodeFlags_DefaultOpen)) {
+            return;
+        }
+
+        EditorProductionMeshDrawMode drawMode =
+            context.productionScenePipeline->DrawMode();
+        if (ImGui::BeginCombo(
+                "Draw Mode",
+                EditorProductionMeshDrawModeLabel(drawMode))) {
+            constexpr std::array<EditorProductionMeshDrawMode, 3>
+                modes{
+                    EditorProductionMeshDrawMode::Auto,
+                    EditorProductionMeshDrawMode::ForceDirect,
+                    EditorProductionMeshDrawMode::ForceGpuDriven};
+            for (const EditorProductionMeshDrawMode candidate : modes) {
+                const bool selected = candidate == drawMode;
+                if (ImGui::Selectable(
+                        EditorProductionMeshDrawModeLabel(candidate),
+                        selected)) {
+                    context.productionScenePipeline->SetDrawMode(
+                        candidate);
+                    drawMode = candidate;
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::TextDisabled(
+            "Force Direct bypasses GPU-driven indirect submission.");
+
+        const EditorProductionMeshPresentationDiagnostic* diagnostic =
+            context.productionScenePipeline
+                ->FindPresentationDiagnostic(entity.guid);
+        if (diagnostic == nullptr) {
+            ImGui::TextDisabled(
+                "No Presentation diagnostic was produced this frame.");
+            return;
+        }
+
+        if (ImGui::BeginTable(
+                "ProductionMeshPresentationState",
+                2,
+                ImGuiTableFlags_Borders |
+                    ImGuiTableFlags_RowBg |
+                    ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn(
+                "Stage",
+                ImGuiTableColumnFlags_WidthFixed,
+                150.0f);
+            ImGui::TableSetupColumn("State");
+            ImGui::TableHeadersRow();
+            const auto drawBool = [](const char* label, bool value) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(label);
+                ImGui::TableNextColumn();
+                ImGui::TextColored(
+                    value
+                        ? ImVec4{0.35f, 0.9f, 0.55f, 1.0f}
+                        : ImVec4{1.0f, 0.45f, 0.35f, 1.0f},
+                    "%s",
+                    value ? "Ready" : "Not Ready");
+            };
+            drawBool("Asset Resolved", diagnostic->assetResolved);
+            drawBool(
+                "Runtime Cache",
+                diagnostic->runtimeCacheReady);
+            drawBool(
+                "Hierarchy Visible",
+                diagnostic->hierarchyVisible);
+            drawBool(
+                "Frustum Visible",
+                diagnostic->frustumVisible);
+            drawBool(
+                "GPU Mesh",
+                diagnostic->gpuAssetReady);
+            drawBool(
+                "GPU Transform",
+                diagnostic->transformReady);
+            drawBool(
+                "GPU Pipeline",
+                diagnostic->gpuPipelineReady);
+            drawBool(
+                "Visibility Dispatch",
+                diagnostic->visibilityDispatchSucceeded);
+            drawBool(
+                "Command Readback",
+                diagnostic->commandReadbackAvailable);
+            drawBool(
+                "Command Generated",
+                diagnostic->commandGenerated);
+            drawBool(
+                "Command Layout",
+                diagnostic->commandLayoutValidated);
+            drawBool(
+                "Hi-Z Fresh",
+                diagnostic->hiZFresh);
+            drawBool(
+                "Batch Prepared",
+                diagnostic->batchPrepared);
+            drawBool(
+                "Batch Submitted",
+                diagnostic->batchSubmitted);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("Selected LOD");
+            ImGui::TableNextColumn();
+            ImGui::Text("%u", diagnostic->selectedLod);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("Render Packets");
+            ImGui::TableNextColumn();
+            ImGui::Text("%u", diagnostic->renderPacketCount);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("GPU Visible");
+            ImGui::TableNextColumn();
+            ImGui::Text("%u", diagnostic->gpuVisibleInstances);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("Frustum Rejected");
+            ImGui::TableNextColumn();
+            ImGui::Text(
+                "%u",
+                diagnostic->frustumRejectedInstances);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("Hi-Z Rejected");
+            ImGui::TableNextColumn();
+            ImGui::Text(
+                "%u",
+                diagnostic->hiZRejectedInstances);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("Invalid Batch");
+            ImGui::TableNextColumn();
+            ImGui::Text(
+                "%u",
+                diagnostic->invalidBatchInstances);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("Frustum-only Retry");
+            ImGui::TableNextColumn();
+            ImGui::TextColored(
+                diagnostic->frustumOnlyRetry
+                    ? ImVec4{1.0f, 0.75f, 0.25f, 1.0f}
+                    : ImVec4{0.35f, 0.9f, 0.55f, 1.0f},
+                "%s",
+                diagnostic->frustumOnlyRetry
+                    ? "Active"
+                    : "Inactive");
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("Occlusion Quarantine");
+            ImGui::TableNextColumn();
+            ImGui::TextColored(
+                diagnostic->occlusionQuarantined
+                    ? ImVec4{1.0f, 0.75f, 0.25f, 1.0f}
+                    : ImVec4{0.35f, 0.9f, 0.55f, 1.0f},
+                "%s",
+                diagnostic->occlusionQuarantined
+                    ? "Frustum-only"
+                    : "Inactive");
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("Prepared / Submitted");
+            ImGui::TableNextColumn();
+            ImGui::Text(
+                "%u / %u",
+                diagnostic->preparedBatches,
+                diagnostic->executedBatches);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("Resolved Path");
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(
+                EditorProductionMeshPresentationPathLabel(
+                    diagnostic->resolvedPath));
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("Auto Fallback");
+            ImGui::TableNextColumn();
+            ImGui::TextColored(
+                diagnostic->autoDirectFallback
+                    ? ImVec4{1.0f, 0.75f, 0.25f, 1.0f}
+                    : ImVec4{0.35f, 0.9f, 0.55f, 1.0f},
+                "%s",
+                diagnostic->autoDirectFallback
+                    ? "Direct Safety Path"
+                    : "Inactive");
+            ImGui::EndTable();
+        }
+        if (!diagnostic->lastFailure.empty()) {
+            ImGui::TextWrapped(
+                "Last rejection: %s",
+                diagnostic->lastFailure.c_str());
+        }
     }
 
     static void DrawGimmickRuntimeDebugger(

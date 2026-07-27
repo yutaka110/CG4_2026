@@ -878,6 +878,8 @@ void DrawCustomDetailsSections(
     sectionContext.worldMutations = context.worldMutations;
     sectionContext.sceneWorldProvider = context.sceneWorldProvider;
     sectionContext.onWorldMutated = context.onWorldMutated;
+    sectionContext.productionScenePipeline =
+        context.productionScenePipeline;
 
     ImGui::Separator();
     for (EditorDetailsSectionProvider* provider : providers) {

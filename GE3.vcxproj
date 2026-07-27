@@ -187,6 +187,7 @@
     <ClCompile Include="application\editor\scene\EditorProductionScenePipeline.cpp" />
     <ClCompile Include="application\editor\geometry\EditorTransientMeshRenderPath.cpp" />
     <ClCompile Include="application\editor\mesh\EditorMeshBakePipeline.cpp" />
+    <ClCompile Include="application\editor\mesh\EditorObjProductionImportBridge.cpp" />
     <ClCompile Include="application\editor\mesh\EditorMeshBakeTools.cpp" />
       <ClCompile Include="application\editor\EditorTransformGizmoService.cpp" />
       <ClCompile Include="application\editor\EditorTransformGizmoMath.cpp" />
@@ -342,6 +343,7 @@
     <ClCompile Include="application\course\SectionCheckpointSystem.cpp" />
     <ClCompile Include="application\terrain\RailPath.cpp" />
     <ClCompile Include="application\terrain\TerrainChunkManager.cpp" />
+    <ClCompile Include="application\terrain\TerrainMaterialLibrary.cpp" />
     <ClCompile Include="application\terrain\TerrainPresetStore.cpp" />
     <ClCompile Include="application\terrain\TerrainVolumeField.cpp" />
     <ClCompile Include="application\terrain\TerrainEditLayer.cpp" />
@@ -976,6 +978,7 @@
     <ClInclude Include="application\editor\scene\EditorProductionScenePipeline.h" />
     <ClInclude Include="application\editor\geometry\EditorTransientMeshRenderPath.h" />
     <ClInclude Include="application\editor\mesh\EditorMeshBakePipeline.h" />
+    <ClInclude Include="application\editor\mesh\EditorObjProductionImportBridge.h" />
     <ClInclude Include="application\editor\mesh\EditorMeshBakeTools.h" />
       <ClInclude Include="application\editor\EditorTransformGizmoService.h" />
       <ClInclude Include="application\editor\EditorTransformGizmoMath.h" />
@@ -1153,6 +1156,7 @@
     <ClInclude Include="application\terrain\RailPath.h" />
     <ClInclude Include="application\terrain\TerrainChunkManager.h" />
     <ClInclude Include="application\terrain\TerrainGenerationSettings.h" />
+    <ClInclude Include="application\terrain\TerrainMaterialLibrary.h" />
     <ClInclude Include="application\terrain\TerrainPresetStore.h" />
     <ClInclude Include="application\terrain\TerrainVolumeField.h" />
     <ClInclude Include="application\terrain\TerrainEditLayer.h" />

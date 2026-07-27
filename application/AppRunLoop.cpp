@@ -8042,6 +8042,13 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     gRailPerfFrame.waitFrameSlotMs = ElapsedMs(waitStart, RailPerfClock::now());
     ResolveCompletedRailGpuTiming(backBufferIndex);
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterWaitForFrameSlot");
+    bool terrainMaterialReloadRequested =
+        scene_.PollTerrainMaterialHotReload();
+    if (terrainMaterialReloadRequested && !frameCoordinator_.FlushGpu()) {
+        OutputDebugStringA(
+            "[TerrainMaterialHotReload] GPU flush failed; reload deferred.\n");
+        terrainMaterialReloadRequested = false;
+    }
     const auto commandBeginStart = RailPerfClock::now();
     ComPtr<ID3D12GraphicsCommandList> commandList =
         clPool_.Begin(backBufferIndex, appPipelines_.GetMainPSO());
@@ -8050,6 +8057,17 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.commandListBeginFailed");
         closeImguiFrameOnAbort();
         return;
+    }
+    if (terrainMaterialReloadRequested) {
+        std::string terrainMaterialReloadError;
+        if (!scene_.ReloadTerrainMaterialAssets(
+                commandList.Get(),
+                &terrainMaterialReloadError)) {
+            OutputDebugStringA(
+                ("[TerrainMaterialHotReload] " +
+                 terrainMaterialReloadError + "\n")
+                    .c_str());
+        }
     }
     BeginRailGpuTiming(commandList.Get(), backBufferIndex);
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterCommandListBegin");

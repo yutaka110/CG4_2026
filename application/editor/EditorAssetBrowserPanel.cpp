@@ -5,6 +5,7 @@
 #include "EditorAssetImportService.h"
 #include "EditorAssetThumbnailService.h"
 #include "EditorNotificationCenter.h"
+#include "mesh/EditorObjProductionImportBridge.h"
 
 #include "../../externals/imgui/imgui.h"
 
@@ -485,6 +486,7 @@ void DrawProductionImportControls(
     EditorAssetSelection* assetSelection,
     EditorAssetThumbnailService* thumbnails,
     EditorNotificationCenter* notifications,
+    EditorProductionMeshRuntimeCache* runtimeCache,
     HWND nativeDialogOwner,
     std::vector<std::filesystem::path>* pendingExternalImportPaths,
     const EditorAssetRecord* selectedRecord) {
@@ -492,6 +494,7 @@ void DrawProductionImportControls(
     static std::array<char, 128> destinationFolderBuffer{};
     static int collisionIndex = 0;
     static bool initialized = false;
+    static std::string lastObjBakeSummary;
     if (!initialized) {
         std::snprintf(destinationFolderBuffer.data(), destinationFolderBuffer.size(), "%s", "Imported");
         initialized = true;
@@ -593,6 +596,57 @@ void DrawProductionImportControls(
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Reimports the selected asset while preserving its GUID.");
+    }
+
+    const bool canBakeObj =
+        selectedRecord != nullptr &&
+        EditorObjProductionImportBridge::CanImport(*selectedRecord);
+    if (!canBakeObj) {
+        ImGui::BeginDisabled();
+    }
+    if (ImGui::SmallButton("Import & Bake OBJ")) {
+        EditorObjProductionImportBridge bridge(
+            registry,
+            runtimeCache,
+            std::filesystem::current_path());
+        EditorObjProductionImportRequest request{};
+        request.sourceAssetGuid = selectedRecord->guid;
+        request.outputAssetName =
+            EditorObjProductionImportBridge::DefaultOutputAssetName(
+                *selectedRecord);
+        const EditorObjProductionImportResult result =
+            bridge.ImportAndBake(request);
+        lastObjBakeSummary = result.message;
+        if (notifications != nullptr) {
+            notifications->Push(
+                result.succeeded
+                    ? EditorNotificationSeverity::Info
+                    : EditorNotificationSeverity::Error,
+                "OBJ Production Import",
+                result.message);
+        }
+        if (result.succeeded) {
+            if (assetSelection != nullptr) {
+                assetSelection->SetPrimary(
+                    MakeEditorAssetHandle(
+                        result.record,
+                        registry.Revision()));
+            }
+            if (thumbnails != nullptr) {
+                thumbnails->Sync(registry);
+            }
+        }
+    }
+    if (!canBakeObj) {
+        ImGui::EndDisabled();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "Converts the selected OBJ into a durable Production .mesh, "
+            "cooks Renderer LODs and Collision, then selects the result.");
+    }
+    if (!lastObjBakeSummary.empty()) {
+        ImGui::TextWrapped("OBJ Bake: %s", lastObjBakeSummary.c_str());
     }
 }
 
@@ -1269,6 +1323,7 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
         context.assetSelection,
         context.thumbnails,
         context.notifications,
+        context.productionMeshRuntimeCache,
         context.nativeDialogOwner,
         context.pendingExternalImportPaths,
         activeSelectedRecord);

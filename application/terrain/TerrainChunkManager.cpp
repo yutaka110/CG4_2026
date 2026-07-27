@@ -5471,6 +5471,9 @@ void TerrainChunkManager::DispatchDebrisCulling(
             hiZPipelineState)) {
         return;
     }
+    hiZBuildFrameSerial_ = frameSerial_;
+    hiZViewProjection_ = viewProjection;
+    hiZViewProjectionValid_ = true;
 
     commandList->SetComputeRootSignature(rootSignature);
     commandList->SetPipelineState(pipelineState);
@@ -5605,6 +5608,37 @@ D3D12_GPU_DESCRIPTOR_HANDLE TerrainChunkManager::GetHiZDebugSrv(uint32_t level) 
         return {};
     }
     return hiZSrvs_[clampedLevel].gpu;
+}
+
+bool TerrainChunkManager::IsHiZFresh(
+    const Matrix4x4& viewProjection,
+    uint64_t maximumFrameAge,
+    float matrixTolerance) const {
+    if (!hiZResourcesReady_ || !hiZViewProjectionValid_ ||
+        hiZBuildFrameSerial_ == 0 || frameSerial_ < hiZBuildFrameSerial_ ||
+        frameSerial_ - hiZBuildFrameSerial_ > maximumFrameAge) {
+        return false;
+    }
+    matrixTolerance = (std::max)(0.0f, matrixTolerance);
+    for (uint32_t row = 0; row < 4; ++row) {
+        for (uint32_t column = 0; column < 4; ++column) {
+            if (std::abs(
+                    viewProjection.m[row][column] -
+                    hiZViewProjection_.m[row][column]) >
+                matrixTolerance) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+uint64_t TerrainChunkManager::HiZAgeFrames() const {
+    if (!hiZViewProjectionValid_ || hiZBuildFrameSerial_ == 0 ||
+        frameSerial_ < hiZBuildFrameSerial_) {
+        return UINT64_MAX;
+    }
+    return frameSerial_ - hiZBuildFrameSerial_;
 }
 
 void TerrainChunkManager::DrawDebrisIndirect(ID3D12GraphicsCommandList* commandList) const {

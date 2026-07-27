@@ -22,6 +22,7 @@ class EditorGimmickPresentationPhysicsAdapter;
 class EditorGimmickRuntimeEventRouter;
 class EditorGimmickRuntimeInteractionSystem;
 class EditorGimmickRuntimeTriggerSystem;
+class EditorProductionScenePipeline;
 struct EditorWorldMutationResult;
 
 struct EditorDetailsSectionContext {
@@ -52,6 +53,7 @@ struct EditorDetailsSectionContext {
     EditorWorldMutationService* worldMutations = nullptr;
     SceneWorldObjectProvider* sceneWorldProvider = nullptr;
     std::function<void(const EditorWorldMutationResult&)> onWorldMutated;
+    EditorProductionScenePipeline* productionScenePipeline = nullptr;
 };
 
 class EditorDetailsSectionProvider {

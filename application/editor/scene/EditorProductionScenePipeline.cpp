@@ -275,6 +275,117 @@ bool CreateBuffer(
 
 } // namespace
 
+const char* EditorProductionMeshDrawModeLabel(
+    EditorProductionMeshDrawMode mode) noexcept {
+    switch (mode) {
+    case EditorProductionMeshDrawMode::Auto: return "Auto";
+    case EditorProductionMeshDrawMode::ForceDirect: return "Force Direct";
+    case EditorProductionMeshDrawMode::ForceGpuDriven:
+        return "Force GPU Driven";
+    }
+    return "Auto";
+}
+
+const char* EditorProductionMeshPresentationPathLabel(
+    EditorProductionMeshPresentationPath path) noexcept {
+    switch (path) {
+    case EditorProductionMeshPresentationPath::None: return "None";
+    case EditorProductionMeshPresentationPath::Direct: return "Direct";
+    case EditorProductionMeshPresentationPath::GpuDriven:
+        return "GPU Driven";
+    }
+    return "None";
+}
+
+bool EditorProductionScenePipeline::ShouldUseGpuDriven(
+    EditorProductionMeshDrawMode mode,
+    bool gpuPipelineReady) noexcept {
+    if (mode == EditorProductionMeshDrawMode::ForceDirect) return false;
+    if (mode == EditorProductionMeshDrawMode::ForceGpuDriven) return true;
+    return gpuPipelineReady;
+}
+
+const EditorProductionMeshPresentationDiagnostic*
+EditorProductionScenePipeline::FindPresentationDiagnostic(
+    std::string_view entityGuid) const noexcept {
+    const auto found = std::find_if(
+        presentationDiagnostics_.begin(),
+        presentationDiagnostics_.end(),
+        [&](const EditorProductionMeshPresentationDiagnostic& diagnostic) {
+            return diagnostic.entityGuid == entityGuid;
+        });
+    return found == presentationDiagnostics_.end() ? nullptr : &*found;
+}
+
+void EditorProductionScenePipeline::UpdatePresentationRouting(
+    const EditorProductionMeshGpuRoutingState& gpuState) {
+    for (EditorProductionMeshPresentationDiagnostic& diagnostic :
+         presentationDiagnostics_) {
+        diagnostic.gpuPipelineReady = gpuState.pipelineReady;
+        diagnostic.visibilityDispatchSucceeded =
+            gpuState.visibilityDispatchSucceeded;
+        diagnostic.commandReadbackAvailable =
+            gpuState.commandReadbackAvailable;
+        diagnostic.gpuVisibleInstances =
+            gpuState.gpuVisibleInstances;
+        diagnostic.commandGenerated =
+            gpuState.gpuVisibleInstances != 0;
+        diagnostic.commandLayoutValidated =
+            gpuState.commandLayoutValidated;
+        diagnostic.hiZFresh = gpuState.hiZFresh;
+        diagnostic.frustumOnlyRetry =
+            gpuState.frustumOnlyRetry;
+        diagnostic.occlusionQuarantined =
+            gpuState.occlusionQuarantined;
+        diagnostic.frustumRejectedInstances =
+            gpuState.frustumRejectedInstances;
+        diagnostic.hiZRejectedInstances =
+            gpuState.hiZRejectedInstances;
+        diagnostic.invalidBatchInstances =
+            gpuState.invalidBatchInstances;
+        diagnostic.preparedBatches =
+            gpuState.preparedBatches;
+        diagnostic.executedBatches =
+            gpuState.executedBatches;
+        diagnostic.batchPrepared =
+            gpuState.preparedBatches != 0;
+        diagnostic.batchSubmitted =
+            gpuState.executedBatches != 0;
+        diagnostic.autoDirectFallback = false;
+        if (diagnostic.renderPacketCount == 0) {
+            diagnostic.resolvedPath =
+                EditorProductionMeshPresentationPath::None;
+            continue;
+        }
+        const bool useGpuDriven =
+            diagnostic.drawMode ==
+                EditorProductionMeshDrawMode::ForceGpuDriven ||
+            (diagnostic.drawMode ==
+                 EditorProductionMeshDrawMode::Auto &&
+             gpuState.autoSubmissionValidated);
+        diagnostic.resolvedPath =
+            useGpuDriven
+                ? EditorProductionMeshPresentationPath::GpuDriven
+                : EditorProductionMeshPresentationPath::Direct;
+        if (diagnostic.drawMode ==
+                EditorProductionMeshDrawMode::ForceGpuDriven &&
+            !gpuState.pipelineReady) {
+            diagnostic.lastFailure =
+                "GPU Driven was forced while the indirect pipeline was not ready.";
+        } else if (
+            diagnostic.drawMode ==
+                EditorProductionMeshDrawMode::Auto &&
+            !gpuState.autoSubmissionValidated) {
+            diagnostic.autoDirectFallback = true;
+            diagnostic.lastFailure =
+                gpuState.fallbackReason.empty()
+                    ? "Auto retained Direct presentation until indirect "
+                      "submission is validated."
+                    : gpuState.fallbackReason;
+        }
+    }
+}
+
 bool EditorProductionScenePipeline::Initialize(ID3D12Device* device, std::string* errorMessage) {
     if (device == nullptr) {
         SetError(errorMessage, "E-6 requires a D3D12 device.");
@@ -300,6 +411,7 @@ void EditorProductionScenePipeline::Shutdown() {
     gpuDrivenCandidates_.clear();
     physicsInstances_.clear();
     diagnostics_.clear();
+    presentationDiagnostics_.clear();
     stats_ = {};
     device_.Reset();
 }
@@ -344,6 +456,7 @@ bool EditorProductionScenePipeline::Sync(
     gpuDrivenCandidates_.clear();
     physicsInstances_.clear();
     diagnostics_.clear();
+    presentationDiagnostics_.clear();
     const uint64_t priorUploadedBytes = stats_.uploadedGpuBytes;
     stats_ = {};
     stats_.uploadedGpuBytes = priorUploadedBytes;
@@ -394,25 +507,49 @@ bool EditorProductionScenePipeline::Sync(
         const EditorSceneComponent* component = scene.FindComponent(entity, kEditorMeshRendererComponentType);
         if (component == nullptr || !component->enabled) continue;
         ++stats_.meshEntities;
-        if (editorTransientOverrides != nullptr &&
-            editorTransientOverrides->contains(entity.guid)) continue;
         const std::string assetGuid = AssetReference(*component);
-        const EditorAssetRecord* record = registry.FindByGuid(assetGuid);
-        if (assetGuid.empty() || record == nullptr || record->kind != EditorAssetKind::Mesh || record->missing) {
-            diagnostics_.push_back("Mesh Entity '" + entity.name + "' has no available durable Mesh Asset.");
+        presentationDiagnostics_.push_back({});
+        EditorProductionMeshPresentationDiagnostic& presentation =
+            presentationDiagnostics_.back();
+        presentation.entityGuid = entity.guid;
+        presentation.assetGuid = assetGuid;
+        presentation.drawMode = drawMode_;
+        if (editorTransientOverrides != nullptr &&
+            editorTransientOverrides->contains(entity.guid)) {
+            presentation.lastFailure =
+                "Production rendering is temporarily replaced by the Modeling preview.";
             continue;
         }
+        const EditorAssetRecord* record = registry.FindByGuid(assetGuid);
+        if (assetGuid.empty() || record == nullptr || record->kind != EditorAssetKind::Mesh || record->missing) {
+            presentation.lastFailure =
+                "No available durable Production Mesh Asset is resolved.";
+            diagnostics_.push_back(
+                "Mesh Entity '" + entity.name +
+                "' has no available durable Mesh Asset.");
+            continue;
+        }
+        presentation.assetResolved = true;
         const EditorProductionMeshRuntimeResource* resource = runtimeCache.Find(assetGuid);
         if (resource == nullptr || resource->sourceTimestamp != record->sourceTimestamp) {
             std::string cacheError;
             if (!runtimeCache.Load(*record, &cacheError)) {
+                presentation.lastFailure =
+                    cacheError.empty()
+                        ? "Runtime Mesh Cache rejected the Asset."
+                        : cacheError;
                 diagnostics_.push_back("Mesh Asset '" + record->displayName + "' rejected: " + cacheError);
                 if (resource == nullptr) continue;
             } else {
                 resource = runtimeCache.Find(assetGuid);
             }
         }
-        if (resource == nullptr || resource->mesh.lods.empty()) continue;
+        if (resource == nullptr || resource->mesh.lods.empty()) {
+            presentation.lastFailure =
+                "Runtime Mesh Cache contains no renderable LOD.";
+            continue;
+        }
+        presentation.runtimeCacheReady = true;
         const EditorSceneComponent* transformComponent =
             scene.FindComponent(entity, kEditorTransformComponentType);
         const Vector3 instanceScale = ParseVector(
@@ -422,6 +559,8 @@ bool EditorProductionScenePipeline::Sync(
             std::abs(instanceScale.z) <= kEpsilon) {
             diagnostics_.push_back(
                 "Mesh Entity '" + entity.name + "' has a non-invertible Transform scale.");
+            presentation.lastFailure =
+                "Transform scale is non-invertible.";
             continue;
         }
 
@@ -443,6 +582,9 @@ bool EditorProductionScenePipeline::Sync(
         instance.frustumCulled = !FrustumVisible(instance.boundsMin, instance.boundsMax, viewProjection);
         const bool hierarchyVisible = resolveVisibility(resolveVisibility, entity);
         instance.visible = hierarchyVisible && !instance.frustumCulled;
+        presentation.selectedLod = instance.selectedLod;
+        presentation.hierarchyVisible = hierarchyVisible;
+        presentation.frustumVisible = !instance.frustumCulled;
         if (instance.visible) ++stats_.visibleInstances;
         if (hierarchyVisible && instance.frustumCulled) ++stats_.frustumCulledInstances;
         ++stats_.selectedLods[(std::min)(instance.selectedLod,
@@ -465,17 +607,50 @@ bool EditorProductionScenePipeline::Sync(
         }
         instances_.push_back(instance);
 
-        if (!hierarchyVisible || device_ == nullptr || uploadCommandList == nullptr) continue;
+        if (!hierarchyVisible) {
+            presentation.lastFailure =
+                "Entity is hidden by its Scene hierarchy.";
+            continue;
+        }
+        if (device_ == nullptr || uploadCommandList == nullptr) {
+            presentation.lastFailure =
+                "GPU upload is unavailable for this frame.";
+            continue;
+        }
         std::string gpuError;
-        if (!EnsureGpuAsset(*resource, uploadCommandList, scheduledFenceValue, &gpuError) ||
-            !EnsureTransform(entity.guid, instance.world, viewProjection, scheduledFenceValue, &gpuError)) {
+        if (!EnsureGpuAsset(
+                *resource,
+                uploadCommandList,
+                scheduledFenceValue,
+                &gpuError)) {
+            presentation.lastFailure =
+                gpuError.empty() ? "GPU Mesh upload failed." : gpuError;
             diagnostics_.push_back("Mesh Entity '" + entity.name + "' GPU sync failed: " + gpuError);
             continue;
         }
+        presentation.gpuAssetReady = true;
+        if (!EnsureTransform(
+                entity.guid,
+                instance.world,
+                viewProjection,
+                scheduledFenceValue,
+                &gpuError)) {
+            presentation.lastFailure =
+                gpuError.empty() ? "GPU Transform upload failed." : gpuError;
+            diagnostics_.push_back(
+                "Mesh Entity '" + entity.name +
+                "' GPU sync failed: " + gpuError);
+            continue;
+        }
+        presentation.transformReady = true;
         const auto asset = gpuAssets_.find(assetGuid);
         const auto transform = gpuTransforms_.find(entity.guid);
         if (asset == gpuAssets_.end() || transform == gpuTransforms_.end() ||
-            instance.selectedLod >= asset->second.lods.size()) continue;
+            instance.selectedLod >= asset->second.lods.size()) {
+            presentation.lastFailure =
+                "GPU Mesh or Transform generation is unavailable.";
+            continue;
+        }
         const GpuLod& lod = asset->second.lods[instance.selectedLod];
         for (const GpuSubmesh& submesh : lod.submeshes) {
             EditorProductionSceneRenderPacket packet{entity.guid, assetGuid, instance.selectedLod,
@@ -483,7 +658,17 @@ bool EditorProductionScenePipeline::Sync(
                 submesh.indexBuffer, transform->second.resource->GetGPUVirtualAddress(),
                 center, radius, instance.visible};
             gpuDrivenCandidates_.push_back(packet);
-            if (instance.visible) renderPackets_.push_back(std::move(packet));
+            if (instance.visible) {
+                renderPackets_.push_back(std::move(packet));
+                ++presentation.renderPacketCount;
+            }
+        }
+        if (!instance.visible) {
+            presentation.lastFailure =
+                "Instance was rejected by the CPU frustum test.";
+        } else if (presentation.renderPacketCount == 0) {
+            presentation.lastFailure =
+                "Selected LOD produced no render packets.";
         }
     }
 

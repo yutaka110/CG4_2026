@@ -52,14 +52,29 @@ struct EditorProductionGpuDrivenStats {
     uint32_t residentInstances = 0;
     uint32_t batches = 0;
     uint32_t gpuVisibleInstances = 0;
+    uint32_t frustumRejectedInstances = 0;
+    uint32_t hiZRejectedInstances = 0;
+    uint32_t invalidBatchInstances = 0;
+    uint32_t preparedBatches = 0;
+    uint32_t rejectedBatchPreparations = 0;
+    uint32_t executedBatches = 0;
+    uint32_t submittedCommandCapacity = 0;
     uint32_t cpuFallbackPackets = 0;
     uint32_t rejectedByInstanceBudget = 0;
     uint32_t rejectedByBatchBudget = 0;
     uint32_t dispatches = 0;
     uint32_t readbacks = 0;
+    uint32_t zeroCommandReadbacks = 0;
     uint32_t ringStalls = 0;
     bool occlusionEnabled = false;
+    bool hiZFresh = false;
+    bool frustumOnlyRetry = false;
+    bool occlusionQuarantined = false;
+    bool dispatchAttempted = false;
+    bool dispatchSucceeded = false;
+    bool readbackAvailable = false;
     bool commandLayoutValidated = false;
+    bool autoDirectFallback = true;
     bool ready = false;
 };
 
@@ -92,8 +107,9 @@ public:
     bool DispatchVisibility(
         ID3D12GraphicsCommandList* commandList,
         D3D12_GPU_DESCRIPTOR_HANDLE hiZHandle,
-        bool hiZAvailable);
-    void ExecuteBatch(ID3D12GraphicsCommandList* commandList, uint32_t batchIndex) const;
+        bool hiZFresh);
+    void RecordBatchPreparation(bool succeeded);
+    bool ExecuteBatch(ID3D12GraphicsCommandList* commandList, uint32_t batchIndex);
     void RecordReadback(ID3D12GraphicsCommandList* commandList);
 
     const std::vector<EditorProductionGpuDrivenBatch>& Batches() const noexcept { return batches_; }
@@ -104,10 +120,29 @@ public:
     const EditorProductionGpuDrivenPolicy& Policy() const noexcept { return policy_; }
     const std::vector<std::string>& Diagnostics() const noexcept { return diagnostics_; }
     bool Ready() const noexcept { return stats_.ready && activeFrame_ >= 0; }
+    bool AutoValidationReady() const noexcept {
+        return Ready() && stats_.readbackAvailable &&
+            stats_.commandLayoutValidated &&
+            stats_.gpuVisibleInstances != 0;
+    }
+    bool AutoSubmissionReady() const noexcept {
+        return AutoValidationReady() && stats_.dispatchSucceeded;
+    }
+    const char* AutoFallbackReason() const noexcept;
 
     static std::vector<EditorProductionGpuDrivenBatchRange> BuildBatchRanges(
         const std::vector<uint32_t>& batchIndices,
         uint32_t batchCount);
+    static bool ShouldSubmitIndirect(
+        EditorProductionMeshDrawMode drawMode,
+        bool pipelineReady,
+        bool dispatchSucceeded,
+        bool autoValidationReady) noexcept;
+    static bool ShouldEnableOcclusion(
+        bool policyEnabled,
+        bool hiZFresh,
+        bool frustumOnlyRetry,
+        bool occlusionQuarantined) noexcept;
 
 private:
     struct GpuInstance;
@@ -137,6 +172,15 @@ private:
     std::vector<EditorProductionSceneRenderPacket> cpuFallbackPackets_;
     EditorProductionGpuDrivenStats stats_{};
     std::vector<std::string> diagnostics_;
+    bool lastReadbackAvailable_ = false;
+    bool lastCommandLayoutValidated_ = false;
+    uint32_t lastGpuVisibleInstances_ = 0;
+    uint32_t lastFrustumRejectedInstances_ = 0;
+    uint32_t lastHiZRejectedInstances_ = 0;
+    uint32_t lastInvalidBatchInstances_ = 0;
+    uint32_t zeroCommandReadbacks_ = 0;
+    bool frustumOnlyRetryPending_ = false;
+    bool occlusionQuarantined_ = false;
 };
 
 } // namespace editor
