@@ -221,6 +221,19 @@ public:
     bool ReloadTerrainMaterialAssets(
         ID3D12GraphicsCommandList* uploadCommandList,
         std::string* errorMessage = nullptr);
+    void PreviewTerrainMaterialDefinitions(
+        const std::array<TerrainPbrMaterialDefinition, TerrainMaterialLibrary::kLayerCount>&
+            definitions);
+    void ResetTerrainMaterialPreview();
+    [[nodiscard]] uint64_t TerrainMaterialRevision() const noexcept {
+        return terrainMaterialRevision_;
+    }
+    [[nodiscard]] bool TerrainMaterialReloadPending() const noexcept {
+        return terrainMaterialPendingSignature_ != 0;
+    }
+    [[nodiscard]] const std::string& TerrainMaterialHotReloadStatus() const noexcept {
+        return terrainMaterialHotReloadStatus_;
+    }
 
     void UpdateCameraWorldPosition(const Vector3& worldPosition);
     void UpdateTransforms(
@@ -398,4 +411,6 @@ private:
     uint64_t terrainMaterialPendingSignature_ = 0;
     uint64_t terrainMaterialPendingSinceMs_ = 0;
     uint64_t terrainMaterialNextPollMs_ = 0;
+    uint64_t terrainMaterialRevision_ = 1;
+    std::string terrainMaterialHotReloadStatus_ = "Not initialized";
 };

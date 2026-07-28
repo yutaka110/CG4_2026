@@ -10,6 +10,7 @@
 struct ImDrawList;
 class AppPipelines;
 
+#include "AppTerrainPbrMaterialsPanel.h"
 #include "graphics/RenderGraph.h"
 #include "editor/EditorAssetSelection.h"
 #include "editor/EditorAssetD3D12ThumbnailGpuBackend.h"
@@ -309,6 +310,7 @@ private:
     bool showcasePresentationInitialized_ = false;
     bool showDeveloperTools_ = false;
     bool showcaseLoopCurrent_ = false;
+    TerrainPbrMaterialsPanelState terrainPbrMaterialsPanelState_{};
     uint32_t selectedEffectInstanceId_ = 0;
     uint32_t trailMeshStreamProbeHealthyFrames_ = 0;
     uint32_t trailMeshStreamActiveHealthyFrames_ = 0;

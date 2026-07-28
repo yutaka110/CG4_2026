@@ -904,6 +904,9 @@
     <ClCompile Include="application\AppSceneControlsPanel.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\AppTerrainPbrMaterialsPanel.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
     <ClCompile Include="application\VfxEngine.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -1399,6 +1402,9 @@
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\AppSceneControlsPanel.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\AppTerrainPbrMaterialsPanel.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\AppVfxRuntimeState.h">

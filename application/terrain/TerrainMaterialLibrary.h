@@ -7,12 +7,21 @@
 
 #include "utils/math/Vector.h"
 
+enum class TerrainPbrOrmInputMode {
+    Packed,
+    Separate,
+};
+
 struct TerrainPbrMaterialDefinition {
     std::string id;
     std::filesystem::path sourcePath;
     std::filesystem::path baseColorPath;
     std::filesystem::path normalPath;
+    TerrainPbrOrmInputMode ormInputMode = TerrainPbrOrmInputMode::Packed;
     std::filesystem::path ormPath;
+    std::filesystem::path ambientOcclusionPath;
+    std::filesystem::path roughnessPath;
+    std::filesystem::path metallicPath;
     std::filesystem::path heightPath;
     Vector4 baseColorTint = {1.0f, 1.0f, 1.0f, 1.0f};
     float worldTileSize = 6.0f;
@@ -52,3 +61,11 @@ private:
 };
 
 [[nodiscard]] std::filesystem::path DefaultTerrainMaterialSetPath();
+
+bool LoadTerrainMaterialDefinition(
+    const std::filesystem::path& path,
+    TerrainPbrMaterialDefinition& output,
+    std::string* error = nullptr);
+
+[[nodiscard]] std::string SerializeTerrainMaterialDefinition(
+    const TerrainPbrMaterialDefinition& material);

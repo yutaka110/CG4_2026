@@ -371,6 +371,9 @@
     <ClCompile Include="application\AppSceneControlsPanel.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="application\AppTerrainPbrMaterialsPanel.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="application\VfxEngine.cpp" />
     <ClCompile Include="application\AppRenderGraphDebugPanel.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
@@ -1179,6 +1182,7 @@
     <ClInclude Include="application\AppPipelines.h" />
     <ClInclude Include="application\AppRuntimeState.h" />
     <ClInclude Include="application\AppSceneControlsPanel.h" />
+    <ClInclude Include="application\AppTerrainPbrMaterialsPanel.h" />
     <ClInclude Include="application\AppVfxRuntimeState.h" />
     <ClInclude Include="application\AppRenderGraphDebugPanel.h" />
     <ClInclude Include="application\AppVfxDebugDataBuilder.h" />

@@ -318,16 +318,14 @@ namespace {
         return {{255, 255, 255, 255}};
     }
 
-    bool NormalizeTerrainPbrLayer(
-        const TerrainPbrMaterialDefinition& material,
-        size_t layerIndex,
-        TerrainPbrTextureKind kind,
+    bool LoadNormalizedTerrainPbrSource(
+        const std::filesystem::path& path,
         uint32_t targetSize,
+        const std::array<uint8_t, 4>& fallbackColor,
         DirectX::ScratchImage& output,
         bool& loadedFromFile) {
         loadedFromFile = false;
         DirectX::ScratchImage source;
-        const std::filesystem::path& path = TerrainPbrTexturePath(material, kind);
         if (!path.empty() &&
             std::filesystem::exists(path) &&
             LoadLinearTextureFile(path, source)) {
@@ -336,7 +334,7 @@ namespace {
             source = CreateSolidColorTextureSized(
                 targetSize,
                 targetSize,
-                TerrainPbrFallbackColor(material, layerIndex, kind));
+                fallbackColor);
         }
 
         const DirectX::Image* baseImage = source.GetImage(0, 0, 0);
@@ -359,24 +357,121 @@ namespace {
             rgbaImage = converted.GetImage(0, 0, 0);
         }
 
-        DirectX::ScratchImage resized;
-        const DirectX::Image* sizedImage = rgbaImage;
         if (rgbaImage == nullptr) {
             return false;
         }
-        if (rgbaImage->width != targetSize || rgbaImage->height != targetSize) {
-            const HRESULT resizeHr = DirectX::Resize(
-                *rgbaImage,
-                targetSize,
-                targetSize,
-                DirectX::TEX_FILTER_DEFAULT,
-                resized);
-            if (FAILED(resizeHr)) {
+        const HRESULT resizeHr = DirectX::Resize(
+            *rgbaImage,
+            targetSize,
+            targetSize,
+            DirectX::TEX_FILTER_DEFAULT,
+            output);
+        if (FAILED(resizeHr)) {
+            return false;
+        }
+        return output.GetImage(0, 0, 0) != nullptr;
+    }
+
+    bool NormalizeTerrainPbrLayer(
+        const TerrainPbrMaterialDefinition& material,
+        size_t layerIndex,
+        TerrainPbrTextureKind kind,
+        uint32_t targetSize,
+        DirectX::ScratchImage& output,
+        bool& loadedFromFile) {
+        if (kind == TerrainPbrTextureKind::Orm &&
+            material.ormInputMode == TerrainPbrOrmInputMode::Separate) {
+            DirectX::ScratchImage ambientOcclusion;
+            DirectX::ScratchImage roughness;
+            DirectX::ScratchImage metallic;
+            bool loadedAmbientOcclusion = false;
+            bool loadedRoughness = false;
+            bool loadedMetallic = false;
+            if (!LoadNormalizedTerrainPbrSource(
+                    material.ambientOcclusionPath,
+                    targetSize,
+                    {{255, 255, 255, 255}},
+                    ambientOcclusion,
+                    loadedAmbientOcclusion) ||
+                !LoadNormalizedTerrainPbrSource(
+                    material.roughnessPath,
+                    targetSize,
+                    {{255, 255, 255, 255}},
+                    roughness,
+                    loadedRoughness) ||
+                !LoadNormalizedTerrainPbrSource(
+                    material.metallicPath,
+                    targetSize,
+                    {{0, 0, 0, 255}},
+                    metallic,
+                    loadedMetallic)) {
                 return false;
             }
-            sizedImage = resized.GetImage(0, 0, 0);
+
+            DirectX::ScratchImage packed;
+            if (FAILED(packed.Initialize2D(
+                    DXGI_FORMAT_R8G8B8A8_UNORM,
+                    targetSize,
+                    targetSize,
+                    1,
+                    1))) {
+                return false;
+            }
+            const DirectX::Image* aoImage =
+                ambientOcclusion.GetImage(0, 0, 0);
+            const DirectX::Image* roughnessImage =
+                roughness.GetImage(0, 0, 0);
+            const DirectX::Image* metallicImage =
+                metallic.GetImage(0, 0, 0);
+            const DirectX::Image* packedImage =
+                packed.GetImage(0, 0, 0);
+            if (aoImage == nullptr || roughnessImage == nullptr ||
+                metallicImage == nullptr || packedImage == nullptr) {
+                return false;
+            }
+            for (uint32_t y = 0; y < targetSize; ++y) {
+                const uint8_t* aoRow =
+                    aoImage->pixels + static_cast<size_t>(y) * aoImage->rowPitch;
+                const uint8_t* roughnessRow =
+                    roughnessImage->pixels +
+                    static_cast<size_t>(y) * roughnessImage->rowPitch;
+                const uint8_t* metallicRow =
+                    metallicImage->pixels +
+                    static_cast<size_t>(y) * metallicImage->rowPitch;
+                uint8_t* packedRow =
+                    packedImage->pixels +
+                    static_cast<size_t>(y) * packedImage->rowPitch;
+                for (uint32_t x = 0; x < targetSize; ++x) {
+                    const size_t offset = static_cast<size_t>(x) * 4u;
+                    packedRow[offset + 0u] = aoRow[offset];
+                    packedRow[offset + 1u] = roughnessRow[offset];
+                    packedRow[offset + 2u] = metallicRow[offset];
+                    packedRow[offset + 3u] = 255;
+                }
+            }
+            const HRESULT mipHr = DirectX::GenerateMipMaps(
+                *packedImage,
+                DirectX::TEX_FILTER_DEFAULT,
+                0,
+                output);
+            loadedFromFile =
+                loadedAmbientOcclusion ||
+                loadedRoughness ||
+                loadedMetallic;
+            return SUCCEEDED(mipHr);
         }
 
+        DirectX::ScratchImage normalized;
+        if (!LoadNormalizedTerrainPbrSource(
+                TerrainPbrTexturePath(material, kind),
+                targetSize,
+                TerrainPbrFallbackColor(material, layerIndex, kind),
+                normalized,
+                loadedFromFile)) {
+            return false;
+        }
+        const DirectX::Image* sizedImage =
+            normalized.GetImage(0, 0, 0);
         if (sizedImage == nullptr) {
             return false;
         }
@@ -448,7 +543,16 @@ namespace {
                 diagnostics += ", ";
             }
             diagnostics += materials[layerIndex].id;
-            diagnostics += loadedFromFile[layerIndex] ? "=file" : "=fallback";
+            if (kind == TerrainPbrTextureKind::Orm &&
+                materials[layerIndex].ormInputMode ==
+                    TerrainPbrOrmInputMode::Separate) {
+                diagnostics += loadedFromFile[layerIndex]
+                    ? "=separate"
+                    : "=separate-defaults";
+            } else {
+                diagnostics +=
+                    loadedFromFile[layerIndex] ? "=file" : "=fallback";
+            }
         }
         return true;
     }
@@ -537,6 +641,9 @@ namespace {
             HashTerrainWatchPath(hash, layer.baseColorPath);
             HashTerrainWatchPath(hash, layer.normalPath);
             HashTerrainWatchPath(hash, layer.ormPath);
+            HashTerrainWatchPath(hash, layer.ambientOcclusionPath);
+            HashTerrainWatchPath(hash, layer.roughnessPath);
+            HashTerrainWatchPath(hash, layer.metallicPath);
             HashTerrainWatchPath(hash, layer.heightPath);
         }
         return hash;
@@ -1935,6 +2042,7 @@ bool AppSceneResources::Initialize(
         ComputeTerrainMaterialWatchSignature(
             DefaultTerrainMaterialSetPath(),
             terrainMaterialLibrary);
+    terrainMaterialHotReloadStatus_ = "Loaded from disk";
 
     DirectX::ScratchImage terrainAlbedoImages;
     DirectX::ScratchImage terrainPbrNormalImages;
@@ -2974,9 +3082,15 @@ bool AppSceneResources::PollTerrainMaterialHotReload() {
     if (observedSignature != terrainMaterialPendingSignature_) {
         terrainMaterialPendingSignature_ = observedSignature;
         terrainMaterialPendingSinceMs_ = now;
+        terrainMaterialHotReloadStatus_ = "Change detected; waiting for file write";
         return false;
     }
-    return now - terrainMaterialPendingSinceMs_ >= kStableWriteWindowMs;
+    const bool ready =
+        now - terrainMaterialPendingSinceMs_ >= kStableWriteWindowMs;
+    if (ready) {
+        terrainMaterialHotReloadStatus_ = "Reloading GPU material arrays";
+    }
+    return ready;
 }
 
 bool AppSceneResources::ReloadTerrainMaterialAssets(
@@ -2991,6 +3105,7 @@ bool AppSceneResources::ReloadTerrainMaterialAssets(
         terrainMaterialWatchSignature_ = terrainMaterialPendingSignature_;
         terrainMaterialPendingSignature_ = 0;
         terrainMaterialPendingSinceMs_ = 0;
+        terrainMaterialHotReloadStatus_ = "Reload failed: " + message;
         return false;
     };
 
@@ -3190,6 +3305,8 @@ bool AppSceneResources::ReloadTerrainMaterialAssets(
             terrainMaterialLibrary);
     terrainMaterialPendingSignature_ = 0;
     terrainMaterialPendingSinceMs_ = 0;
+    ++terrainMaterialRevision_;
+    terrainMaterialHotReloadStatus_ = "Reloaded from disk";
 
     const std::string message =
         "[TerrainMaterialHotReload] reloaded base{" +
@@ -3206,6 +3323,20 @@ bool AppSceneResources::ReloadTerrainMaterialAssets(
         errorMessage->clear();
     }
     return true;
+}
+
+void AppSceneResources::PreviewTerrainMaterialDefinitions(
+    const std::array<
+        TerrainPbrMaterialDefinition,
+        TerrainMaterialLibrary::kLayerCount>& definitions) {
+    if (terrainPbrMaterialData == nullptr) {
+        return;
+    }
+    *terrainPbrMaterialData = BuildTerrainPbrGpuConstants(definitions);
+}
+
+void AppSceneResources::ResetTerrainMaterialPreview() {
+    PreviewTerrainMaterialDefinitions(terrainMaterialLibrary.Layers());
 }
 
 void AppSceneResources::ReleaseInitialUploadResources() {

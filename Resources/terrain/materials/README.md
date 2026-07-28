@@ -18,6 +18,17 @@ Map conventions:
 - `orm`: linear channels R=ambient occlusion, G=roughness, B=metallic
 - `height`: linear height in the red channel, neutral height 0.5
 
+Surface-mask input is selected per material:
+
+- `ormInputMode=packed` reads the `orm` texture directly.
+- `ormInputMode=separate` reads the red channels of `ambientOcclusion`,
+  `roughness`, and `metallic`, then packs them into ORM during import.
+- Empty separate inputs use AO=1, roughness=1, and metallic=0.
+
+Definitions without `ormInputMode` remain backward compatible and use packed
+ORM. Separate source maps and packed ORM are retained together so artists can
+switch modes in the Terrain PBR Materials panel without losing either setup.
+
 Missing maps do not prevent startup. Base color receives a layer-specific rock
 fallback, normal receives a flat normal, ORM receives AO=1/roughness=1/metal=0,
 and height receives 0.5. This makes it safe to replace maps independently while

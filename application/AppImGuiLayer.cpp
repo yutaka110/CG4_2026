@@ -14,6 +14,7 @@
 #include "AppRuntimeState.h"
 #include "AppSceneResources.h"
 #include "AppSceneControlsPanel.h"
+#include "AppTerrainPbrMaterialsPanel.h"
 #include "AppVfxDebugDataBuilder.h"
 #include "AppVfxRuntimeQueuesPanel.h"
 #include "AppVfxRuntimeStatusPanel.h"
@@ -3890,6 +3891,22 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             editor::EditorPanelHostArea::RightInspector,
             panelVisible("scene.lighting"),
             [&]() { DrawSceneLightingControlsPanel(runtimeState); }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "terrain.pbrMaterials",
+            "Terrain PBR Materials",
+            "Terrain",
+            editor::EditorPanelHostArea::RightInspector,
+            panelVisible("terrain.pbrMaterials"),
+            [&]() {
+                DrawTerrainPbrMaterialsPanel(
+                    terrainPbrMaterialsPanelState_,
+                    TerrainPbrMaterialsPanelContext{
+                        context.scene,
+                        &editorNotifications_,
+                        hwnd_,
+                        editorCommandContext.canMutateAuthoring});
+            }});
     registerPanel(
         editor::EditorPanelDescriptor{
             "postprocess.inspector",

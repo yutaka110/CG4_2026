@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -50,7 +52,7 @@ std::filesystem::path ResolveReferencedPath(
     return path.lexically_normal();
 }
 
-bool LoadMaterialDefinition(
+bool LoadMaterialDefinitionInternal(
     const std::filesystem::path& path,
     TerrainPbrMaterialDefinition& output,
     std::string* error) {
@@ -87,8 +89,19 @@ bool LoadMaterialDefinition(
             loaded.baseColorPath = ResolveReferencedPath(path, value);
         } else if (key == "normal") {
             loaded.normalPath = ResolveReferencedPath(path, value);
+        } else if (key == "ormInputMode") {
+            loaded.ormInputMode =
+                value == "separate"
+                    ? TerrainPbrOrmInputMode::Separate
+                    : TerrainPbrOrmInputMode::Packed;
         } else if (key == "orm") {
             loaded.ormPath = ResolveReferencedPath(path, value);
+        } else if (key == "ambientOcclusion") {
+            loaded.ambientOcclusionPath = ResolveReferencedPath(path, value);
+        } else if (key == "roughness") {
+            loaded.roughnessPath = ResolveReferencedPath(path, value);
+        } else if (key == "metallic") {
+            loaded.metallicPath = ResolveReferencedPath(path, value);
         } else if (key == "height") {
             loaded.heightPath = ResolveReferencedPath(path, value);
         } else if (key == "baseColorTintR") {
@@ -208,7 +221,7 @@ bool TerrainMaterialLibrary::LoadFromSet(
 
     std::array<TerrainPbrMaterialDefinition, kLayerCount> loaded{};
     for (size_t index = 0; index < loaded.size(); ++index) {
-        if (!LoadMaterialDefinition(definitions[index], loaded[index], error)) {
+        if (!LoadMaterialDefinitionInternal(definitions[index], loaded[index], error)) {
             return false;
         }
     }
@@ -251,4 +264,62 @@ std::filesystem::path DefaultTerrainMaterialSetPath() {
         "terrain" /
         "materials" /
         "default.terrainmaterialset";
+}
+
+bool LoadTerrainMaterialDefinition(
+    const std::filesystem::path& path,
+    TerrainPbrMaterialDefinition& output,
+    std::string* error) {
+    return LoadMaterialDefinitionInternal(path, output, error);
+}
+
+std::string SerializeTerrainMaterialDefinition(
+    const TerrainPbrMaterialDefinition& material) {
+    const auto portablePath = [&](const std::filesystem::path& referenced) {
+        if (referenced.empty()) {
+            return std::string{};
+        }
+        std::error_code error;
+        const std::filesystem::path ownerDirectory =
+            material.sourcePath.parent_path();
+        if (!ownerDirectory.empty()) {
+            const std::filesystem::path relative =
+                std::filesystem::relative(referenced, ownerDirectory, error);
+            if (!error && !relative.empty()) {
+                return relative.generic_string();
+            }
+        }
+        return referenced.lexically_normal().generic_string();
+    };
+
+    std::ostringstream output;
+    output << "id=" << material.id << "\n";
+    output << "baseColor=" << portablePath(material.baseColorPath) << "\n";
+    output << "normal=" << portablePath(material.normalPath) << "\n";
+    output << "ormInputMode="
+           << (material.ormInputMode == TerrainPbrOrmInputMode::Separate
+                   ? "separate"
+                   : "packed")
+           << "\n";
+    output << "orm=" << portablePath(material.ormPath) << "\n";
+    output << "ambientOcclusion="
+           << portablePath(material.ambientOcclusionPath) << "\n";
+    output << "roughness=" << portablePath(material.roughnessPath) << "\n";
+    output << "metallic=" << portablePath(material.metallicPath) << "\n";
+    output << "height=" << portablePath(material.heightPath) << "\n";
+    output << std::fixed << std::setprecision(4);
+    output << "baseColorTintR=" << material.baseColorTint.x << "\n";
+    output << "baseColorTintG=" << material.baseColorTint.y << "\n";
+    output << "baseColorTintB=" << material.baseColorTint.z << "\n";
+    output << "worldTileSize=" << material.worldTileSize << "\n";
+    output << "normalStrength=" << material.normalStrength << "\n";
+    output << "detailNormalStrength=" << material.detailNormalStrength << "\n";
+    output << "roughnessScale=" << material.roughnessScale << "\n";
+    output << "roughnessBias=" << material.roughnessBias << "\n";
+    output << "aoStrength=" << material.aoStrength << "\n";
+    output << "heightScale=" << material.heightScale << "\n";
+    output << "heightBlendSharpness=" << material.heightBlendSharpness << "\n";
+    output << "macroVariationStrength=" << material.macroVariationStrength << "\n";
+    output << "wetnessResponse=" << material.wetnessResponse << "\n";
+    return output.str();
 }
