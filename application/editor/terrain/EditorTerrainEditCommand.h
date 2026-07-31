@@ -20,6 +20,11 @@ public:
         std::string_view documentKey,
         const std::vector<TerrainBrushStamp>& stamps,
         EditorTransactionApplyMode mode) = 0;
+    virtual EditorUndoResult ApplyTerrainSnapshot(
+        std::string_view documentKey,
+        const TerrainEditLayer& snapshot,
+        const TerrainEditDirtyRegion& dirty,
+        EditorTransactionApplyMode mode) = 0;
 };
 
 class EditorTerrainEditExecutionService final
@@ -37,6 +42,11 @@ public:
         std::string_view documentKey,
         const std::vector<TerrainBrushStamp>& stamps,
         EditorTransactionApplyMode mode) override;
+    EditorUndoResult ApplyTerrainSnapshot(
+        std::string_view documentKey,
+        const TerrainEditLayer& snapshot,
+        const TerrainEditDirtyRegion& dirty,
+        EditorTransactionApplyMode mode) override;
 
 private:
     std::string documentKey_;
@@ -48,6 +58,9 @@ class EditorTerrainEditUndoCommand final : public IEditorUndoCommand {
 public:
     EditorTerrainEditUndoCommand(
         std::string documentKey,
+        TerrainEditLayer beforeSnapshot,
+        TerrainEditLayer afterSnapshot,
+        TerrainEditDirtyRegion dirty,
         std::vector<TerrainBrushStamp> stamps);
 
     EditorUndoResult Apply(
@@ -61,6 +74,9 @@ public:
 
 private:
     std::string documentKey_;
+    TerrainEditLayer beforeSnapshot_;
+    TerrainEditLayer afterSnapshot_;
+    TerrainEditDirtyRegion dirty_{};
     std::vector<TerrainBrushStamp> stamps_;
 };
 

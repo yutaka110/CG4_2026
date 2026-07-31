@@ -61,6 +61,7 @@
 #include "EditorViewportInteractionService.h"
 #include "EditorViewportOverlay.h"
 #include "EditorViewportPanel.h"
+#include "EditorViewportSelectionBridge.h"
 #include "EditorValidationService.h"
 #include "ExistingFeatureProtection.h"
 #include "core/EditorExecutionContext.h"
@@ -117,6 +118,7 @@
 #include "world/IEditorWorldMutationProvider.h"
 #include "world/VfxWorldObjectProvider.h"
 #include "tools/EditorModeRegistry.h"
+#include "tools/EditorModePanels.h"
 #include "tools/EditorToolManager.h"
 #include "tools/EditorPlacementQueryService.h"
 #include "tools/EditorPlacementTools.h"
@@ -129,6 +131,9 @@
 #include "geometry/EditorGeometryWorkspace.h"
 #include "geometry/EditorGeometryTools.h"
 #include "mesh/EditorProductionMeshAsset.h"
+#include "mesh/EditorCreateEditableCopyTool.h"
+#include "mesh/EditorProductionMeshEditableSourceLoader.h"
+#include "mesh/EditorProductionMeshEditableSourceMetadata.h"
 #include "mesh/EditorMeshBakePipeline.h"
 #include "mesh/EditorMeshBakeTools.h"
 #include "mesh/EditorObjProductionImportBridge.h"
@@ -445,6 +450,34 @@ void WriteBinaryFile(const std::filesystem::path& path, const std::vector<unsign
     file.write(
         reinterpret_cast<const char*>(bytes.data()),
         static_cast<std::streamsize>(bytes.size()));
+}
+
+std::vector<unsigned char> ReadBinaryFile(
+    const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error(
+            "failed to read " + path.generic_string());
+    }
+    file.seekg(0, std::ios::end);
+    const std::streamoff size = file.tellg();
+    if (size < 0) {
+        throw std::runtime_error(
+            "failed to measure " + path.generic_string());
+    }
+    file.seekg(0, std::ios::beg);
+    std::vector<unsigned char> bytes(
+        static_cast<std::size_t>(size));
+    if (!bytes.empty()) {
+        file.read(
+            reinterpret_cast<char*>(bytes.data()),
+            static_cast<std::streamsize>(bytes.size()));
+    }
+    if (!file && !bytes.empty()) {
+        throw std::runtime_error(
+            "failed to read complete file " + path.generic_string());
+    }
+    return bytes;
 }
 
 std::vector<unsigned char> MakeBmpPreviewHeader(uint32_t width, uint32_t height) {
@@ -2404,8 +2437,12 @@ void TestPlaySessionRuntimeControlService(RegressionRunner& runner) {
         &notifications,
         "regression.runtimeControl.lifecycle"};
     runner.Expect(
-        lifecycle.Begin(lifecycleRequest, EditorPlaySessionMode::Simulating).succeeded,
-        "runtime control test should begin simulate session");
+        lifecycle.Begin(lifecycleRequest, EditorPlaySessionMode::Playing).succeeded,
+        "runtime control test should begin play session");
+    runner.Expect(
+        playSession.ViewportPossessed() &&
+            playSession.ViewportMode() == EditorPlaySessionViewportMode::GameCamera,
+        "play should begin with the gameplay camera possessed");
 
     const EditorPlaySessionRuntimeControlRequest controlRequest{
         &playSession,
@@ -2420,14 +2457,45 @@ void TestPlaySessionRuntimeControlService(RegressionRunner& runner) {
     runner.Expect(playSession.RuntimePaused(), "runtime control pause should mark runtime paused");
     runner.Expect(!playSession.ShouldAdvanceRuntimeFrame(), "paused runtime should block frame advance");
 
+    const uint64_t runtimeFrameBeforeEject = playSession.RuntimeFrameCount();
+    const EditorPlaySessionRuntimeControlResult ejectResult =
+        runtimeControl.Eject(controlRequest);
+    runner.Expect(ejectResult.succeeded, "runtime control should eject an active play session");
+    runner.Expect(
+        playSession.IsSimulating() && playSession.ViewportEjected(),
+        "eject should switch only viewport ownership to the editor free camera");
+    runner.Expect(
+        playSession.RuntimePaused() &&
+            playSession.RuntimeFrameCount() == runtimeFrameBeforeEject,
+        "eject should preserve the frozen runtime state and frame number");
+
     const EditorPlaySessionRuntimeControlResult stepResult =
         runtimeControl.Step(controlRequest);
     runner.Expect(stepResult.succeeded, "runtime control should queue a single step");
     runner.Expect(playSession.ShouldAdvanceRuntimeFrame(), "queued step should allow one runtime frame");
     playSession.CompleteRuntimeFrameAdvance();
     runner.Expect(playSession.RuntimeFrameCount() == 1, "single step should advance one runtime frame");
+    runner.Expect(
+        playSession.RuntimeStepCount() == 1,
+        "completed single step should remain visible in debug evidence");
     runner.Expect(playSession.RuntimePaused(), "single step should return to paused state");
     runner.Expect(!playSession.RuntimeStepRequested(), "single step should consume the step request");
+    runner.Expect(
+        playSession.ViewportEjected(),
+        "single step should not take viewport ownership away from the editor camera");
+
+    const EditorPlaySessionRuntimeControlResult possessResult =
+        runtimeControl.Possess(controlRequest);
+    runner.Expect(possessResult.succeeded, "runtime control should possess an ejected session");
+    runner.Expect(
+        playSession.IsPlaying() && playSession.ViewportPossessed(),
+        "possess should restore gameplay camera ownership");
+    runner.Expect(
+        playSession.RuntimePaused() && playSession.RuntimeFrameCount() == 1,
+        "possess should preserve the frozen runtime state and stepped frame");
+    runner.Expect(
+        playSession.EjectCount() == 1 && playSession.PossessCount() == 1,
+        "viewport ownership transitions should be counted for debug evidence");
 
     const EditorPlaySessionRuntimeControlResult resumeResult =
         runtimeControl.Resume(controlRequest);
@@ -2452,6 +2520,10 @@ void TestPlaySessionRuntimeControlService(RegressionRunner& runner) {
 
     const EditorPlaySessionLifecycleResult stopResult = lifecycle.Stop(lifecycleRequest);
     runner.Expect(stopResult.succeeded, "runtime control test should still stop through lifecycle service");
+    runner.Expect(
+        playSession.IsStopped() &&
+            playSession.ViewportMode() == EditorPlaySessionViewportMode::EditorFree,
+        "stop should return viewport ownership to the editor");
 }
 
 void TestRuntimeAuthoringApplyService(RegressionRunner& runner) {
@@ -8663,6 +8735,106 @@ void TestSceneEntityComponentFoundation(RegressionRunner& runner) {
             mesh->references.front().assetGuid == createAssetEntity.assetGuid,
         "Asset Drop should preserve an Asset GUID object reference on the typed Component");
 
+    EditorWorldMutationRequest createPatrolRoute{};
+    createPatrolRoute.kind = EditorWorldMutationKind::Create;
+    createPatrolRoute.targets = {worldProvider.RootHandle()};
+    createPatrolRoute.name = "Patrol Route";
+    result = mutations.Execute(
+        createPatrolRoute, transactions, true);
+    const EditorObjectHandle patrolRouteHandle =
+        result.succeeded && !result.resultingSelection.empty()
+        ? result.resultingSelection.front()
+        : EditorObjectHandle{};
+    const EditorSceneEntity* patrolRouteEntity =
+        worldProvider.ResolveEntity(patrolRouteHandle);
+    const std::string patrolRouteGuid = patrolRouteEntity != nullptr
+        ? patrolRouteEntity->guid
+        : std::string{};
+    EditorWorldMutationRequest addPatrolRoute{};
+    addPatrolRoute.kind = EditorWorldMutationKind::AddComponent;
+    addPatrolRoute.targets = {patrolRouteHandle};
+    addPatrolRoute.name = std::string(kEditorSplineRouteComponentType);
+    const EditorWorldMutationResult addedPatrolRoute =
+        mutations.Execute(addPatrolRoute, transactions, true);
+
+    EditorWorldMutationRequest setupPatrol{};
+    setupPatrol.kind = EditorWorldMutationKind::SetupPatrol;
+    setupPatrol.targets = {
+        worldModel.FindByStableId(childHandle.stableId)->handle};
+    setupPatrol.patrolSetup.routeEntityGuid = patrolRouteGuid;
+    setupPatrol.patrolSetup.enemyType = "TURRET";
+    setupPatrol.patrolSetup.speed = 7.5f;
+    setupPatrol.patrolSetup.startDistance = 2.0f;
+    setupPatrol.patrolSetup.traversalMode =
+        EditorPatrolTraversalMode::PingPong;
+    const EditorWorldMutationResult patrolSetupResult =
+        mutations.Execute(setupPatrol, transactions, true);
+    child = scene->FindEntity(childGuid);
+    const EditorSceneComponent* patrolSetupSpawn = child != nullptr
+        ? scene->FindComponent(
+            *child, kEditorGameplaySpawnPointComponentType)
+        : nullptr;
+    const EditorSceneComponent* patrolSetupComponent = child != nullptr
+        ? scene->FindComponent(*child, kEditorPatrolComponentType)
+        : nullptr;
+    const auto patrolSpawnKind = patrolSetupSpawn != nullptr
+        ? std::find_if(
+            patrolSetupSpawn->properties.begin(),
+            patrolSetupSpawn->properties.end(),
+            [](const EditorSceneProperty& property) {
+                return property.name == "kind";
+            })
+        : std::vector<EditorSceneProperty>::const_iterator{};
+    const auto patrolEnemyType = patrolSetupSpawn != nullptr
+        ? std::find_if(
+            patrolSetupSpawn->properties.begin(),
+            patrolSetupSpawn->properties.end(),
+            [](const EditorSceneProperty& property) {
+                return property.name == "enemy_type";
+            })
+        : std::vector<EditorSceneProperty>::const_iterator{};
+    const EditorSceneObjectReference* patrolRouteReference =
+        patrolSetupComponent != nullptr
+        ? FindEditorSceneEntityReference(
+            *patrolSetupComponent,
+            kEditorPatrolRouteReferenceProperty)
+        : nullptr;
+    runner.Expect(
+        addedPatrolRoute.succeeded &&
+            patrolSetupResult.succeeded &&
+            patrolSetupSpawn != nullptr &&
+            patrolSpawnKind != patrolSetupSpawn->properties.end() &&
+            patrolSpawnKind->value == "ENEMY" &&
+            patrolEnemyType != patrolSetupSpawn->properties.end() &&
+            patrolEnemyType->value == "TURRET" &&
+            patrolSetupComponent != nullptr &&
+            patrolRouteReference != nullptr &&
+            patrolRouteReference->entityGuid == patrolRouteGuid &&
+            scene->Validate().Succeeded(),
+        "Patrol Setup should atomically create an ENEMY Spawn Point, Patrol, and typed Route reference");
+
+    const bool patrolSetupUndone =
+        transactions.Undo(executionContext, &executionError);
+    child = scene->FindEntity(childGuid);
+    runner.Expect(
+        patrolSetupUndone && child != nullptr &&
+            scene->FindComponent(
+                *child, kEditorGameplaySpawnPointComponentType) == nullptr &&
+            scene->FindComponent(*child, kEditorPatrolComponentType) == nullptr,
+        "Patrol Setup Undo should remove Spawn Point and Patrol as one transaction");
+    const bool patrolSetupRedone =
+        transactions.Redo(executionContext, &executionError);
+    child = scene->FindEntity(childGuid);
+    runner.Expect(
+        patrolSetupRedone && child != nullptr &&
+            scene->FindComponent(
+                *child, kEditorGameplaySpawnPointComponentType) != nullptr &&
+            scene->FindComponent(*child, kEditorPatrolComponentType) != nullptr,
+        "Patrol Setup Redo should restore the complete configured dependency set");
+    transactions.Undo(executionContext, &executionError);
+    scene->DeleteEntity(patrolRouteGuid);
+    worldModel.Refresh();
+
     EditorWorldMutationRequest reparent{};
     reparent.kind = EditorWorldMutationKind::Reparent;
     reparent.targets = {childHandle};
@@ -13019,6 +13191,33 @@ void TestViewportOverlayLayerSystem(RegressionRunner& runner) {
 }
 
 void TestEditorModeInteractiveToolFramework(RegressionRunner& runner) {
+    EditorInteractiveToolProperty symbolicChoice{
+        "Operation",
+        "MOVE",
+        "Spline operation",
+        EditorInteractiveToolPropertyEditKind::Choice,
+        0.0f,
+        0.0f,
+        {"MOVE", "ADD", "DELETE"}};
+    symbolicChoice.choiceValues = {"MOVE", "ADD", "DELETE"};
+    runner.Expect(
+        ResolveEditorInteractiveToolChoiceIndex(symbolicChoice) == 0 &&
+            SerializeEditorInteractiveToolChoice(symbolicChoice, 1) == "ADD",
+        "Tool Properties Choice should serialize symbolic values instead of numeric indices");
+
+    const EditorInteractiveToolProperty legacyIndexedChoice{
+        "Material Layer",
+        "2",
+        "Legacy indexed choice",
+        EditorInteractiveToolPropertyEditKind::Choice,
+        0.0f,
+        3.0f,
+        {"Layer 0", "Layer 1", "Layer 2", "Layer 3"}};
+    runner.Expect(
+        ResolveEditorInteractiveToolChoiceIndex(legacyIndexedChoice) == 2 &&
+            SerializeEditorInteractiveToolChoice(legacyIndexedChoice, 3) == "3",
+        "Tool Properties Choice should preserve legacy numeric-index serialization");
+
     EditorModeRegistry registry;
     RegisterDefaultEditorModes(registry);
     runner.Expect(registry.ModeCount() == 2, "default Editor Mode registry should expose Select and Inspect modes");
@@ -13367,6 +13566,23 @@ void TestProductionTerrainSculptPaintToolPack(RegressionRunner& runner) {
     runner.Expect(!edits.ApplyStroke(sculpt, &error),
         "terrain edit layer should reject duplicate stroke identity");
 
+    TerrainEditLayer stableSmooth;
+    const std::vector<TerrainBrushStamp> smoothSource{
+        makeStamp("terrain-smooth-source", "terrain-smooth-source-0",
+            TerrainEditOperation::Sculpt, 24.0f, 8.0f)};
+    std::vector<TerrainBrushStamp> overlappingSmooth{
+        makeStamp("terrain-stroke-smooth", "terrain-stamp-smooth-0",
+            TerrainEditOperation::Smooth, 24.0f, -4.0f),
+        makeStamp("terrain-stroke-smooth", "terrain-stamp-smooth-1",
+            TerrainEditOperation::Smooth, 25.0f, -4.0f)};
+    runner.Expect(stableSmooth.ApplyStroke(smoothSource, &error) &&
+            stableSmooth.ApplyStroke(overlappingSmooth, &error),
+        "Terrain Smooth should accept one immutable-pass correction field");
+    const float stableSmoothCenter =
+        stableSmooth.Evaluate(24.0f, 0.0f).radialOffset;
+    runner.Expect(stableSmoothCenter > 3.9f && stableSmoothCenter < 4.1f,
+        "overlapping Smooth samples should be normalized instead of doubling into a spike");
+
     CourseAsset course;
     course.BuildFallbackCanyon(18.0f);
     const EditorDocumentId document{
@@ -13379,21 +13595,38 @@ void TestProductionTerrainSculptPaintToolPack(RegressionRunner& runner) {
     EditorError executionError{};
     runner.Expect(execution.Register(terrainExecution, &executionError),
         "Terrain command execution should register through the domain-neutral context");
-    auto command = std::make_shared<EditorTerrainEditUndoCommand>(document.Key(), sculpt);
+    TerrainEditLayer beforeSculptSnapshot = course.terrainEditLayer;
+    TerrainEditLayer afterSculptSnapshot = beforeSculptSnapshot;
+    runner.Expect(afterSculptSnapshot.ApplyStroke(sculpt, &error),
+        "Terrain command test should construct a durable post-stroke snapshot");
+    auto command = std::make_shared<EditorTerrainEditUndoCommand>(
+        document.Key(),
+        beforeSculptSnapshot,
+        afterSculptSnapshot,
+        afterSculptSnapshot.DirtyRegionFor(sculpt),
+        sculpt);
     EditorTransactionStack transactions;
     const EditorObjectHandle terrainTarget{
         EditorDomainId::TerrainGeneration,
         BuildEditorWorldStableId(document, "course", "root"), 0, 1, "Terrain"};
     const EditorUndoResult applied = command->Apply(EditorTransactionApplyMode::Redo, execution);
+    const uint64_t beforeSnapshotHash =
+        beforeSculptSnapshot.ContentHashForRange(0.0f, 64.0f);
+    const uint64_t afterSnapshotHash =
+        afterSculptSnapshot.ContentHashForRange(0.0f, 64.0f);
     runner.Expect(applied.succeeded && committedDirty.valid &&
             transactions.PushCommand("Sculpt Terrain Stroke", terrainTarget, command, &executionError) &&
             transactions.UndoDepth() == 1 && course.terrainEditLayer.Stamps().size() == 1,
         "one compact Terrain command should publish one stroke as one Transaction");
     runner.Expect(transactions.Undo(execution, &executionError) &&
             course.terrainEditLayer.Stamps().empty() &&
+            course.terrainEditLayer.ContentHashForRange(0.0f, 64.0f) ==
+                beforeSnapshotHash &&
             transactions.Redo(execution, &executionError) &&
-            course.terrainEditLayer.Stamps().size() == 1,
-        "Terrain stroke Undo/Redo should atomically remove and restore stable stamps");
+            course.terrainEditLayer.Stamps().size() == 1 &&
+            course.terrainEditLayer.ContentHashForRange(0.0f, 64.0f) ==
+                afterSnapshotHash,
+        "Terrain stroke Undo/Redo should atomically restore Before/After layer snapshots");
 
     runner.Expect(course.terrainEditLayer.ApplyStroke(paint, &error),
         "Course should accept a second durable Paint stroke");
@@ -13513,6 +13746,45 @@ void TestProductionTerrainSculptPaintToolPack(RegressionRunner& runner) {
         "Terrain release should atomically Accept one bounded stroke as one Transaction");
 
     const std::size_t committedStampCount = toolCourse.terrainEditLayer.Stamps().size();
+    runner.Expect(manager.StartTool(
+            "editor.tool.terrainSmooth", environment, toolTransactions, &error),
+        "Smooth should activate through the production Terrain framework");
+    manager.Tick(environment, routeTerrainPointer(10.0f, true, true, false), toolTransactions);
+    manager.Tick(environment, routeTerrainPointer(20.0f, false, true, false), toolTransactions);
+    const std::vector<EditorInteractiveToolProperty> smoothProperties =
+        manager.ActiveTool() != nullptr
+            ? manager.ActiveTool()->Properties()
+            : std::vector<EditorInteractiveToolProperty>{};
+    const auto smoothPasses = std::find_if(
+        smoothProperties.begin(),
+        smoothProperties.end(),
+        [](const EditorInteractiveToolProperty& property) {
+            return property.name == "Smooth Apply Passes";
+        });
+    const auto undoSnapshot = std::find_if(
+        smoothProperties.begin(),
+        smoothProperties.end(),
+        [](const EditorInteractiveToolProperty& property) {
+            return property.name == "Undo Snapshot";
+        });
+    runner.Expect(
+        smoothPasses != smoothProperties.end() && smoothPasses->value == "2" &&
+            undoSnapshot != smoothProperties.end() &&
+            undoSnapshot->value == "Captured" &&
+            runtimeTerrain.previewEditLayer.Validate(&error),
+        "Smooth preview should expose two immutable 3x3 Apply passes and a stroke snapshot");
+    const float smoothPreviewCorrection =
+        runtimeTerrain.previewEditLayer.Evaluate(15.0f, 0.0f).radialOffset;
+    runner.Expect(std::isfinite(smoothPreviewCorrection) &&
+            std::abs(smoothPreviewCorrection) <= 2.0f,
+        "double-buffer Smooth preview should remain bounded by its source neighborhood");
+    manager.RequestCancel();
+    manager.Tick(environment, {}, toolTransactions);
+    runner.Expect(runtimeTerrain.previewEditLayer.Stamps().empty() &&
+            toolCourse.terrainEditLayer.Stamps().size() == committedStampCount &&
+            toolTransactions.UndoDepth() == 1,
+        "cancelling Smooth should restore the stroke-start authoring state and history");
+
     runner.Expect(manager.StartTool("editor.tool.terrainPaint", environment, toolTransactions, &error),
         "Paint tool should activate through the same Terrain framework");
     runner.Expect(
@@ -13711,6 +13983,12 @@ void TestProductionModelingGeometryFramework(RegressionRunner& runner) {
     runner.Expect(modes.FindMode("editor.mode.modeling") != nullptr &&
             modes.ToolsForMode("editor.mode.modeling").size() == 6,
         "Modeling mode should expose selection, creation, topology, normals, and collision tools");
+    const EditorInteractiveToolDescriptor* faceSelectionDescriptor =
+        modes.FindTool("editor.tool.geometrySelectFaces");
+    runner.Expect(faceSelectionDescriptor != nullptr &&
+            faceSelectionDescriptor->selectionBoundary ==
+                EditorInteractiveToolSelectionBoundary::PrimaryObjectChange,
+        "face selection should lock its target Entity while allowing sub-element selection changes");
     EditorViewportCoordinateService coordinates;
     coordinates.Update(EditorViewportCoordinateContext{
         {0.0f, 0.0f, 100.0f, 100.0f}, 100, 100, MakeIdentity4x4()});
@@ -13737,6 +14015,25 @@ void TestProductionModelingGeometryFramework(RegressionRunner& runner) {
     runner.Expect(!manager.HasActiveTool() && toolWorkspace.HasGeometry() &&
             toolTransactions.UndoDepth() == 1,
         "accepting primitive creation should create one Transaction and durable Geometry");
+
+    runner.Expect(manager.StartTool(
+            "editor.tool.geometrySelectFaces", environment, toolTransactions, &error),
+        "Select Faces should enter a persistent sub-element selection session");
+    EditorInteractiveToolEnvironment samePrimarySelectionChange = environment;
+    samePrimarySelectionChange.selectionRevision += 1;
+    manager.Tick(samePrimarySelectionChange, {}, toolTransactions);
+    runner.Expect(manager.HasActiveTool(),
+        "same-Entity selection revision noise must not close Select Faces properties");
+    EditorSelection changedToolSelection;
+    changedToolSelection.SetPrimary(EditorObjectHandle{
+        EditorDomainId::SceneEntity, "another-scene-entity", 0, 1, "Another Entity"});
+    EditorInteractiveToolEnvironment changedPrimarySelection = environment;
+    changedPrimarySelection.selection = &changedToolSelection;
+    changedPrimarySelection.selectionRevision = environment.selectionRevision + 1;
+    manager.Tick(changedPrimarySelection, {}, toolTransactions);
+    runner.Expect(!manager.HasActiveTool() &&
+            manager.LastEndReason() == EditorInteractiveToolEndReason::SelectionChanged,
+        "Select Faces should still cancel safely when its target Entity actually changes");
 
     toolWorkspace.SelectFace(toolWorkspace.AuthoredMesh()->triangles[0].guid, false);
     const uint64_t authoredHash = toolWorkspace.AuthoredMesh()->ContentHash();
@@ -14101,6 +14398,1168 @@ void TestProductionMeshBakeAssetPipeline(RegressionRunner& runner) {
     RemoveTreeIfPresent(root);
 }
 
+void TestProductionMeshEditableSourceLoader(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" /
+        "production_mesh_editable_source";
+    RemoveTreeIfPresent(root);
+
+    EditorProductionMeshAssetDocument document{};
+    document.assetGuid = GenerateEditorAssetGuid();
+    document.assetId = "ball_production";
+    document.geometry =
+        EditorGeometryMesh::MakeBox({1.0f, 1.5f, 2.0f});
+    document.sourceGeometryHash = document.geometry.ContentHash();
+    document.settings = {};
+    std::string sourceText;
+    std::string error;
+    runner.Expect(
+        document.Serialize(sourceText, &error),
+        "Production Mesh editable-source fixture should serialize");
+
+    const std::filesystem::path sourcePath =
+        root / "ball_production.mesh";
+    WriteBinaryFile(
+        sourcePath,
+        std::vector<unsigned char>(sourceText.begin(), sourceText.end()));
+    EditorAssetRegistry registry;
+    EditorAssetRecord record = MakeAsset(
+        EditorAssetKind::Mesh,
+        document.assetId,
+        sourcePath.generic_string(),
+        true,
+        document.assetGuid);
+    record.sourceTimestamp = 42;
+    runner.Expect(
+        registry.Register(record),
+        "Production Mesh editable-source fixture should register by GUID");
+
+    const uint32_t registryRevision = registry.Revision();
+    EditorProductionMeshEditableSourceLoader loader{
+        std::filesystem::current_path()};
+    EditorProductionMeshEditableSourceLoadResult loaded =
+        loader.Load(registry, document.assetGuid);
+    runner.Expect(
+        loaded.Succeeded() &&
+            loaded.source.assetGuid == document.assetGuid &&
+            loaded.source.assetId == document.assetId &&
+            loaded.source.sourceGeometryHash ==
+                document.sourceGeometryHash &&
+            loaded.source.geometry.ContentHash() ==
+                document.sourceGeometryHash &&
+            loaded.source.buildSettingsHash ==
+                document.settings.ContentHash() &&
+            loaded.source.sourceTimestamp == 42 &&
+            loaded.source.registryRevision == registryRevision &&
+            loaded.source.Validate(&error),
+        "GUID-only load should clone the authoritative source Geometry with "
+        "matching source and build hashes; status=" +
+            std::string(ToString(loaded.status)) +
+            " message='" + loaded.message + "' validation='" + error + "'");
+    runner.Expect(
+        registry.Revision() == registryRevision &&
+            loaded.source.sourcePath ==
+                std::filesystem::weakly_canonical(sourcePath),
+        "editable-source loading should not mutate the Asset Registry and "
+        "should return a canonical project path");
+
+    loaded.source.geometry.vertices.front().position.x += 7.0f;
+    runner.Expect(
+        loaded.source.geometry.ContentHash() !=
+                document.sourceGeometryHash &&
+            document.geometry.ContentHash() ==
+                document.sourceGeometryHash,
+        "the returned Geometry should own an independent editable copy");
+    const EditorProductionMeshEditableSourceLoadResult reloaded =
+        loader.Load(registry, document.assetGuid);
+    runner.Expect(
+        reloaded.Succeeded() &&
+            reloaded.source.geometry.ContentHash() ==
+                document.sourceGeometryHash,
+        "editing one loaded copy should not affect a subsequent source load");
+
+    constexpr std::string_view kBallProductionGuid =
+        "a7853409f86661149beaecb724ea5104";
+    EditorAssetRegistry ballRegistry;
+    EditorAssetRecord ballRecord = MakeAsset(
+        EditorAssetKind::Mesh,
+        "ball_production",
+        "Resources/Generated/Imported/ball_production.mesh",
+        true,
+        std::string(kBallProductionGuid));
+    const EditorProductionMeshEditableSourceLoadResult ballLoaded =
+        ballRegistry.Register(std::move(ballRecord))
+        ? loader.Load(ballRegistry, kBallProductionGuid)
+        : EditorProductionMeshEditableSourceLoadResult{};
+    runner.Expect(
+        ballLoaded.Succeeded() &&
+            ballLoaded.source.assetId == "ball_production" &&
+            ballLoaded.source.sourceGeometryHash != 0 &&
+            ballLoaded.source.geometry.ContentHash() ==
+                ballLoaded.source.sourceGeometryHash,
+        "the real ball_production GUID should clone its retained authoring "
+        "Geometry without Scene or UI state");
+
+    EditorAssetRegistry missingRegistry;
+    runner.Expect(
+        loader.Load(missingRegistry, document.assetGuid).status ==
+            EditorProductionMeshEditableSourceLoadStatus::AssetNotFound,
+        "an unregistered Production Mesh GUID should be rejected");
+
+    EditorAssetRegistry wrongKindRegistry;
+    EditorAssetRecord wrongKind = record;
+    wrongKind.kind = EditorAssetKind::Texture;
+    wrongKind.id = "ball_texture";
+    runner.Expect(
+        wrongKindRegistry.Register(wrongKind) &&
+            loader.Load(wrongKindRegistry, document.assetGuid).status ==
+                EditorProductionMeshEditableSourceLoadStatus::WrongAssetKind,
+        "a non-Mesh Asset using the requested GUID should be rejected");
+
+    EditorAssetRegistry ambiguousRegistry;
+    EditorAssetRecord duplicate = record;
+    duplicate.id = "ball_production_duplicate";
+    runner.Expect(
+        ambiguousRegistry.Register(record) &&
+            ambiguousRegistry.Register(duplicate) &&
+            loader.Load(ambiguousRegistry, document.assetGuid).status ==
+                EditorProductionMeshEditableSourceLoadStatus::
+                    AmbiguousAssetGuid,
+        "duplicate Asset GUIDs should be rejected instead of choosing an "
+        "arbitrary editing source");
+
+    EditorAssetRegistry mismatchedRegistry;
+    EditorAssetRecord mismatch = record;
+    mismatch.guid = GenerateEditorAssetGuid();
+    runner.Expect(
+        mismatchedRegistry.Register(mismatch) &&
+            loader.Load(mismatchedRegistry, mismatch.guid).status ==
+                EditorProductionMeshEditableSourceLoadStatus::
+                    IdentityMismatch,
+        "Registry and Production Mesh document identities should match");
+
+    std::string corruptSource = sourceText;
+    const std::string originalHash =
+        "sourceHash=" + std::to_string(document.sourceGeometryHash);
+    const std::size_t hashPosition = corruptSource.find(originalHash);
+    if (hashPosition != std::string::npos) {
+        corruptSource.replace(
+            hashPosition,
+            originalHash.size(),
+            "sourceHash=1");
+    }
+    WriteBinaryFile(
+        sourcePath,
+        std::vector<unsigned char>(
+            corruptSource.begin(),
+            corruptSource.end()));
+    runner.Expect(
+        hashPosition != std::string::npos &&
+            loader.Load(registry, document.assetGuid).status ==
+                EditorProductionMeshEditableSourceLoadStatus::SourceInvalid,
+        "a stale source Geometry hash should be rejected before editing");
+
+    RemoveTreeIfPresent(root);
+}
+
+void TestCreateEditableCopyInteractiveTool(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" /
+        "create_editable_copy_tool";
+    RemoveTreeIfPresent(root);
+
+    EditorProductionMeshAssetDocument sourceDocument{};
+    sourceDocument.assetGuid = GenerateEditorAssetGuid();
+    sourceDocument.assetId = "interactive_source";
+    sourceDocument.geometry =
+        EditorGeometryMesh::MakeBox({1.0f, 2.0f, 3.0f});
+    sourceDocument.sourceGeometryHash =
+        sourceDocument.geometry.ContentHash();
+    std::string sourceText;
+    std::string error;
+    runner.Expect(
+        sourceDocument.Serialize(sourceText, &error),
+        "Create Editable Copy source fixture should serialize");
+    const std::filesystem::path sourcePath =
+        root / "interactive_source.mesh";
+    WriteBinaryFile(
+        sourcePath,
+        std::vector<unsigned char>(
+            sourceText.begin(),
+            sourceText.end()));
+
+    EditorAssetRegistry assets;
+    EditorAssetRecord sourceRecord = MakeAsset(
+        EditorAssetKind::Mesh,
+        sourceDocument.assetId,
+        sourcePath.generic_string(),
+        true,
+        sourceDocument.assetGuid);
+    sourceRecord.sourceTimestamp = 77;
+    runner.Expect(
+        assets.Register(sourceRecord),
+        "Create Editable Copy source fixture should register");
+
+    const EditorDocumentId document{
+        "create-editable-copy-scene",
+        std::string(EditorDocumentTypes::Scene)};
+    EditorScene scene;
+    EditorSceneEntity* entity = scene.CreateEntity(
+        "Production Mesh",
+        {},
+        "create-editable-copy-entity");
+    const EditorSceneObjectReference assetReference{
+        "asset",
+        {},
+        sourceDocument.assetGuid};
+    runner.Expect(
+        entity != nullptr &&
+            scene.AddComponent(
+                entity->guid,
+                std::string(kEditorMeshRendererComponentType),
+                &assetReference),
+        "Create Editable Copy target should reference a Production Mesh Asset");
+
+    SceneWorldObjectProvider provider;
+    provider.Bind(&scene, document);
+    const EditorObjectHandle target{
+        EditorDomainId::SceneEntity,
+        BuildEditorWorldStableId(
+            document,
+            provider.ProviderId(),
+            entity->guid),
+        0,
+        1,
+        entity->name};
+    EditorSelection selection;
+    selection.SetPrimary(target);
+    EditorGeometryWorkspace workspace;
+    workspace.Bind(&provider, &selection, document);
+    runner.Expect(
+        workspace.CanEdit() && !workspace.HasGeometry() &&
+            workspace.MeshAssetGuid() == sourceDocument.assetGuid,
+        "Geometry Workspace should expose the selected Mesh Renderer Asset GUID");
+
+    EditorProductionMeshEditableSourceLoader loader{
+        std::filesystem::current_path()};
+    std::optional<EditorCreateEditableCopyCommitRequest> acceptedRequest;
+    uint32_t commitRequestCount = 0;
+    EditorCreateEditableCopyToolBinding binding{};
+    binding.workspace = &workspace;
+    binding.assetRegistry = &assets;
+    binding.sourceLoader = &loader;
+    binding.onCommitRequested =
+        [&](const EditorCreateEditableCopyCommitRequest& request) {
+            acceptedRequest = request;
+            ++commitRequestCount;
+        };
+
+    EditorModeRegistry modes;
+    RegisterDefaultEditorModes(modes);
+    EditorGeometryToolBinding geometryBinding{&workspace, {}};
+    RegisterProductionGeometryTools(modes, &geometryBinding);
+    RegisterProductionCreateEditableCopyTools(modes, &binding);
+    const EditorInteractiveToolDescriptor* descriptor =
+        modes.FindTool("editor.tool.geometryCreateEditableCopy");
+    const std::vector<const EditorInteractiveToolDescriptor*>
+        modelingPalette =
+            modes.ToolsForMode("editor.mode.modeling");
+    runner.Expect(
+        descriptor != nullptr &&
+            modelingPalette.size() == 7 &&
+            std::find(
+                modelingPalette.begin(),
+                modelingPalette.end(),
+                descriptor) != modelingPalette.end() &&
+            descriptor->transactionPolicy ==
+                EditorInteractiveToolTransactionPolicy::
+                    SingleCommandOnAccept &&
+            descriptor->selectionBoundary ==
+                EditorInteractiveToolSelectionBoundary::PrimaryObjectChange,
+        "Modeling Palette should formally expose Create Editable Copy with "
+        "one Scene Transaction on Accept");
+
+    uint32_t geometryChangeNotifications = 0;
+    EditorGeometryExecutionService geometryExecution;
+    geometryExecution.Bind(
+        document,
+        &scene,
+        [&](std::string_view changedEntityGuid) {
+            if (changedEntityGuid == entity->guid) {
+                ++geometryChangeNotifications;
+            }
+        });
+    EditorExecutionContext execution;
+    EditorError executionError{};
+    runner.Expect(
+        execution.Register(geometryExecution, &executionError),
+        "Create Editable Copy should register its Geometry execution boundary");
+
+    const uint64_t revisionBeforeInvalidApply = scene.revision;
+    const EditorGeometryPropertyState invalidAtomicState{
+        std::nullopt,
+        std::nullopt,
+        sourceDocument.assetGuid,
+        std::nullopt};
+    const EditorUndoResult invalidAtomicApply =
+        geometryExecution.ApplyGeometryState(
+            document.Key(),
+            entity->guid,
+            invalidAtomicState);
+    runner.Expect(
+        !invalidAtomicApply.succeeded &&
+            scene.revision == revisionBeforeInvalidApply &&
+            scene.FindComponent(
+                *scene.FindEntity(entity->guid),
+                kEditorMeshRendererComponentType)->properties.empty() &&
+            geometryChangeNotifications == 0,
+        "invalid partial source metadata should fail before any Scene mutation");
+
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        {0.0f, 0.0f, 100.0f, 100.0f},
+        100,
+        100,
+        MakeIdentity4x4()});
+    EditorInteractiveToolEnvironment environment{};
+    environment.selection = &selection;
+    environment.coordinates = &coordinates;
+    environment.execution = &execution;
+    environment.activeDocumentKey = document.Key();
+    environment.documentEditRevision = scene.revision;
+    environment.documentGeneration = 1;
+    environment.selectionRevision = selection.Revision();
+    environment.canMutateAuthoring = true;
+    environment.viewportAvailable = true;
+    EditorTransactionStack transactions;
+    EditorToolManager manager(modes);
+    runner.Expect(
+        manager.Initialize("editor.mode.modeling", &error),
+        "Create Editable Copy test should initialize Modeling mode");
+
+    const uint64_t sceneRevisionBeforePreview = scene.revision;
+    const uint32_t assetRevisionBeforePreview = assets.Revision();
+    runner.Expect(
+        manager.StartTool(
+            "editor.tool.geometryCreateEditableCopy",
+            environment,
+            transactions,
+            &error) &&
+            workspace.HasPreview() &&
+            workspace.DisplayMesh() != nullptr &&
+            workspace.DisplayMesh()->ContentHash() ==
+                sourceDocument.sourceGeometryHash &&
+            scene.revision == sceneRevisionBeforePreview &&
+            assets.Revision() == assetRevisionBeforePreview &&
+            transactions.UndoDepth() == 0 &&
+            commitRequestCount == 0,
+        "Create Editable Copy should preview an identical in-memory source clone without mutating Scene, Asset, or history");
+    const auto* activeTool =
+        dynamic_cast<const EditorCreateEditableCopyTool*>(
+            manager.ActiveTool());
+    const EditorCreateEditableCopyCommitRequest* pending =
+        activeTool != nullptr
+        ? activeTool->PendingCommitRequest()
+        : nullptr;
+    runner.Expect(
+        activeTool != nullptr && activeTool->PreviewState().ready &&
+            pending != nullptr && pending->Validate(&error) &&
+            pending->sourceIdentity.assetGuid ==
+                sourceDocument.assetGuid &&
+            pending->sourceIdentity.sourceGeometryHash ==
+                sourceDocument.sourceGeometryHash,
+        "preview should retain a validated durable source GUID/hash identity");
+
+    manager.RequestCancel();
+    manager.Tick(environment, {}, transactions);
+    runner.Expect(
+        !manager.HasActiveTool() && !workspace.HasPreview() &&
+            commitRequestCount == 0 &&
+            scene.revision == sceneRevisionBeforePreview &&
+            assets.Revision() == assetRevisionBeforePreview &&
+            transactions.UndoDepth() == 0,
+        "Create Editable Copy Cancel should discard only transient Geometry");
+
+    runner.Expect(
+        manager.StartTool(
+            "editor.tool.geometryCreateEditableCopy",
+            environment,
+            transactions,
+            &error),
+        "Create Editable Copy should restart after Cancel");
+    manager.RequestAccept();
+    manager.Tick(environment, {}, transactions);
+    const EditorSceneComponent* meshComponent =
+        scene.FindComponent(
+            *scene.FindEntity(entity->guid),
+            kEditorMeshRendererComponentType);
+    runner.Expect(
+        !manager.HasActiveTool() && !workspace.HasPreview() &&
+            commitRequestCount == 1 &&
+            acceptedRequest.has_value() &&
+            acceptedRequest->Validate(&error) &&
+            acceptedRequest->editableGeometryHash ==
+                sourceDocument.sourceGeometryHash &&
+            meshComponent != nullptr &&
+            workspace.HasGeometry() &&
+            workspace.AuthoredMesh()->ContentHash() ==
+                sourceDocument.sourceGeometryHash &&
+            ReadEditorProductionMeshEditableSourceMetadata(*meshComponent).
+                HasIdentity() &&
+            ReadEditorProductionMeshEditableSourceMetadata(*meshComponent).
+                identity.assetGuid == sourceDocument.assetGuid &&
+            ReadEditorProductionMeshEditableSourceMetadata(*meshComponent).
+                identity.sourceGeometryHash ==
+                    sourceDocument.sourceGeometryHash &&
+            scene.revision == sceneRevisionBeforePreview + 1 &&
+            geometryChangeNotifications == 1 &&
+            transactions.UndoDepth() == 1,
+        "Accept should atomically commit Geometry and source GUID/hash as one Transaction");
+
+    runner.Expect(
+        transactions.Undo(execution, &executionError),
+        "Create Editable Copy should Undo through the shared Transaction Stack");
+    workspace.RefreshFromScene();
+    meshComponent = scene.FindComponent(
+        *scene.FindEntity(entity->guid),
+        kEditorMeshRendererComponentType);
+    runner.Expect(
+        !workspace.HasGeometry() &&
+            meshComponent != nullptr &&
+            meshComponent->properties.empty() &&
+            !ReadEditorProductionMeshEditableSourceMetadata(*meshComponent).
+                HasIdentity() &&
+            geometryChangeNotifications == 2 &&
+            transactions.UndoDepth() == 0 &&
+            transactions.RedoDepth() == 1,
+        "Undo should remove Geometry and source identity together without leaving partial metadata");
+
+    runner.Expect(
+        transactions.Redo(execution, &executionError),
+        "Create Editable Copy should Redo through the shared Transaction Stack");
+    workspace.RefreshFromScene();
+    meshComponent = scene.FindComponent(
+        *scene.FindEntity(entity->guid),
+        kEditorMeshRendererComponentType);
+    runner.Expect(
+        workspace.HasGeometry() &&
+            workspace.AuthoredMesh()->ContentHash() ==
+                sourceDocument.sourceGeometryHash &&
+            meshComponent != nullptr &&
+            ReadEditorProductionMeshEditableSourceMetadata(*meshComponent).
+                HasIdentity() &&
+            geometryChangeNotifications == 3 &&
+            transactions.UndoDepth() == 1 &&
+            transactions.RedoDepth() == 0,
+        "Redo should restore the same Geometry and provenance identity atomically");
+
+    runner.Expect(
+        transactions.Undo(execution, &executionError),
+        "stale-Registry safety setup should return to the Production Mesh state");
+    workspace.RefreshFromScene();
+    environment.documentEditRevision = scene.revision;
+
+    runner.Expect(
+        manager.StartTool(
+            "editor.tool.geometryCreateEditableCopy",
+            environment,
+            transactions,
+            &error),
+        "Create Editable Copy should start before stale-Registry safety test");
+    EditorAssetRecord unrelated = MakeAsset(
+        EditorAssetKind::Mesh,
+        "unrelated_mesh",
+        (root / "unrelated.mesh").generic_string(),
+        true,
+        GenerateEditorAssetGuid());
+    runner.Expect(
+        assets.Register(std::move(unrelated)),
+        "stale-Registry safety fixture should change Registry revision");
+    manager.RequestAccept();
+    manager.Tick(environment, {}, transactions);
+    runner.Expect(
+        manager.HasActiveTool() &&
+            commitRequestCount == 1 &&
+            manager.LastMessage().find("Asset Registry changed") !=
+                std::string::npos &&
+            !workspace.HasGeometry() &&
+            geometryChangeNotifications == 4 &&
+            transactions.UndoDepth() == 0,
+        "Accept should reject a stale Asset Registry snapshot instead of committing the wrong source");
+    manager.RequestCancel();
+    manager.Tick(environment, {}, transactions);
+
+    EditorInteractiveToolEnvironment locked = environment;
+    locked.playSessionActive = true;
+    locked.canMutateAuthoring = false;
+    runner.Expect(
+        !manager.StartTool(
+            "editor.tool.geometryCreateEditableCopy",
+            locked,
+            transactions,
+            &error),
+        "Play/Sim authoring lock should reject Create Editable Copy");
+
+    RemoveTreeIfPresent(root);
+}
+
+void TestCreateEditableCopyBakeRuntimeReconcileE2E(
+    RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" /
+        "editable_copy_bake_reconcile_e2e";
+    RemoveTreeIfPresent(root);
+    std::string error;
+
+    const EditorDocumentId document{
+        "editable-copy-bake-reconcile-scene",
+        std::string(EditorDocumentTypes::Scene)};
+    EditorScene scene;
+    EditorSceneEntity* sourceEntity = scene.CreateEntity(
+        "Source Authoring Mesh",
+        {},
+        "editable-copy-e2e-source");
+    runner.Expect(
+        sourceEntity != nullptr &&
+            scene.AddComponent(
+                sourceEntity->guid,
+                std::string(kEditorMeshRendererComponentType)),
+        "E2E source authoring entity should own a Mesh Renderer");
+
+    const EditorGeometryMesh sourceGeometry =
+        EditorGeometryMesh::MakeBox({1.0f, 1.5f, 2.0f});
+    const uint64_t sourceGeometryHash =
+        sourceGeometry.ContentHash();
+    std::string sourceGeometryText;
+    runner.Expect(
+        sourceGeometry.Serialize(sourceGeometryText, &error),
+        "E2E source Geometry should serialize");
+    EditorSceneComponent* sourceComponent =
+        scene.FindComponent(
+            *sourceEntity,
+            kEditorMeshRendererComponentType);
+    sourceComponent->properties.push_back({
+        std::string(kEditorEditableGeometryProperty),
+        sourceGeometryText});
+    scene.Touch();
+
+    EditorAssetRegistry registry;
+    // The execution service publishes an absolute source path to its live cache.
+    // Keep that cache rooted at the process working directory; the independent
+    // observer cache below intentionally uses the fixture root with Registry-
+    // relative paths to exercise ReconcileAssets().
+    EditorProductionMeshRuntimeCache commandRuntimeCache;
+    EditorMeshBakePipeline bakePipeline;
+    bakePipeline.Bind(document, &scene, &registry, root);
+    EditorMeshBuildSettings initialSettings{};
+    initialSettings.lodCount = 3;
+    initialSettings.collisionMode =
+        EditorMeshCollisionBuildMode::Box;
+    const EditorGeneratedCollision sourceCollision =
+        GenerateEditorGeometryBoxCollision(sourceGeometry);
+    EditorMeshBakePrepared initialBake{};
+    runner.Expect(
+        bakePipeline.Prepare(
+            sourceEntity->guid,
+            sourceGeometry,
+            &sourceCollision,
+            "editable_copy_e2e_mesh",
+            initialSettings,
+            initialBake,
+            &error) &&
+            !initialBake.rebake,
+        "E2E fixture should prepare its initial Production Mesh");
+
+    EditorMeshBakeExecutionService bakeExecution;
+    bakeExecution.Bind(
+        document,
+        &scene,
+        &registry,
+        &commandRuntimeCache,
+        root);
+    EditorGeometryExecutionService geometryExecution;
+    geometryExecution.Bind(document, &scene);
+    EditorExecutionContext execution;
+    EditorError executionError{};
+    runner.Expect(
+        execution.Register(bakeExecution, &executionError) &&
+            execution.Register(geometryExecution, &executionError),
+        "E2E should register Mesh Bake and Geometry execution services");
+    EditorMeshBakeUndoCommand initialBakeCommand{
+        initialBake.change};
+    runner.Expect(
+        initialBakeCommand.Apply(
+            EditorTransactionApplyMode::Redo,
+            execution).succeeded,
+        "E2E fixture should publish its initial Production Mesh");
+
+    const EditorAssetRecord* initialRecord =
+        registry.Find(
+            EditorAssetKind::Mesh,
+            "editable_copy_e2e_mesh");
+    const std::string productionGuid =
+        initialRecord != nullptr ? initialRecord->guid : std::string{};
+    const bool initialRuntimeLoaded =
+        commandRuntimeCache.Find(productionGuid) != nullptr;
+    const bool initialRendererReady =
+        commandRuntimeCache.ResolveForRenderer(
+            productionGuid,
+            0).Valid();
+    const bool initialPhysicsReady =
+        commandRuntimeCache.ResolveForPhysics(
+            productionGuid).Valid();
+    runner.Expect(
+        initialRecord != nullptr &&
+            IsDurableEditorAssetGuid(productionGuid) &&
+            initialRuntimeLoaded &&
+            initialRendererReady &&
+            initialPhysicsReady,
+        "initial Production Mesh should be available to Renderer and Physics"
+        " (published=" + std::string(initialRuntimeLoaded ? "ready" : "failed") +
+        ", renderer=" + (initialRendererReady ? "ready" : "failed") +
+        ", physics=" + (initialPhysicsReady ? "ready" : "failed") +
+        ")");
+
+    EditorMeshAssetChangeTracker changeTracker{root};
+    const EditorMeshAssetChangeSet initialChanges =
+        changeTracker.Poll(registry);
+    EditorProductionMeshRuntimeCache reconciledCache{root};
+    runner.Expect(
+        initialChanges.changes.size() == 1 &&
+            initialRecord != nullptr &&
+            reconciledCache.Load(*initialRecord, &error),
+        "E2E runtime observer should establish a resident initial generation");
+    const EditorProductionMeshRuntimeHandle initialHandle =
+        reconciledCache.Handle(productionGuid);
+
+    EditorSceneEntity* editEntity = scene.CreateEntity(
+        "Editable Production Instance",
+        {},
+        "editable-copy-e2e-target");
+    const EditorSceneObjectReference sourceReference{
+        "asset",
+        {},
+        productionGuid};
+    runner.Expect(
+        editEntity != nullptr &&
+            scene.AddComponent(
+                editEntity->guid,
+                std::string(kEditorMeshRendererComponentType),
+                &sourceReference),
+        "E2E target should begin as a Production Mesh-only Scene Entity");
+
+    SceneWorldObjectProvider provider;
+    provider.Bind(&scene, document);
+    EditorSelection selection;
+    selection.SetPrimary({
+        EditorDomainId::SceneEntity,
+        BuildEditorWorldStableId(
+            document,
+            provider.ProviderId(),
+            editEntity->guid),
+        0,
+        1,
+        editEntity->name});
+    EditorGeometryWorkspace workspace;
+    workspace.Bind(&provider, &selection, document);
+    EditorProductionMeshEditableSourceLoader sourceLoader{root};
+    EditorCreateEditableCopyToolBinding createBinding{
+        &workspace,
+        &registry,
+        &sourceLoader,
+        {}};
+    EditorGeometryToolBinding geometryBinding{&workspace, {}};
+    EditorMeshBakeToolBinding bakeBinding{
+        &workspace,
+        &bakePipeline,
+        {}};
+
+    EditorModeRegistry modes;
+    RegisterDefaultEditorModes(modes);
+    RegisterProductionGeometryTools(modes, &geometryBinding);
+    RegisterProductionCreateEditableCopyTools(
+        modes,
+        &createBinding);
+    RegisterProductionMeshBakeTools(modes, &bakeBinding);
+    runner.Expect(
+        modes.ToolsForMode("editor.mode.modeling").size() == 8,
+        "E2E Modeling Palette should contain Geometry, Editable Copy, and Bake tools");
+
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        {0.0f, 0.0f, 100.0f, 100.0f},
+        100,
+        100,
+        MakeIdentity4x4()});
+    EditorInteractiveToolEnvironment environment{};
+    environment.selection = &selection;
+    environment.coordinates = &coordinates;
+    environment.execution = &execution;
+    environment.activeDocumentKey = document.Key();
+    environment.documentEditRevision = scene.revision;
+    environment.documentGeneration = 1;
+    environment.selectionRevision = selection.Revision();
+    environment.canMutateAuthoring = true;
+    environment.viewportAvailable = true;
+    EditorTransactionStack transactions;
+    EditorToolManager manager{modes};
+    runner.Expect(
+        manager.Initialize("editor.mode.modeling", &error) &&
+            manager.StartTool(
+                "editor.tool.geometryCreateEditableCopy",
+                environment,
+                transactions,
+                &error),
+        "E2E should start Create Editable Copy from the Production Mesh GUID");
+    manager.RequestAccept();
+    manager.Tick(environment, {}, transactions);
+    workspace.RefreshFromScene();
+    const EditorSceneComponent* editComponent =
+        scene.FindComponent(
+            *scene.FindEntity(editEntity->guid),
+            kEditorMeshRendererComponentType);
+    EditorProductionMeshEditableSourceMetadataReadResult metadata =
+        editComponent != nullptr
+        ? ReadEditorProductionMeshEditableSourceMetadata(*editComponent)
+        : EditorProductionMeshEditableSourceMetadataReadResult{
+            EditorProductionMeshEditableSourceMetadataState::Invalid};
+    runner.Expect(
+        workspace.HasGeometry() &&
+            workspace.AuthoredMesh()->ContentHash() ==
+                sourceGeometryHash &&
+            metadata.HasIdentity() &&
+            metadata.identity.assetGuid == productionGuid &&
+            metadata.identity.sourceGeometryHash ==
+                sourceGeometryHash &&
+            transactions.UndoDepth() == 1,
+        "Create Editable Copy should retain the original Production GUID/hash in one Transaction");
+
+    const EditorGeometryMesh* authored = workspace.AuthoredMesh();
+    runner.Expect(
+        authored != nullptr && authored->triangles.size() >= 2,
+        "E2E editable copy should expose topology for Modeling");
+    workspace.SelectFace(authored->triangles[0].guid, false);
+    workspace.SelectFace(authored->triangles[1].guid, true);
+    environment.documentEditRevision = scene.revision;
+    runner.Expect(
+        manager.StartTool(
+            "editor.tool.geometryExtrudeFaces",
+            environment,
+            transactions,
+            &error) &&
+            manager.ActiveTool() != nullptr &&
+            manager.ActiveTool()->SetProperty(
+                "Distance",
+                "0.500",
+                error),
+        "E2E should create a changed Dynamic Geometry preview");
+    manager.RequestAccept();
+    manager.Tick(environment, {}, transactions);
+    workspace.RefreshFromScene();
+    const uint64_t editedGeometryHash =
+        workspace.AuthoredMesh() != nullptr
+        ? workspace.AuthoredMesh()->ContentHash()
+        : 0;
+    editComponent = scene.FindComponent(
+        *scene.FindEntity(editEntity->guid),
+        kEditorMeshRendererComponentType);
+    metadata =
+        editComponent != nullptr
+        ? ReadEditorProductionMeshEditableSourceMetadata(*editComponent)
+        : EditorProductionMeshEditableSourceMetadataReadResult{
+            EditorProductionMeshEditableSourceMetadataState::Invalid};
+    runner.Expect(
+        editedGeometryHash != 0 &&
+            editedGeometryHash != sourceGeometryHash &&
+            metadata.HasIdentity() &&
+            metadata.identity.sourceGeometryHash ==
+                sourceGeometryHash &&
+            transactions.UndoDepth() == 2,
+        "Modeling should change Geometry while retaining its pre-bake source identity");
+
+    environment.documentEditRevision = scene.revision;
+    runner.Expect(
+        manager.StartTool(
+            "editor.tool.meshBake",
+            environment,
+            transactions,
+            &error),
+        "E2E should prepare Bake from the edited Dynamic Geometry");
+    bool preparedAsRebuild = false;
+    if (manager.ActiveTool() != nullptr) {
+        const std::vector<EditorInteractiveToolProperty> properties =
+            manager.ActiveTool()->Properties();
+        const auto bakeType = std::find_if(
+            properties.begin(),
+            properties.end(),
+            [](const EditorInteractiveToolProperty& property) {
+                return property.name == "Bake Type";
+            });
+        preparedAsRebuild =
+            bakeType != properties.end() &&
+            bakeType->value == "Rebake";
+    }
+    runner.Expect(
+        preparedAsRebuild,
+        "Bake should consume editable-source GUID and rebuild the original Asset");
+    manager.RequestAccept();
+    manager.Tick(environment, {}, transactions);
+    workspace.RefreshFromScene();
+
+    const EditorAssetRecord* rebuiltRecord =
+        registry.FindByGuid(productionGuid);
+    const std::filesystem::path rebuiltSourcePath =
+        rebuiltRecord != nullptr
+        ? root / rebuiltRecord->sourcePath
+        : std::filesystem::path{};
+    EditorProductionMeshAssetDocument rebuiltDocument{};
+    std::string rebuiltSourceText;
+    if (!rebuiltSourcePath.empty()) {
+        const std::vector<unsigned char> bytes =
+            ReadBinaryFile(rebuiltSourcePath);
+        rebuiltSourceText.assign(bytes.begin(), bytes.end());
+    }
+    editComponent = scene.FindComponent(
+        *scene.FindEntity(editEntity->guid),
+        kEditorMeshRendererComponentType);
+    metadata =
+        editComponent != nullptr
+        ? ReadEditorProductionMeshEditableSourceMetadata(*editComponent)
+        : EditorProductionMeshEditableSourceMetadataReadResult{
+            EditorProductionMeshEditableSourceMetadataState::Invalid};
+    runner.Expect(
+        rebuiltRecord != nullptr &&
+            rebuiltRecord->guid == productionGuid &&
+            EditorProductionMeshAssetDocument::Deserialize(
+                rebuiltSourceText,
+                rebuiltDocument,
+                &error) &&
+            rebuiltDocument.sourceGeometryHash ==
+                editedGeometryHash &&
+            metadata.HasIdentity() &&
+            metadata.identity.assetGuid == productionGuid &&
+            metadata.identity.sourceGeometryHash ==
+                editedGeometryHash &&
+            transactions.UndoDepth() == 3,
+        "Bake should preserve GUID, update source Hash, and commit as one Transaction");
+
+    const EditorMeshAssetChangeSet rebuildChanges =
+        changeTracker.Poll(registry);
+    const EditorProductionMeshRuntimeReconcileResult rebuildResult =
+        reconciledCache.ReconcileAssets(
+            registry,
+            rebuildChanges);
+    const EditorProductionMeshRuntimeHandle rebuiltHandle =
+        reconciledCache.Handle(productionGuid);
+    runner.Expect(
+        rebuildChanges.changes.size() == 1 &&
+            rebuildChanges.changes.front().kind ==
+                EditorMeshAssetChangeKind::Modified &&
+            rebuildResult.updated == 1 &&
+            rebuiltHandle.Valid() &&
+            rebuiltHandle.generation > initialHandle.generation &&
+            reconciledCache.Resolve(initialHandle) == nullptr &&
+            reconciledCache.Resolve(rebuiltHandle) != nullptr &&
+            reconciledCache.Resolve(rebuiltHandle)->
+                mesh.sourceGeometryHash == editedGeometryHash &&
+            reconciledCache.ResolveForRenderer(
+                productionGuid,
+                0).Valid() &&
+            reconciledCache.ResolveForPhysics(
+                productionGuid).Valid(),
+        "Runtime Reconcile should atomically replace Renderer/Physics generation");
+
+    runner.Expect(
+        transactions.Undo(execution, &executionError),
+        "E2E Bake should be undoable without undoing the Modeling edit");
+    workspace.RefreshFromScene();
+    const EditorMeshAssetChangeSet undoChanges =
+        changeTracker.Poll(registry);
+    const EditorProductionMeshRuntimeReconcileResult undoReconcile =
+        reconciledCache.ReconcileAssets(registry, undoChanges);
+    const EditorProductionMeshRuntimeHandle undoHandle =
+        reconciledCache.Handle(productionGuid);
+    editComponent = scene.FindComponent(
+        *scene.FindEntity(editEntity->guid),
+        kEditorMeshRendererComponentType);
+    metadata =
+        editComponent != nullptr
+        ? ReadEditorProductionMeshEditableSourceMetadata(*editComponent)
+        : EditorProductionMeshEditableSourceMetadataReadResult{
+            EditorProductionMeshEditableSourceMetadataState::Invalid};
+    runner.Expect(
+        undoReconcile.updated == 1 &&
+            undoHandle.generation > rebuiltHandle.generation &&
+            reconciledCache.Resolve(rebuiltHandle) == nullptr &&
+            reconciledCache.Resolve(undoHandle) != nullptr &&
+            reconciledCache.Resolve(undoHandle)->
+                mesh.sourceGeometryHash == sourceGeometryHash &&
+            metadata.HasIdentity() &&
+            metadata.identity.sourceGeometryHash ==
+                sourceGeometryHash &&
+            workspace.AuthoredMesh()->ContentHash() ==
+                editedGeometryHash &&
+            transactions.UndoDepth() == 2 &&
+            transactions.RedoDepth() == 1,
+        "Bake Undo should restore old Asset/runtime generation and provenance while keeping edited Geometry");
+
+    runner.Expect(
+        transactions.Redo(execution, &executionError),
+        "E2E Bake should redo through the shared Transaction Stack");
+    workspace.RefreshFromScene();
+    const EditorMeshAssetChangeSet redoChanges =
+        changeTracker.Poll(registry);
+    const EditorProductionMeshRuntimeReconcileResult redoReconcile =
+        reconciledCache.ReconcileAssets(registry, redoChanges);
+    const EditorProductionMeshRuntimeHandle redoHandle =
+        reconciledCache.Handle(productionGuid);
+    runner.Expect(
+        redoReconcile.updated == 1 &&
+            redoHandle.generation > undoHandle.generation &&
+            reconciledCache.Resolve(undoHandle) == nullptr &&
+            reconciledCache.Resolve(redoHandle) != nullptr &&
+            reconciledCache.Resolve(redoHandle)->
+                mesh.sourceGeometryHash == editedGeometryHash &&
+            transactions.UndoDepth() == 3 &&
+            transactions.RedoDepth() == 0,
+        "Bake Redo should republish the edited Asset as a new runtime generation");
+
+    rebuiltRecord = registry.FindByGuid(productionGuid);
+    const std::filesystem::path cookedPath =
+        rebuiltRecord != nullptr
+        ? root / EditorCookedMeshPath(rebuiltRecord->sourcePath)
+        : std::filesystem::path{};
+    std::vector<unsigned char> validCookedBytes =
+        ReadBinaryFile(cookedPath);
+    std::vector<unsigned char> corruptCookedBytes =
+        validCookedBytes;
+    if (corruptCookedBytes.size() > 20) {
+        corruptCookedBytes[20] ^= 0x5au;
+    }
+    WriteBinaryFile(cookedPath, corruptCookedBytes);
+    std::error_code stampError;
+    const auto corruptWriteTime =
+        std::filesystem::last_write_time(cookedPath, stampError);
+    if (!stampError) {
+        std::filesystem::last_write_time(
+            cookedPath,
+            corruptWriteTime + std::chrono::seconds(2),
+            stampError);
+    }
+    const EditorMeshAssetChangeSet corruptChanges =
+        changeTracker.Poll(registry);
+    const EditorProductionMeshRuntimeReconcileResult corruptResult =
+        reconciledCache.ReconcileAssets(
+            registry,
+            corruptChanges);
+    runner.Expect(
+        corruptChanges.changes.size() == 1 &&
+            corruptResult.failed == 1 &&
+            !corruptResult.diagnostics.empty() &&
+            reconciledCache.Handle(productionGuid).generation ==
+                redoHandle.generation &&
+            reconciledCache.Resolve(redoHandle) != nullptr,
+        "corrupt hot reload should retain the last-known-good runtime generation");
+    WriteBinaryFile(cookedPath, validCookedBytes);
+
+    RemoveTreeIfPresent(root);
+}
+
+void TestProductionMeshEditableSourceMetadata(RegressionRunner& runner) {
+    EditorSceneComponentRegistry components =
+        CreateBuiltInEditorSceneComponentRegistry();
+    const EditorSceneComponentDescriptor* meshDescriptor =
+        components.Find(kEditorMeshRendererComponentType);
+    const EditorSceneComponentPropertyDescriptor* guidDescriptor =
+        meshDescriptor != nullptr
+        ? FindEditorSceneComponentPropertyDescriptor(
+            *meshDescriptor,
+            kEditorEditableSourceAssetGuidProperty)
+        : nullptr;
+    const EditorSceneComponentPropertyDescriptor* hashDescriptor =
+        meshDescriptor != nullptr
+        ? FindEditorSceneComponentPropertyDescriptor(
+            *meshDescriptor,
+            kEditorEditableSourceGeometryHashProperty)
+        : nullptr;
+    EditorSceneComponent defaultMesh =
+        components.CreateDefault(kEditorMeshRendererComponentType);
+    runner.Expect(
+        guidDescriptor != nullptr &&
+            hashDescriptor != nullptr &&
+            !guidDescriptor->required &&
+            !hashDescriptor->required &&
+            guidDescriptor->readOnly &&
+            hashDescriptor->readOnly &&
+            defaultMesh.properties.empty(),
+        "Mesh Renderer should register optional read-only editable-source "
+        "identity without materializing empty metadata on default Components");
+
+    const EditorProductionMeshEditableSourceIdentity identity{
+        GenerateEditorAssetGuid(),
+        ~uint64_t{0}};
+    std::string error;
+    runner.Expect(
+        WriteEditorProductionMeshEditableSourceMetadata(
+            defaultMesh,
+            identity,
+            &error),
+        "typed metadata write should accept the full non-zero uint64 hash "
+        "range; error='" + error + "'");
+    const auto written =
+        ReadEditorProductionMeshEditableSourceMetadata(defaultMesh);
+    runner.Expect(
+        written.HasIdentity() &&
+            written.identity.assetGuid == identity.assetGuid &&
+            written.identity.sourceGeometryHash ==
+                identity.sourceGeometryHash,
+        "typed metadata read should recover the exact source GUID/hash pair");
+
+    defaultMesh.properties.push_back({
+        std::string(kEditorEditableSourceAssetGuidProperty),
+        identity.assetGuid});
+    const auto duplicate =
+        ReadEditorProductionMeshEditableSourceMetadata(defaultMesh);
+    runner.Expect(
+        !duplicate.Succeeded() &&
+            duplicate.state ==
+                EditorProductionMeshEditableSourceMetadataState::Invalid,
+        "duplicate provenance properties should be rejected as ambiguous");
+    runner.Expect(
+        WriteEditorProductionMeshEditableSourceMetadata(
+            defaultMesh,
+            identity,
+            &error) &&
+            ReadEditorProductionMeshEditableSourceMetadata(defaultMesh).
+                HasIdentity(),
+        "typed metadata write should atomically normalize an existing "
+        "malformed pair");
+
+    EditorSceneComponent incomplete =
+        components.CreateDefault(kEditorMeshRendererComponentType);
+    incomplete.properties.push_back({
+        std::string(kEditorEditableSourceAssetGuidProperty),
+        identity.assetGuid});
+    runner.Expect(
+        !ReadEditorProductionMeshEditableSourceMetadata(incomplete).
+            Succeeded(),
+        "a GUID without its source Geometry hash should be invalid");
+
+    const EditorSceneComponent beforeInvalidWrite = defaultMesh;
+    const EditorProductionMeshEditableSourceIdentity invalidIdentity{
+        "auto-provisional",
+        0};
+    runner.Expect(
+        !WriteEditorProductionMeshEditableSourceMetadata(
+            defaultMesh,
+            invalidIdentity,
+            &error) &&
+            defaultMesh.properties.size() ==
+                beforeInvalidWrite.properties.size(),
+        "an invalid identity should be rejected without mutating the "
+        "Component");
+
+    EditorScene scene;
+    EditorSceneEntity* entity = scene.CreateEntity(
+        "Editable Copy",
+        {},
+        "81818181818181818181818181818181");
+    runner.Expect(
+        entity != nullptr &&
+            scene.AddComponent(
+                entity->guid,
+                std::string(kEditorMeshRendererComponentType),
+                nullptr,
+                &components),
+        "editable-source metadata Scene fixture should create a Mesh Renderer");
+    entity = scene.FindEntity("81818181818181818181818181818181");
+    EditorSceneComponent* sceneMesh =
+        entity != nullptr
+        ? scene.FindComponent(
+            *entity,
+            kEditorMeshRendererComponentType)
+        : nullptr;
+    EditorGeometryMesh sourceGeometry =
+        EditorGeometryMesh::MakeBox({1.0f, 1.0f, 1.0f});
+    const uint64_t sourceHash = sourceGeometry.ContentHash();
+    EditorGeometryMesh editedGeometry = sourceGeometry;
+    editedGeometry.vertices.front().position.x += 0.25f;
+    std::string editedGeometryText;
+    runner.Expect(
+        sceneMesh != nullptr &&
+            editedGeometry.Serialize(editedGeometryText, &error),
+        "editable-source metadata fixture Geometry should serialize");
+    if (sceneMesh != nullptr) {
+        sceneMesh->properties.push_back({
+            std::string(kEditorEditableGeometryProperty),
+            editedGeometryText});
+        WriteEditorProductionMeshEditableSourceMetadata(
+            *sceneMesh,
+            {identity.assetGuid, sourceHash},
+            &error);
+    }
+    runner.Expect(
+        editedGeometry.ContentHash() != sourceHash &&
+            scene.Validate(&components).Succeeded(),
+        "source hash should remain valid provenance after editable Geometry "
+        "changes instead of being compared with the current Geometry hash");
+
+    EditorDocumentContent encoded;
+    EditorScene decoded;
+    runner.Expect(
+        EditorSceneDocumentProvider::Encode(scene, &encoded, &error) &&
+            EditorSceneDocumentProvider::Decode(
+                encoded,
+                &decoded,
+                &error),
+        "Scene save/reload should round-trip editable-source metadata; "
+        "error='" + error + "'");
+    const EditorSceneEntity* decodedEntity =
+        decoded.FindEntity("81818181818181818181818181818181");
+    const EditorSceneComponent* decodedMesh =
+        decodedEntity != nullptr
+        ? decoded.FindComponent(
+            *decodedEntity,
+            kEditorMeshRendererComponentType)
+        : nullptr;
+    const auto decodedMetadata =
+        decodedMesh != nullptr
+        ? ReadEditorProductionMeshEditableSourceMetadata(*decodedMesh)
+        : EditorProductionMeshEditableSourceMetadataReadResult{
+            EditorProductionMeshEditableSourceMetadataState::Invalid};
+    runner.Expect(
+        decodedMetadata.HasIdentity() &&
+            decodedMetadata.identity.assetGuid == identity.assetGuid &&
+            decodedMetadata.identity.sourceGeometryHash == sourceHash &&
+            decoded.Validate(&components).Succeeded(),
+        "reloaded Scene should preserve and validate the exact Production "
+        "Mesh editing-source identity");
+
+    if (sceneMesh != nullptr) {
+        sceneMesh->properties.erase(
+            std::remove_if(
+                sceneMesh->properties.begin(),
+                sceneMesh->properties.end(),
+                [](const EditorSceneProperty& property) {
+                    return property.name ==
+                        kEditorEditableGeometryProperty;
+                }),
+            sceneMesh->properties.end());
+    }
+    runner.Expect(
+        !scene.Validate(&components).Succeeded(),
+        "source identity without an editable Geometry payload should fail "
+        "Scene validation");
+    runner.Expect(
+        sceneMesh != nullptr &&
+            ClearEditorProductionMeshEditableSourceMetadata(
+                *sceneMesh,
+                &error) &&
+            !ReadEditorProductionMeshEditableSourceMetadata(*sceneMesh).
+                HasIdentity(),
+        "metadata clear should remove the GUID/hash pair together");
+}
+
 void TestObjProductionImportBridge(RegressionRunner& runner) {
     const std::filesystem::path root =
         std::filesystem::path{"generated"} /
@@ -14196,7 +15655,28 @@ void TestObjProductionImportBridge(RegressionRunner& runner) {
         "Collision, and metadata artifacts; result='" + imported.message +
             "' vertices=" + std::to_string(imported.vertexCount) +
             " triangles=" + std::to_string(imported.triangleCount) +
-            " lods=" + std::to_string(imported.lodCount));
+             " lods=" + std::to_string(imported.lodCount));
+    runner.Expect(
+        production != nullptr &&
+            EditorObjProductionImportBridge::IsProductionForSource(
+                *production,
+                source,
+                root),
+        "Placement should be able to resolve the generated Production Mesh back to its source Mesh");
+
+    EditorAssetRecord supportedSource = source;
+    bool supportedSourceExtensions = true;
+    for (const char* extension : {".obj", ".gltf", ".glb", ".fbx"}) {
+        supportedSource.sourcePath =
+            (std::filesystem::path{"Resources"} / "Source" /
+             (std::string{"supported"} + extension))
+                .generic_string();
+        supportedSourceExtensions = supportedSourceExtensions &&
+            EditorObjProductionImportBridge::CanImport(supportedSource);
+    }
+    runner.Expect(
+        supportedSourceExtensions,
+        "Placement auto-import should accept supported OBJ, glTF, GLB, and FBX source Mesh formats");
     const std::string productionGuid =
         production != nullptr ? production->guid : std::string{};
     const EditorProductionMeshRuntimeHandle initialHandle =
@@ -14565,6 +16045,27 @@ void TestViewportInputOwnershipRouting(RegressionRunner& runner) {
             interaction.State().viewportPrimaryDown &&
             interaction.HasPrimaryCapture(),
         "viewport-owned ImGui image input should route exclusively to the active interactive tool");
+    EditorSelection lockedSelection;
+    const EditorObjectHandle lockedTarget{
+        EditorDomainId::SceneEntity, "scene:locked-modeling-target", 0, 1, "Modeling Target"};
+    lockedSelection.SetPrimary(lockedTarget);
+    const uint32_t lockedRevision = lockedSelection.Revision();
+    std::vector<EditorViewportPickResult> competingPicks{
+        MakeEditorViewportPickResult(
+            EditorViewportPickSource::CourseViewport,
+            EditorDomainId::CourseTerrainPlacement,
+            "course-terrain",
+            4,
+            1,
+            "Competing Course Pick")};
+    EditorViewportSelectionBridge selectionBridge;
+    selectionBridge.Sync(EditorViewportSelectionBridgeInput{
+        &lockedSelection, &interaction, &competingPicks});
+    runner.Expect(
+        lockedSelection.Revision() == lockedRevision &&
+            lockedSelection.Primary() != nullptr &&
+            lockedSelection.Primary()->SameObject(lockedTarget),
+        "interactive viewport tools should lock top-level selection against competing pick sync");
 
     input.mouseX = 950.0f;
     input.primaryPressed = false;
@@ -16140,6 +17641,18 @@ int RunEditorCoreRegressionTests() {
         {"editor notification toast lifecycle", [&]() { TestEditorNotificationToastLifecycle(runner); }},
         {"production modeling geometry framework", [&]() { TestProductionModelingGeometryFramework(runner); }},
         {"production mesh bake asset pipeline", [&]() { TestProductionMeshBakeAssetPipeline(runner); }},
+        {"production mesh editable source loader", [&]() {
+             TestProductionMeshEditableSourceLoader(runner);
+         }},
+        {"create editable copy interactive tool", [&]() {
+             TestCreateEditableCopyInteractiveTool(runner);
+         }},
+        {"editable copy bake runtime reconcile e2e", [&]() {
+             TestCreateEditableCopyBakeRuntimeReconcileE2E(runner);
+         }},
+        {"production mesh editable source metadata", [&]() {
+             TestProductionMeshEditableSourceMetadata(runner);
+         }},
         {"obj production import bake bridge", [&]() { TestObjProductionImportBridge(runner); }},
         {"panel layout geometry", [&]() { TestPanelLayoutGeometry(runner); }},
         {"editor frame pacing and viewport realtime", [&]() {

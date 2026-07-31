@@ -151,6 +151,9 @@
     <ClCompile Include="application\editor\geometry\EditorGeometryWorkspace.cpp" />
     <ClCompile Include="application\editor\geometry\EditorGeometryTools.cpp" />
     <ClCompile Include="application\editor\mesh\EditorProductionMeshAsset.cpp" />
+    <ClCompile Include="application\editor\mesh\EditorProductionMeshEditableSourceLoader.cpp" />
+    <ClCompile Include="application\editor\mesh\EditorProductionMeshEditableSourceMetadata.cpp" />
+    <ClCompile Include="application\editor\mesh\EditorCreateEditableCopyTool.cpp" />
     <ClCompile Include="application\editor\scene\EditorBlenderSceneImportService.cpp" />
     <ClCompile Include="application\editor\scene\EditorBlenderSceneImportCommandProvider.cpp" />
     <ClCompile Include="application\editor\scene\EditorBlenderSceneImportTransaction.cpp" />
@@ -945,6 +948,9 @@
     <ClInclude Include="application\editor\geometry\EditorGeometryWorkspace.h" />
     <ClInclude Include="application\editor\geometry\EditorGeometryTools.h" />
     <ClInclude Include="application\editor\mesh\EditorProductionMeshAsset.h" />
+    <ClInclude Include="application\editor\mesh\EditorProductionMeshEditableSourceLoader.h" />
+    <ClInclude Include="application\editor\mesh\EditorProductionMeshEditableSourceMetadata.h" />
+    <ClInclude Include="application\editor\mesh\EditorCreateEditableCopyTool.h" />
     <ClInclude Include="application\editor\scene\EditorBlenderSceneImportService.h" />
     <ClInclude Include="application\editor\scene\EditorBlenderSceneImportCommandProvider.h" />
     <ClInclude Include="application\editor\scene\EditorBlenderSceneImportTransaction.h" />

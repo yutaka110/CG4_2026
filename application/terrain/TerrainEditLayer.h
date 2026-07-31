@@ -55,6 +55,9 @@ public:
     bool RemoveStroke(
         std::string_view strokeGuid,
         std::string* errorMessage = nullptr);
+    bool ReplaceFromSnapshot(
+        const TerrainEditLayer& snapshot,
+        std::string* errorMessage = nullptr);
     void Clear();
 
     TerrainEditEvaluation Evaluate(float distance, float angle) const noexcept;

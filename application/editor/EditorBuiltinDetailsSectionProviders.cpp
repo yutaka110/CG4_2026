@@ -28,7 +28,10 @@
 #include "scene/EditorGimmickRuntimeEventSequenceRegistry.h"
 #include "scene/EditorGimmickRuntimeInteractionSystem.h"
 #include "scene/EditorGimmickRuntimeTriggerSystem.h"
+#include "scene/EditorBlenderSceneImportService.h"
+#include "scene/EditorPatrolComponent.h"
 #include "scene/EditorProductionScenePipeline.h"
+#include "scene/EditorSplineRouteComponent.h"
 
 namespace editor {
 namespace {
@@ -422,7 +425,11 @@ public:
                         ? propertyDescriptor->displayName.c_str()
                         : property.name.c_str());
                 ImGui::SameLine(120.0f);
-                ImGui::BeginDisabled(!context.canMutateAuthoring || !component.enabled);
+                ImGui::BeginDisabled(
+                    !context.canMutateAuthoring ||
+                    !component.enabled ||
+                    (propertyDescriptor != nullptr &&
+                     propertyDescriptor->readOnly));
                 bool commit = false;
                 std::string committedValue;
                 if (propertyDescriptor != nullptr &&
@@ -560,9 +567,253 @@ public:
             ImGui::EndPopup();
         }
         ImGui::EndDisabled();
+        if (DrawPatrolSetupDialog(context)) return;
     }
 
 private:
+    struct PatrolSetupState {
+        bool requestOpen = false;
+        bool active = false;
+        EditorObjectHandle target;
+        std::string ownerEntityGuid;
+        std::string routeEntityGuid;
+        std::string enemyType = "DRONE";
+        float speed = 5.0f;
+        float startDistance = 0.0f;
+        EditorPatrolTraversalMode traversalMode =
+            EditorPatrolTraversalMode::Loop;
+        bool reverse = false;
+        std::array<char, 128> routeFilter{};
+        std::string error;
+    };
+
+    void BeginPatrolSetup(
+        const EditorDetailsSectionContext& context,
+        const EditorObjectHandle& target,
+        const EditorSceneEntity& owner) {
+        patrolSetup_ = {};
+        patrolSetup_.requestOpen = true;
+        patrolSetup_.active = true;
+        patrolSetup_.target = target;
+        patrolSetup_.ownerEntityGuid = owner.guid;
+
+        const EditorScene* scene =
+            context.sceneWorldProvider != nullptr
+            ? context.sceneWorldProvider->BoundScene()
+            : nullptr;
+        if (scene != nullptr) {
+            const EditorSceneComponent* spawn = scene->FindComponent(
+                owner, kEditorGameplaySpawnPointComponentType);
+            if (spawn != nullptr) {
+                const auto enemyType = std::find_if(
+                    spawn->properties.begin(),
+                    spawn->properties.end(),
+                    [](const EditorSceneProperty& property) {
+                        return property.name == "enemy_type";
+                    });
+                if (enemyType != spawn->properties.end() &&
+                    (enemyType->value == "DRONE" ||
+                     enemyType->value == "TURRET" ||
+                     enemyType->value == "BOSS")) {
+                    patrolSetup_.enemyType = enemyType->value;
+                }
+            }
+            for (const EditorSceneEntity& candidate : scene->entities) {
+                const EditorSceneComponent* route = scene->FindComponent(
+                    candidate, kEditorSplineRouteComponentType);
+                if (route != nullptr && route->enabled &&
+                    scene->IsRuntimeActiveInHierarchy(candidate.guid)) {
+                    patrolSetup_.routeEntityGuid = candidate.guid;
+                    if (candidate.guid == owner.guid) break;
+                }
+            }
+        }
+    }
+
+    bool DrawPatrolSetupDialog(
+        const EditorDetailsSectionContext& context) {
+        if (patrolSetup_.requestOpen) {
+            ImGui::OpenPopup("Set Up Patrol");
+            patrolSetup_.requestOpen = false;
+        }
+        if (!patrolSetup_.active) return false;
+
+        bool committed = false;
+        if (!ImGui::BeginPopupModal(
+                "Set Up Patrol",
+                nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize)) {
+            return false;
+        }
+
+        const EditorScene* scene =
+            context.sceneWorldProvider != nullptr
+            ? context.sceneWorldProvider->BoundScene()
+            : nullptr;
+        const EditorSceneEntity* owner =
+            scene != nullptr
+            ? scene->FindEntity(patrolSetup_.ownerEntityGuid)
+            : nullptr;
+        ImGui::TextUnformatted(
+            "Configure the Enemy Spawn Point, Patrol, and Route reference.");
+        ImGui::TextDisabled(
+            "The complete setup is committed as one Undoable transaction.");
+        ImGui::Separator();
+        ImGui::Text("Enemy Entity: %s",
+            owner != nullptr ? owner->name.c_str() : "<Missing>");
+
+        const EditorSceneEntity* selectedRoute =
+            scene != nullptr
+            ? scene->FindEntity(patrolSetup_.routeEntityGuid)
+            : nullptr;
+        const char* routePreview = selectedRoute != nullptr
+            ? selectedRoute->name.c_str()
+            : "<Select Spline Route>";
+        ImGui::SetNextItemWidth(360.0f);
+        if (ImGui::BeginCombo("Route", routePreview)) {
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputTextWithHint(
+                "##PatrolRouteFilter",
+                "Search Route Entity...",
+                patrolSetup_.routeFilter.data(),
+                patrolSetup_.routeFilter.size());
+            if (scene != nullptr) {
+                for (const EditorSceneEntity& candidate : scene->entities) {
+                    const EditorSceneComponent* route = scene->FindComponent(
+                        candidate, kEditorSplineRouteComponentType);
+                    if (route == nullptr || !route->enabled ||
+                        !scene->IsRuntimeActiveInHierarchy(candidate.guid)) {
+                        continue;
+                    }
+                    const std::string label = candidate.name + " [" +
+                        candidate.guid.substr(
+                            0,
+                            std::min<std::size_t>(8, candidate.guid.size())) +
+                        "]";
+                    if (patrolSetup_.routeFilter[0] != '\0' &&
+                        label.find(patrolSetup_.routeFilter.data()) ==
+                            std::string::npos) {
+                        continue;
+                    }
+                    const bool selected =
+                        patrolSetup_.routeEntityGuid == candidate.guid;
+                    if (ImGui::Selectable(label.c_str(), selected)) {
+                        patrolSetup_.routeEntityGuid = candidate.guid;
+                        patrolSetup_.error.clear();
+                    }
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        ImGui::SetNextItemWidth(180.0f);
+        if (ImGui::BeginCombo(
+                "Enemy Type", patrolSetup_.enemyType.c_str())) {
+            for (const char* value : {"DRONE", "TURRET", "BOSS"}) {
+                const bool selected = patrolSetup_.enemyType == value;
+                if (ImGui::Selectable(value, selected)) {
+                    patrolSetup_.enemyType = value;
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::DragFloat(
+            "Speed", &patrolSetup_.speed, 0.1f, 0.01f, 10000.0f, "%.2f");
+        ImGui::DragFloat(
+            "Start Distance", &patrolSetup_.startDistance,
+            0.1f, 0.0f, 100000000.0f, "%.2f");
+        const char* traversalPreview = ToString(
+            patrolSetup_.traversalMode);
+        if (ImGui::BeginCombo("Traversal Mode", traversalPreview)) {
+            const EditorPatrolTraversalMode modes[] = {
+                EditorPatrolTraversalMode::Loop,
+                EditorPatrolTraversalMode::PingPong,
+                EditorPatrolTraversalMode::Once,
+            };
+            for (EditorPatrolTraversalMode mode : modes) {
+                const bool selected =
+                    patrolSetup_.traversalMode == mode;
+                if (ImGui::Selectable(ToString(mode), selected)) {
+                    patrolSetup_.traversalMode = mode;
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::Checkbox("Reverse", &patrolSetup_.reverse);
+
+        if (selectedRoute == nullptr) {
+            ImGui::TextColored(
+                ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
+                "No Runtime-active Spline Route is selected.");
+        }
+        if (!patrolSetup_.error.empty()) {
+            ImGui::TextColored(
+                ImVec4(1.0f, 0.35f, 0.3f, 1.0f),
+                "%s", patrolSetup_.error.c_str());
+        }
+
+        const bool canCommit =
+            context.canMutateAuthoring &&
+            context.worldMutations != nullptr &&
+            context.transactions != nullptr &&
+            owner != nullptr &&
+            selectedRoute != nullptr;
+        ImGui::BeginDisabled(!canCommit);
+        if (ImGui::Button("Create Patrol Setup")) {
+            EditorWorldMutationRequest request{};
+            request.kind = EditorWorldMutationKind::SetupPatrol;
+            request.targets = {patrolSetup_.target};
+            request.patrolSetup.routeEntityGuid =
+                patrolSetup_.routeEntityGuid;
+            request.patrolSetup.enemyType = patrolSetup_.enemyType;
+            request.patrolSetup.speed = patrolSetup_.speed;
+            request.patrolSetup.startDistance =
+                patrolSetup_.startDistance;
+            request.patrolSetup.traversalMode =
+                patrolSetup_.traversalMode;
+            request.patrolSetup.reverse = patrolSetup_.reverse;
+            const EditorWorldMutationResult result =
+                context.worldMutations->Execute(
+                    request,
+                    *context.transactions,
+                    context.canMutateAuthoring);
+            if (result.succeeded) {
+                if (context.onWorldMutated) {
+                    context.onWorldMutated(result);
+                }
+                patrolSetup_.active = false;
+                ImGui::CloseCurrentPopup();
+                committed = true;
+            } else {
+                patrolSetup_.error = result.message.empty()
+                    ? "Patrol setup failed."
+                    : result.message;
+            }
+            if (context.notifications != nullptr) {
+                context.notifications->Push(
+                    result.succeeded
+                        ? EditorNotificationSeverity::Info
+                        : EditorNotificationSeverity::Error,
+                    "Patrol Setup",
+                    result.succeeded
+                        ? "Spawn Point, Patrol, and Route reference were committed."
+                        : patrolSetup_.error);
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            patrolSetup_.active = false;
+            patrolSetup_.error.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+        return committed;
+    }
+
     static void DrawRuntimeRow(
         const char* label,
         const char* value) {
@@ -669,6 +920,30 @@ private:
                     "%s",
                     value ? "Ready" : "Not Ready");
             };
+            const auto drawOptionalBool = [](
+                const char* label,
+                bool value,
+                bool bypassedByDirectPath) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(label);
+                ImGui::TableNextColumn();
+                if (bypassedByDirectPath) {
+                    ImGui::TextColored(
+                        ImVec4{0.55f, 0.75f, 1.0f, 1.0f},
+                        "Bypassed (Direct)");
+                } else {
+                    ImGui::TextColored(
+                        value
+                            ? ImVec4{0.35f, 0.9f, 0.55f, 1.0f}
+                            : ImVec4{1.0f, 0.45f, 0.35f, 1.0f},
+                        "%s",
+                        value ? "Ready" : "Not Ready");
+                }
+            };
+            const bool directPresentation =
+                diagnostic->resolvedPath ==
+                EditorProductionMeshPresentationPath::Direct;
             drawBool("Asset Resolved", diagnostic->assetResolved);
             drawBool(
                 "Runtime Cache",
@@ -685,30 +960,38 @@ private:
             drawBool(
                 "GPU Transform",
                 diagnostic->transformReady);
-            drawBool(
+            drawOptionalBool(
                 "GPU Pipeline",
-                diagnostic->gpuPipelineReady);
-            drawBool(
+                diagnostic->gpuPipelineReady,
+                directPresentation);
+            drawOptionalBool(
                 "Visibility Dispatch",
-                diagnostic->visibilityDispatchSucceeded);
-            drawBool(
+                diagnostic->visibilityDispatchSucceeded,
+                directPresentation);
+            drawOptionalBool(
                 "Command Readback",
-                diagnostic->commandReadbackAvailable);
-            drawBool(
+                diagnostic->commandReadbackAvailable,
+                directPresentation);
+            drawOptionalBool(
                 "Command Generated",
-                diagnostic->commandGenerated);
-            drawBool(
+                diagnostic->commandGenerated,
+                directPresentation);
+            drawOptionalBool(
                 "Command Layout",
-                diagnostic->commandLayoutValidated);
-            drawBool(
+                diagnostic->commandLayoutValidated,
+                directPresentation);
+            drawOptionalBool(
                 "Hi-Z Fresh",
-                diagnostic->hiZFresh);
-            drawBool(
+                diagnostic->hiZFresh,
+                directPresentation);
+            drawOptionalBool(
                 "Batch Prepared",
-                diagnostic->batchPrepared);
-            drawBool(
+                diagnostic->batchPrepared,
+                directPresentation);
+            drawOptionalBool(
                 "Batch Submitted",
-                diagnostic->batchSubmitted);
+                diagnostic->batchSubmitted,
+                directPresentation);
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::TextUnformatted("Selected LOD");
@@ -2923,7 +3206,7 @@ private:
         return result.succeeded;
     }
 
-    static void DrawAddItem(
+    void DrawAddItem(
         const EditorDetailsSectionContext& context,
         const EditorObjectHandle& target,
         const EditorSceneEntity& entity,
@@ -2933,14 +3216,20 @@ private:
                 entity, descriptor.typeId) != nullptr;
         ImGui::BeginDisabled(exists);
         if (ImGui::MenuItem(descriptor.displayName.c_str())) {
-            ExecuteMutation(
-                context,
-                target,
-                EditorWorldMutationKind::AddComponent,
-                descriptor.typeId);
+            if (descriptor.typeId == kEditorPatrolComponentType) {
+                BeginPatrolSetup(context, target, entity);
+            } else {
+                ExecuteMutation(
+                    context,
+                    target,
+                    EditorWorldMutationKind::AddComponent,
+                    descriptor.typeId);
+            }
         }
         ImGui::EndDisabled();
     }
+
+    PatrolSetupState patrolSetup_;
 };
 
 } // namespace

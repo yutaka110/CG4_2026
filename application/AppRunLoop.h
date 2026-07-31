@@ -44,6 +44,7 @@
 #include "editor/EditorPropertyEditSession.h"
 #include "editor/EditorTransactionStack.h"
 #include "editor/EditorViewportCameraController.h"
+#include "editor/EditorPlaySessionState.h"
 #include "editor/EditorViewportAuthoringInputGuard.h"
 #include "editor/scene/EditorGameplaySpawnRuntimeFactory.h"
 #include "editor/scene/EditorBuiltInRuntimeFactoryRegistration.h"
@@ -196,7 +197,14 @@ private:
     bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
+    // The free editor camera and the possessed game-camera view must not
+    // share transform state. Ejecting may inspect a frozen runtime without
+    // mutating the camera owned by gameplay/course simulation.
     editor::EditorViewportCameraController editorViewportCamera_{};
+    editor::EditorViewportCameraController editorGameViewportCamera_{};
+    editor::EditorPlaySessionViewportMode lastEditorViewportMode_ =
+        editor::EditorPlaySessionViewportMode::EditorFree;
+    uint64_t lastEditorViewportSessionSerial_ = 0;
     AppRuntimeState& runtimeState_;
     AppSceneResources& scene_;
     AppParticleSystem& particleSystem_;

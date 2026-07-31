@@ -455,6 +455,41 @@ void EditorBuiltinCommandProvider::RegisterCommands(EditorContext& context) cons
     RegisterEditorToolCommand(
         context,
         EditorCommand{
+            "editor.toggleViewportPossession",
+            "Eject / Possess Viewport",
+            "Editor",
+            "F10",
+            [playSession, input, &commandContext]() {
+                return commandContext.developerToolsVisible &&
+                    playSession != nullptr &&
+                    playSession->IsActive() &&
+                    static_cast<bool>(input.toggleViewportPossession);
+            },
+            [playSession, input, &commandContext]() {
+                if (!commandContext.developerToolsVisible) {
+                    return std::string("Developer tools are hidden.");
+                }
+                if (playSession == nullptr) {
+                    return std::string("Play session state is unavailable.");
+                }
+                if (!playSession->IsActive()) {
+                    return std::string(
+                        "Eject/Possess is available during Play or Simulate.");
+                }
+                return input.toggleViewportPossession
+                    ? std::string()
+                    : std::string("Viewport control service is unavailable.");
+            },
+            [input]() {
+                return input.toggleViewportPossession
+                    ? input.toggleViewportPossession()
+                    : EditorCommandResult{
+                          false, "Viewport control service is unavailable."};
+            }});
+
+    RegisterEditorToolCommand(
+        context,
+        EditorCommand{
             "editor.resetRuntime",
             "Reset Runtime",
             "Editor",

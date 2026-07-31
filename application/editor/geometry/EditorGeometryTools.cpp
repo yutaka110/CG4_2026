@@ -293,6 +293,9 @@ EditorInteractiveToolDescriptor MakeDescriptor(
     descriptor.transactionPolicy = operation == GeometryToolOperation::SelectFaces
         ? EditorInteractiveToolTransactionPolicy::None
         : EditorInteractiveToolTransactionPolicy::SingleCommandOnAccept;
+    descriptor.selectionBoundary = operation == GeometryToolOperation::SelectFaces
+        ? EditorInteractiveToolSelectionBoundary::PrimaryObjectChange
+        : EditorInteractiveToolSelectionBoundary::AnySelectionChange;
     descriptor.build = [binding, operation]() {
         return std::make_unique<EditorGeometryTool>(binding, operation);
     };

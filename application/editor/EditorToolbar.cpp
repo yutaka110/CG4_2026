@@ -3,6 +3,7 @@
 #include "EditorCommandRegistry.h"
 #include "EditorContext.h"
 #include "EditorLayoutService.h"
+#include "EditorPlaySessionState.h"
 #include "EditorToolRegistration.h"
 #include "EditorTransformGizmoService.h"
 #include "documents/EditorDocumentManager.h"
@@ -73,12 +74,20 @@ std::string ToolbarLabel(
             return state.snapEnabled ? "Snap On" : "Snap Off";
         }
     }
+    if (item.commandId == "editor.toggleViewportPossession" &&
+        context.playSession != nullptr) {
+        return context.playSession->ViewportEjected() ? "Possess" : "Eject";
+    }
     return item.label;
 }
 
 bool ToolbarItemActive(
     const EditorContext& context,
     const EditorToolbarItemDescriptor& item) {
+    if (item.commandId == "editor.toggleViewportPossession") {
+        return context.playSession != nullptr &&
+            context.playSession->ViewportEjected();
+    }
     if (context.transformGizmo == nullptr) return false;
     const EditorTransformGizmoState& state = context.transformGizmo->State();
     if (item.commandId == "editor.transform.translate") {
@@ -145,10 +154,11 @@ void RegisterDefaultEditorToolbar(EditorToolRegistry& registry) {
         {"toolbar.editor.play", "editor.play", "Play", 400, false},
         {"toolbar.editor.simulate", "editor.simulate", "Sim", 410, false},
         {"toolbar.editor.stop", "editor.stop", "Stop", 420, false},
-        {"toolbar.editor.pauseRuntime", "editor.pauseRuntime", "Pause", 430, false},
+        {"toolbar.editor.pauseRuntime", "editor.pauseRuntime", "Freeze", 430, false},
         {"toolbar.editor.resumeRuntime", "editor.resumeRuntime", "Resume", 440, false},
-        {"toolbar.editor.stepRuntime", "editor.stepRuntime", "Step", 450, true},
-        {"toolbar.course.previewFreeze", "course.previewFreeze", "Freeze", 500, false},
+        {"toolbar.editor.stepRuntime", "editor.stepRuntime", "Step", 450, false},
+        {"toolbar.editor.viewportPossession", "editor.toggleViewportPossession", "Eject", 460, true},
+        {"toolbar.course.previewFreeze", "course.previewFreeze", "Course Freeze", 500, false},
         {"toolbar.course.apply", "course.apply", "Apply", 510, false},
         {"toolbar.course.reload", "course.reload", "Reload", 520, true},
         {"toolbar.editor.commandPalette", "editor.commandPalette", "Palette", 900, false},

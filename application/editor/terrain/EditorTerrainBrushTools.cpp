@@ -6,6 +6,7 @@
 #include "../world/EditorWorldObjectRecord.h"
 #include "../../course/CourseAsset.h"
 #include "../../terrain/TerrainGenerationSettings.h"
+#include "../../terrain/TerrainVolumeField.h"
 
 #include <algorithm>
 #include <array>
@@ -56,6 +57,31 @@ bool ParseFloat(std::string_view text, float& value) {
     } catch (...) {
         return false;
     }
+}
+
+float SurfaceRadialDistance(
+    const TerrainVolumeField& field,
+    const RailPath& railPath,
+    float distance,
+    float angle) {
+    const RailPathSample rail = railPath.Evaluate(distance);
+    const Vector3 surface = field.SurfacePoint(distance, angle);
+    const Vector3 delta{
+        surface.x - rail.position.x,
+        surface.y - rail.position.y,
+        surface.z - rail.position.z};
+    Vector3 radial{
+        rail.right.x * std::cos(angle) + rail.up.x * std::sin(angle),
+        rail.right.y * std::cos(angle) + rail.up.y * std::sin(angle),
+        rail.right.z * std::cos(angle) + rail.up.z * std::sin(angle)};
+    const float radialLength = std::sqrt(
+        radial.x * radial.x + radial.y * radial.y + radial.z * radial.z);
+    if (radialLength > 0.00001f) {
+        radial.x /= radialLength;
+        radial.y /= radialLength;
+        radial.z /= radialLength;
+    }
+    return delta.x * radial.x + delta.y * radial.y + delta.z * radial.z;
 }
 
 TerrainEditEvaluation EvaluateCombined(
@@ -119,6 +145,7 @@ public:
             strokeGuid_ = GenerateEditorWorldGuid();
             stamps_.clear();
             sampledHits_.clear();
+            smoothApplyCount_ = 0;
             brushSampler_.Begin(hit_.position, BrushSettings());
             flattenTarget_ = EvaluateCombined(
                 binding_->course->terrainEditLayer,
@@ -141,8 +168,22 @@ public:
             return EditorInteractiveToolAcceptResult::Failure(
                 "Terrain stroke contains no valid surface samples.");
         }
+        TerrainEditLayer beforeSnapshot = binding_->course->terrainEditLayer;
+        TerrainEditLayer afterSnapshot = beforeSnapshot;
+        std::string snapshotError;
+        if (!afterSnapshot.ApplyStroke(stamps_, &snapshotError)) {
+            return EditorInteractiveToolAcceptResult::Failure(
+                snapshotError.empty()
+                    ? "Terrain stroke snapshot could not be constructed."
+                    : snapshotError);
+        }
+        const TerrainEditDirtyRegion dirty = afterSnapshot.DirtyRegionFor(stamps_);
         auto command = std::make_shared<EditorTerrainEditUndoCommand>(
-            binding_->document.Key(), stamps_);
+            binding_->document.Key(),
+            std::move(beforeSnapshot),
+            std::move(afterSnapshot),
+            dirty,
+            stamps_);
         return EditorInteractiveToolAcceptResult::Commit(
             EditorInteractiveToolCommit{
                 std::string(ToString(operation_)) + " Terrain Stroke",
@@ -156,6 +197,7 @@ public:
         acceptRequested_ = false;
         stamps_.clear();
         sampledHits_.clear();
+        smoothApplyCount_ = 0;
         brushSampler_.Cancel();
     }
 
@@ -169,6 +211,7 @@ public:
         }
         stamps_.clear();
         sampledHits_.clear();
+        smoothApplyCount_ = 0;
         acceptRequested_ = false;
     }
 
@@ -298,6 +341,16 @@ public:
                 "Primary pointer capture and stroke sampling state."},
             {"Stroke Samples", std::to_string(stamps_.size()),
                 "One bounded stroke creates one Transaction."}};
+        if (operation_ == TerrainEditOperation::Smooth) {
+            properties.push_back({
+                "Smooth Apply Passes",
+                std::to_string(smoothApplyCount_),
+                "Each pass reads an immutable 3x3 source buffer and writes a separate destination."});
+            properties.push_back({
+                "Undo Snapshot",
+                brushSampler_.Active() || !stamps_.empty() ? "Captured" : "Pending",
+                "The full stroke commits one Before/After Terrain snapshot Transaction."});
+        }
         if (operation_ == TerrainEditOperation::Sculpt) {
             properties.push_back({"Invert", invert_ ? "true" : "false",
                 "Invert the signed radial sculpt direction.",
@@ -337,6 +390,63 @@ private:
         return EditorBrushStrokeSettings{spacing_, TerrainEditLayer::kMaxStrokeStamps};
     }
 
+    float BuildSmoothCorrection(const EditorTerrainSurfaceHit& hit) {
+        constexpr std::array<float, 9> kKernelWeights{
+            1.0f, 2.0f, 1.0f,
+            2.0f, 4.0f, 2.0f,
+            1.0f, 2.0f, 1.0f};
+        std::array<float, 9> source{};
+        std::array<float, 9> destination{};
+        const float distanceStep = radius_ * 0.5f;
+        const float angleStep =
+            radius_ * 0.5f / (std::max)(hit.surfaceRadius, 1.0f);
+        const TerrainVolumeField sourceField(
+            railPath_,
+            binding_->runtimeTerrain->settings,
+            &binding_->course->terrainEditLayer,
+            &binding_->runtimeTerrain->previewEditLayer);
+
+        std::size_t index = 0;
+        for (int angleOffset = -1; angleOffset <= 1; ++angleOffset) {
+            for (int distanceOffset = -1; distanceOffset <= 1; ++distanceOffset) {
+                const float sampleDistance = (std::max)(
+                    0.0f,
+                    hit.railDistance +
+                        static_cast<float>(distanceOffset) * distanceStep);
+                const float sampleAngle =
+                    hit.angle + static_cast<float>(angleOffset) * angleStep;
+                source[index++] = SurfaceRadialDistance(
+                    sourceField, railPath_, sampleDistance, sampleAngle);
+            }
+        }
+
+        // Immutable source and independent destination mirror the Landscape
+        // Smooth read/write split: no value written by this Apply pass can be
+        // sampled again until the next pointer Apply.
+        destination = source;
+        float filtered = 0.0f;
+        float weightSum = 0.0f;
+        for (std::size_t sample = 0; sample < source.size(); ++sample) {
+            filtered += source[sample] * kKernelWeights[sample];
+            weightSum += kKernelWeights[sample];
+        }
+        filtered /= (std::max)(weightSum, 0.0001f);
+        const auto bounds = std::minmax_element(source.begin(), source.end());
+        destination[4] = (std::clamp)(
+            std::lerp(
+                source[4],
+                filtered,
+                (std::clamp)(strength_, 0.0f, 1.0f)),
+            *bounds.first,
+            *bounds.second);
+        ++smoothApplyCount_;
+        const float maxCorrection = (std::max)(0.25f, radius_ * 0.25f);
+        return (std::clamp)(
+            destination[4] - source[4],
+            -maxCorrection,
+            maxCorrection);
+    }
+
     void AppendStamp(const EditorTerrainSurfaceHit& hit) {
         TerrainBrushStamp stamp{};
         stamp.strokeGuid = strokeGuid_;
@@ -357,23 +467,7 @@ private:
             stamp.strength = strength_ * (invert_ ? -1.0f : 1.0f);
             break;
         case TerrainEditOperation::Smooth: {
-            const float deltaDistance = radius_ * 0.5f;
-            const float deltaAngle = radius_ * 0.5f / (std::max)(hit.surfaceRadius, 1.0f);
-            const float average = (
-                EvaluateCombined(binding_->course->terrainEditLayer,
-                    binding_->runtimeTerrain->previewEditLayer,
-                    (std::max)(0.0f, hit.railDistance - deltaDistance), hit.angle).radialOffset +
-                EvaluateCombined(binding_->course->terrainEditLayer,
-                    binding_->runtimeTerrain->previewEditLayer,
-                    hit.railDistance + deltaDistance, hit.angle).radialOffset +
-                EvaluateCombined(binding_->course->terrainEditLayer,
-                    binding_->runtimeTerrain->previewEditLayer,
-                    hit.railDistance, hit.angle - deltaAngle).radialOffset +
-                EvaluateCombined(binding_->course->terrainEditLayer,
-                    binding_->runtimeTerrain->previewEditLayer,
-                    hit.railDistance, hit.angle + deltaAngle).radialOffset) * 0.25f;
-            stamp.strength = (average - current.radialOffset) *
-                (std::clamp)(strength_, 0.0f, 1.0f);
+            stamp.strength = BuildSmoothCorrection(hit);
             break;
         }
         case TerrainEditOperation::Flatten:
@@ -418,6 +512,7 @@ private:
     float spacing_ = 2.0f;
     float flattenTarget_ = 0.0f;
     uint32_t materialLayer_ = 0;
+    std::size_t smoothApplyCount_ = 0;
     bool invert_ = false;
     bool acceptRequested_ = false;
 };

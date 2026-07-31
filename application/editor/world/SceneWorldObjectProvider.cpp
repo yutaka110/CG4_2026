@@ -1,9 +1,12 @@
 #include "SceneWorldObjectProvider.h"
 #include "../EditorAssetRegistry.h"
+#include "../scene/EditorBlenderSceneImportService.h"
 #include "../scene/EditorGimmickComponent.h"
 #include "../scene/EditorGimmickEventBindingMutation.h"
 #include "../scene/EditorGimmickEventSequenceMutation.h"
+#include "../scene/EditorPatrolComponent.h"
 #include "../scene/EditorSceneComponentRegistry.h"
+#include "../scene/EditorSplineRouteComponent.h"
 
 #include <algorithm>
 #include <memory>
@@ -534,6 +537,130 @@ bool SceneWorldObjectProvider::BuildMutation(
         changed = true;
         break;
     }
+    case EditorWorldMutationKind::SetupPatrol: {
+        const auto& target = request.targets.front();
+        EditorSceneEntity* enemy = targetEntity(target);
+        if (enemy == nullptr) {
+            if (errorMessage != nullptr) {
+                *errorMessage = "Patrol setup target no longer exists.";
+            }
+            return false;
+        }
+        if (working.FindComponent(*enemy, kEditorPatrolComponentType) != nullptr) {
+            if (errorMessage != nullptr) {
+                *errorMessage = "Selected Entity already has a Patrol Component.";
+            }
+            return false;
+        }
+
+        EditorSceneEntity* route =
+            working.FindEntity(request.patrolSetup.routeEntityGuid);
+        EditorSceneComponent* routeComponent = route != nullptr
+            ? working.FindComponent(*route, kEditorSplineRouteComponentType)
+            : nullptr;
+        if (route == nullptr || routeComponent == nullptr ||
+            !routeComponent->enabled ||
+            !working.IsRuntimeActiveInHierarchy(route->guid)) {
+            if (errorMessage != nullptr) {
+                *errorMessage =
+                    "Patrol setup requires a Runtime-active Entity with an enabled Spline Route.";
+            }
+            return false;
+        }
+
+        if (request.patrolSetup.enemyType != "DRONE" &&
+            request.patrolSetup.enemyType != "TURRET" &&
+            request.patrolSetup.enemyType != "BOSS") {
+            if (errorMessage != nullptr) {
+                *errorMessage = "Patrol setup Enemy Type is invalid.";
+            }
+            return false;
+        }
+
+        EditorPatrolComponent authoredPatrol{};
+        authoredPatrol.routeEntityGuid =
+            route->guid == enemy->guid ? std::string{} : route->guid;
+        authoredPatrol.speed = request.patrolSetup.speed;
+        authoredPatrol.startDistance =
+            request.patrolSetup.startDistance;
+        authoredPatrol.traversalMode =
+            request.patrolSetup.traversalMode;
+        authoredPatrol.reverse = request.patrolSetup.reverse;
+        std::string patrolError;
+        if (!authoredPatrol.Validate(&patrolError)) {
+            if (errorMessage != nullptr) *errorMessage = patrolError;
+            return false;
+        }
+
+        EditorSceneComponent* spawn = working.FindComponent(
+            *enemy, kEditorGameplaySpawnPointComponentType);
+        if (spawn == nullptr) {
+            if (!working.AddComponent(
+                    enemy->guid,
+                    std::string(kEditorGameplaySpawnPointComponentType),
+                    nullptr,
+                    componentRegistry_)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage =
+                        "Patrol setup could not add Gameplay Spawn Point.";
+                }
+                return false;
+            }
+            enemy = working.FindEntity(target.objectGuid);
+            spawn = enemy != nullptr
+                ? working.FindComponent(
+                    *enemy, kEditorGameplaySpawnPointComponentType)
+                : nullptr;
+        }
+        if (spawn == nullptr) {
+            if (errorMessage != nullptr) {
+                *errorMessage = "Patrol setup Spawn Point is unavailable.";
+            }
+            return false;
+        }
+        const auto setProperty = [](
+            EditorSceneComponent& component,
+            std::string_view name,
+            std::string value) {
+            const auto found = std::find_if(
+                component.properties.begin(),
+                component.properties.end(),
+                [&](const EditorSceneProperty& property) {
+                    return property.name == name;
+                });
+            if (found == component.properties.end()) {
+                component.properties.push_back(
+                    {std::string(name), std::move(value)});
+            } else {
+                found->value = std::move(value);
+            }
+        };
+        spawn->enabled = true;
+        setProperty(*spawn, "kind", "ENEMY");
+        setProperty(
+            *spawn, "enemy_type", request.patrolSetup.enemyType);
+
+        const EditorSceneComponentRegistry& componentRegistry =
+            componentRegistry_ != nullptr
+            ? *componentRegistry_
+            : BuiltInEditorSceneComponentRegistry();
+        EditorSceneComponent patrol = componentRegistry.CreateDefault(
+            kEditorPatrolComponentType);
+        if (!authoredPatrol.WriteToSceneComponent(
+                patrol, &patrolError) ||
+            !working.AddComponent(enemy->guid, std::move(patrol))) {
+            if (errorMessage != nullptr) {
+                *errorMessage = patrolError.empty()
+                    ? "Patrol setup could not add Patrol Component."
+                    : patrolError;
+            }
+            return false;
+        }
+        working.Touch();
+        selection.push_back(target);
+        changed = true;
+        break;
+    }
     case EditorWorldMutationKind::SetGimmickDefinition: {
         const auto& target = request.targets.front();
         EditorSceneEntity* entity = targetEntity(target);
@@ -712,6 +839,8 @@ bool SceneWorldObjectProvider::BuildMutation(
         plan->label = "Place " + std::to_string(request.placements.size()) + " Scene Entities";
     } else if (request.kind == EditorWorldMutationKind::Create) {
         plan->label = "Place Scene Entity";
+    } else if (request.kind == EditorWorldMutationKind::SetupPatrol) {
+        plan->label = "Set Up Patrol";
     } else {
         plan->label = std::string(ToString(request.kind)) + " Scene Entity";
     }

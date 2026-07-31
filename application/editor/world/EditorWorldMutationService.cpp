@@ -123,6 +123,7 @@ bool EditorWorldMutationService::Prepare(
         request.eventBindingMutation;
     providerRequest.eventSequenceMutation =
         request.eventSequenceMutation;
+    providerRequest.patrolSetup = request.patrolSetup;
     providerRequest.value = request.value;
     std::string providerId;
     EditorDocumentId document;

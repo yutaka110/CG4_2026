@@ -7,6 +7,9 @@
 #include "EditorPatrolComponent.h"
 #include "EditorSplineRouteComponent.h"
 
+#include "../geometry/EditorGeometryMesh.h"
+#include "../mesh/EditorProductionMeshEditableSourceMetadata.h"
+
 #include <algorithm>
 #include <cmath>
 #include <locale>
@@ -46,6 +49,20 @@ EditorSceneComponentPropertyDescriptor EntityReferenceProperty(
     descriptor.entityReferenceTargetComponentType =
         std::move(targetComponentType);
     descriptor.entityReferenceDefaultsToSelf = defaultsToSelf;
+    return descriptor;
+}
+
+EditorSceneComponentPropertyDescriptor OptionalReadOnlyProperty(
+    std::string name,
+    std::string displayName,
+    std::string defaultValue = {}) {
+    EditorSceneComponentPropertyDescriptor descriptor = Property(
+        std::move(name),
+        std::move(displayName),
+        EditorScenePropertyKind::String,
+        std::move(defaultValue));
+    descriptor.required = false;
+    descriptor.readOnly = true;
     return descriptor;
 }
 
@@ -231,7 +248,10 @@ EditorSceneComponent EditorSceneComponentRegistry::CreateDefault(
     component.enabled = true;
     component.properties.reserve(descriptor->properties.size());
     for (const EditorSceneComponentPropertyDescriptor& property : descriptor->properties) {
-        if (property.kind == EditorScenePropertyKind::EntityReference) continue;
+        if (property.kind == EditorScenePropertyKind::EntityReference ||
+            !property.required) {
+            continue;
+        }
         component.properties.push_back({property.name, property.defaultValue});
     }
     return component;
@@ -356,6 +376,41 @@ EditorSceneComponentRegistry CreateBuiltInEditorSceneComponentRegistry() {
     auto mesh = Component(
         kEditorMeshRendererComponentType, "Mesh Renderer", "Rendering", 0);
     mesh.assetKind = "Mesh";
+    mesh.properties = {
+        OptionalReadOnlyProperty(
+            std::string(kEditorEditableSourceAssetGuidProperty),
+            "Editable Source Asset GUID"),
+        OptionalReadOnlyProperty(
+            std::string(kEditorEditableSourceGeometryHashProperty),
+            "Editable Source Geometry Hash"),
+    };
+    mesh.validator = [](
+        const EditorSceneComponent& component,
+        EditorSceneValidationReport& report,
+        std::string_view entityGuid) {
+        const auto metadata =
+            ReadEditorProductionMeshEditableSourceMetadata(component);
+        if (!metadata.Succeeded()) {
+            report.errors.push_back(
+                "Editable source identity is invalid on Entity " +
+                std::string(entityGuid) + ": " + metadata.message);
+            return false;
+        }
+        if (!metadata.HasIdentity()) return true;
+        const bool hasEditableGeometry = std::any_of(
+            component.properties.begin(),
+            component.properties.end(),
+            [](const EditorSceneProperty& property) {
+                return property.name == kEditorEditableGeometryProperty;
+            });
+        if (!hasEditableGeometry) {
+            report.errors.push_back(
+                "Editable source identity requires Editable Geometry on "
+                "Entity " + std::string(entityGuid) + ".");
+            return false;
+        }
+        return true;
+    };
     RegisterBuiltIn(registry, std::move(mesh));
 
     auto vfx = Component(kEditorVfxComponentType, "VFX", "Rendering", 100);

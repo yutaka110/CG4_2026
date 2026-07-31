@@ -138,6 +138,17 @@ bool TerrainEditLayer::RemoveStroke(
     return true;
 }
 
+bool TerrainEditLayer::ReplaceFromSnapshot(
+    const TerrainEditLayer& snapshot,
+    std::string* errorMessage) {
+    if (!snapshot.Validate(errorMessage)) {
+        return false;
+    }
+    stamps_ = snapshot.stamps_;
+    ++revision_;
+    return true;
+}
+
 void TerrainEditLayer::Clear() {
     if (stamps_.empty()) return;
     stamps_.clear();
@@ -146,15 +157,43 @@ void TerrainEditLayer::Clear() {
 
 TerrainEditEvaluation TerrainEditLayer::Evaluate(float distance, float angle) const noexcept {
     TerrainEditEvaluation result{};
-    for (const TerrainBrushStamp& stamp : stamps_) {
+    for (std::size_t index = 0; index < stamps_.size();) {
+        const TerrainBrushStamp& stamp = stamps_[index];
+        if (stamp.operation == TerrainEditOperation::Smooth) {
+            const std::string& strokeGuid = stamp.strokeGuid;
+            float weightedCorrection = 0.0f;
+            float accumulatedWeight = 0.0f;
+            do {
+                const TerrainBrushStamp& smoothStamp = stamps_[index];
+                const float weight = StampWeight(smoothStamp, distance, angle);
+                if (weight > 0.0f) {
+                    weightedCorrection += smoothStamp.strength * weight;
+                    accumulatedWeight += weight;
+                }
+                ++index;
+            } while (index < stamps_.size() &&
+                stamps_[index].operation == TerrainEditOperation::Smooth &&
+                stamps_[index].strokeGuid == strokeGuid);
+
+            if (accumulatedWeight > 0.0f) {
+                // A Smooth stroke is one filtered field update. Normalizing the
+                // overlapping brush basis prevents dense pointer samples from
+                // amplifying the correction beyond the immutable source pass.
+                const float coverage = (std::min)(accumulatedWeight, 1.0f);
+                result.radialOffset +=
+                    (weightedCorrection / accumulatedWeight) * coverage;
+            }
+            continue;
+        }
+
         const float weight = StampWeight(stamp, distance, angle);
-        if (weight <= 0.0f) continue;
-        if (stamp.operation == TerrainEditOperation::Paint) {
+        if (weight > 0.0f && stamp.operation == TerrainEditOperation::Paint) {
             result.paintWeights[stamp.materialLayer] +=
                 (std::max)(0.0f, stamp.strength) * weight;
-        } else {
+        } else if (weight > 0.0f) {
             result.radialOffset += stamp.strength * weight;
         }
+        ++index;
     }
     result.radialOffset = (std::clamp)(result.radialOffset, -64.0f, 64.0f);
     return result;

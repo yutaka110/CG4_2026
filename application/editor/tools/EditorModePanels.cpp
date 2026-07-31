@@ -1,5 +1,6 @@
 #include "EditorModePanels.h"
 
+#include "../../AppLogFile.h"
 #include "EditorToolManager.h"
 #include "../EditorContext.h"
 #include "../EditorNotificationCenter.h"
@@ -13,8 +14,50 @@
 #include <string>
 #include <array>
 #include <algorithm>
+#include <fstream>
+#include <iterator>
 
 namespace editor {
+
+std::size_t ResolveEditorInteractiveToolChoiceIndex(
+    const EditorInteractiveToolProperty& property) noexcept {
+    if (property.choices.empty()) return 0;
+
+    if (property.choiceValues.size() == property.choices.size()) {
+        const auto found = std::find(
+            property.choiceValues.begin(),
+            property.choiceValues.end(),
+            property.value);
+        if (found != property.choiceValues.end()) {
+            return static_cast<std::size_t>(
+                std::distance(property.choiceValues.begin(), found));
+        }
+    }
+
+    try {
+        std::size_t consumed = 0;
+        const int parsed = std::stoi(property.value, &consumed);
+        if (consumed == property.value.size()) {
+            return static_cast<std::size_t>((std::clamp)(
+                parsed,
+                0,
+                static_cast<int>(property.choices.size() - 1)));
+        }
+    } catch (...) {
+    }
+    return 0;
+}
+
+std::string SerializeEditorInteractiveToolChoice(
+    const EditorInteractiveToolProperty& property,
+    std::size_t choiceIndex) {
+    if (choiceIndex >= property.choices.size()) return {};
+    if (property.choiceValues.size() == property.choices.size()) {
+        return property.choiceValues[choiceIndex];
+    }
+    return std::to_string(choiceIndex);
+}
+
 namespace {
 
 EditorInteractiveToolEnvironment BuildEnvironment(const EditorContext& context) {
@@ -92,8 +135,18 @@ void DrawEditorModePalettePanel(EditorContext& context) {
         const bool isActive = manager.ActiveToolDescriptor() == tool;
         if (isActive) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_TabActive));
         const char* label = isActive ? "Active" : tool->label.c_str();
-        if (ImGui::Button(label, ImVec2(-1.0f, 0.0f)) && !isActive &&
-            context.transactions != nullptr) {
+        const bool clicked = ImGui::Button(label, ImVec2(-1.0f, 0.0f));
+        if (clicked) {
+            std::ofstream log = app::OpenRotatingLog("logs/editor_interactive_tools.log");
+            if (log) {
+                log << "button-clicked tool=" << tool->id
+                    << " active=" << (isActive ? "true" : "false")
+                    << " transactions="
+                    << (context.transactions != nullptr ? "ready" : "unavailable")
+                    << '\n';
+            }
+        }
+        if (clicked && !isActive && context.transactions != nullptr) {
             std::string error;
             const bool started = manager.StartTool(
                 tool->id, BuildEnvironment(context), *context.transactions, &error);
@@ -105,6 +158,18 @@ void DrawEditorModePalettePanel(EditorContext& context) {
                 ToString(tool->transactionPolicy));
         }
         ImGui::PopID();
+    }
+
+    const EditorToolManagerSnapshot snapshot = manager.Snapshot();
+    if (!snapshot.status.empty()) {
+        ImGui::Separator();
+        if (manager.HasActiveTool()) {
+            ImGui::TextWrapped("Status: %s", snapshot.status.c_str());
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("Status: %s", snapshot.status.c_str());
+            ImGui::PopStyleColor();
+        }
     }
 
     if (!manager.Registry().Diagnostics().empty()) {
@@ -182,10 +247,8 @@ void DrawEditorToolPropertiesPanel(EditorContext& context) {
                 break;
             }
             case EditorInteractiveToolPropertyEditKind::Choice: {
-                int selected = 0;
-                try { selected = std::stoi(property.value); } catch (...) {}
-                selected = (std::clamp)(
-                    selected, 0, (std::max)(0, static_cast<int>(property.choices.size()) - 1));
+                int selected = static_cast<int>(
+                    ResolveEditorInteractiveToolChoiceIndex(property));
                 const char* preview = property.choices.empty()
                     ? property.value.c_str() : property.choices[selected].c_str();
                 if (ImGui::BeginCombo("##value", preview)) {
@@ -193,7 +256,9 @@ void DrawEditorToolPropertiesPanel(EditorContext& context) {
                         const bool active = index == selected;
                         if (ImGui::Selectable(property.choices[index].c_str(), active)) {
                             selected = index;
-                            serialized = std::to_string(index);
+                            serialized = SerializeEditorInteractiveToolChoice(
+                                property,
+                                static_cast<std::size_t>(index));
                             changed = true;
                         }
                         if (active) ImGui::SetItemDefaultFocus();

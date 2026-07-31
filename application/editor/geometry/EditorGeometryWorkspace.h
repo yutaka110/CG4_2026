@@ -52,6 +52,7 @@ public:
     const EditorObjectHandle& Target() const noexcept { return target_; }
     const EditorDocumentId& Document() const noexcept { return document_; }
     const std::string& EntityGuid() const noexcept { return entityGuid_; }
+    const std::string& MeshAssetGuid() const noexcept { return meshAssetGuid_; }
 
     EditorGeometryPropertyState AuthoredState() const;
     bool SetPreview(EditorGeometryMesh mesh, std::string* errorMessage = nullptr);
@@ -77,11 +78,14 @@ private:
     EditorDocumentId document_{};
     EditorObjectHandle target_{};
     std::string entityGuid_;
+    std::string meshAssetGuid_;
     std::optional<EditorGeometryMesh> authored_;
     std::optional<EditorGeometryMesh> preview_;
     std::optional<EditorGeneratedCollision> collisionPreview_;
     std::optional<std::string> authoredGeometryText_;
     std::optional<std::string> authoredCollisionText_;
+    std::optional<std::string> authoredSourceAssetGuid_;
+    std::optional<std::string> authoredSourceGeometryHash_;
     EditorGeometryTransform transform_{};
     EditorGeometryElementMode elementMode_ = EditorGeometryElementMode::Face;
     std::vector<std::string> selectedFaces_;

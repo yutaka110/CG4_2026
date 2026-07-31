@@ -5,11 +5,13 @@
 #include "../EditorAssetSelection.h"
 #include "../EditorSelection.h"
 #include "../EditorViewportOverlay.h"
+#include "../mesh/EditorObjProductionImportBridge.h"
 #include "../scene/EditorScene.h"
 #include "../world/EditorWorldMutationService.h"
 #include "../world/SceneWorldObjectProvider.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <iomanip>
@@ -47,6 +49,17 @@ bool ParseFloat(std::string_view text, float& value) {
     }
 }
 
+std::string LowercaseExtension(const EditorAssetRecord& record) {
+    std::string extension =
+        std::filesystem::path(record.sourcePath).extension().string();
+    std::transform(
+        extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char value) {
+            return static_cast<char>(std::tolower(value));
+        });
+    return extension;
+}
+
 class EditorScenePlacementTool final : public IEditorInteractiveTool {
 public:
     EditorScenePlacementTool(EditorPlacementToolServices services, PlacementToolKind kind)
@@ -70,43 +83,7 @@ public:
             return false;
         }
         if (kind_ != PlacementToolKind::EmptyEntity) {
-            if (services_.assets == nullptr || services_.assetSelection == nullptr ||
-                services_.assetSelection->Primary() == nullptr) {
-                outError = "Select a referenceable Asset before starting placement.";
-                return false;
-            }
-            const EditorAssetHandleResolveResult resolved = ResolveEditorAssetHandle(
-                *services_.assets, *services_.assetSelection->Primary());
-            if (resolved.record == nullptr || resolved.record->missing ||
-                !resolved.record->referenceable || resolved.record->guid.empty()) {
-                outError = "Selected Asset is missing or cannot be referenced by a Scene Entity.";
-                return false;
-            }
-            if (resolved.record->kind == EditorAssetKind::Mesh) {
-                const std::string extension =
-                    std::filesystem::path(resolved.record->sourcePath)
-                        .extension()
-                        .string();
-                if (!resolved.record->hasMetadata ||
-                    resolved.record->provisionalGuid ||
-                    !IsDurableEditorAssetGuid(resolved.record->guid) ||
-                    extension != ".mesh") {
-                    outError =
-                        "Selected Mesh is a source-only Asset. Use Content Browser "
-                        "\"Import & Bake OBJ\" and place the generated Production "
-                        ".mesh Asset.";
-                    return false;
-                }
-            }
-            assetGuid_ = resolved.record->guid;
-            assetType_ = ToString(resolved.record->kind);
-            if (EditorSceneComponentTypeForAssetKind(assetType_).empty()) {
-                outError = "Selected Asset type is not supported by Scene Placement.";
-                return false;
-            }
-            sourceLabel_ = resolved.record->displayName.empty()
-                ? resolved.record->logicalPath : resolved.record->displayName;
-            baseName_ = sourceLabel_.empty() ? "Placed Asset" : sourceLabel_;
+            if (!BindSelectedAsset(outError)) return false;
         } else {
             sourceLabel_ = "Empty Entity";
             baseName_ = "Entity";
@@ -120,6 +97,7 @@ public:
         const EditorInteractiveToolFrameInput& input) override {
         coordinates_ = environment.coordinates;
         preview_ = {};
+        if (!RefreshSelectedAssetBinding()) return;
         if (coordinates_ != nullptr) {
             preview_ = query_.QueryDisplay(
                 *coordinates_, input.mouseX, input.mouseY, querySettings_);
@@ -145,6 +123,13 @@ public:
 
     EditorInteractiveToolAcceptResult BuildAccept(
         const EditorInteractiveToolEnvironment&) override {
+        if (kind_ != PlacementToolKind::EmptyEntity &&
+            (!assetBindingError_.empty() || assetGuid_.empty())) {
+            return EditorInteractiveToolAcceptResult::Failure(
+                assetBindingError_.empty()
+                    ? "Select a supported Asset before placement."
+                    : assetBindingError_);
+        }
         std::vector<Vector3> points;
         if (kind_ == PlacementToolKind::SelectedAssetBrush) {
             points = stroke_.Samples();
@@ -276,6 +261,9 @@ public:
     }
 
     std::string ViewportHint() const override {
+        if (!assetBindingError_.empty()) {
+            return "Scene Placement unavailable: " + assetBindingError_;
+        }
         if (kind_ == PlacementToolKind::SelectedAssetBrush) {
             return "Placement Brush: drag in Viewport; release commits one Transaction; Esc cancels";
         }
@@ -284,7 +272,10 @@ public:
 
     std::vector<EditorInteractiveToolProperty> Properties() const override {
         std::vector<EditorInteractiveToolProperty> properties{
-            {"Source", sourceLabel_, "Durable Asset GUID source."},
+            {"Source", sourceLabel_.empty() ? "None" : sourceLabel_,
+                assetBindingError_.empty()
+                    ? "Durable Asset GUID source. Content Browser selection changes rebind this active tool."
+                    : assetBindingError_},
             {"Entity Name", baseName_, "Name base for placed Entities.",
                 EditorInteractiveToolPropertyEditKind::Text},
             {"Grid Snap", querySettings_.gridSnapEnabled ? "true" : "false",
@@ -319,6 +310,146 @@ public:
     }
 
 private:
+    bool BindSelectedAsset(std::string& outError) {
+        if (services_.assets == nullptr || services_.assetSelection == nullptr ||
+            services_.assetSelection->Primary() == nullptr) {
+            outError = "Select a referenceable Asset before starting placement.";
+            return false;
+        }
+
+        const EditorAssetHandleResolveResult resolved = ResolveEditorAssetHandle(
+            *services_.assets, *services_.assetSelection->Primary());
+        if (resolved.record == nullptr || resolved.record->missing ||
+            !resolved.record->referenceable || resolved.record->guid.empty()) {
+            outError =
+                "Selected Asset is missing or cannot be referenced by a Scene Entity.";
+            return false;
+        }
+
+        EditorAssetRecord placementRecord = *resolved.record;
+        if (placementRecord.kind == EditorAssetKind::Mesh &&
+            EditorObjProductionImportBridge::CanImport(placementRecord)) {
+            const std::string outputId =
+                EditorObjProductionImportBridge::DefaultOutputAssetName(
+                    placementRecord);
+            const EditorAssetRecord* existing =
+                services_.assets->Find(EditorAssetKind::Mesh, outputId);
+            if (existing != nullptr &&
+                EditorObjProductionImportBridge::IsProductionForSource(
+                    *existing,
+                    placementRecord)) {
+                placementRecord = *existing;
+                services_.assetSelection->SetPrimary(
+                    MakeEditorAssetHandle(
+                        placementRecord, services_.assets->Revision()));
+                if (services_.onAssetPrepared) {
+                    services_.onAssetPrepared(
+                        "Resolved source Mesh to existing Production Asset '" +
+                        placementRecord.id + "'.");
+                }
+            } else {
+                EditorObjProductionImportBridge bridge(
+                    *services_.assets,
+                    services_.productionMeshCache,
+                    std::filesystem::current_path());
+                EditorObjProductionImportRequest request{};
+                request.sourceAssetGuid = placementRecord.guid;
+                request.outputAssetName = outputId;
+                const EditorObjProductionImportResult imported =
+                    bridge.ImportAndBake(request);
+                if (!imported.succeeded) {
+                    outError = imported.message.empty()
+                        ? "Source Mesh could not be prepared for placement."
+                        : imported.message;
+                    return false;
+                }
+                placementRecord = imported.record;
+                services_.assetSelection->SetPrimary(
+                    MakeEditorAssetHandle(
+                        placementRecord, services_.assets->Revision()));
+                if (services_.onAssetPrepared) {
+                    services_.onAssetPrepared(imported.message);
+                }
+            }
+        }
+
+        if (placementRecord.kind == EditorAssetKind::Mesh) {
+            const std::string extension = LowercaseExtension(placementRecord);
+            if (!placementRecord.hasMetadata ||
+                placementRecord.provisionalGuid ||
+                !IsDurableEditorAssetGuid(placementRecord.guid) ||
+                extension != ".mesh") {
+                outError =
+                    "Selected Mesh source is not supported for Production "
+                    "placement. Select an OBJ, glTF, GLB, FBX, or Production "
+                    ".mesh Asset.";
+                return false;
+            }
+            if (services_.productionMeshCache != nullptr) {
+                std::string cacheError;
+                if (!services_.productionMeshCache->Load(
+                        placementRecord, &cacheError)) {
+                    outError = cacheError.empty()
+                        ? "Production Mesh could not be loaded for placement."
+                        : cacheError;
+                    return false;
+                }
+            }
+        }
+
+        const std::string assetType = ToString(placementRecord.kind);
+        if (EditorSceneComponentTypeForAssetKind(assetType).empty()) {
+            outError = "Selected Asset type is not supported by Scene Placement.";
+            return false;
+        }
+
+        assetGuid_ = placementRecord.guid;
+        assetType_ = assetType;
+        sourceLabel_ = placementRecord.displayName.empty()
+            ? placementRecord.logicalPath
+            : placementRecord.displayName;
+        baseName_ = sourceLabel_.empty() ? "Placed Asset" : sourceLabel_;
+        assetBindingError_.clear();
+        assetSelectionRevision_ = services_.assetSelection->Revision();
+        return true;
+    }
+
+    bool RefreshSelectedAssetBinding() {
+        if (kind_ == PlacementToolKind::EmptyEntity) return true;
+        if (services_.assetSelection == nullptr) {
+            assetBindingError_ = "Asset Selection service is unavailable.";
+            return false;
+        }
+        if (assetSelectionRevision_ == services_.assetSelection->Revision()) {
+            return assetBindingError_.empty() && !assetGuid_.empty();
+        }
+
+        acceptRequested_ = false;
+        preview_ = {};
+        stroke_.Cancel();
+        prepared_ = {};
+        singlePosition_ = {};
+        assetGuid_.clear();
+        assetType_.clear();
+        sourceLabel_.clear();
+
+        std::string error;
+        if (!BindSelectedAsset(error)) {
+            const EditorAssetHandle* selected = services_.assetSelection->Primary();
+            if (selected != nullptr) {
+                sourceLabel_ = selected->displayName.empty()
+                    ? selected->logicalPath
+                    : selected->displayName;
+            }
+            assetBindingError_ = error.empty()
+                ? "Selected Asset could not be bound for placement."
+                : std::move(error);
+            assetSelectionRevision_ = services_.assetSelection->Revision();
+            return false;
+        }
+        return true;
+    }
+
     EditorPlacementToolServices services_{};
     PlacementToolKind kind_ = PlacementToolKind::EmptyEntity;
     EditorPlacementQueryService query_{};
@@ -332,7 +463,9 @@ private:
     std::string assetGuid_;
     std::string assetType_;
     std::string sourceLabel_;
+    std::string assetBindingError_;
     std::string baseName_ = "Entity";
+    uint32_t assetSelectionRevision_ = 0;
     float rotationY_ = 0.0f;
     float uniformScale_ = 1.0f;
     bool acceptRequested_ = false;

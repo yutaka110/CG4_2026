@@ -41,6 +41,9 @@ struct EditorSceneComponentPropertyDescriptor {
     // An empty reference resolves to the owning Entity. This is useful for
     // Components such as Patrol that commonly consume a sibling Component.
     bool entityReferenceDefaultsToSelf = false;
+    // Read-only properties are authored by a dedicated mutation/service and
+    // are exposed by generic Details only for diagnostics.
+    bool readOnly = false;
 };
 
 struct EditorSceneComponentDescriptor {

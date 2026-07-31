@@ -19,6 +19,11 @@ struct EditorModeDescriptor {
     int sortOrder = 0;
 };
 
+enum class EditorInteractiveToolSelectionBoundary {
+    AnySelectionChange,
+    PrimaryObjectChange,
+};
+
 struct EditorInteractiveToolDescriptor {
     std::string id;
     std::string modeId;
@@ -34,6 +39,8 @@ struct EditorInteractiveToolDescriptor {
     EditorInteractiveToolTransactionPolicy transactionPolicy =
         EditorInteractiveToolTransactionPolicy::SingleCommandOnAccept;
     std::function<std::unique_ptr<IEditorInteractiveTool>()> build;
+    EditorInteractiveToolSelectionBoundary selectionBoundary =
+        EditorInteractiveToolSelectionBoundary::AnySelectionChange;
 };
 
 enum class EditorModeRegistryDiagnosticSeverity {

@@ -536,7 +536,7 @@ public:
             operation_ == SplineEditOperation::Move ? "MOVE" :
             operation_ == SplineEditOperation::Add ? "ADD" :
             "DELETE";
-        return {
+        std::vector<EditorInteractiveToolProperty> properties{
             {"Operation", operation,
              "Choose point interaction mode.",
              EditorInteractiveToolPropertyEditKind::Choice,
@@ -563,6 +563,9 @@ public:
                 : "None",
              "Nearest control point under the cursor."},
         };
+        properties[0].choiceValues = {"MOVE", "ADD", "DELETE"};
+        properties[1].choiceValues = {"XZ", "XY", "YZ"};
+        return properties;
     }
 
 private:

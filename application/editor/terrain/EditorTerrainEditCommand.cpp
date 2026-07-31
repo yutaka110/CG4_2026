@@ -51,10 +51,40 @@ EditorUndoResult EditorTerrainEditExecutionService::ApplyTerrainStroke(
             ? "Terrain stroke applied." : "Terrain stroke removed.");
 }
 
+EditorUndoResult EditorTerrainEditExecutionService::ApplyTerrainSnapshot(
+    std::string_view documentKey,
+    const TerrainEditLayer& snapshot,
+    const TerrainEditDirtyRegion& dirty,
+    EditorTransactionApplyMode mode) {
+    if (layer_ == nullptr || documentKey.empty() || documentKey != documentKey_) {
+        return EditorUndoResult::Failure(
+            EditorErrorCode::MissingService,
+            "Active Course Terrain Edit Layer does not match the command document.");
+    }
+    std::string error;
+    if (!layer_->ReplaceFromSnapshot(snapshot, &error)) {
+        return EditorUndoResult::Failure(
+            EditorErrorCode::ApplyFailed,
+            error.empty() ? "Terrain snapshot could not be restored." : error);
+    }
+    if (onChanged_) onChanged_(dirty);
+    return EditorUndoResult::Success(
+        mode == EditorTransactionApplyMode::Redo
+            ? "Terrain stroke snapshot applied."
+            : "Terrain stroke snapshot restored.");
+}
+
 EditorTerrainEditUndoCommand::EditorTerrainEditUndoCommand(
     std::string documentKey,
+    TerrainEditLayer beforeSnapshot,
+    TerrainEditLayer afterSnapshot,
+    TerrainEditDirtyRegion dirty,
     std::vector<TerrainBrushStamp> stamps)
-    : documentKey_(std::move(documentKey)), stamps_(std::move(stamps)) {}
+    : documentKey_(std::move(documentKey)),
+      beforeSnapshot_(std::move(beforeSnapshot)),
+      afterSnapshot_(std::move(afterSnapshot)),
+      dirty_(dirty),
+      stamps_(std::move(stamps)) {}
 
 EditorUndoResult EditorTerrainEditUndoCommand::Apply(
     EditorTransactionApplyMode mode,
@@ -67,15 +97,26 @@ EditorUndoResult EditorTerrainEditUndoCommand::Apply(
             EditorErrorCode::MissingService,
             "Terrain edit execution service is unavailable.");
     }
-    return service->ApplyTerrainStroke(documentKey_, stamps_, mode);
+    return service->ApplyTerrainSnapshot(
+        documentKey_,
+        mode == EditorTransactionApplyMode::Redo
+            ? afterSnapshot_
+            : beforeSnapshot_,
+        dirty_,
+        mode);
 }
 
 std::size_t EditorTerrainEditUndoCommand::EstimatedBytes() const noexcept {
     std::size_t bytes = sizeof(EditorTerrainEditUndoCommand) + documentKey_.capacity();
-    bytes += stamps_.capacity() * sizeof(TerrainBrushStamp);
-    for (const TerrainBrushStamp& stamp : stamps_) {
-        bytes += stamp.strokeGuid.capacity() + stamp.stampGuid.capacity();
-    }
+    const auto addStamps = [&bytes](const std::vector<TerrainBrushStamp>& values) {
+        bytes += values.capacity() * sizeof(TerrainBrushStamp);
+        for (const TerrainBrushStamp& stamp : values) {
+            bytes += stamp.strokeGuid.capacity() + stamp.stampGuid.capacity();
+        }
+    };
+    addStamps(beforeSnapshot_.Stamps());
+    addStamps(afterSnapshot_.Stamps());
+    addStamps(stamps_);
     return bytes;
 }
 

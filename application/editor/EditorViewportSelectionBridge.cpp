@@ -42,6 +42,16 @@ void EditorViewportSelectionBridge::Sync(const EditorViewportSelectionBridgeInpu
         input.pickResults != nullptr ? static_cast<uint32_t>(input.pickResults->size()) : 0;
 
     const uint64_t signature = PickSignature(input.pickResults);
+    if (input.viewportInteraction != nullptr &&
+        input.viewportInteraction->State().interactiveToolActive) {
+        // An interactive viewport tool owns primary-pointer interpretation. Keep
+        // the top-level object selection locked while tools edit sub-elements
+        // such as faces or spline points. Outliner-driven selection changes still
+        // update EditorSelection directly and remain visible to Tool Manager.
+        pickSignatureInitialized_ = true;
+        lastPickSignature_ = signature;
+        return;
+    }
     if (suppressNextRequest_) {
         suppressNextRequest_ = false;
         pickSignatureInitialized_ = true;

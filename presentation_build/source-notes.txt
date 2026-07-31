@@ -1,0 +1,24 @@
+Deck purpose: job-application quality explanation of the CG4 editor's Terrain,
+Production Mesh Sync, and Asset Placement features.
+
+Internal visual sources:
+- .codex/video_frames_capture10/frame_00_0.png
+- .codex/slide_build/editor_terrain_mode.png
+- .codex/slide_build/editor_modeling_mode.png
+- .codex/slide_build/editor_place_mode.png
+
+Internal technical sources:
+- docs/EditorCoreDesign.md, especially Production Placement, Terrain, Geometry,
+  Mesh Bake, and Scene Instance pipeline sections.
+- docs/EditorEvolutionDesign.md, E-2 through E-5 implementation results.
+- application/terrain/TerrainEditLayer.cpp
+- application/editor/terrain/EditorTerrainBrushTools.cpp
+- application/editor/mesh/EditorCreateEditableCopyTool.cpp
+- application/editor/mesh/EditorMeshBakePipeline.cpp
+- application/editor/mesh/EditorProductionMeshAsset.cpp
+- application/editor/EditorBuiltinDetailsSectionProviders.cpp
+- application/editor/scene/EditorSceneComponentRegistry.cpp
+- application/AppImGuiLayer.cpp
+- Resources/Generated/Imported/ball_production.mesh.meta
+
+No external web claims or external visual assets were used.

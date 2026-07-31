@@ -89,6 +89,7 @@ EditorCommandResult UndoEditorTransaction(
     EditorGameplayVisualScriptService* gameplayVisualScripts,
     EditorProductionAiAuthoringPipeline* aiAuthoring,
     EditorProductionNavigationAuthoringPipeline* navigationAuthoring,
+    EditorExecutionContext* interactiveExecution,
     IEditorBlenderSceneImportExecutionService* blenderSceneImportExecution) {
     const EditorTransactionRecord* next =
         transactions != nullptr ? transactions->NextUndoTransaction() : nullptr;
@@ -101,7 +102,23 @@ EditorCommandResult UndoEditorTransaction(
             next->command->DomainId() == "gameplay-visual-script" ||
             next->command->DomainId() == "ai-authoring" ||
             next->command->DomainId() == "navigation-authoring" ||
+            next->command->DomainId() == "terrain.edit" ||
             next->command->DomainId() == "blender-scene-import")) {
+        const bool terrainCommand = next->command->DomainId() == "terrain.edit";
+        if (terrainCommand) {
+            if (interactiveExecution == nullptr) {
+                return EditorCommandResult{
+                    false, "Terrain edit execution context is unavailable."};
+            }
+            EditorError error;
+            const bool applied = transactions->Undo(*interactiveExecution, &error);
+            if (!applied && notifications != nullptr) {
+                notifications->Push(
+                    EditorNotificationSeverity::Error, "Transaction", error.message);
+            }
+            return EditorCommandResult{
+                applied, applied ? "Terrain stroke undo completed." : error.message};
+        }
         const bool assetCommand = next->command->DomainId() == "asset";
         const bool worldCommand = next->command->DomainId() == "world";
         const bool sequencerCommand = next->command->DomainId() == "sequencer";
@@ -205,6 +222,7 @@ EditorCommandResult RedoEditorTransaction(
     EditorGameplayVisualScriptService* gameplayVisualScripts,
     EditorProductionAiAuthoringPipeline* aiAuthoring,
     EditorProductionNavigationAuthoringPipeline* navigationAuthoring,
+    EditorExecutionContext* interactiveExecution,
     IEditorBlenderSceneImportExecutionService* blenderSceneImportExecution) {
     const EditorTransactionRecord* next =
         transactions != nullptr ? transactions->NextRedoTransaction() : nullptr;
@@ -217,7 +235,23 @@ EditorCommandResult RedoEditorTransaction(
             next->command->DomainId() == "gameplay-visual-script" ||
             next->command->DomainId() == "ai-authoring" ||
             next->command->DomainId() == "navigation-authoring" ||
+            next->command->DomainId() == "terrain.edit" ||
             next->command->DomainId() == "blender-scene-import")) {
+        const bool terrainCommand = next->command->DomainId() == "terrain.edit";
+        if (terrainCommand) {
+            if (interactiveExecution == nullptr) {
+                return EditorCommandResult{
+                    false, "Terrain edit execution context is unavailable."};
+            }
+            EditorError error;
+            const bool applied = transactions->Redo(*interactiveExecution, &error);
+            if (!applied && notifications != nullptr) {
+                notifications->Push(
+                    EditorNotificationSeverity::Error, "Transaction", error.message);
+            }
+            return EditorCommandResult{
+                applied, applied ? "Terrain stroke redo completed." : error.message};
+        }
         const bool assetCommand = next->command->DomainId() == "asset";
         const bool worldCommand = next->command->DomainId() == "world";
         const bool sequencerCommand = next->command->DomainId() == "sequencer";
@@ -626,7 +660,7 @@ void RegisterAppEditorCommandToolModules(
                 EditorPlaySessionIsolationSnapshot& playSessionSnapshot = *input.playSessionSnapshot;
                 EditorBuiltinCommandProvider builtinProvider(
                     EditorBuiltinCommandProviderInput{
-                        [&context,
+                        .undo = [&context,
                          &runtimeState,
                          &runtimeAuthoringApply,
                          transactions = editorContext.transactions,
@@ -643,6 +677,7 @@ void RegisterAppEditorCommandToolModules(
                          gameplayVisualScripts = editorContext.gameplayVisualScripts,
                          aiAuthoring = editorContext.aiAuthoring,
                          navigationAuthoring = editorContext.navigationAuthoring,
+                         interactiveExecution = editorContext.interactiveExecution,
                          blenderSceneImportExecution =
                              editorContext.blenderSceneImportExecution]() {
                             return UndoEditorTransaction(
@@ -662,9 +697,10 @@ void RegisterAppEditorCommandToolModules(
                                 gameplayVisualScripts,
                                 aiAuthoring,
                                 navigationAuthoring,
+                                interactiveExecution,
                                 blenderSceneImportExecution);
                         },
-                        [&context,
+                        .redo = [&context,
                          &runtimeState,
                          &runtimeAuthoringApply,
                          transactions = editorContext.transactions,
@@ -681,6 +717,7 @@ void RegisterAppEditorCommandToolModules(
                          gameplayVisualScripts = editorContext.gameplayVisualScripts,
                          aiAuthoring = editorContext.aiAuthoring,
                          navigationAuthoring = editorContext.navigationAuthoring,
+                         interactiveExecution = editorContext.interactiveExecution,
                          blenderSceneImportExecution =
                              editorContext.blenderSceneImportExecution]() {
                             return RedoEditorTransaction(
@@ -700,9 +737,10 @@ void RegisterAppEditorCommandToolModules(
                                 gameplayVisualScripts,
                                 aiAuthoring,
                                 navigationAuthoring,
+                                interactiveExecution,
                                 blenderSceneImportExecution);
                         },
-                        [&context,
+                        .beginPlaySession = [&context,
                          &runtimeState,
                          &playSessionLifecycle,
                          &playSessionSnapshot,
@@ -742,7 +780,7 @@ void RegisterAppEditorCommandToolModules(
                             }
                             return EditorCommandResult{result.succeeded, result.message};
                         },
-                        [&context,
+                        .stopPlaySession = [&context,
                          &runtimeState,
                          &playSessionLifecycle,
                          &playSessionSnapshot,
@@ -764,7 +802,7 @@ void RegisterAppEditorCommandToolModules(
                             }
                             return EditorCommandResult{result.succeeded, result.message};
                         },
-                        [&context,
+                        .pauseRuntime = [&context,
                          &runtimeState,
                          &playSessionRuntimeControl,
                          &playSessionSnapshot,
@@ -783,7 +821,7 @@ void RegisterAppEditorCommandToolModules(
                                         context.postProcessStack});
                             return EditorCommandResult{result.succeeded, result.message};
                         },
-                        [&context,
+                        .resumeRuntime = [&context,
                          &runtimeState,
                          &playSessionRuntimeControl,
                          &playSessionSnapshot,
@@ -802,7 +840,7 @@ void RegisterAppEditorCommandToolModules(
                                         context.postProcessStack});
                             return EditorCommandResult{result.succeeded, result.message};
                         },
-                        [&context,
+                        .stepRuntime = [&context,
                          &runtimeState,
                          &playSessionRuntimeControl,
                          &playSessionSnapshot,
@@ -821,7 +859,33 @@ void RegisterAppEditorCommandToolModules(
                                         context.postProcessStack});
                             return EditorCommandResult{result.succeeded, result.message};
                         },
-                        [&context,
+                        .toggleViewportPossession = [&context,
+                         &runtimeState,
+                         &playSessionRuntimeControl,
+                         &playSessionSnapshot,
+                         playSession = editorContext.playSession,
+                         notifications = editorContext.notifications]() {
+                            if (playSession == nullptr) {
+                                return EditorCommandResult{
+                                    false, "Play session state is unavailable."};
+                            }
+                            const EditorPlaySessionRuntimeControlRequest request{
+                                playSession,
+                                &playSessionSnapshot,
+                                context.course,
+                                &runtimeState,
+                                notifications,
+                                "editor.command.viewportControl",
+                                context.effectRuntime,
+                                context.postProcessStack};
+                            const EditorPlaySessionRuntimeControlResult result =
+                                playSession->ViewportPossessed()
+                                    ? playSessionRuntimeControl.Eject(request)
+                                    : playSessionRuntimeControl.Possess(request);
+                            return EditorCommandResult{
+                                result.succeeded, result.message};
+                        },
+                        .resetRuntime = [&context,
                          &runtimeState,
                          &playSessionRuntimeControl,
                          &playSessionSnapshot,
@@ -843,7 +907,7 @@ void RegisterAppEditorCommandToolModules(
                             }
                             return EditorCommandResult{result.succeeded, result.message};
                         },
-                        [&context,
+                        .applyRuntimeChanges = [&context,
                          &runtimeState,
                          &runtimeAuthoringApply,
                          &playSessionSnapshot,
@@ -903,14 +967,14 @@ void RegisterAppEditorCommandToolModules(
                                     ? std::string("Runtime apply confirmation requested.")
                                     : std::string("Runtime apply confirmation is already pending.")};
                         },
-                        [&runtimeState](EditorTransformGizmoMode mode) {
+                        .setTransformMode = [&runtimeState](EditorTransformGizmoMode mode) {
                             runtimeState.terrain.courseObjectGizmoMode =
                                 ToCourseGizmoMode(mode);
                             runtimeState.terrain.courseObjectActiveAxis = -1;
                             return EditorCommandResult{
                                 true, std::string("Transform mode: ") + ToString(mode) + "."};
                         },
-                        [&runtimeState]() {
+                        .toggleTransformSpace = [&runtimeState]() {
                             runtimeState.terrain.courseObjectGizmoSpace =
                                 runtimeState.terrain.courseObjectGizmoSpace == 0 ? 1 : 0;
                             return EditorCommandResult{
@@ -920,7 +984,7 @@ void RegisterAppEditorCommandToolModules(
                                          ? "World."
                                          : "Local.")};
                         },
-                        [&runtimeState]() {
+                        .toggleTransformSnap = [&runtimeState]() {
                             runtimeState.terrain.courseObjectSnapEnabled =
                                 !runtimeState.terrain.courseObjectSnapEnabled;
                             return EditorCommandResult{

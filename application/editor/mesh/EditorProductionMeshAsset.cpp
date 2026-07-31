@@ -497,7 +497,15 @@ bool EditorProductionMeshAssetDocument::Deserialize(
     }
     std::istringstream stream{std::string(input)};
     std::string line;
-    if (!std::getline(stream, line) || line != "CGMESH|1") {
+    const auto stripCarriageReturn = [](std::string& value) {
+        if (!value.empty() && value.back() == '\r') value.pop_back();
+    };
+    if (!std::getline(stream, line)) {
+        SetError(errorMessage, "Production Mesh source header is unsupported.");
+        return false;
+    }
+    stripCarriageReturn(line);
+    if (line != "CGMESH|1") {
         SetError(errorMessage, "Production Mesh source header is unsupported.");
         return false;
     }
@@ -505,6 +513,7 @@ bool EditorProductionMeshAssetDocument::Deserialize(
     bool hasGuid = false, hasId = false, hasHash = false, hasLodCount = false;
     bool hasRatios = false, hasCollision = false, hasGeometry = false;
     while (std::getline(stream, line)) {
+        stripCarriageReturn(line);
         const std::size_t separator = line.find('=');
         if (separator == std::string::npos) continue;
         const std::string_view key(line.data(), separator);

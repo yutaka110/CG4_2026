@@ -617,6 +617,9 @@
     <ClCompile Include="application\editor\geometry\EditorGeometryWorkspace.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\geometry\EditorGeometryTools.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\mesh\EditorProductionMeshAsset.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\mesh\EditorProductionMeshEditableSourceLoader.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\mesh\EditorProductionMeshEditableSourceMetadata.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\mesh\EditorCreateEditableCopyTool.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\scene\EditorBlenderSceneImportService.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\scene\EditorBlenderSceneImportCommandProvider.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\scene\EditorBlenderSceneImportTransaction.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
@@ -1796,6 +1799,9 @@
     <ClInclude Include="application\editor\geometry\EditorGeometryWorkspace.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\geometry\EditorGeometryTools.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\mesh\EditorProductionMeshAsset.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\mesh\EditorProductionMeshEditableSourceLoader.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\mesh\EditorProductionMeshEditableSourceMetadata.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\mesh\EditorCreateEditableCopyTool.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\scene\EditorBlenderSceneImportService.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\scene\EditorBlenderSceneImportCommandProvider.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\scene\EditorBlenderSceneImportTransaction.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>

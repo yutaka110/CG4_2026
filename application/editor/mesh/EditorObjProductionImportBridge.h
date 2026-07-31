@@ -39,6 +39,10 @@ public:
 
     static bool CanImport(const EditorAssetRecord& source);
     static std::string DefaultOutputAssetName(const EditorAssetRecord& source);
+    static bool IsProductionForSource(
+        const EditorAssetRecord& production,
+        const EditorAssetRecord& source,
+        const std::filesystem::path& projectRoot = std::filesystem::current_path());
 
     EditorObjProductionImportResult ImportAndBake(
         const EditorObjProductionImportRequest& request);

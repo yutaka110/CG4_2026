@@ -598,13 +598,13 @@ void DrawProductionImportControls(
         ImGui::SetTooltip("Reimports the selected asset while preserving its GUID.");
     }
 
-    const bool canBakeObj =
+    const bool canBakeSourceMesh =
         selectedRecord != nullptr &&
         EditorObjProductionImportBridge::CanImport(*selectedRecord);
-    if (!canBakeObj) {
+    if (!canBakeSourceMesh) {
         ImGui::BeginDisabled();
     }
-    if (ImGui::SmallButton("Import & Bake OBJ")) {
+    if (ImGui::SmallButton("Import & Bake Mesh")) {
         EditorObjProductionImportBridge bridge(
             registry,
             runtimeCache,
@@ -622,7 +622,7 @@ void DrawProductionImportControls(
                 result.succeeded
                     ? EditorNotificationSeverity::Info
                     : EditorNotificationSeverity::Error,
-                "OBJ Production Import",
+                "Mesh Production Import",
                 result.message);
         }
         if (result.succeeded) {
@@ -637,12 +637,12 @@ void DrawProductionImportControls(
             }
         }
     }
-    if (!canBakeObj) {
+    if (!canBakeSourceMesh) {
         ImGui::EndDisabled();
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
-            "Converts the selected OBJ into a durable Production .mesh, "
+            "Converts the selected OBJ, glTF, GLB, or FBX into a durable Production .mesh, "
             "cooks Renderer LODs and Collision, then selects the result.");
     }
     if (!lastObjBakeSummary.empty()) {
@@ -1453,6 +1453,10 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
             continue;
         }
         const EditorAssetRecord& record = *recordPtr;
+        const std::string rowIdentity = !record.guid.empty()
+            ? record.guid
+            : record.logicalPath;
+        ImGui::PushID(rowIdentity.c_str());
 
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
@@ -1547,6 +1551,7 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
         }
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(record.sourcePath.c_str());
+        ImGui::PopID();
     }
 
     ImGui::EndTable();

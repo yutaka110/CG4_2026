@@ -5117,6 +5117,78 @@ void AppRunLoop::UpdateRailShooterFrame() {
     runtimeState_.cameraWorldPosition = cameraPosition;
     scene_.UpdateCameraWorldPosition(cameraPosition);
 
+    // Rail Shooter owns its gameplay camera independently from the generic
+    // VFX-preview camera path. When the editor Ejects (or freezes a course
+    // preview without a Play session), replace only the viewport presentation
+    // camera. The RailCameraDirector transform above remains the authoritative
+    // gameplay camera and is restored immediately by Possess.
+    if (imguiLayer_.IsEnabled()) {
+        const editor::EditorPlaySessionState& playSession =
+            imguiLayer_.EditorPlaySession();
+        const editor::EditorPlaySessionViewportMode viewportMode =
+            playSession.ViewportMode();
+        const bool activeSession = playSession.IsActive();
+        const bool useEditorInspectionCamera =
+            (activeSession && playSession.UsesEditorFreeCamera()) ||
+            (!activeSession && runtimeState_.terrain.freezeCourseRuntime);
+        const bool viewportModeChanged =
+            viewportMode != lastEditorViewportMode_ ||
+            playSession.SessionSerial() != lastEditorViewportSessionSerial_;
+
+        if (useEditorInspectionCamera) {
+            editor::EditorViewportCameraSettings cameraSettings{};
+            cameraSettings.moveSpeed =
+                (std::max)(0.0f, runtimeState_.camera.debugMoveSpeed) * 60.0f;
+            cameraSettings.rotationSensitivity =
+                (std::max)(0.0f, runtimeState_.camera.debugRotateSpeed) * 0.15f;
+            cameraSettings.fastMoveMultiplier =
+                runtimeState_.camera.debugFastMoveMultiplier;
+            cameraSettings.slowMoveMultiplier =
+                runtimeState_.camera.debugSlowMoveMultiplier;
+            editorViewportCamera_.SetSettings(cameraSettings);
+
+            if (!editorViewportCamera_.Initialized()) {
+                editorViewportCamera_.Initialize(
+                    runtimeState_.camera.transform,
+                    runtimeState_.camera.fovY,
+                    aspectRatio,
+                    runtimeState_.camera.nearZ,
+                    runtimeState_.camera.farZ);
+            } else {
+                if (viewportModeChanged) {
+                    editorViewportCamera_.SetTransform(
+                        runtimeState_.camera.transform);
+                }
+                editorViewportCamera_.SetLens(
+                    runtimeState_.camera.fovY,
+                    aspectRatio,
+                    runtimeState_.camera.nearZ,
+                    runtimeState_.camera.farZ);
+            }
+
+            // Editor inspection input must continue while gameplay simulation
+            // is frozen and while the Rail Shooter rejects debug-camera input.
+            editorViewportCamera_.Update(
+                imguiLayer_.EditorViewportCameraFrameInput());
+            runtimeState_.cameraWorldPosition =
+                editorViewportCamera_.WorldPosition();
+            frameState_.viewMatrix =
+                editorViewportCamera_.ViewMatrix();
+            frameState_.projMatrix =
+                editorViewportCamera_.ProjectionMatrix();
+            frameState_.viewProjectionMatrix =
+                editorViewportCamera_.ViewProjectionMatrix();
+            frameState_.cameraWorldPosition =
+                editorViewportCamera_.WorldPosition();
+            scene_.UpdateCameraWorldPosition(
+                editorViewportCamera_.WorldPosition());
+        }
+
+        lastEditorViewportMode_ = viewportMode;
+        lastEditorViewportSessionSerial_ =
+            playSession.SessionSerial();
+    }
+
     const auto vfxUpdateStart = RailPerfClock::now();
     vfxEngine_.Update(runtimeState_.vfx, gameplayDeltaTime);
     gRailPerfFrame.vfxUpdateMs = ElapsedMs(vfxUpdateStart, RailPerfClock::now());
@@ -5298,6 +5370,18 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
     const float aspectRatio = metrics.AspectRatio();
     const bool useEditorViewportCamera = imguiLayer_.IsEnabled();
     if (useEditorViewportCamera) {
+        const editor::EditorPlaySessionState& playSession =
+            imguiLayer_.EditorPlaySession();
+        const editor::EditorPlaySessionViewportMode viewportMode =
+            playSession.ViewportMode();
+        const bool activeSession = playSession.IsActive();
+        const bool usePossessedGameCamera =
+            activeSession &&
+            viewportMode ==
+                editor::EditorPlaySessionViewportMode::GameCamera;
+        const bool viewportModeChanged =
+            viewportMode != lastEditorViewportMode_ ||
+            playSession.SessionSerial() != lastEditorViewportSessionSerial_;
         editor::EditorViewportCameraSettings cameraSettings{};
         // Preserve the previous debug-camera tuning while converting its
         // per-frame values to frame-rate independent editor navigation.
@@ -5310,32 +5394,88 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
         cameraSettings.slowMoveMultiplier =
             runtimeState_.camera.debugSlowMoveMultiplier;
         editorViewportCamera_.SetSettings(cameraSettings);
-        if (!editorViewportCamera_.Initialized()) {
-            editorViewportCamera_.Initialize(
-                runtimeState_.camera.transform,
-                runtimeState_.camera.fovY,
-                aspectRatio,
-                runtimeState_.camera.nearZ,
-                runtimeState_.camera.farZ);
+        editorGameViewportCamera_.SetSettings(cameraSettings);
+
+        if (usePossessedGameCamera) {
+            if (!editorGameViewportCamera_.Initialized()) {
+                editorGameViewportCamera_.Initialize(
+                    runtimeState_.camera.transform,
+                    runtimeState_.camera.fovY,
+                    aspectRatio,
+                    runtimeState_.camera.nearZ,
+                    runtimeState_.camera.farZ);
+            } else {
+                editorGameViewportCamera_.SetTransform(
+                    runtimeState_.camera.transform);
+                editorGameViewportCamera_.SetLens(
+                    runtimeState_.camera.fovY,
+                    aspectRatio,
+                    runtimeState_.camera.nearZ,
+                    runtimeState_.camera.farZ);
+            }
+            runtimeState_.cameraWorldPosition =
+                editorGameViewportCamera_.WorldPosition();
+            frameState_.viewMatrix =
+                editorGameViewportCamera_.ViewMatrix();
+            frameState_.projMatrix =
+                editorGameViewportCamera_.ProjectionMatrix();
+            frameState_.viewProjectionMatrix =
+                editorGameViewportCamera_.ViewProjectionMatrix();
         } else {
-            editorViewportCamera_.SetTransform(runtimeState_.camera.transform);
-            editorViewportCamera_.SetLens(
-                runtimeState_.camera.fovY,
-                aspectRatio,
-                runtimeState_.camera.nearZ,
-                runtimeState_.camera.farZ);
+            // Entering an ejected session starts from the exact gameplay
+            // camera pose. Subsequent free-camera motion remains editor-only.
+            const bool seedFromGameCamera =
+                activeSession && viewportModeChanged &&
+                viewportMode ==
+                    editor::EditorPlaySessionViewportMode::EjectedFree;
+            if (!editorViewportCamera_.Initialized()) {
+                editorViewportCamera_.Initialize(
+                    runtimeState_.camera.transform,
+                    runtimeState_.camera.fovY,
+                    aspectRatio,
+                    runtimeState_.camera.nearZ,
+                    runtimeState_.camera.farZ);
+            } else {
+                if (seedFromGameCamera) {
+                    editorViewportCamera_.SetTransform(
+                        runtimeState_.camera.transform);
+                }
+                editorViewportCamera_.SetLens(
+                    runtimeState_.camera.fovY,
+                    aspectRatio,
+                    runtimeState_.camera.nearZ,
+                    runtimeState_.camera.farZ);
+            }
+            editor::EditorViewportCameraInput cameraInput =
+                imguiLayer_.EditorViewportCameraFrameInput();
+            const bool allowEjectedEditorCameraInput =
+                activeSession &&
+                viewportMode ==
+                    editor::EditorPlaySessionViewportMode::EjectedFree;
+            // Runtime camera debug input is a gameplay policy. It must not
+            // disable the editor-owned inspection camera after Eject.
+            if (!runtimeState_.camera.enableDebugInput &&
+                !allowEjectedEditorCameraInput) {
+                cameraInput = {};
+            }
+            editorViewportCamera_.Update(cameraInput);
+            // Preserve legacy authoring-camera behavior while stopped. During
+            // Play/Sim the Runtime Game Camera remains untouched by Eject.
+            if (!activeSession) {
+                runtimeState_.camera.transform =
+                    editorViewportCamera_.CameraTransform();
+            }
+            runtimeState_.cameraWorldPosition =
+                editorViewportCamera_.WorldPosition();
+            frameState_.viewMatrix = editorViewportCamera_.ViewMatrix();
+            frameState_.projMatrix =
+                editorViewportCamera_.ProjectionMatrix();
+            frameState_.viewProjectionMatrix =
+                editorViewportCamera_.ViewProjectionMatrix();
         }
-        editor::EditorViewportCameraInput cameraInput =
-            imguiLayer_.EditorViewportCameraFrameInput();
-        if (!runtimeState_.camera.enableDebugInput) {
-            cameraInput = {};
-        }
-        editorViewportCamera_.Update(cameraInput);
-        runtimeState_.camera.transform = editorViewportCamera_.CameraTransform();
-        runtimeState_.cameraWorldPosition = editorViewportCamera_.WorldPosition();
-        frameState_.viewMatrix = editorViewportCamera_.ViewMatrix();
-        frameState_.projMatrix = editorViewportCamera_.ProjectionMatrix();
-        frameState_.viewProjectionMatrix = editorViewportCamera_.ViewProjectionMatrix();
+        lastEditorViewportMode_ = viewportMode;
+        lastEditorViewportSessionSerial_ =
+            playSession.SessionSerial();
     } else {
         debugCamera_.SetInputEnabled(runtimeState_.camera.enableDebugInput);
         debugCamera_.SetMoveSpeed(runtimeState_.camera.debugMoveSpeed);

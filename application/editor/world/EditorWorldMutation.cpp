@@ -25,6 +25,7 @@ EditorWorldObjectCapability CapabilityForEditorWorldMutation(
     case EditorWorldMutationKind::SetComponentEnabled:
     case EditorWorldMutationKind::SetComponentAssetReference:
     case EditorWorldMutationKind::SetComponentEntityReference:
+    case EditorWorldMutationKind::SetupPatrol:
     case EditorWorldMutationKind::SetGimmickDefinition:
     case EditorWorldMutationKind::SetGimmickParameter:
     case EditorWorldMutationKind::MutateGimmickEventBinding:
@@ -52,6 +53,7 @@ const char* ToString(EditorWorldMutationKind kind) noexcept {
     case EditorWorldMutationKind::SetComponentProperty: return "Set Component Property";
     case EditorWorldMutationKind::SetComponentAssetReference: return "Set Component Asset Reference";
     case EditorWorldMutationKind::SetComponentEntityReference: return "Set Component Entity Reference";
+    case EditorWorldMutationKind::SetupPatrol: return "Set Up Patrol";
     case EditorWorldMutationKind::SetGimmickDefinition: return "Set Gimmick Definition";
     case EditorWorldMutationKind::SetGimmickParameter: return "Set Gimmick Parameter";
     case EditorWorldMutationKind::MutateGimmickEventBinding:

@@ -27,6 +27,8 @@ struct EditorPlaySessionRuntimeControlResult {
     uint64_t sessionSerial = 0;
     bool runtimePaused = false;
     bool runtimeStepRequested = false;
+    EditorPlaySessionViewportMode viewportMode =
+        EditorPlaySessionViewportMode::EditorFree;
     uint64_t runtimeFrameCount = 0;
     uint32_t runtimeResetCount = 0;
     std::string message;
@@ -39,6 +41,10 @@ public:
     EditorPlaySessionRuntimeControlResult Resume(
         const EditorPlaySessionRuntimeControlRequest& request) const;
     EditorPlaySessionRuntimeControlResult Step(
+        const EditorPlaySessionRuntimeControlRequest& request) const;
+    EditorPlaySessionRuntimeControlResult Eject(
+        const EditorPlaySessionRuntimeControlRequest& request) const;
+    EditorPlaySessionRuntimeControlResult Possess(
         const EditorPlaySessionRuntimeControlRequest& request) const;
     EditorPlaySessionRuntimeControlResult ResetRuntime(
         const EditorPlaySessionRuntimeControlRequest& request) const;

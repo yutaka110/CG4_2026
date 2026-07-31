@@ -79,6 +79,11 @@
 #include "editor/tools/EditorPlacementTools.h"
 #include "editor/world/EditorWorldOutlinerPanel.h"
 #include "editor/scene/EditorBlenderSceneImportTransaction.h"
+#include "editor/scene/EditorGimmickComponent.h"
+#include "editor/scene/EditorGimmickEventBindingComponent.h"
+#include "editor/scene/EditorGimmickEventSequenceComponent.h"
+#include "editor/scene/EditorPatrolComponent.h"
+#include "editor/scene/EditorSplineRouteComponent.h"
 #include "editor/ExistingFeatureProtection.h"
 #include "editor/ExistingFeatureProtectionPanel.h"
 #include "vfx/DistortionRenderer.h"
@@ -102,6 +107,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -1313,6 +1319,13 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
                         editor::EditorNotificationSeverity::Info,
                         "Placement Tool",
                         result.message);
+                },
+                &editorProductionMeshRuntimeCache_,
+                [this](std::string_view message) {
+                    editorNotifications_.Push(
+                        editor::EditorNotificationSeverity::Info,
+                        "Placement Asset Preparation",
+                        std::string(message));
                 }});
         editor::RegisterSplineRouteTools(
             editorModeRegistry_,
@@ -1352,6 +1365,25 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
         };
         editor::RegisterProductionGeometryTools(
             editorModeRegistry_, &editorGeometryToolBinding_);
+        editorCreateEditableCopyToolBinding_.workspace =
+            &editorGeometryWorkspace_;
+        editorCreateEditableCopyToolBinding_.assetRegistry =
+            &editorAssetRegistry_;
+        editorCreateEditableCopyToolBinding_.sourceLoader =
+            &editorProductionMeshEditableSourceLoader_;
+        editorCreateEditableCopyToolBinding_.onCommitRequested =
+            [this](
+                const editor::EditorCreateEditableCopyCommitRequest&
+                    request) {
+                editorNotifications_.Push(
+                    editor::EditorNotificationSeverity::Info,
+                    "Modeling Tool",
+                    "Editable copy created from Production Mesh " +
+                        request.sourceIdentity.assetGuid + ".");
+            };
+        editor::RegisterProductionCreateEditableCopyTools(
+            editorModeRegistry_,
+            &editorCreateEditableCopyToolBinding_);
         editorMeshBakeToolBinding_.workspace = &editorGeometryWorkspace_;
         editorMeshBakeToolBinding_.pipeline = &editorMeshBakePipeline_;
         editorMeshBakeToolBinding_.onCommitted = [this](
@@ -2016,9 +2048,15 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 editorDocumentManager_.MarkDirty(document->id, reason);
             }
         });
+    editor::EditorDocumentId activeSceneDocument = editorSceneDocumentId_;
+    if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active();
+        activeDocument != nullptr && activeDocument->open &&
+        activeDocument->id.type == editor::EditorDocumentTypes::Scene) {
+        activeSceneDocument = activeDocument->id;
+    }
     editorSceneWorldProvider_.Bind(
-        editorSceneDocumentProvider_.Scene(editorSceneDocumentId_),
-        editorSceneDocumentId_,
+        editorSceneDocumentProvider_.Scene(activeSceneDocument),
+        activeSceneDocument,
         &editorSceneComponentRegistry_,
         &editorGimmickDefinitionRegistry_);
     editor::EditorDocumentId activeGeometryDocument{};
@@ -2113,6 +2151,10 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 &transientMeshError,
                 &editorWorldPartitionPipeline_.SourceResidentEntities());
             std::string productionSceneError;
+            const std::unordered_set<std::string>* productionResidentEntities =
+                editorPlaySession_.IsActive()
+                    ? &editorWorldPartitionPipeline_.SourceResidentEntities()
+                    : nullptr;
             editorProductionScenePipeline_.Sync(
                 productionMeshScene,
                 editorAssetRegistry_,
@@ -2123,7 +2165,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 context.editorCompletedFenceValue,
                 context.editorScheduledFenceValue,
                 &productionSceneError,
-                &editorWorldPartitionPipeline_.SourceResidentEntities(),
+                productionResidentEntities,
                 &editorTransientMeshRenderPath_.OverriddenEntities());
             std::string productionNavigationError;
             editorProductionNavigationPipeline_.Sync(
@@ -2394,7 +2436,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         worldInputSignature *= 1099511628211ull;
     };
     mixWorldInput(runtimeState.terrain.courseObjectEditRevision);
-    if (const editor::EditorScene* scene = editorSceneDocumentProvider_.Scene(editorSceneDocumentId_)) {
+    if (const editor::EditorScene* scene = editorSceneDocumentProvider_.Scene(activeSceneDocument)) {
         mixWorldInput(scene->revision);
         mixWorldInput(scene->entities.size());
     }
@@ -2668,6 +2710,60 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 : Vector3{},
             1.0f});
     {
+        const bool playSessionActive = editorPlaySession_.IsActive();
+        const bool coursePreviewFrozen =
+            runtimeState.terrain.freezeCourseRuntime;
+        if (playSessionActive || coursePreviewFrozen) {
+            std::ostringstream debugState;
+            if (playSessionActive) {
+                debugState
+                    << (editorPlaySession_.RuntimePaused()
+                            ? "FROZEN"
+                            : "RUNTIME LIVE")
+                    << " | "
+                    << editor::ToString(editorPlaySession_.ViewportMode())
+                    << "\nRuntime frame "
+                    << editorPlaySession_.RuntimeFrameCount()
+                    << " | completed steps "
+                    << editorPlaySession_.RuntimeStepCount();
+                if (editorPlaySession_.RuntimeStepRequested()) {
+                    debugState << " | STEP QUEUED";
+                }
+                debugState
+                    << "\nF10: Eject/Possess | RMB+WASD: Move | Q/E: Vertical";
+                if (editorPlaySession_.ViewportEjected()) {
+                    debugState
+                        << "\nCamera input: "
+                        << (editorViewportInteraction_
+                                    .HasViewportCameraCapture()
+                                ? "CAPTURED"
+                                : "Awaiting RMB in Viewport");
+                }
+            } else {
+                debugState
+                    << "COURSE PREVIEW FROZEN | Editor Free Camera"
+                    << "\nRMB+WASD: Move | Q/E: Vertical"
+                    << "\nCourse simulation is stopped; camera inspection remains live.";
+            }
+            editor::EditorViewportOverlayItemOptions options{};
+            options.selected = true;
+            options.iconFallback = false;
+            options.background = true;
+            options.priority = 1000;
+            editorViewportOverlay_
+                .Sink(editor::EditorViewportOverlayLayerId::AuthoringHelpers)
+                .Label(
+                    14.0f,
+                    14.0f,
+                    debugState.str(),
+                    editorPlaySession_.ViewportEjected() ||
+                            (!playSessionActive && coursePreviewFrozen)
+                        ? 0xff72e6ffu
+                        : 0xffffd36bu,
+                    options);
+        }
+    }
+    {
         editor::EditorViewportOverlayCommandSink boundsSink =
             editorViewportOverlay_.Sink(editor::EditorViewportOverlayLayerId::AuthoringHelpers);
         editor::EditorViewportOverlayCommandSink labelSink =
@@ -2762,7 +2858,10 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     viewportInteractionInput.imguiWantsMouse = imguiIO.WantCaptureMouse;
     viewportInteractionInput.developerToolsVisible = showDeveloperTools_;
     viewportInteractionInput.viewportFocusMode = viewportFocusMode_;
-    viewportInteractionInput.documentEditable = editableCourse != nullptr;
+    const editor::EditorDocumentRecord* activeViewportDocument =
+        editorDocumentManager_.Active();
+    viewportInteractionInput.documentEditable =
+        activeViewportDocument != nullptr && activeViewportDocument->open;
     viewportInteractionInput.authoringMutationAllowed = !editorPlaySession_.IsActive();
     viewportInteractionInput.playSessionActive = editorPlaySession_.IsActive();
     viewportInteractionInput.viewportOwnsMouse = !editorContentBrowserMaximized_;
@@ -2977,6 +3076,103 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             context.courseDistance,
             context.courseSpeed,
             context.courseRailLength});
+    {
+        struct FeatureEvidenceCounts {
+            size_t entities = 0;
+            size_t runtimeDisabledEntities = 0;
+            size_t disabledComponents = 0;
+            size_t meshes = 0;
+            size_t colliders = 0;
+            size_t spawnPoints = 0;
+            size_t splineRoutes = 0;
+            size_t patrols = 0;
+            size_t gimmicks = 0;
+            size_t eventBindings = 0;
+            size_t eventSequences = 0;
+        } evidence;
+
+        const editor::EditorScene* evidenceScene = ActiveEditorScene();
+        if (evidenceScene != nullptr) {
+            evidence.entities = evidenceScene->entities.size();
+            for (const editor::EditorSceneEntity& entity : evidenceScene->entities) {
+                if (!entity.runtimeEnabled) {
+                    ++evidence.runtimeDisabledEntities;
+                }
+                for (const editor::EditorSceneComponent& component : entity.components) {
+                    if (!component.enabled) {
+                        ++evidence.disabledComponents;
+                    }
+                    if (component.typeId == editor::kEditorMeshRendererComponentType) {
+                        ++evidence.meshes;
+                    } else if (component.typeId == editor::kEditorBoxColliderComponentType) {
+                        ++evidence.colliders;
+                    } else if (component.typeId ==
+                               editor::kEditorGameplaySpawnPointComponentType) {
+                        ++evidence.spawnPoints;
+                    } else if (component.typeId ==
+                               editor::kEditorSplineRouteComponentType) {
+                        ++evidence.splineRoutes;
+                    } else if (component.typeId == editor::kEditorPatrolComponentType) {
+                        ++evidence.patrols;
+                    } else if (component.typeId == editor::kEditorGimmickComponentType) {
+                        ++evidence.gimmicks;
+                    } else if (component.typeId ==
+                               editor::kEditorGimmickEventBindingComponentType) {
+                        ++evidence.eventBindings;
+                    } else if (component.typeId ==
+                               editor::kEditorGimmickEventSequenceComponentType) {
+                        ++evidence.eventSequences;
+                    }
+                }
+            }
+        }
+
+        std::ostringstream authoredDetail;
+        authoredDetail
+            << "entities=" << evidence.entities
+            << " mesh=" << evidence.meshes
+            << " collider=" << evidence.colliders
+            << " spawn=" << evidence.spawnPoints
+            << " spline=" << evidence.splineRoutes
+            << " patrol=" << evidence.patrols
+            << " gimmick=" << evidence.gimmicks
+            << " binding=" << evidence.eventBindings
+            << " sequence=" << evidence.eventSequences
+            << " runtimeDisabled=" << evidence.runtimeDisabledEntities
+            << " componentDisabled=" << evidence.disabledComponents
+            << " terrainRevision="
+            << runtimeState.terrain.courseObjectEditRevision;
+        editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
+            "Submission Evidence",
+            "+Alpha Authored Inventory",
+            evidenceScene != nullptr ? "Captured" : "No Scene",
+            authoredDetail.str(),
+            evidenceScene != nullptr ? editor::EditorRuntimeWatchSeverity::Info
+                                     : editor::EditorRuntimeWatchSeverity::Warning,
+            editorDocumentServiceFrame_});
+
+        std::ostringstream captureDetail;
+        captureDetail
+            << "runtime="
+            << (editorPlaySession_.RuntimePaused() ? "Frozen" : "Live")
+            << " stepQueued="
+            << (editorPlaySession_.RuntimeStepRequested() ? "true" : "false")
+            << " viewport=" << editor::ToString(editorPlaySession_.ViewportMode())
+            << " runtimeFrame=" << editorPlaySession_.RuntimeFrameCount()
+            << " completedSteps=" << editorPlaySession_.RuntimeStepCount()
+            << " ejects=" << editorPlaySession_.EjectCount()
+            << " possesses=" << editorPlaySession_.PossessCount()
+            << " controls=[Freeze, Step, F10 Eject/Possess]";
+        editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
+            "Submission Evidence",
+            "Runtime Debug Capture",
+            editorPlaySession_.IsActive()
+                ? (editorPlaySession_.RuntimePaused() ? "Frozen" : "Running")
+                : "Stopped",
+            captureDetail.str(),
+            editor::EditorRuntimeWatchSeverity::Info,
+            editorDocumentServiceFrame_});
+    }
     {
         const editor::EditorProductionTexturePipelineStats& textureStats =
             editorProductionTexturePipeline_.Stats();

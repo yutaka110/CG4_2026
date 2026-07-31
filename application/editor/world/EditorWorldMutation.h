@@ -3,6 +3,7 @@
 #include "EditorWorldObjectRecord.h"
 #include "../scene/EditorGimmickEventBindingMutation.h"
 #include "../scene/EditorGimmickEventSequenceMutation.h"
+#include "../scene/EditorPatrolComponent.h"
 
 #include <cstddef>
 #include <memory>
@@ -26,6 +27,7 @@ enum class EditorWorldMutationKind {
     SetComponentProperty,
     SetComponentAssetReference,
     SetComponentEntityReference,
+    SetupPatrol,
     SetGimmickDefinition,
     SetGimmickParameter,
     MutateGimmickEventBinding,
@@ -75,6 +77,7 @@ struct EditorWorldMutationRequest {
     std::vector<Placement> placements;
     EditorGimmickEventBindingMutation eventBindingMutation;
     EditorGimmickEventSequenceMutation eventSequenceMutation;
+    EditorPatrolSetupMutation patrolSetup;
     bool value = false;
 };
 
@@ -92,6 +95,7 @@ struct EditorWorldProviderMutationRequest {
     std::vector<EditorWorldMutationRequest::Placement> placements;
     EditorGimmickEventBindingMutation eventBindingMutation;
     EditorGimmickEventSequenceMutation eventSequenceMutation;
+    EditorPatrolSetupMutation patrolSetup;
     bool value = false;
 };
 

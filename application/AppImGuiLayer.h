@@ -85,6 +85,7 @@ class AppPipelines;
 #include "editor/geometry/EditorGeometryEditCommand.h"
 #include "editor/geometry/EditorGeometryWorkspace.h"
 #include "editor/geometry/EditorTransientMeshRenderPath.h"
+#include "editor/mesh/EditorCreateEditableCopyTool.h"
 #include "editor/mesh/EditorMeshBakeTools.h"
 #include "editor/scene/EditorProductionScenePipeline.h"
 #include "editor/material/EditorProductionMaterialPipeline.h"
@@ -232,6 +233,15 @@ public:
     }
     bool EditorPlaySessionActive() const {
         return editorPlaySession_.IsActive();
+    }
+    const editor::EditorPlaySessionState& EditorPlaySession() const {
+        return editorPlaySession_;
+    }
+    bool EditorViewportUsesFreeCamera() const {
+        return editorPlaySession_.UsesEditorFreeCamera();
+    }
+    editor::EditorPlaySessionViewportMode EditorViewportControlMode() const {
+        return editorPlaySession_.ViewportMode();
     }
     bool EditorViewportInteractionActive() const {
         return editorViewportInteraction_.HasAnyCapture();
@@ -411,6 +421,10 @@ private:
     editor::EditorGeometryWorkspace editorGeometryWorkspace_{};
     editor::EditorGeometryToolBinding editorGeometryToolBinding_{};
     editor::EditorGeometryExecutionService editorGeometryExecution_{};
+    editor::EditorProductionMeshEditableSourceLoader
+        editorProductionMeshEditableSourceLoader_{};
+    editor::EditorCreateEditableCopyToolBinding
+        editorCreateEditableCopyToolBinding_{};
     editor::EditorMeshBakePipeline editorMeshBakePipeline_{};
     editor::EditorMeshBakeToolBinding editorMeshBakeToolBinding_{};
     editor::EditorMeshBakeExecutionService editorMeshBakeExecution_{};

@@ -41,6 +41,20 @@ struct EditorPatrolComponent {
         std::string* errorMessage = nullptr) const;
 };
 
+// Authoring payload used by the dedicated Patrol setup workflow. The Scene
+// mutation consumes this together with the selected Enemy Entity so that the
+// Spawn Point, Patrol Component, and typed Route reference are committed as
+// one Undoable transaction.
+struct EditorPatrolSetupMutation {
+    std::string routeEntityGuid;
+    std::string enemyType = "DRONE";
+    float speed = 5.0f;
+    float startDistance = 0.0f;
+    EditorPatrolTraversalMode traversalMode =
+        EditorPatrolTraversalMode::Loop;
+    bool reverse = false;
+};
+
 const char* ToString(EditorPatrolTraversalMode mode) noexcept;
 bool ParseEditorPatrolTraversalMode(
     std::string_view text,

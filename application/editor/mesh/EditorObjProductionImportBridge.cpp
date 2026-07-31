@@ -339,11 +339,13 @@ EditorObjProductionImportBridge::EditorObjProductionImportBridge(
 
 bool EditorObjProductionImportBridge::CanImport(
     const EditorAssetRecord& source) {
+    const std::string extension = Lowercase(
+        std::filesystem::path(source.sourcePath).extension().string());
     return source.kind == EditorAssetKind::Mesh &&
         source.referenceable &&
         !source.missing &&
-        Lowercase(std::filesystem::path(source.sourcePath).extension().string()) ==
-            ".obj";
+        (extension == ".obj" || extension == ".gltf" ||
+         extension == ".glb" || extension == ".fbx");
 }
 
 std::string EditorObjProductionImportBridge::DefaultOutputAssetName(
@@ -356,25 +358,43 @@ std::string EditorObjProductionImportBridge::DefaultOutputAssetName(
         "_production";
 }
 
+bool EditorObjProductionImportBridge::IsProductionForSource(
+    const EditorAssetRecord& production,
+    const EditorAssetRecord& source,
+    const std::filesystem::path& projectRoot) {
+    if (production.kind != EditorAssetKind::Mesh || production.missing ||
+        !production.referenceable || production.guid.empty() ||
+        Lowercase(std::filesystem::path(production.sourcePath).extension().string()) !=
+            ".mesh") {
+        return false;
+    }
+    const std::string sourceLogicalPath = source.logicalPath.empty()
+        ? source.sourcePath
+        : source.logicalPath;
+    return MetadataMatchesSource(
+        ResolveProjectPath(projectRoot, production.metadataPath),
+        sourceLogicalPath);
+}
+
 EditorObjProductionImportResult
 EditorObjProductionImportBridge::ImportAndBake(
     const EditorObjProductionImportRequest& request) {
     EditorObjProductionImportResult result{};
     if (projectRoot_.empty()) {
-        SetError(result, "OBJ Production Import has no project root.");
+        SetError(result, "Mesh Production Import has no project root.");
         return result;
     }
     const EditorAssetRecord* source =
         registry_.FindByGuid(request.sourceAssetGuid);
     if (source == nullptr) {
-        SetError(result, "Selected OBJ Asset no longer exists in the Asset Registry.");
+        SetError(result, "Selected source Mesh Asset no longer exists in the Asset Registry.");
         return result;
     }
     const EditorAssetRecord sourceSnapshot = *source;
     if (!CanImport(sourceSnapshot)) {
         SetError(
             result,
-            "OBJ Production Import requires one available .obj Mesh source.");
+            "Mesh Production Import requires an available OBJ, glTF, GLB, or FBX source.");
         return result;
     }
     std::string settingsError;
@@ -382,7 +402,7 @@ EditorObjProductionImportBridge::ImportAndBake(
         SetError(
             result,
             settingsError.empty()
-                ? "OBJ Production Import settings are invalid."
+                ? "Mesh Production Import settings are invalid."
                 : settingsError);
         return result;
     }
@@ -415,7 +435,7 @@ EditorObjProductionImportBridge::ImportAndBake(
         SetError(
             result,
             conversionError.empty()
-                ? "OBJ could not be converted to editable Geometry."
+                ? "Source Mesh could not be converted to editable Geometry."
                 : conversionError);
         return result;
     }
@@ -433,6 +453,14 @@ EditorObjProductionImportBridge::ImportAndBake(
         "Generated" /
         "Imported" /
         (outputId + ".mesh");
+    std::string sourceFormatTag =
+        Lowercase(sourcePath.extension().string());
+    if (!sourceFormatTag.empty() && sourceFormatTag.front() == '.') {
+        sourceFormatTag.erase(sourceFormatTag.begin());
+    }
+    if (sourceFormatTag.empty()) {
+        sourceFormatTag = "mesh-source";
+    }
 
     EditorAssetRecord outputRecord{};
     const EditorAssetRecord* existing =
@@ -467,7 +495,7 @@ EditorObjProductionImportBridge::ImportAndBake(
         outputRecord.referenceable = true;
         outputRecord.hasMetadata = true;
         outputRecord.provisionalGuid = false;
-        outputRecord.tags = {"generated", "imported", "obj"};
+        outputRecord.tags = {"generated", "imported", sourceFormatTag};
     }
     outputRecord.missing = false;
     outputRecord.sourceTimestamp = CurrentTimestamp();
@@ -523,7 +551,7 @@ EditorObjProductionImportBridge::ImportAndBake(
     std::ostringstream metadata;
     metadata << "guid=" << outputRecord.guid << '\n';
     metadata << "logicalPath=" << outputRecord.logicalPath << '\n';
-    metadata << "tags=generated,imported,obj\n";
+    metadata << "tags=generated,imported," << sourceFormatTag << '\n';
     metadata << "importSourceGuid=" << sourceSnapshot.guid << '\n';
     metadata << "importSourcePath=" << sourceLogicalPath << '\n';
     metadata << "importSourceHash=" << sourceFileHash << '\n';
@@ -559,7 +587,7 @@ EditorObjProductionImportBridge::ImportAndBake(
         SetError(
             result,
             transactionError.empty()
-                ? "OBJ Production Import file transaction could not be staged."
+                ? "Mesh Production Import file transaction could not be staged."
                 : transactionError);
         return result;
     }
@@ -568,7 +596,7 @@ EditorObjProductionImportBridge::ImportAndBake(
         SetError(
             result,
             transactionError.empty()
-                ? "OBJ Production Import file transaction could not be prepared."
+                ? "Mesh Production Import file transaction could not be prepared."
                 : transactionError);
         return result;
     }
@@ -622,7 +650,7 @@ EditorObjProductionImportBridge::ImportAndBake(
         metadata.str().size();
     result.message =
         std::string(result.reimported ? "Reimported " : "Imported ") +
-        "OBJ as Production Mesh '" + outputRecord.id + "' (" +
+        "Mesh source as Production Mesh '" + outputRecord.id + "' (" +
         std::to_string(result.vertexCount) + " vertices, " +
         std::to_string(result.triangleCount) + " triangles, " +
         std::to_string(result.lodCount) + " LODs).";

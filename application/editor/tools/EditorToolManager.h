@@ -86,6 +86,8 @@ private:
     uint64_t activationDocumentEditRevision_ = 0;
     uint64_t activationDocumentGeneration_ = 0;
     uint32_t activationSelectionRevision_ = 0;
+    EditorObjectHandle activationPrimarySelection_{};
+    bool activationHadPrimarySelection_ = false;
     uint32_t activationTransactionRevision_ = 0;
     uint32_t activationRegistryRevision_ = 0;
     std::size_t activationUndoDepth_ = 0;

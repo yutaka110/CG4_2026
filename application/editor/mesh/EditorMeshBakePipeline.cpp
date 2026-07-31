@@ -1,5 +1,6 @@
 #include "EditorMeshBakePipeline.h"
 
+#include "EditorProductionMeshEditableSourceMetadata.h"
 #include "../core/EditorExecutionContext.h"
 #include "../io/EditorFileTransaction.h"
 
@@ -162,7 +163,12 @@ std::size_t SnapshotBytes(const EditorMeshBakeSnapshot& snapshot) {
         bytes += sizeof(reference) + reference.property.capacity() +
             reference.entityGuid.capacity() + reference.assetGuid.capacity();
     }
-    for (const auto* value : {&snapshot.bakedGuid, &snapshot.sourceHash, &snapshot.buildHash}) {
+    for (const auto* value : {
+             &snapshot.bakedGuid,
+             &snapshot.sourceHash,
+             &snapshot.buildHash,
+             &snapshot.editableSourceAssetGuid,
+             &snapshot.editableSourceGeometryHash}) {
         if (value->has_value()) bytes += (*value)->capacity();
     }
     return bytes;
@@ -260,9 +266,24 @@ bool EditorMeshBakePipeline::Prepare(
         return false;
     }
 
-    const std::optional<std::string> bakedGuid = PropertyValue(*component, kEditorBakedMeshGuidProperty);
-    const EditorAssetRecord* existing = bakedGuid.has_value()
-        ? registry_->FindByGuid(*bakedGuid)
+    std::optional<std::string> rebuildGuid =
+        PropertyValue(*component, kEditorBakedMeshGuidProperty);
+    const EditorProductionMeshEditableSourceMetadataReadResult
+        editableSource =
+            ReadEditorProductionMeshEditableSourceMetadata(*component);
+    if (!editableSource.Succeeded()) {
+        SetError(
+            errorMessage,
+            editableSource.message.empty()
+                ? "Production Mesh editable-source identity is invalid."
+                : editableSource.message);
+        return false;
+    }
+    if (!rebuildGuid.has_value() && editableSource.HasIdentity()) {
+        rebuildGuid = editableSource.identity.assetGuid;
+    }
+    const EditorAssetRecord* existing = rebuildGuid.has_value()
+        ? registry_->FindByGuid(*rebuildGuid)
         : nullptr;
     if (existing != nullptr && (existing->kind != EditorAssetKind::Mesh ||
             std::filesystem::path(existing->sourcePath).extension() != ".mesh")) {
@@ -339,6 +360,14 @@ bool EditorMeshBakePipeline::Prepare(
     prepared.change.before.bakedGuid = PropertyValue(*component, kEditorBakedMeshGuidProperty);
     prepared.change.before.sourceHash = PropertyValue(*component, kEditorBakedMeshSourceHashProperty);
     prepared.change.before.buildHash = PropertyValue(*component, kEditorBakedMeshBuildHashProperty);
+    prepared.change.before.editableSourceAssetGuid =
+        PropertyValue(
+            *component,
+            kEditorEditableSourceAssetGuidProperty);
+    prepared.change.before.editableSourceGeometryHash =
+        PropertyValue(
+            *component,
+            kEditorEditableSourceGeometryHashProperty);
     if (!ReadOptionalFile(projectRoot_ / paths.source, prepared.change.before.sourceBytes, errorMessage, rebake) ||
         !ReadOptionalFile(projectRoot_ / paths.cooked, prepared.change.before.cookedBytes, errorMessage, rebake) ||
         !ReadOptionalFile(projectRoot_ / paths.collision, prepared.change.before.collisionBytes, errorMessage, false) ||
@@ -368,6 +397,9 @@ bool EditorMeshBakePipeline::Prepare(
     prepared.change.after.bakedGuid = record.guid;
     prepared.change.after.sourceHash = std::to_string(document.sourceGeometryHash);
     prepared.change.after.buildHash = std::to_string(settings.ContentHash());
+    prepared.change.after.editableSourceAssetGuid = record.guid;
+    prepared.change.after.editableSourceGeometryHash =
+        std::to_string(document.sourceGeometryHash);
     prepared.lodCount = static_cast<uint32_t>(cooked.lods.size());
     for (const EditorCookedMeshLod& lod : cooked.lods) {
         prepared.lodTriangleCounts.push_back(static_cast<uint32_t>(lod.indices.size() / 3));
@@ -455,6 +487,14 @@ EditorUndoResult EditorMeshBakeExecutionService::ApplyMeshBake(
     ApplyProperty(*component, kEditorBakedMeshGuidProperty, target.bakedGuid);
     ApplyProperty(*component, kEditorBakedMeshSourceHashProperty, target.sourceHash);
     ApplyProperty(*component, kEditorBakedMeshBuildHashProperty, target.buildHash);
+    ApplyProperty(
+        *component,
+        kEditorEditableSourceAssetGuidProperty,
+        target.editableSourceAssetGuid);
+    ApplyProperty(
+        *component,
+        kEditorEditableSourceGeometryHashProperty,
+        target.editableSourceGeometryHash);
     scene_->Touch();
     if (!transaction.CommitPrepared(&receipt, &error)) {
         *component = componentBackup;

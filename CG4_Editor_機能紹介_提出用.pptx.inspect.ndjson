@@ -1,0 +1,197 @@
+{"kind":"deck","id":"pr/5578jd","name":"Deck"}
+{"kind":"layout","layoutId":"39fca5e7-22ac-4df1-8f6c-385ec4c4dae0","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"5126f84a-8edd-451c-9785-2d28af4086dc","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/fpnmfk","slide":1,"title":"CG4 / CUSTOM D3D12 EDITOR","textShapes":3}
+{"kind":"shape","id":"sh/d8vu90zu","slide":1,"name":"title-panel","bbox":[0,0,720,720]}
+{"kind":"textbox","id":"sh/c7md0vi9","slide":1,"name":"title-eyebrow","text":"CG4 / CUSTOM D3D12 EDITOR","textPreview":"CG4 / CUSTOM D3D12 EDITOR","textChars":25,"textLines":1,"bbox":[41.33,41.18,598.67,50]}
+{"kind":"textbox","id":"sh/zadcbahk","slide":1,"name":"title-main","text":"Production\nAuthoring Pipeline","textPreview":"Production | Authoring Pipeline","textChars":29,"textLines":2,"bbox":[41.33,182.55,650,250]}
+{"kind":"textbox","id":"sh/e94v250f","slide":1,"name":"title-sub","text":"Terrain / Mesh Sync / Asset Placement\nプレビュー・履歴・実行反映・永続化を一貫設計","textPreview":"Terrain / Mesh Sync / Asset Placement | プレビュー・履歴・実行反映・永続化を一貫設計","textChars":60,"textLines":2,"bbox":[41.33,497.87,610,115]}
+{"kind":"image","id":"im/jqx4jm10","slide":1,"name":"","alt":"Canyon runtime view","bbox":[0,0,1280,720]}
+{"kind":"notes","id":"nt/fpnmfk","slide":1,"text":"[Sources]\n- Internal runtime capture: .codex/video_frames_capture10/frame_00_0.png\n- Technical scope supplied by the user and verified against internal project sources."}
+{"kind":"slide","id":"sl/thrcwg","slide":2,"title":"SYSTEM OVERVIEW","textShapes":13}
+{"kind":"textbox","id":"sh/hg3ydob2","slide":2,"name":"section-2","text":"SYSTEM OVERVIEW","textPreview":"SYSTEM OVERVIEW","textChars":15,"textLines":1,"bbox":[41.33,28,360,28]}
+{"kind":"textbox","id":"sh/udcz29cr","slide":2,"name":"title-2","text":"3つの編集系を、共通のライフサイクルで統合","textPreview":"3つの編集系を、共通のライフサイクルで統合","textChars":21,"textLines":1,"bbox":[41.33,58,1197.33,76]}
+{"kind":"textbox","id":"sh/velgbetw","slide":2,"name":"page-2","text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[1184.18,666,54.48,18]}
+{"kind":"shape","id":"sh/8buh0zul","slide":2,"name":"accent-rule","bbox":[41.33,146,96,5]}
+{"kind":"textbox","id":"sh/tc3y94b6","slide":2,"name":"overview-thesis","text":"Previewで結果を確認し、Accept後だけ履歴・保存・ゲーム反映へ進める。","textPreview":"Previewで結果を確認し、Accept後だけ履歴・保存・ゲーム反映へ進める。","textChars":40,"textLines":1,"bbox":[41.33,184,1110,70]}
+{"kind":"shape","id":"sh/6pszy9cf","slide":2,"name":"overview-card-0","bbox":[40.77,340,374.67,280]}
+{"kind":"textbox","id":"sh/7alg7ut0","slide":2,"name":"overview-no-0","text":"01","textPreview":"01","textChars":2,"textLines":1,"bbox":[70.77,370,50,28]}
+{"kind":"textbox","id":"sh/s7ehc3up","slide":2,"name":"overview-title-0","text":"Terrain","textPreview":"Terrain","textChars":7,"textLines":1,"bbox":[70.77,410,310,45]}
+{"kind":"textbox","id":"sh/d87il8ba","slide":2,"name":"overview-body-0","text":"非破壊ブラシ\n局所再構築\nterrainRevision","textPreview":"非破壊ブラシ | 局所再構築 | terrainRevision","textChars":28,"textLines":3,"bbox":[70.77,474,315,116]}
+{"kind":"shape","id":"sh/hw3mlg7m","slide":2,"name":"overview-card-1","bbox":[452.38,340,374.67,280]}
+{"kind":"textbox","id":"sh/wvu5cb61","slide":2,"name":"overview-no-1","text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[482.38,370,50,28]}
+{"kind":"textbox","id":"sh/vul4j6pg","slide":2,"name":"overview-title-1","text":"Mesh Sync","textPreview":"Mesh Sync","textChars":9,"textLines":1,"bbox":[482.38,410,310,45]}
+{"kind":"textbox","id":"sh/utcna1ov","slide":2,"name":"overview-body-1","text":"Editable Copy\nGUID維持Rebake\nRenderer / Physics更新","textPreview":"Editable Copy | GUID維持Rebake | Renderer / Physics更新","textChars":47,"textLines":3,"bbox":[482.38,474,315,116]}
+{"kind":"shape","id":"sh/983mhw7a","slide":2,"name":"overview-card-2","bbox":[864,340,374.67,280]}
+{"kind":"textbox","id":"sh/87al8r6p","slide":2,"name":"overview-no-2","text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[894,370,50,28]}
+{"kind":"textbox","id":"sh/7614f6pk","slide":2,"name":"overview-title-2","text":"Placement","textPreview":"Placement","textChars":9,"textLines":1,"bbox":[894,410,310,45]}
+{"kind":"textbox","id":"sh/m5s3618z","slide":2,"name":"overview-body-2","text":"Content Drawer\nPreview配置\nScene永続化","textPreview":"Content Drawer | Preview配置 | Scene永続化","textChars":33,"textLines":3,"bbox":[894,474,315,116]}
+{"kind":"notes","id":"nt/thrcwg","slide":2,"text":"[Sources]\n- User-provided feature requirements.\n- docs/EditorCoreDesign.md: shared Tool Manager lifecycle, Placement, Terrain, Geometry, Mesh Bake, and Scene Instance pipeline sections."}
+{"kind":"slide","id":"sl/rkp4kf","slide":3,"title":"01 / TERRAIN","textShapes":7}
+{"kind":"textbox","id":"sh/gjqhg7a5","slide":3,"name":"section-3","text":"01 / TERRAIN","textPreview":"01 / TERRAIN","textChars":12,"textLines":1,"bbox":[41.33,28,360,28]}
+{"kind":"textbox","id":"sh/vih0729k","slide":3,"name":"title-3","text":"Terrain：形状と材質を、止めず・壊さず編集","textPreview":"Terrain：形状と材質を、止めず・壊さず編集","textChars":24,"textLines":1,"bbox":[41.33,58,1197.33,76]}
+{"kind":"textbox","id":"sh/uh8zexsf","slide":3,"name":"page-3","text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[1184.18,666,54.48,18]}
+{"kind":"shape","id":"sh/tgzi5sru","slide":3,"name":"accent-rule","bbox":[41.33,146,96,5]}
+{"kind":"shape","id":"sh/8fqhcna9","slide":3,"name":"terrain-shot-backing","bbox":[658.17,170,581.6,470]}
+{"kind":"textbox","id":"sh/6dozads3","slide":3,"name":"terrain-target","text":"CanyonAssaultRoute01.course","textPreview":"CanyonAssaultRoute01.course","textChars":27,"textLines":1,"bbox":[41.33,188,581.33,40]}
+{"kind":"textbox","id":"sh/dcjihwry","slide":3,"name":"terrain-body","text":"Course Freeze後、Terrain Modeで4ツールを使用。\n\nSculpt　隆起・掘削\nSmooth　局所平滑化\nFlatten　基準面へ整形\nPaint　4層の地表バリエーション\n\nドラッグ中はPreviewのみ。Acceptで\n1 stroke = 1 Transactionとして確定。","textPreview":"Course Freeze後、Terrain Modeで4ツールを使用。 |  | Sculpt　隆起・掘削 | Smooth　局所平滑化 | Flatten　基準面へ整形 | Paint　4層の地表バリエーション |  | ドラッグ中はPreviewのみ。Acceptで ...","textChars":153,"textLines":9,"bbox":[41.33,248,570,326]}
+{"kind":"shape","id":"sh/sbahorad","slide":3,"name":"tag-Undo / Redo → Play / Sim → Reload → revision","bbox":[41.33,584,570,54]}
+{"kind":"textbox","id":"sh/mdonqt8z","slide":3,"name":"tag-text-Undo / Redo → Play / Sim → Reload → revision","text":"Undo / Redo → Play / Sim → Reload → revision","textPreview":"Undo / Redo → Play / Sim → Reload → revision","textChars":44,"textLines":1,"bbox":[53.33,592,546,42]}
+{"kind":"textbox","id":"sh/7ehojy9k","slide":3,"name":"terrain-caption","text":"実機キャプチャ｜Terrain / Sculpt / Smooth / Flatten / Paint","textPreview":"実機キャプチャ｜Terrain / Sculpt / Smooth / Flatten / Paint","textChars":51,"textLines":1,"bbox":[675,646,550,24]}
+{"kind":"image","id":"im/q9wbalkv","slide":3,"name":"","geometry":"roundRect","alt":"Terrain mode in the CG4 editor","bbox":[665.17,177,567.6,456]}
+{"kind":"notes","id":"nt/rkp4kf","slide":3,"text":"[Sources]\n- Internal UI capture: .codex/slide_build/editor_terrain_mode.png\n- docs/EditorCoreDesign.md lines covering TerrainEditLayer and TerrainChunkManager.\n- application/editor/terrain/EditorTerrainBrushTools.cpp\n- application/terrain/TerrainEditLayer.cpp"}
+{"kind":"slide","id":"sl/24sdvb","slide":4,"title":"01 / TERRAIN DEMO","textShapes":12}
+{"kind":"textbox","id":"sh/1gz65ob2","slide":4,"name":"section-4","text":"01 / TERRAIN DEMO","textPreview":"01 / TERRAIN DEMO","textChars":17,"textLines":1,"bbox":[41.33,28,360,28]}
+{"kind":"textbox","id":"sh/ed8nutsb","slide":4,"name":"title-4","text":"安全に試せる → 戻せる → 再起動後も残る","textPreview":"安全に試せる → 戻せる → 再起動後も残る","textChars":22,"textLines":1,"bbox":[41.33,58,1197.33,76]}
+{"kind":"textbox","id":"sh/feho3etw","slide":4,"name":"page-4","text":"04","textPreview":"04","textChars":2,"textLines":1,"bbox":[1184.18,666,54.48,18]}
+{"kind":"shape","id":"sh/ojap03ad","slide":4,"name":"accent-rule","bbox":[41.33,146,96,5]}
+{"kind":"shape","id":"sh/pkj698by","slide":4,"name":"timeline-line-4","bbox":[42,336,1128,0]}
+{"kind":"textbox","id":"sh/2hs7ytsn","slide":4,"name":"stage-label-4-0","text":"PREVIEW","textPreview":"PREVIEW","textChars":7,"textLines":1,"bbox":[42,278,330,34]}
+{"kind":"shape","id":"sh/3i1o7yt8","slide":4,"name":"stage-dot-4-0","bbox":[42,326,20,20]}
+{"kind":"textbox","id":"sh/4n65oza9","slide":4,"name":"stage-title-4-0","text":"Sculptを短くドラッグ","textPreview":"Sculptを短くドラッグ","textChars":13,"textLines":1,"bbox":[42,374,330,82]}
+{"kind":"textbox","id":"sh/5of6x4bu","slide":4,"name":"stage-body-4-0","text":"Radius 4–8\nStrength 0.10–0.25\nHardness 0.30–0.50\nSpacing 0.50–1.00","textPreview":"Radius 4–8 | Strength 0.10–0.25 | Hardness 0.30–0.50 | Spacing 0.50–1.00","textChars":66,"textLines":4,"bbox":[42,458,330,164]}
+{"kind":"textbox","id":"sh/dcfax0ji","slide":4,"name":"stage-label-4-1","text":"ACCEPT & HISTORY","textPreview":"ACCEPT & HISTORY","textChars":16,"textLines":1,"bbox":[452,278,330,34]}
+{"kind":"shape","id":"sh/cb694v2d","slide":4,"name":"stage-dot-4-1","bbox":[452,326,20,20]}
+{"kind":"textbox","id":"sh/baxsvq1s","slide":4,"name":"stage-title-4-1","text":"4操作を順に確定","textPreview":"4操作を順に確定","textChars":8,"textLines":1,"bbox":[452,374,330,82]}
+{"kind":"textbox","id":"sh/q94r2lk7","slide":4,"name":"stage-body-4-1","text":"Sculpt → Smooth（≈0.10）\n→ Flatten → Paint\n各操作をAcceptし、\nUndo / Redoで単位を確認","textPreview":"Sculpt → Smooth（≈0.10） | → Flatten → Paint | 各操作をAcceptし、 | Undo / Redoで単位を確認","textChars":71,"textLines":4,"bbox":[452,458,330,164]}
+{"kind":"textbox","id":"sh/l0fa10ju","slide":4,"name":"stage-label-4-2","text":"RUNTIME & SAVE","textPreview":"RUNTIME & SAVE","textChars":14,"textLines":1,"bbox":[862,278,330,34]}
+{"kind":"shape","id":"sh/kf698v29","slide":4,"name":"stage-dot-4-2","bbox":[862,326,20,20]}
+{"kind":"textbox","id":"sh/zexszq1o","slide":4,"name":"stage-title-4-2","text":"反映と永続化を証明","textPreview":"反映と永続化を証明","textChars":9,"textLines":1,"bbox":[862,374,330,82]}
+{"kind":"textbox","id":"sh/ydor65k3","slide":4,"name":"stage-body-4-2","text":"Play / Simで形状を確認\nSave → Reload / restart\nRuntime Watchで\nterrainRevisionの増加を確認","textPreview":"Play / Simで形状を確認 | Save → Reload / restart | Runtime Watchで | terrainRevisionの増加を確認","textChars":77,"textLines":4,"bbox":[862,458,330,164]}
+{"kind":"notes","id":"nt/24sdvb","slide":4,"text":"[Sources]\n- User-provided Terrain recording sequence and safe parameter ranges.\n- application/AppImGuiLayer.cpp: Runtime Watch terrainRevision evidence."}
+{"kind":"slide","id":"sl/j4nj1y","slide":5,"title":"01 / TERRAIN DESIGN","textShapes":15}
+{"kind":"textbox","id":"sh/ylgryxwj","slide":5,"name":"section-5","text":"01 / TERRAIN DESIGN","textPreview":"01 / TERRAIN DESIGN","textChars":19,"textLines":1,"bbox":[41.33,28,360,28]}
+{"kind":"textbox","id":"sh/lora9cfu","slide":5,"name":"title-5","text":"非破壊編集を支える4つの設計判断","textPreview":"非破壊編集を支える4つの設計判断","textChars":16,"textLines":1,"bbox":[41.33,58,1197.33,76]}
+{"kind":"textbox","id":"sh/kni907e9","slide":5,"name":"page-5","text":"05","textPreview":"05","textChars":2,"textLines":1,"bbox":[1184.18,666,54.48,18]}
+{"kind":"shape","id":"sh/bip832xs","slide":5,"name":"accent-rule","bbox":[41.33,146,96,5]}
+{"kind":"shape","id":"sh/ahgruxw7","slide":5,"name":"grid-box-5-0","bbox":[41.33,204,581.33,176]}
+{"kind":"textbox","id":"sh/xk7q5sfy","slide":5,"name":"grid-no-5-0","text":"01","textPreview":"01","textChars":2,"textLines":1,"bbox":[63.33,222,52,28]}
+{"kind":"textbox","id":"sh/wjy9w7ed","slide":5,"name":"grid-title-5-0","text":"Previewを分離","textPreview":"Previewを分離","textChars":10,"textLines":1,"bbox":[127.33,219,473.33,42]}
+{"kind":"textbox","id":"sh/ne58zixw","slide":5,"name":"grid-body-5-0","text":"drag中はpreviewEditLayerのみ更新。Accept前のCourseと履歴は変更しない。","textPreview":"drag中はpreviewEditLayerのみ更新。Accept前のCourseと履歴は変更しない。","textChars":51,"textLines":1,"bbox":[63.33,273,537.33,86]}
+{"kind":"shape","id":"sh/mdwrqdwb","slide":5,"name":"grid-box-5-1","bbox":[656.86,204,581.33,176]}
+{"kind":"textbox","id":"sh/87ix872d","slide":5,"name":"grid-no-5-1","text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[678.86,222,52,28]}
+{"kind":"textbox","id":"sh/98ry1cjy","slide":5,"name":"grid-title-5-1","text":"変更領域だけ再構築","textPreview":"変更領域だけ再構築","textChars":9,"textLines":1,"bbox":[742.86,219,473.33,42]}
+{"kind":"textbox","id":"sh/m50f6hk7","slide":5,"name":"grid-body-5-1","text":"各chunkは重なるstampだけをhash化。dirty regionのみ非同期で再生成する。","textPreview":"各chunkは重なるstampだけをhash化。dirty regionのみ非同期で再生成する。","textChars":48,"textLines":1,"bbox":[678.86,273,537.33,86]}
+{"kind":"shape","id":"sh/n69wz21s","slide":5,"name":"grid-box-5-2","bbox":[41.33,418,581.33,176]}
+{"kind":"textbox","id":"sh/03ix4721","slide":5,"name":"grid-no-5-2","text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[63.33,436,52,28]}
+{"kind":"textbox","id":"sh/l4rexcjm","slide":5,"name":"grid-title-5-2","text":"Smoothを安定化","textPreview":"Smoothを安定化","textChars":10,"textLines":1,"bbox":[127.33,433,473.33,42]}
+{"kind":"textbox","id":"sh/y1gf2xkb","slide":5,"name":"grid-body-5-2","text":"Apply単位で読込元を固定するダブルバッファ。重複sampleは正規化して尖りを防ぐ。","textPreview":"Apply単位で読込元を固定するダブルバッファ。重複sampleは正規化して尖りを防ぐ。","textChars":44,"textLines":1,"bbox":[63.33,487,537.33,86]}
+{"kind":"shape","id":"sh/z2pwv21g","slide":5,"name":"grid-box-5-3","bbox":[656.86,418,581.33,176]}
+{"kind":"textbox","id":"sh/kz2xgr2l","slide":5,"name":"grid-no-5-3","text":"04","textPreview":"04","textChars":2,"textLines":1,"bbox":[678.86,436,52,28]}
+{"kind":"textbox","id":"sh/50by9wj6","slide":5,"name":"grid-title-5-3","text":"1 stroke = 1履歴","textPreview":"1 stroke = 1履歴","textChars":14,"textLines":1,"bbox":[742.86,433,473.33,42]}
+{"kind":"textbox","id":"sh/twretwba","slide":5,"name":"grid-body-5-3","text":"EditorTerrainEditUndoCommandで開始前へ復元。Save / Loadも同じ永続Layerを扱う。","textPreview":"EditorTerrainEditUndoCommandで開始前へ復元。Save / Loadも同じ永続Layerを扱う。","textChars":61,"textLines":1,"bbox":[678.86,487,537.33,86]}
+{"kind":"notes","id":"nt/j4nj1y","slide":5,"text":"[Sources]\n- docs/EditorCoreDesign.md: TerrainEditLayer, one command per stroke, filtered chunk rebuild.\n- application/editor/terrain/EditorTerrainBrushTools.cpp: immutable Smooth apply pass.\n- application/terrain/TerrainEditLayer.cpp: normalized overlapping Smooth samples."}
+{"kind":"slide","id":"sl/206odk","slide":6,"title":"02 / PRODUCTION MESH","textShapes":7}
+{"kind":"textbox","id":"sh/ehofqlkz","slide":6,"name":"section-6","text":"02 / PRODUCTION MESH","textPreview":"02 / PRODUCTION MESH","textChars":20,"textLines":1,"bbox":[41.33,28,360,28]}
+{"kind":"textbox","id":"sh/14fe1gjq","slide":6,"name":"title-6","text":"Mesh Sync：同じGUIDへRebakeし、配置済み形状を更新","textPreview":"Mesh Sync：同じGUIDへRebakeし、配置済み形状を更新","textChars":34,"textLines":1,"bbox":[41.33,58,1197.33,76]}
+{"kind":"textbox","id":"sh/036xsv25","slide":6,"name":"page-6","text":"06","textPreview":"06","textChars":2,"textLines":1,"bbox":[1184.18,666,54.48,18]}
+{"kind":"shape","id":"sh/redwv6lo","slide":6,"name":"accent-rule","bbox":[41.33,146,96,5]}
+{"kind":"shape","id":"sh/qd4fm1k3","slide":6,"name":"modeling-shot-backing","bbox":[658.17,170,581.6,470]}
+{"kind":"textbox","id":"sh/sfmxob29","slide":6,"name":"mesh-body","text":"ball_productionを選択し、Modelingへ。\n\nCreate Editable Copy\n元形状をPreview複製 → Accept\n\nSelect Faces → Extrude（0.2–0.5）\nRecalculate Normals\nGenerate Box Collision\n\nBake Mesh Asset\nBake Type: Rebake / 同一Asset GUID","textPreview":"ball_productionを選択し、Modelingへ。 |  | Create Editable Copy | 元形状をPreview複製 → Accept |  | Select Faces → Extrude（0.2–0.5） | Recalculate Norm...","textChars":201,"textLines":11,"bbox":[41.33,188,570,342]}
+{"kind":"textbox","id":"sh/3adwr6lc","slide":6,"name":"mesh-guid","text":"GUID  a7853409f86661149beaecb724ea5104\nHASH  13349175553422702320","textPreview":"GUID  a7853409f86661149beaecb724ea5104 | HASH  13349175553422702320","textChars":65,"textLines":2,"bbox":[41.33,544,580,60]}
+{"kind":"shape","id":"sh/i94fi1kr","slide":6,"name":"tag-再起動なしでRenderer / Physicsへ反映","bbox":[41.33,608,570,42]}
+{"kind":"textbox","id":"sh/sji94vax","slide":6,"name":"tag-text-再起動なしでRenderer / Physicsへ反映","text":"再起動なしでRenderer / Physicsへ反映","textPreview":"再起動なしでRenderer / Physicsへ反映","textChars":27,"textLines":1,"bbox":[53.33,616,546,30]}
+{"kind":"textbox","id":"sh/tkrax0bi","slide":6,"name":"modeling-caption","text":"実機キャプチャ｜Modeling Tool Palette","textPreview":"実機キャプチャ｜Modeling Tool Palette","textChars":29,"textLines":1,"bbox":[675,646,550,24]}
+{"kind":"image","id":"im/0zyd47y1","slide":6,"name":"","geometry":"roundRect","alt":"Modeling mode in the CG4 editor","bbox":[665.17,177,567.6,456]}
+{"kind":"notes","id":"nt/206odk","slide":6,"text":"[Sources]\n- Internal UI capture: .codex/slide_build/editor_modeling_mode.png\n- Resources/Generated/Imported/ball_production.mesh.meta\n- application/editor/mesh/EditorCreateEditableCopyTool.cpp\n- application/editor/mesh/EditorMeshBakePipeline.cpp"}
+{"kind":"slide","id":"sl/dfb73t","slide":7,"title":"02 / MESH DEMO","textShapes":12}
+{"kind":"textbox","id":"sh/43upgned","slide":7,"name":"section-7","text":"02 / MESH DEMO","textPreview":"02 / MESH DEMO","textChars":14,"textLines":1,"bbox":[41.33,28,360,28]}
+{"kind":"textbox","id":"sh/j2lonixs","slide":7,"name":"title-7","text":"複製・加工・再発行の3段階を連続で見せる","textPreview":"複製・加工・再発行の3段階を連続で見せる","textChars":20,"textLines":1,"bbox":[41.33,58,1197.33,76]}
+{"kind":"textbox","id":"sh/i1c7exw7","slide":7,"name":"page-7","text":"07","textPreview":"07","textChars":2,"textLines":1,"bbox":[1184.18,666,54.48,18]}
+{"kind":"shape","id":"sh/tsn6tcfu","slide":7,"name":"accent-rule","bbox":[41.33,146,96,5]}
+{"kind":"shape","id":"sh/srepk7e9","slide":7,"name":"timeline-line-7","bbox":[42,336,1128,0]}
+{"kind":"textbox","id":"sh/rqlor2xo","slide":7,"name":"stage-label-7-0","text":"EDITABLE COPY","textPreview":"EDITABLE COPY","textChars":13,"textLines":1,"bbox":[42,278,330,34]}
+{"kind":"shape","id":"sh/6pc7ixw3","slide":7,"name":"stage-dot-7-0","bbox":[42,326,20,20]}
+{"kind":"textbox","id":"sh/1wn6xcfq","slide":7,"name":"stage-title-7-0","text":"元形状を非破壊複製","textPreview":"元形状を非破壊複製","textChars":9,"textLines":1,"bbox":[42,374,330,82]}
+{"kind":"textbox","id":"sh/gvepo7el","slide":7,"name":"stage-body-7-0","text":"Previewは元Assetを変更しない\nAccept後、Mesh Rendererに\nEditable Source Asset GUID /\nGeometry Hashを表示","textPreview":"Previewは元Assetを変更しない | Accept後、Mesh Rendererに | Editable Source Asset GUID / | Geometry Hashを表示","textChars":89,"textLines":4,"bbox":[42,458,330,164]}
+{"kind":"textbox","id":"sh/2xkzudgz","slide":7,"name":"stage-label-7-1","text":"GEOMETRY","textPreview":"GEOMETRY","textChars":8,"textLines":1,"bbox":[452,278,330,34]}
+{"kind":"shape","id":"sh/nytg3ixk","slide":7,"name":"stage-dot-7-1","bbox":[452,326,20,20]}
+{"kind":"textbox","id":"sh/oz2hwny5","slide":7,"name":"stage-title-7-1","text":"局所面を加工","textPreview":"局所面を加工","textChars":6,"textLines":1,"bbox":[452,374,330,82]}
+{"kind":"textbox","id":"sh/p0by5sfq","slide":7,"name":"stage-body-7-1","text":"1–2面をSelect Faces\nExtrude Distance 0.2–0.5\nNormalsとBox Collisionも\nPreview → Accept","textPreview":"1–2面をSelect Faces | Extrude Distance 0.2–0.5 | NormalsとBox Collisionも | Preview → Accept","textChars":82,"textLines":4,"bbox":[452,458,330,164]}
+{"kind":"textbox","id":"sh/a1kzyxgv","slide":7,"name":"stage-label-7-2","text":"REBAKE & SYNC","textPreview":"REBAKE & SYNC","textChars":13,"textLines":1,"bbox":[862,278,330,34]}
+{"kind":"shape","id":"sh/bmt072xg","slide":7,"name":"stage-dot-7-2","bbox":[862,326,20,20]}
+{"kind":"textbox","id":"sh/cn2h0ny1","slide":7,"name":"stage-title-7-2","text":"同一GUIDで即時更新","textPreview":"同一GUIDで即時更新","textChars":11,"textLines":1,"bbox":[862,374,330,82]}
+{"kind":"textbox","id":"sh/xovi9sfm","slide":7,"name":"stage-body-7-2","text":"Bake Type: Rebake\n配置済みballが再起動なしで更新\nUndo / RedoでBake前後を往復\nPlayでゲーム側描画を確認","textPreview":"Bake Type: Rebake | 配置済みballが再起動なしで更新 | Undo / RedoでBake前後を往復 | Playでゲーム側描画を確認","textChars":72,"textLines":4,"bbox":[862,458,330,164]}
+{"kind":"notes","id":"nt/dfb73t","slide":7,"text":"[Sources]\n- User-provided Production Mesh recording sequence.\n- application/editor/scene/EditorSceneComponentRegistry.cpp: editable source GUID/hash fields.\n- application/editor/mesh/EditorMeshBakeTools.cpp: Rebake property."}
+{"kind":"slide","id":"sl/eusl0f","slide":8,"title":"02 / MESH ARCHITECTURE","textShapes":15}
+{"kind":"textbox","id":"sh/b6h03ipc","slide":8,"name":"section-8","text":"02 / MESH ARCHITECTURE","textPreview":"02 / MESH ARCHITECTURE","textChars":22,"textLines":1,"bbox":[41.33,28,360,28]}
+{"kind":"textbox","id":"sh/w7qhwn6x","slide":8,"name":"title-8","text":"Asset Change TrackerがRendererとPhysicsを同時更新","textPreview":"Asset Change TrackerがRendererとPhysicsを同時更新","textChars":42,"textLines":1,"bbox":[41.33,58,1197.33,76]}
+{"kind":"textbox","id":"sh/x8zi5sn2","slide":8,"name":"page-8","text":"08","textPreview":"08","textChars":2,"textLines":1,"bbox":[1184.18,666,54.48,18]}
+{"kind":"shape","id":"sh/y98jyxon","slide":8,"name":"accent-rule","bbox":[41.33,146,96,5]}
+{"kind":"shape","id":"sh/jah07i58","slide":8,"name":"grid-box-8-0","bbox":[41.33,204,581.33,176]}
+{"kind":"textbox","id":"sh/kbq10n6t","slide":8,"name":"grid-no-8-0","text":"01","textPreview":"01","textChars":2,"textLines":1,"bbox":[63.33,222,52,28]}
+{"kind":"textbox","id":"sh/lwji9sne","slide":8,"name":"grid-title-8-0","text":"Stable Identity","textPreview":"Stable Identity","textChars":15,"textLines":1,"bbox":[127.33,219,473.33,42]}
+{"kind":"textbox","id":"sh/6xsj2xoz","slide":8,"name":"grid-body-8-0","text":"RebakeはAsset GUID・ID・pathを維持。Scene側のdurable referenceを切らない。","textPreview":"RebakeはAsset GUID・ID・pathを維持。Scene側のdurable referenceを切らない。","textChars":59,"textLines":1,"bbox":[63.33,273,537.33,86]}
+{"kind":"shape","id":"sh/7y10b25k","slide":8,"name":"grid-box-8-1","bbox":[656.86,204,581.33,176]}
+{"kind":"textbox","id":"sh/3q5k3a1s","slide":8,"name":"grid-no-8-1","text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[678.86,222,52,28]}
+{"kind":"textbox","id":"sh/25c3a5k7","slide":8,"name":"grid-title-8-1","text":"Atomic Publication","textPreview":"Atomic Publication","textChars":18,"textLines":1,"bbox":[742.86,219,473.33,42]}
+{"kind":"textbox","id":"sh/psn25kji","slide":8,"name":"grid-body-8-1","text":"source / cooked / collision / Registry / Sceneを1 File Transactionで発行。失敗時は全域rollback。","textPreview":"source / cooked / collision / Registry / Sceneを1 File Transactionで発行。失敗時は全域rollback。","textChars":84,"textLines":1,"bbox":[678.86,273,537.33,86]}
+{"kind":"shape","id":"sh/4relcf2x","slide":8,"name":"grid-box-8-2","bbox":[41.33,418,581.33,176]}
+{"kind":"textbox","id":"sh/f2lkzq1g","slide":8,"name":"grid-no-8-2","text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[63.33,436,52,28]}
+{"kind":"textbox","id":"sh/u1c365kv","slide":8,"name":"grid-title-8-2","text":"Change Detection","textPreview":"Change Detection","textChars":16,"textLines":1,"bbox":[127.33,433,473.33,42]}
+{"kind":"textbox","id":"sh/h43210jm","slide":8,"name":"grid-body-8-2","text":"artifact stampをPollし、変更AssetだけRuntime CacheへReconcile。検証失敗時はlast-known-goodを維持。","textPreview":"artifact stampをPollし、変更AssetだけRuntime CacheへReconcile。検証失敗時はlast-known-goodを維持。","textChars":79,"textLines":1,"bbox":[63.33,487,537.33,86]}
+{"kind":"shape","id":"sh/g3ul8v21","slide":8,"name":"grid-box-8-3","bbox":[656.86,418,581.33,176]}
+{"kind":"textbox","id":"sh/zypkbu1k","slide":8,"name":"grid-no-8-3","text":"04","textPreview":"04","textChars":2,"textLines":1,"bbox":[678.86,436,52,28]}
+{"kind":"textbox","id":"sh/exw3ipkf","slide":8,"name":"grid-title-8-3","text":"Runtime Generation","textPreview":"Runtime Generation","textChars":18,"textLines":1,"bbox":[742.86,433,473.33,42]}
+{"kind":"textbox","id":"sh/at0nat4n","slide":8,"name":"grid-body-8-3","text":"新generationへ差し替え、Renderer / Physicsが再Resolve。Draw Mode: Autoと各Readyを診断表示。","textPreview":"新generationへ差し替え、Renderer / Physicsが再Resolve。Draw Mode: Autoと各Readyを診断表示。","textChars":73,"textLines":1,"bbox":[678.86,487,537.33,86]}
+{"kind":"notes","id":"nt/eusl0f","slide":8,"text":"[Sources]\n- docs/EditorCoreDesign.md: prepared File Transaction and GUID-preserving Rebake.\n- application/editor/mesh/EditorProductionMeshAsset.cpp: Asset Change Tracker and runtime generations.\n- application/editor/EditorBuiltinDetailsSectionProviders.cpp: Production Mesh Presentation Ready stages."}
+{"kind":"slide","id":"sl/kal7qi","slide":9,"title":"03 / LOADER & PLACEMENT","textShapes":6}
+{"kind":"textbox","id":"sh/nal0zal0","slide":9,"name":"section-9","text":"03 / LOADER & PLACEMENT","textPreview":"03 / LOADER & PLACEMENT","textChars":23,"textLines":1,"bbox":[41.33,28,360,28]}
+{"kind":"textbox","id":"sh/obuh8f2l","slide":9,"name":"title-9","text":"Placement：選択AssetをPreview配置し、Sceneへ確定","textPreview":"Placement：選択AssetをPreview配置し、Sceneへ確定","textChars":37,"textLines":1,"bbox":[41.33,58,1197.33,76]}
+{"kind":"textbox","id":"sh/pcni1k36","slide":9,"name":"page-9","text":"09","textPreview":"09","textChars":2,"textLines":1,"bbox":[1184.18,666,54.48,18]}
+{"kind":"shape","id":"sh/e5cz25kj","slide":9,"name":"accent-rule","bbox":[41.33,146,96,5]}
+{"kind":"shape","id":"sh/f6lgvql4","slide":9,"name":"place-shot-backing","bbox":[658.17,170,581.6,470]}
+{"kind":"textbox","id":"sh/183ix03u","slide":9,"name":"place-body","text":"Ctrl + Space → Content Drawer\nAssets → Resources / Generated\n\nSelected Mesh: ball_production / GUID\nPlace Mode → Place Selected Asset\nUniform Scale → Viewport click → Accept\n\nWorld Outliner：Scene配下のEntity\nDetails：Transform / Mesh Renderer / Asset GUID\n\nF2で Demo_Mesh に変更","textPreview":"Ctrl + Space → Content Drawer | Assets → Resources / Generated |  | Selected Mesh: ball_production / GUID | Place Mode → Place Selected A...","textChars":270,"textLines":11,"bbox":[41.33,188,570,390]}
+{"kind":"shape","id":"sh/qhszylk7","slide":9,"name":"tag-Undoで消去 → Redoで同じEntityを復元","bbox":[41.33,594,570,50]}
+{"kind":"textbox","id":"sh/ri1grqls","slide":9,"name":"tag-text-Undoで消去 → Redoで同じEntityを復元","text":"Undoで消去 → Redoで同じEntityを復元","textPreview":"Undoで消去 → Redoで同じEntityを復元","textChars":26,"textLines":1,"bbox":[53.33,602,546,38]}
+{"kind":"textbox","id":"sh/n2lg3a5w","slide":9,"name":"place-caption","text":"実機キャプチャ｜Place Selected Asset / Selected Mesh","textPreview":"実機キャプチャ｜Place Selected Asset / Selected Mesh","textChars":44,"textLines":1,"bbox":[675,646,550,24]}
+{"kind":"image","id":"im/lsfe9srm","slide":9,"name":"","geometry":"roundRect","alt":"Place mode in the CG4 editor","bbox":[665.17,177,567.6,456]}
+{"kind":"notes","id":"nt/kal7qi","slide":9,"text":"[Sources]\n- Internal UI capture: .codex/slide_build/editor_place_mode.png\n- docs/EditorCoreDesign.md: Production Placement lifecycle.\n- application/editor/tools/EditorPlacementTools.cpp"}
+{"kind":"slide","id":"sl/kdjli6","slide":10,"title":"03 / PLACEMENT DEMO","textShapes":12}
+{"kind":"textbox","id":"sh/0rutkned","slide":10,"name":"section-10","text":"03 / PLACEMENT DEMO","textPreview":"03 / PLACEMENT DEMO","textChars":19,"textLines":1,"bbox":[41.33,28,360,28]}
+{"kind":"textbox","id":"sh/fqlcrix8","slide":10,"name":"title-10","text":"選択 → 生成 → 復元までを1本のデモで完結","textPreview":"選択 → 生成 → 復元までを1本のデモで完結","textChars":23,"textLines":1,"bbox":[41.33,58,1197.33,76]}
+{"kind":"textbox","id":"sh/epcbidwn","slide":10,"name":"page-10","text":"10","textPreview":"10","textChars":2,"textLines":1,"bbox":[1184.18,666,54.48,18]}
+{"kind":"shape","id":"sh/do3ap8f2","slide":10,"name":"accent-rule","bbox":[41.33,146,96,5]}
+{"kind":"shape","id":"sh/snutgneh","slide":10,"name":"timeline-line-10","bbox":[42,336,1128,0]}
+{"kind":"textbox","id":"sh/rm1snixw","slide":10,"name":"stage-label-10-0","text":"SELECT","textPreview":"SELECT","textChars":6,"textLines":1,"bbox":[42,278,330,34]}
+{"kind":"shape","id":"sh/qlsbedwb","slide":10,"name":"stage-dot-10-0","bbox":[42,326,20,20]}
+{"kind":"textbox","id":"sh/xknu1cf6","slide":10,"name":"stage-title-10-0","text":"Content Drawerで選択","textPreview":"Content Drawerで選択","textChars":17,"textLines":1,"bbox":[42,374,330,82]}
+{"kind":"textbox","id":"sh/wjets7el","slide":10,"name":"stage-body-10-0","text":"ball_production行をクリック\nSelected MeshとGUIDを撮影\nDrawerを閉じてPlaceへ","textPreview":"ball_production行をクリック | Selected MeshとGUIDを撮影 | Drawerを閉じてPlaceへ","textChars":60,"textLines":3,"bbox":[42,458,330,164]}
+{"kind":"textbox","id":"sh/2x4zqx03","slide":10,"name":"stage-label-10-1","text":"PLACE","textPreview":"PLACE","textChars":5,"textLines":1,"bbox":[452,278,330,34]}
+{"kind":"shape","id":"sh/3ydgz2ho","slide":10,"name":"stage-dot-10-1","bbox":[452,326,20,20]}
+{"kind":"textbox","id":"sh/4zmhs7i9","slide":10,"name":"stage-title-10-1","text":"PreviewからEntity生成","textPreview":"PreviewからEntity生成","textChars":17,"textLines":1,"bbox":[452,374,330,82]}
+{"kind":"textbox","id":"sh/p0vy1czu","slide":10,"name":"stage-body-10-1","text":"Place Selected Asset\n見やすいUniform Scale\nViewport click → Accept\nOutliner / Detailsを確認","textPreview":"Place Selected Asset | 見やすいUniform Scale | Viewport click → Accept | Outliner / Detailsを確認","textChars":84,"textLines":4,"bbox":[452,458,330,164]}
+{"kind":"textbox","id":"sh/utkfmx07","slide":10,"name":"stage-label-10-2","text":"PERSIST","textPreview":"PERSIST","textChars":7,"textLines":1,"bbox":[862,278,330,34]}
+{"kind":"shape","id":"sh/futgv2hs","slide":10,"name":"stage-dot-10-2","bbox":[862,326,20,20]}
+{"kind":"textbox","id":"sh/gv2ho7ix","slide":10,"name":"stage-title-10-2","text":"Demo_Meshを永続化","textPreview":"Demo_Meshを永続化","textChars":13,"textLines":1,"bbox":[862,374,330,82]}
+{"kind":"textbox","id":"sh/hwbyxszi","slide":10,"name":"stage-body-10-2","text":"F2でrename\nUndoで消去 / Redoで復元\nSave → Scene reopen / restart\nPlayでゲーム側表示","textPreview":"F2でrename | Undoで消去 / Redoで復元 | Save → Scene reopen / restart | Playでゲーム側表示","textChars":69,"textLines":4,"bbox":[862,458,330,164]}
+{"kind":"notes","id":"nt/kdjli6","slide":10,"text":"[Sources]\n- User-provided Loader and Placement recording sequence.\n- application/editor/tools/EditorPlacementTools.cpp: Uniform Scale and Place Selected Asset."}
+{"kind":"slide","id":"sl/r25q6y","slide":11,"title":"VERIFICATION","textShapes":15}
+{"kind":"textbox","id":"sh/rq943ahg","slide":11,"name":"section-11","text":"VERIFICATION","textPreview":"VERIFICATION","textChars":12,"textLines":1,"bbox":[41.33,28,360,28]}
+{"kind":"textbox","id":"sh/sr25cvi1","slide":11,"name":"title-11","text":"提出動画で残すべき5つの実装証拠","textPreview":"提出動画で残すべき5つの実装証拠","textChars":16,"textLines":1,"bbox":[41.33,58,1197.33,76]}
+{"kind":"textbox","id":"sh/dsbm50zm","slide":11,"name":"page-11","text":"11","textPreview":"11","textChars":2,"textLines":1,"bbox":[1184.18,666,54.48,18]}
+{"kind":"shape","id":"sh/i10n6l0z","slide":11,"name":"accent-rule","bbox":[41.33,146,96,5]}
+{"kind":"textbox","id":"sh/j294zqhk","slide":11,"name":"verify-lead","text":"“編集できる”だけではなく、\nデータの一貫性が保たれることを示す。","textPreview":"“編集できる”だけではなく、 | データの一貫性が保たれることを示す。","textChars":33,"textLines":2,"bbox":[41.33,184,581.33,100]}
+{"kind":"textbox","id":"sh/43i58vip","slide":11,"name":"verify-body","text":"評価者が確認できる連続性\n\n変更前 → Preview → Accept\n→ Undo / Redo → Runtime\n→ Save / Reload\n\nTerrain・Mesh・Placementで同じ観点を揃えることで、個別機能ではなくEditor基盤として説明できます。","textPreview":"評価者が確認できる連続性 |  | 変更前 → Preview → Accept | → Undo / Redo → Runtime | → Save / Reload |  | Terrain・Mesh・Placementで同じ観点を揃えることで、個別機能ではなくEdit...","textChars":139,"textLines":7,"bbox":[41.33,320,581.33,292]}
+{"kind":"shape","id":"sh/54rm10za","slide":11,"name":"check-0","bbox":[748,262,30,30]}
+{"kind":"textbox","id":"sh/uxg32l0n","slide":11,"name":"check-mark-0","text":"✓","textPreview":"✓","textChars":1,"textLines":1,"bbox":[754,263,20,24]}
+{"kind":"textbox","id":"sh/vyp4vqh8","slide":11,"name":"check-text-0","text":"Preview中はAuthoring dataが未変更","textPreview":"Preview中はAuthoring dataが未変更","textChars":27,"textLines":1,"bbox":[800,258,420,42]}
+{"kind":"shape","id":"sh/72h0zihw","slide":11,"name":"check-1","bbox":[748,332,30,30]}
+{"kind":"textbox","id":"sh/m1ojqdgb","slide":11,"name":"check-mark-1","text":"✓","textPreview":"✓","textChars":1,"textLines":1,"bbox":[754,333,20,24]}
+{"kind":"textbox","id":"sh/94zi1sz2","slide":11,"name":"check-text-1","text":"Accept後、Undo / Redoが同一単位","textPreview":"Accept後、Undo / Redoが同一単位","textChars":24,"textLines":1,"bbox":[800,328,420,42]}
+{"kind":"shape","id":"sh/83q1snyh","slide":11,"name":"check-2","bbox":[748,402,30,30]}
+{"kind":"textbox","id":"sh/v6hk32h8","slide":11,"name":"check-mark-2","text":"✓","textPreview":"✓","textChars":1,"textLines":1,"bbox":[754,403,20,24]}
+{"kind":"textbox","id":"sh/u58juxgn","slide":11,"name":"check-text-2","text":"同一GUID・revision / Ready診断","textPreview":"同一GUID・revision / Ready診断","textChars":25,"textLines":1,"bbox":[800,398,420,42]}
+{"kind":"shape","id":"sh/h8z25szy","slide":11,"name":"check-3","bbox":[748,472,30,30]}
+{"kind":"textbox","id":"sh/w7q1wnyd","slide":11,"name":"check-mark-3","text":"✓","textPreview":"✓","textChars":1,"textLines":1,"bbox":[754,473,20,24]}
+{"kind":"textbox","id":"sh/bad0ryho","slide":11,"name":"check-text-3","text":"Play / Simでゲーム画面へ反映","textPreview":"Play / Simでゲーム画面へ反映","textChars":19,"textLines":1,"bbox":[800,468,420,42]}
+{"kind":"shape","id":"sh/a94jit03","slide":11,"name":"check-4","bbox":[748,542,30,30]}
+{"kind":"textbox","id":"sh/e5c3q10r","slide":11,"name":"check-mark-4","text":"✓","textPreview":"✓","textChars":1,"textLines":1,"bbox":[754,543,20,24]}
+{"kind":"textbox","id":"sh/fql4z61c","slide":11,"name":"check-text-4","text":"Reload後もTerrain / Demo_Meshを維持","textPreview":"Reload後もTerrain / Demo_Meshを維持","textChars":30,"textLines":1,"bbox":[800,538,420,42]}
+{"kind":"notes","id":"nt/r25q6y","slide":11,"text":"[Sources]\n- User-provided evidence requirements for Undo/Redo, Play/Sim, Reload, Runtime Watch, GUID and Ready states.\n- Internal project implementation sources listed in .codex/slide_build/source-notes.txt."}
+{"kind":"slide","id":"sl/j8nvpp","slide":12,"title":"CG4 EDITOR","textShapes":3}
+{"kind":"textbox","id":"sh/sf6x8rq9","slide":12,"name":"close-eyebrow","text":"CG4 EDITOR","textPreview":"CG4 EDITOR","textChars":10,"textLines":1,"bbox":[41.33,41.18,260,54]}
+{"kind":"textbox","id":"sh/rexwfm9o","slide":12,"name":"close-title","text":"編集・反映・永続化を\n同じTransaction設計で接続","textPreview":"編集・反映・永続化を | 同じTransaction設計で接続","textChars":29,"textLines":2,"bbox":[41.33,182.55,1120,260]}
+{"kind":"textbox","id":"sh/qdof6h83","slide":12,"name":"close-details","text":"Terrain：局所差分　｜　Mesh：GUID維持　｜　Placement：Scene永続化","textPreview":"Terrain：局所差分　｜　Mesh：GUID維持　｜　Placement：Scene永続化","textChars":47,"textLines":1,"bbox":[41.33,522.13,1120,75]}
+{"kind":"shape","id":"sh/14zylwrq","slide":12,"name":"close-rule","bbox":[41.33,624,1197,4]}
+{"kind":"notes","id":"nt/j8nvpp","slide":12,"text":"[Sources]\n- Synthesis of the internal implementation and user-provided demonstration scope."}
