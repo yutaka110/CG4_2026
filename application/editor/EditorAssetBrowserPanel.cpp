@@ -5,6 +5,7 @@
 #include "EditorAssetImportService.h"
 #include "EditorAssetThumbnailService.h"
 #include "EditorNotificationCenter.h"
+#include "mesh/EditorObjProductionImportBridge.h"
 
 #include "../../externals/imgui/imgui.h"
 
@@ -485,6 +486,7 @@ void DrawProductionImportControls(
     EditorAssetSelection* assetSelection,
     EditorAssetThumbnailService* thumbnails,
     EditorNotificationCenter* notifications,
+    EditorProductionMeshRuntimeCache* runtimeCache,
     HWND nativeDialogOwner,
     std::vector<std::filesystem::path>* pendingExternalImportPaths,
     const EditorAssetRecord* selectedRecord) {
@@ -492,6 +494,7 @@ void DrawProductionImportControls(
     static std::array<char, 128> destinationFolderBuffer{};
     static int collisionIndex = 0;
     static bool initialized = false;
+    static std::string lastObjBakeSummary;
     if (!initialized) {
         std::snprintf(destinationFolderBuffer.data(), destinationFolderBuffer.size(), "%s", "Imported");
         initialized = true;
@@ -593,6 +596,57 @@ void DrawProductionImportControls(
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Reimports the selected asset while preserving its GUID.");
+    }
+
+    const bool canBakeSourceMesh =
+        selectedRecord != nullptr &&
+        EditorObjProductionImportBridge::CanImport(*selectedRecord);
+    if (!canBakeSourceMesh) {
+        ImGui::BeginDisabled();
+    }
+    if (ImGui::SmallButton("Import & Bake Mesh")) {
+        EditorObjProductionImportBridge bridge(
+            registry,
+            runtimeCache,
+            std::filesystem::current_path());
+        EditorObjProductionImportRequest request{};
+        request.sourceAssetGuid = selectedRecord->guid;
+        request.outputAssetName =
+            EditorObjProductionImportBridge::DefaultOutputAssetName(
+                *selectedRecord);
+        const EditorObjProductionImportResult result =
+            bridge.ImportAndBake(request);
+        lastObjBakeSummary = result.message;
+        if (notifications != nullptr) {
+            notifications->Push(
+                result.succeeded
+                    ? EditorNotificationSeverity::Info
+                    : EditorNotificationSeverity::Error,
+                "Mesh Production Import",
+                result.message);
+        }
+        if (result.succeeded) {
+            if (assetSelection != nullptr) {
+                assetSelection->SetPrimary(
+                    MakeEditorAssetHandle(
+                        result.record,
+                        registry.Revision()));
+            }
+            if (thumbnails != nullptr) {
+                thumbnails->Sync(registry);
+            }
+        }
+    }
+    if (!canBakeSourceMesh) {
+        ImGui::EndDisabled();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "Converts the selected OBJ, glTF, GLB, or FBX into a durable Production .mesh, "
+            "cooks Renderer LODs and Collision, then selects the result.");
+    }
+    if (!lastObjBakeSummary.empty()) {
+        ImGui::TextWrapped("OBJ Bake: %s", lastObjBakeSummary.c_str());
     }
 }
 
@@ -943,7 +997,8 @@ void DrawAssetGrid(
     EditorAssetSelection* assetSelection,
     const EditorAssetHandle* selectedAsset,
     EditorAssetThumbnailService* thumbnails,
-    EditorContentBrowserState* browserState) {
+    EditorContentBrowserState* browserState,
+    float height) {
     const float tileWidth = 124.0f;
     const float availableWidth = (std::max)(tileWidth, ImGui::GetContentRegionAvail().x);
     const int columns = (std::max)(1, static_cast<int>(availableWidth / tileWidth));
@@ -951,7 +1006,7 @@ void DrawAssetGrid(
             "EditorAssetBrowserGrid",
             columns,
             ImGuiTableFlags_ScrollY,
-            ImVec2(0.0f, 0.0f))) {
+            ImVec2(0.0f, height))) {
         return;
     }
 
@@ -1034,6 +1089,11 @@ void DrawContentBrowserNavigation(
 
 } // namespace
 
+float ResolveEditorAssetViewHeight(float availableHeight) {
+    constexpr float kMinimumAssetViewHeight = 180.0f;
+    return (std::max)(kMinimumAssetViewHeight, availableHeight);
+}
+
 void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) {
     if (context.registry == nullptr) {
         ImGui::TextUnformatted("Asset registry unavailable.");
@@ -1062,6 +1122,23 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
     }
 
     EditorAssetThumbnailService* thumbnails = context.thumbnails;
+    const EditorAssetHandle* selectedAsset =
+        context.assetSelection != nullptr ? context.assetSelection->Primary() : nullptr;
+    if (selectedAsset != nullptr && !selectedAsset->guid.empty() &&
+        browserState.SelectedAssetGuid() != selectedAsset->guid) {
+        browserState.SetSelectedAssetGuid(selectedAsset->guid);
+    }
+    if (selectedAsset != nullptr) {
+        ImGui::Text(
+            "Selected  %s:%s  GUID %s",
+            ToString(selectedAsset->kind),
+            selectedAsset->id.c_str(),
+            selectedAsset->guid.empty() ? "-" : selectedAsset->guid.c_str());
+    } else {
+        ImGui::TextUnformatted("Selected  none");
+    }
+
+    if (ImGui::CollapsingHeader("Asset Diagnostics & Operations")) {
     ImGui::Text(
         "Registry  Assets %u  Mesh %u  Durable %u/%u (%.1f%%)  Redirects %u  Auto GUID %u  Deps %u  Missing %u  Revision %u",
         static_cast<unsigned int>(registry.Count()),
@@ -1139,12 +1216,6 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
         ImGui::TextUnformatted("Preview Cache  unavailable");
     }
 
-    const EditorAssetHandle* selectedAsset =
-        context.assetSelection != nullptr ? context.assetSelection->Primary() : nullptr;
-    if (selectedAsset != nullptr && !selectedAsset->guid.empty() &&
-        browserState.SelectedAssetGuid() != selectedAsset->guid) {
-        browserState.SetSelectedAssetGuid(selectedAsset->guid);
-    }
     const EditorAssetRecord* activeSelectedRecord = nullptr;
     if (selectedAsset != nullptr) {
         const EditorAssetHandleResolveResult selectedResolve =
@@ -1252,11 +1323,26 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
         context.assetSelection,
         context.thumbnails,
         context.notifications,
+        context.productionMeshRuntimeCache,
         context.nativeDialogOwner,
         context.pendingExternalImportPaths,
         activeSelectedRecord);
+    }
 
-    ImGui::BeginChild("ContentBrowserNavigation", ImVec2(210.0f, 190.0f), true);
+    const float minimumAssetViewHeight = ResolveEditorAssetViewHeight(0.0f);
+    constexpr float kMinimumNavigationHeight = 112.0f;
+    constexpr float kMaximumNavigationHeight = 190.0f;
+    const float availableBeforeNavigation =
+        (std::max)(0.0f, ImGui::GetContentRegionAvail().y);
+    const float navigationHeight = (std::clamp)(
+        availableBeforeNavigation - minimumAssetViewHeight - ImGui::GetFrameHeightWithSpacing(),
+        kMinimumNavigationHeight,
+        kMaximumNavigationHeight);
+
+    ImGui::BeginChild(
+        "ContentBrowserNavigation",
+        ImVec2(210.0f, navigationHeight),
+        true);
     DrawContentBrowserNavigation(browserState, registry);
     ImGui::EndChild();
     ImGui::SameLine();
@@ -1321,6 +1407,8 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
 
     const std::vector<const EditorAssetRecord*> visibleAssets =
         browserState.FilterAssets(registry);
+    const float assetViewHeight =
+        ResolveEditorAssetViewHeight(ImGui::GetContentRegionAvail().y);
     if (browserState.ViewMode() == EditorContentBrowserViewMode::Grid) {
         DrawAssetGrid(
             visibleAssets,
@@ -1328,7 +1416,8 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
             context.assetSelection,
             selectedAsset,
             thumbnails,
-            &browserState);
+            &browserState,
+            assetViewHeight);
         return;
     }
 
@@ -1339,7 +1428,7 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
                 ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_Resizable |
                 ImGuiTableFlags_ScrollY,
-            ImVec2(0.0f, 0.0f))) {
+            ImVec2(0.0f, assetViewHeight))) {
         return;
     }
 
@@ -1364,6 +1453,10 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
             continue;
         }
         const EditorAssetRecord& record = *recordPtr;
+        const std::string rowIdentity = !record.guid.empty()
+            ? record.guid
+            : record.logicalPath;
+        ImGui::PushID(rowIdentity.c_str());
 
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
@@ -1458,6 +1551,7 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
         }
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(record.sourcePath.c_str());
+        ImGui::PopID();
     }
 
     ImGui::EndTable();

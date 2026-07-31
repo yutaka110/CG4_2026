@@ -6,9 +6,11 @@
 #include "EditorLayoutPersistenceService.h"
 #include "EditorPanelLayoutService.h"
 #include "EditorPlaySessionState.h"
+#include "EditorFramePacingService.h"
 #include "EditorTransformGizmoService.h"
 #include "EditorViewportInteractionService.h"
 #include "EditorViewportOverlay.h"
+#include "EditorViewportRealtimePolicy.h"
 #include "EditorViewportSelectionBridge.h"
 #include "EditorAssetSelection.h"
 #include "EditorNotificationCenter.h"
@@ -63,9 +65,9 @@ bool EditorViewportOverlayUiContains(
     float controlHeight) {
     if (!panelRect.Valid()) return false;
     const EditorPanelRect controls{
-        panelRect.x + panelRect.width - 92.0f,
+        panelRect.x + panelRect.width - 198.0f,
         panelRect.y + 8.0f,
-        82.0f,
+        188.0f,
         (std::max)(controlHeight, 20.0f)};
     return displayX >= controls.x && displayY >= controls.y &&
         displayX < controls.x + controls.width &&
@@ -161,6 +163,26 @@ void SubmitViewportDiagnostics(EditorContext& context, const EditorPanelRect& re
         text << "\nTool      " << tool.modeLabel;
         if (!tool.toolLabel.empty()) text << " / " << tool.toolLabel;
     }
+    if (context.viewportRealtimePolicy != nullptr) {
+        const EditorViewportRealtimeSnapshot realtime =
+            context.viewportRealtimePolicy->Evaluate(
+                EditorViewportRealtimeInput{
+                    context.playSession != nullptr &&
+                        context.playSession->IsActive(),
+                    context.viewportInteraction != nullptr &&
+                        context.viewportInteraction->HasAnyCapture(),
+                    context.interactiveTools != nullptr &&
+                        context.interactiveTools->HasActiveTool()});
+        text << "\nRealtime  " << ToString(realtime.reason);
+    }
+    if (context.framePacing != nullptr) {
+        const EditorFramePacingSnapshot& pacing =
+            context.framePacing->Snapshot();
+        text << "\nPacing    " << ToString(pacing.decision.mode);
+        if (pacing.decision.targetFps != 0) {
+            text << " @ " << pacing.decision.targetFps << " FPS";
+        }
+    }
 
     EditorViewportOverlayItemOptions options{};
     options.background = true;
@@ -233,6 +255,31 @@ void DrawViewportOverlayControls(
         ImGui::PopID();
     }
     ImGui::EndPopup();
+}
+
+void DrawViewportRealtimeControl(
+    EditorViewportRealtimePolicy& policy,
+    const EditorPanelRect& rect) {
+    const bool enabled = policy.RealtimeEnabled();
+    ImGui::SetCursorScreenPos(
+        ImVec2(rect.x + rect.width - 198.0f, rect.y + 8.0f));
+    if (enabled) {
+        ImGui::PushStyleColor(
+            ImGuiCol_Button,
+            ImVec4(0.08f, 0.42f, 0.58f, 1.0f));
+    }
+    if (ImGui::Button(enabled ? "Realtime On" : "Realtime Off",
+            ImVec2(98.0f, 0.0f))) {
+        policy.ToggleRealtime();
+    }
+    if (enabled) {
+        ImGui::PopStyleColor();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "Toggle continuous Viewport updates (Ctrl+R).\n"
+            "Play/Sim and active Viewport tools remain realtime.");
+    }
 }
 
 void AcceptSceneAssetDrop(EditorContext& context) {
@@ -388,6 +435,11 @@ void DrawEditorViewportPanelContent(
 
     DrawViewportRenderSurface(rect, renderInput);
     AcceptSceneAssetDrop(context);
+    if (context.viewportRealtimePolicy != nullptr) {
+        DrawViewportRealtimeControl(
+            *context.viewportRealtimePolicy,
+            rect);
+    }
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     if (context.viewportOverlay != nullptr) {

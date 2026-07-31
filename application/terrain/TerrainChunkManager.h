@@ -236,6 +236,11 @@ public:
     const std::vector<TerrainRenderChunk>& RenderChunks() const { return renderChunks_; }
     const TerrainDebrisCullingStats& LastDebrisCullingStats() const { return lastDebrisCullingStats_; }
     D3D12_GPU_DESCRIPTOR_HANDLE GetHiZDebugSrv(uint32_t level) const;
+    bool IsHiZFresh(
+        const Matrix4x4& viewProjection,
+        uint64_t maximumFrameAge = 1,
+        float matrixTolerance = 0.05f) const;
+    uint64_t HiZAgeFrames() const;
 
 private:
     void RebuildRenderChunks(
@@ -278,6 +283,9 @@ private:
     std::array<ge3::core::DescriptorHandle, kHiZMipCount> hiZUavs_{};
     std::array<D3D12_RESOURCE_STATES, kHiZMipCount> hiZStates_{};
     bool hiZResourcesReady_ = false;
+    uint64_t hiZBuildFrameSerial_ = 0;
+    Matrix4x4 hiZViewProjection_ = MakeIdentity4x4();
+    bool hiZViewProjectionValid_ = false;
     TerrainDebrisCullingStats lastDebrisCullingStats_{};
     uint32_t debrisCullingFrameCounter_ = 0;
 };

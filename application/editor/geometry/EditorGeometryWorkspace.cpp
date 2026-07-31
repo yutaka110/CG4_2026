@@ -1,5 +1,6 @@
 #include "EditorGeometryWorkspace.h"
 
+#include "../mesh/EditorProductionMeshEditableSourceMetadata.h"
 #include "../scene/EditorScene.h"
 #include "../world/SceneWorldObjectProvider.h"
 
@@ -135,11 +136,14 @@ void EditorGeometryWorkspace::Clear() {
     document_ = {};
     target_ = {};
     entityGuid_.clear();
+    meshAssetGuid_.clear();
     authored_.reset();
     preview_.reset();
     collisionPreview_.reset();
     authoredGeometryText_.reset();
     authoredCollisionText_.reset();
+    authoredSourceAssetGuid_.reset();
+    authoredSourceGeometryHash_.reset();
     transform_ = {};
     selectedFaces_.clear();
 }
@@ -154,10 +158,27 @@ void EditorGeometryWorkspace::RefreshFromScene() {
         Clear();
         return;
     }
+    const auto assetReference = std::find_if(
+        meshComponent->references.begin(),
+        meshComponent->references.end(),
+        [](const EditorSceneObjectReference& reference) {
+            return reference.property == "asset";
+        });
+    meshAssetGuid_ = assetReference == meshComponent->references.end()
+        ? std::string{}
+        : assetReference->assetGuid;
     const std::optional<std::string> geometry =
         PropertyValue(*meshComponent, kEditorEditableGeometryProperty);
     const std::optional<std::string> collision =
         PropertyValue(*meshComponent, kEditorGeneratedCollisionProperty);
+    const std::optional<std::string> sourceAssetGuid =
+        PropertyValue(
+            *meshComponent,
+            kEditorEditableSourceAssetGuidProperty);
+    const std::optional<std::string> sourceGeometryHash =
+        PropertyValue(
+            *meshComponent,
+            kEditorEditableSourceGeometryHashProperty);
     if (geometry != authoredGeometryText_) {
         authored_.reset();
         if (geometry.has_value()) {
@@ -172,6 +193,8 @@ void EditorGeometryWorkspace::RefreshFromScene() {
         PruneElementSelection();
     }
     authoredCollisionText_ = collision;
+    authoredSourceAssetGuid_ = sourceAssetGuid;
+    authoredSourceGeometryHash_ = sourceGeometryHash;
     transform_ = {};
     if (const EditorSceneComponent* transform = scene->FindComponent(*entity, kEditorTransformComponentType)) {
         if (const EditorSceneProperty* value = FindProperty(*transform, "translation")) {
@@ -201,7 +224,11 @@ const EditorGeometryMesh* EditorGeometryWorkspace::DisplayMesh() const noexcept 
 }
 
 EditorGeometryPropertyState EditorGeometryWorkspace::AuthoredState() const {
-    return {authoredGeometryText_, authoredCollisionText_};
+    return {
+        authoredGeometryText_,
+        authoredCollisionText_,
+        authoredSourceAssetGuid_,
+        authoredSourceGeometryHash_};
 }
 
 bool EditorGeometryWorkspace::SetPreview(

@@ -17,6 +17,7 @@ struct EditorBuiltinCommandProviderInput {
     std::function<EditorCommandResult()> pauseRuntime;
     std::function<EditorCommandResult()> resumeRuntime;
     std::function<EditorCommandResult()> stepRuntime;
+    std::function<EditorCommandResult()> toggleViewportPossession;
     std::function<EditorCommandResult()> resetRuntime;
     std::function<EditorCommandResult()> applyRuntimeChanges;
     std::function<EditorCommandResult(EditorTransformGizmoMode)> setTransformMode;

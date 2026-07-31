@@ -13,6 +13,7 @@
 #include "course/CourseMeshRenderQueue.h"
 #include "diagnostics/DebugDrawSystem.h"
 #include "Skeleton.h"
+#include "terrain/TerrainMaterialLibrary.h"
 #include "WeaponAttachment.h"
 #include "utils/math/MathUtils.h"
 #include "utils/math/Vector.h"
@@ -154,6 +155,17 @@ struct CascadeShadowData {
     Vector4 parameters{}; // x: depth bias, y: strength, z: enabled, w: texel size
 };
 
+struct TerrainPbrLayerGpuConstants {
+    Vector4 baseColorTintAndNormalStrength{};
+    Vector4 surfaceParameters{};
+    Vector4 scaleParameters{};
+};
+
+struct TerrainPbrLibraryGpuConstants {
+    std::array<TerrainPbrLayerGpuConstants, TerrainMaterialLibrary::kLayerCount> layers{};
+    Vector4 blendParameters{}; // x: floor start, y: floor end, z: height blend scale, w: layer count
+};
+
 struct AppManagedTextureResource {
     std::string name;
     std::string path;
@@ -195,6 +207,7 @@ public:
     static constexpr uint32_t kCascadeShadowCount = 4;
     static constexpr uint32_t kCascadeShadowMapSize = 2048;
     static constexpr uint32_t kCascadeShadowSrvBaseIndex = 12;
+    static constexpr uint32_t kTerrainPbrSrvBaseIndex = 16;
     static constexpr uint32_t kMaterialTextureSrvBaseIndex = 160;
     static constexpr uint32_t kMaterialTextureSrvCount = 512;
 
@@ -204,6 +217,23 @@ public:
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap,
         uint32_t descriptorSizeSRV);
     void ReleaseInitialUploadResources();
+    [[nodiscard]] bool PollTerrainMaterialHotReload();
+    bool ReloadTerrainMaterialAssets(
+        ID3D12GraphicsCommandList* uploadCommandList,
+        std::string* errorMessage = nullptr);
+    void PreviewTerrainMaterialDefinitions(
+        const std::array<TerrainPbrMaterialDefinition, TerrainMaterialLibrary::kLayerCount>&
+            definitions);
+    void ResetTerrainMaterialPreview();
+    [[nodiscard]] uint64_t TerrainMaterialRevision() const noexcept {
+        return terrainMaterialRevision_;
+    }
+    [[nodiscard]] bool TerrainMaterialReloadPending() const noexcept {
+        return terrainMaterialPendingSignature_ != 0;
+    }
+    [[nodiscard]] const std::string& TerrainMaterialHotReloadStatus() const noexcept {
+        return terrainMaterialHotReloadStatus_;
+    }
 
     void UpdateCameraWorldPosition(const Vector3& worldPosition);
     void UpdateTransforms(
@@ -252,6 +282,9 @@ public:
     Material* materialData = nullptr;
     Microsoft::WRL::ComPtr<ID3D12Resource> terrainMaterialResource;
     Material* terrainMaterialData = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12Resource> terrainPbrMaterialResource;
+    TerrainPbrLibraryGpuConstants* terrainPbrMaterialData = nullptr;
+    TerrainMaterialLibrary terrainMaterialLibrary;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> materialResourceSprite;
     Material* materialDataSprite = nullptr;
@@ -292,6 +325,9 @@ public:
     Microsoft::WRL::ComPtr<ID3D12Resource> terrainAlbedoTextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> terrainDetailCacheTextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> terrainDetailNormalMapTextureResource;
+    Microsoft::WRL::ComPtr<ID3D12Resource> terrainPbrNormalTextureResource;
+    Microsoft::WRL::ComPtr<ID3D12Resource> terrainPbrOrmTextureResource;
+    Microsoft::WRL::ComPtr<ID3D12Resource> terrainPbrHeightTextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> circle2TextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> gradationLineTextureResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> skyboxTextureResource;
@@ -302,6 +338,9 @@ public:
     D3D12_GPU_DESCRIPTOR_HANDLE terrainAlbedoTextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE terrainDetailCacheTextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE terrainDetailNormalMapTextureSrvHandleGPU{};
+    D3D12_GPU_DESCRIPTOR_HANDLE terrainPbrNormalTextureSrvHandleGPU{};
+    D3D12_GPU_DESCRIPTOR_HANDLE terrainPbrOrmTextureSrvHandleGPU{};
+    D3D12_GPU_DESCRIPTOR_HANDLE terrainPbrHeightTextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE circle2TextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE gradationLineTextureSrvHandleGPU{};
     D3D12_GPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleGPU{};
@@ -312,6 +351,9 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE terrainAlbedoTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE terrainDetailCacheTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE terrainDetailNormalMapTextureSrvHandleCPU{};
+    D3D12_CPU_DESCRIPTOR_HANDLE terrainPbrNormalTextureSrvHandleCPU{};
+    D3D12_CPU_DESCRIPTOR_HANDLE terrainPbrOrmTextureSrvHandleCPU{};
+    D3D12_CPU_DESCRIPTOR_HANDLE terrainPbrHeightTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE circle2TextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE gradationLineTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleCPU{};
@@ -361,4 +403,14 @@ public:
 
 private:
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> initialUploadResources_;
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> terrainRuntimeUploadResources_;
+    Microsoft::WRL::ComPtr<ID3D12Device> terrainPbrDevice_;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> terrainPbrSrvHeap_;
+    uint32_t terrainPbrDescriptorSize_ = 0;
+    uint64_t terrainMaterialWatchSignature_ = 0;
+    uint64_t terrainMaterialPendingSignature_ = 0;
+    uint64_t terrainMaterialPendingSinceMs_ = 0;
+    uint64_t terrainMaterialNextPollMs_ = 0;
+    uint64_t terrainMaterialRevision_ = 1;
+    std::string terrainMaterialHotReloadStatus_ = "Not initialized";
 };

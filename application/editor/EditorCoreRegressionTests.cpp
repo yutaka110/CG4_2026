@@ -2,6 +2,7 @@
 
 #include "EditorAssetMutationExecutor.h"
 #include "EditorAssetMutationSafety.h"
+#include "EditorAssetBrowserPanel.h"
 #include "EditorAssetFallbackIconAtlas.h"
 #include "EditorAssetFolderIndexer.h"
 #include "EditorAssetImportService.h"
@@ -23,14 +24,18 @@
 #include "EditorDetailsEditController.h"
 #include "EditorCompositePropertyAccessor.h"
 #include "EditorContentBrowserState.h"
+#include "EditorCommandContext.h"
 #include "EditorContext.h"
 #include "CourseObjectPropertyAdapter.h"
+#include "CourseMeshAssetAdapter.h"
 #include "EditorBuiltinDetailsSectionProviders.h"
 #include "EditorDetailsSectionProvider.h"
 #include "EditorDetailsViewState.h"
 #include "EditorFontService.h"
 #include "EditorLayoutPersistenceService.h"
 #include "EditorPanelLayoutService.h"
+#include "EditorContentDrawerService.h"
+#include "EditorFramePacingService.h"
 #include "EditorPanelRegistry.h"
 #include "EditorPlaySessionLifecycleService.h"
 #include "EditorPlaySessionRuntimeControlService.h"
@@ -50,11 +55,13 @@
 #include "EditorTransactionStack.h"
 #include "EditorTransformGizmoMath.h"
 #include "EditorTransformGizmoService.h"
+#include "EditorViewportRealtimePolicy.h"
 #include "EditorViewportCameraController.h"
 #include "EditorViewportCoordinateService.h"
 #include "EditorViewportInteractionService.h"
 #include "EditorViewportOverlay.h"
 #include "EditorViewportPanel.h"
+#include "EditorViewportSelectionBridge.h"
 #include "EditorValidationService.h"
 #include "ExistingFeatureProtection.h"
 #include "core/EditorExecutionContext.h"
@@ -111,9 +118,11 @@
 #include "world/IEditorWorldMutationProvider.h"
 #include "world/VfxWorldObjectProvider.h"
 #include "tools/EditorModeRegistry.h"
+#include "tools/EditorModePanels.h"
 #include "tools/EditorToolManager.h"
 #include "tools/EditorPlacementQueryService.h"
 #include "tools/EditorPlacementTools.h"
+#include "tools/EditorSplineRouteTool.h"
 #include "terrain/EditorTerrainBrushTools.h"
 #include "terrain/EditorTerrainEditCommand.h"
 #include "terrain/EditorTerrainSurfaceQuery.h"
@@ -122,8 +131,40 @@
 #include "geometry/EditorGeometryWorkspace.h"
 #include "geometry/EditorGeometryTools.h"
 #include "mesh/EditorProductionMeshAsset.h"
+#include "mesh/EditorCreateEditableCopyTool.h"
+#include "mesh/EditorProductionMeshEditableSourceLoader.h"
+#include "mesh/EditorProductionMeshEditableSourceMetadata.h"
 #include "mesh/EditorMeshBakePipeline.h"
 #include "mesh/EditorMeshBakeTools.h"
+#include "mesh/EditorObjProductionImportBridge.h"
+#include "scene/EditorBlenderSceneImportService.h"
+#include "scene/EditorBlenderSceneImportCommandProvider.h"
+#include "scene/EditorBlenderSceneImportTransaction.h"
+#include "scene/EditorBuiltInRuntimeFactoryRegistration.h"
+#include "scene/EditorGameplaySpawnRuntimeService.h"
+#include "scene/EditorGameplaySpawnRuntimeFactory.h"
+#include "scene/EditorGimmickComponent.h"
+#include "scene/EditorGimmickDefinitionRegistry.h"
+#include "scene/EditorGimmickEventBindingComponent.h"
+#include "scene/EditorGimmickEventBindingMutation.h"
+#include "scene/EditorGimmickEventSequenceComponent.h"
+#include "scene/EditorGimmickEventSequenceMutation.h"
+#include "scene/EditorGimmickPresentationPhysicsAdapter.h"
+#include "scene/EditorGimmickRuntimeActivationPolicy.h"
+#include "scene/EditorGimmickRuntimeEventBindingRegistry.h"
+#include "scene/EditorGimmickRuntimeEventRouter.h"
+#include "scene/EditorGimmickRuntimeDelayedEventScheduler.h"
+#include "scene/EditorGimmickRuntimeEventSequenceRegistry.h"
+#include "scene/EditorGimmickRuntimeFactory.h"
+#include "scene/EditorGimmickRuntimeInteractionSystem.h"
+#include "scene/EditorGimmickRuntimeTriggerSystem.h"
+#include "scene/EditorMeshRendererRuntimeFactory.h"
+#include "scene/EditorPatrolComponent.h"
+#include "scene/EditorPatrolRuntimeFactory.h"
+#include "scene/EditorSceneComponentRegistry.h"
+#include "scene/EditorSceneRuntimeInstantiation.h"
+#include "scene/EditorSplineRouteComponent.h"
+#include "scene/EditorSplineRouteEvaluationService.h"
 #include "scene/EditorProductionScenePipeline.h"
 
 #include "../AppEditorToolModules.h"
@@ -135,6 +176,7 @@
 #include "../HandParticleAttachment.h"
 #include "../WeaponAttachment.h"
 #include "../ModelLoaderAssimp.h"
+#include "../level/BlenderLevelJsonLoader.h"
 #include "../Skeleton.h"
 #include "../EffectAssetLoader.h"
 #include "../EffectRuntime.h"
@@ -155,6 +197,7 @@
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -407,6 +450,34 @@ void WriteBinaryFile(const std::filesystem::path& path, const std::vector<unsign
     file.write(
         reinterpret_cast<const char*>(bytes.data()),
         static_cast<std::streamsize>(bytes.size()));
+}
+
+std::vector<unsigned char> ReadBinaryFile(
+    const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error(
+            "failed to read " + path.generic_string());
+    }
+    file.seekg(0, std::ios::end);
+    const std::streamoff size = file.tellg();
+    if (size < 0) {
+        throw std::runtime_error(
+            "failed to measure " + path.generic_string());
+    }
+    file.seekg(0, std::ios::beg);
+    std::vector<unsigned char> bytes(
+        static_cast<std::size_t>(size));
+    if (!bytes.empty()) {
+        file.read(
+            reinterpret_cast<char*>(bytes.data()),
+            static_cast<std::streamsize>(bytes.size()));
+    }
+    if (!file && !bytes.empty()) {
+        throw std::runtime_error(
+            "failed to read complete file " + path.generic_string());
+    }
+    return bytes;
 }
 
 std::vector<unsigned char> MakeBmpPreviewHeader(uint32_t width, uint32_t height) {
@@ -2366,8 +2437,12 @@ void TestPlaySessionRuntimeControlService(RegressionRunner& runner) {
         &notifications,
         "regression.runtimeControl.lifecycle"};
     runner.Expect(
-        lifecycle.Begin(lifecycleRequest, EditorPlaySessionMode::Simulating).succeeded,
-        "runtime control test should begin simulate session");
+        lifecycle.Begin(lifecycleRequest, EditorPlaySessionMode::Playing).succeeded,
+        "runtime control test should begin play session");
+    runner.Expect(
+        playSession.ViewportPossessed() &&
+            playSession.ViewportMode() == EditorPlaySessionViewportMode::GameCamera,
+        "play should begin with the gameplay camera possessed");
 
     const EditorPlaySessionRuntimeControlRequest controlRequest{
         &playSession,
@@ -2382,14 +2457,45 @@ void TestPlaySessionRuntimeControlService(RegressionRunner& runner) {
     runner.Expect(playSession.RuntimePaused(), "runtime control pause should mark runtime paused");
     runner.Expect(!playSession.ShouldAdvanceRuntimeFrame(), "paused runtime should block frame advance");
 
+    const uint64_t runtimeFrameBeforeEject = playSession.RuntimeFrameCount();
+    const EditorPlaySessionRuntimeControlResult ejectResult =
+        runtimeControl.Eject(controlRequest);
+    runner.Expect(ejectResult.succeeded, "runtime control should eject an active play session");
+    runner.Expect(
+        playSession.IsSimulating() && playSession.ViewportEjected(),
+        "eject should switch only viewport ownership to the editor free camera");
+    runner.Expect(
+        playSession.RuntimePaused() &&
+            playSession.RuntimeFrameCount() == runtimeFrameBeforeEject,
+        "eject should preserve the frozen runtime state and frame number");
+
     const EditorPlaySessionRuntimeControlResult stepResult =
         runtimeControl.Step(controlRequest);
     runner.Expect(stepResult.succeeded, "runtime control should queue a single step");
     runner.Expect(playSession.ShouldAdvanceRuntimeFrame(), "queued step should allow one runtime frame");
     playSession.CompleteRuntimeFrameAdvance();
     runner.Expect(playSession.RuntimeFrameCount() == 1, "single step should advance one runtime frame");
+    runner.Expect(
+        playSession.RuntimeStepCount() == 1,
+        "completed single step should remain visible in debug evidence");
     runner.Expect(playSession.RuntimePaused(), "single step should return to paused state");
     runner.Expect(!playSession.RuntimeStepRequested(), "single step should consume the step request");
+    runner.Expect(
+        playSession.ViewportEjected(),
+        "single step should not take viewport ownership away from the editor camera");
+
+    const EditorPlaySessionRuntimeControlResult possessResult =
+        runtimeControl.Possess(controlRequest);
+    runner.Expect(possessResult.succeeded, "runtime control should possess an ejected session");
+    runner.Expect(
+        playSession.IsPlaying() && playSession.ViewportPossessed(),
+        "possess should restore gameplay camera ownership");
+    runner.Expect(
+        playSession.RuntimePaused() && playSession.RuntimeFrameCount() == 1,
+        "possess should preserve the frozen runtime state and stepped frame");
+    runner.Expect(
+        playSession.EjectCount() == 1 && playSession.PossessCount() == 1,
+        "viewport ownership transitions should be counted for debug evidence");
 
     const EditorPlaySessionRuntimeControlResult resumeResult =
         runtimeControl.Resume(controlRequest);
@@ -2414,6 +2520,10 @@ void TestPlaySessionRuntimeControlService(RegressionRunner& runner) {
 
     const EditorPlaySessionLifecycleResult stopResult = lifecycle.Stop(lifecycleRequest);
     runner.Expect(stopResult.succeeded, "runtime control test should still stop through lifecycle service");
+    runner.Expect(
+        playSession.IsStopped() &&
+            playSession.ViewportMode() == EditorPlaySessionViewportMode::EditorFree,
+        "stop should return viewport ownership to the editor");
 }
 
 void TestRuntimeAuthoringApplyService(RegressionRunner& runner) {
@@ -4483,6 +4593,12 @@ void TestMenuToolbarStatusEvolution(RegressionRunner& runner) {
         toolbarItem("course.apply") != tools.Toolbar().Items().end() &&
             toolbarItem("course.apply")->contextualDocumentType == EditorDocumentTypes::Course,
         "Course toolbar commands should be contextual rather than globally permanent");
+    const auto freezeItem = toolbarItem("course.previewFreeze");
+    runner.Expect(
+        freezeItem != tools.Toolbar().Items().end() &&
+            freezeItem->contextualDocumentType.empty() &&
+            freezeItem->requiresCoursePreview,
+        "Course Preview Freeze should follow Viewport preview presence instead of the active document type");
 
     EditorValidationReport validation;
     validation.errorCount = 2;
@@ -4495,6 +4611,15 @@ void TestMenuToolbarStatusEvolution(RegressionRunner& runner) {
     EditorContext context;
     context.validationReport = &validation;
     context.commands = &commands;
+    if (freezeItem != tools.Toolbar().Items().end()) {
+        runner.Expect(
+            !EditorToolbarItemMatchesContext(context, *freezeItem),
+            "Freeze should be hidden when no Course Preview is visible");
+        context.coursePreviewVisible = true;
+        runner.Expect(
+            EditorToolbarItemMatchesContext(context, *freezeItem),
+            "Freeze should remain visible over a Scene document while the Viewport shows a Course Preview");
+    }
     const EditorStatusBarSnapshot snapshot = BuildEditorStatusBarSnapshot(context);
     runner.Expect(
         snapshot.errorCount == 2 && snapshot.warningCount == 3 &&
@@ -4854,7 +4979,7 @@ void TestPrefabFoundation(RegressionRunner& runner) {
     EditorDocumentContent sceneEncoded{};
     runner.Expect(
         EditorSceneDocumentProvider::Encode(scene, &sceneEncoded, &error),
-        "Scene schema v2 should serialize Prefab instances and overrides");
+        "Scene schema v3 should serialize Prefab instances, overrides, and Runtime activation");
     EditorScene sceneDecoded{};
     runner.Expect(
         EditorSceneDocumentProvider::Decode(sceneEncoded, &sceneDecoded, &error) &&
@@ -4878,6 +5003,56 @@ void TestPrefabFoundation(RegressionRunner& runner) {
             legacyScene, &migratedScene, &sceneMigration, &error) &&
             sceneMigration.migrated && migratedScene.schemaVersion == kEditorSceneSchemaVersion,
         "Scene schema v1 should migrate to the persistent Prefab instance schema");
+
+    EditorScene legacyV2Model{};
+    EditorSceneEntity* legacyV2Entity =
+        legacyV2Model.CreateEntity(
+            "Legacy V2 Entity",
+            {},
+            "94949494949494949494949494949494");
+    if (legacyV2Entity != nullptr) {
+        legacyV2Entity->runtimeEnabled = false;
+    }
+    EditorDocumentContent legacyV2{};
+    runner.Expect(
+        EditorSceneDocumentProvider::Encode(
+            legacyV2Model, &legacyV2, &error),
+        "Scene schema v2 migration fixture should serialize");
+    std::string legacyV2Text(
+        legacyV2.bytes.begin(), legacyV2.bytes.end());
+    legacyV2Text.replace(
+        0,
+        std::string("SCENE 3").size(),
+        "SCENE 2");
+    const std::size_t legacyV2EntityBegin =
+        legacyV2Text.find("ENTITY ");
+    const std::size_t legacyV2EntityEnd =
+        legacyV2Text.find('\n', legacyV2EntityBegin);
+    const std::size_t legacyV2RuntimeField =
+        legacyV2Text.rfind(' ', legacyV2EntityEnd);
+    if (legacyV2EntityBegin != std::string::npos &&
+        legacyV2EntityEnd != std::string::npos &&
+        legacyV2RuntimeField != std::string::npos) {
+        legacyV2Text.erase(
+            legacyV2RuntimeField,
+            legacyV2EntityEnd - legacyV2RuntimeField);
+    }
+    legacyV2.bytes.assign(
+        legacyV2Text.begin(), legacyV2Text.end());
+    legacyV2.schemaVersion = 2;
+    EditorDocumentContent migratedV2{};
+    EditorDocumentMigrationReport migrationV2{};
+    EditorScene decodedV2{};
+    runner.Expect(
+        sceneDocuments.Migrate(
+            legacyV2, &migratedV2, &migrationV2, &error) &&
+            migrationV2.migrated &&
+            migratedV2.schemaVersion == kEditorSceneSchemaVersion &&
+            EditorSceneDocumentProvider::Decode(
+                migratedV2, &decodedV2, &error) &&
+            decodedV2.entities.size() == 1 &&
+            decodedV2.entities.front().runtimeEnabled,
+        "Scene schema v2 should migrate legacy Entities to Runtime Enabled by default");
     runner.Expect(
         EditorAssetKindForImportPath("sample.prefab") == EditorAssetKind::Prefab &&
             std::string(ToString(EditorAssetKind::Prefab)) == "Prefab",
@@ -5209,6 +5384,31 @@ void TestProductionGpuDrivenVisibilityPipeline(RegressionRunner& runner) {
         empty.size() == 2 && empty[0].commandOffset == 0 &&
             empty[0].commandCapacity == 0 && empty[1].commandCapacity == 0,
         "E-11 should preserve zero-capacity batches without overlapping command ranges");
+    runner.Expect(
+        !EditorProductionGpuDrivenPipeline::ShouldSubmitIndirect(
+            EditorProductionMeshDrawMode::Auto, true, true, false) &&
+            EditorProductionGpuDrivenPipeline::ShouldSubmitIndirect(
+                EditorProductionMeshDrawMode::Auto, true, true, true) &&
+            !EditorProductionGpuDrivenPipeline::ShouldSubmitIndirect(
+                EditorProductionMeshDrawMode::Auto, true, false, true) &&
+            EditorProductionGpuDrivenPipeline::ShouldSubmitIndirect(
+                EditorProductionMeshDrawMode::ForceGpuDriven, true, true,
+                false) &&
+            !EditorProductionGpuDrivenPipeline::ShouldSubmitIndirect(
+                EditorProductionMeshDrawMode::ForceDirect, true, true, true),
+        "E-11 Auto should retain Direct presentation until dispatch and "
+        "indirect-command readback are validated");
+    runner.Expect(
+        EditorProductionGpuDrivenPipeline::ShouldEnableOcclusion(
+            true, true, false, false) &&
+            !EditorProductionGpuDrivenPipeline::ShouldEnableOcclusion(
+                true, false, false, false) &&
+            !EditorProductionGpuDrivenPipeline::ShouldEnableOcclusion(
+                true, true, true, false) &&
+            !EditorProductionGpuDrivenPipeline::ShouldEnableOcclusion(
+                true, true, false, true),
+        "E-11 should consume only fresh Hi-Z and force Frustum-only culling "
+        "during retry or occlusion quarantine");
 }
 
 void TestWorldPartitionCellPolicy(RegressionRunner& runner) {
@@ -7674,6 +7874,796 @@ void TestWorldOutlinerMutations(RegressionRunner& runner) {
         "Outliner reparent should redo through the generic World execution service");
 }
 
+void TestBlenderLevelJsonLoader(RegressionRunner& runner) {
+    using ge3::level::BlenderEnemyType;
+    using ge3::level::BlenderLevelJsonLimits;
+    using ge3::level::BlenderLevelJsonLoader;
+    using ge3::level::BlenderLevelLoadErrorCode;
+    using ge3::level::BlenderSpawnKind;
+
+    const std::filesystem::path samplePath =
+        std::filesystem::path{"Resources"} / "Levels" / "Blender" / "sample_level_v1.json";
+    BlenderLevelJsonLoader loader;
+    const auto loaded = loader.LoadFile(samplePath);
+    runner.Expect(
+        loaded.Succeeded() && loaded.data->schemaVersion == 1 &&
+            loaded.data->sceneGuid == "11111111111111111111111111111111" &&
+            loaded.data->ObjectCount() == 2 &&
+            loaded.data->PlayerSpawnCount() == 1 &&
+            loaded.data->EnemySpawnCount() == 1,
+        "Blender Level loader should decode the fixed v1 file fixture");
+
+    const auto* player = loaded.Succeeded()
+        ? loaded.data->FindObject("22222222222222222222222222222222")
+        : nullptr;
+    const auto* enemy = loaded.Succeeded()
+        ? loaded.data->FindObject("33333333333333333333333333333333")
+        : nullptr;
+    runner.Expect(
+        player != nullptr && player->spawnKind == BlenderSpawnKind::Player &&
+            player->transform.translation.x == 0.0 &&
+            enemy != nullptr && enemy->spawnKind == BlenderSpawnKind::Enemy &&
+            enemy->enemyType == BlenderEnemyType::Turret &&
+            enemy->transform.translation.x == 10.0 &&
+            enemy->transform.translation.y == 2.0 &&
+            enemy->transform.translation.z == 30.0,
+        "Blender Level loader should preserve spawn roles, enemy types, and source transforms");
+
+    std::ifstream sampleStream(samplePath, std::ios::binary);
+    std::ostringstream sampleBuffer;
+    sampleBuffer << sampleStream.rdbuf();
+    const std::string sample = sampleBuffer.str();
+    runner.Expect(!sample.empty(), "Blender Level regression fixture should be readable");
+
+    std::string unsupportedVersion = sample;
+    const std::size_t versionOffset = unsupportedVersion.find("\"schema_version\": 1");
+    if (versionOffset != std::string::npos) {
+        unsupportedVersion.replace(
+            versionOffset,
+            std::string("\"schema_version\": 1").size(),
+            "\"schema_version\": 2");
+    }
+    const auto versionFailure =
+        loader.LoadJsonString(unsupportedVersion, "unsupported-version.json");
+    runner.Expect(
+        !versionFailure.Succeeded() && versionFailure.error.has_value() &&
+            versionFailure.error->code == BlenderLevelLoadErrorCode::SchemaViolation &&
+            versionFailure.error->jsonPath == "$.schema_version",
+        "Blender Level loader should reject unsupported schema versions with a JSON path");
+
+    std::string duplicateGuid = sample;
+    const std::size_t enemyGuidOffset =
+        duplicateGuid.find("33333333333333333333333333333333");
+    if (enemyGuidOffset != std::string::npos) {
+        duplicateGuid.replace(
+            enemyGuidOffset,
+            32,
+            "22222222222222222222222222222222");
+    }
+    const auto duplicateFailure =
+        loader.LoadJsonString(duplicateGuid, "duplicate-guid.json");
+    runner.Expect(
+        !duplicateFailure.Succeeded() && duplicateFailure.error.has_value() &&
+            duplicateFailure.error->code == BlenderLevelLoadErrorCode::SchemaViolation &&
+            duplicateFailure.error->message.find("duplicated") != std::string::npos,
+        "Blender Level loader should reject duplicated stable Object GUIDs");
+
+    const auto duplicateKeyFailure = loader.LoadJsonString(
+        R"({"schema_version":1,"schema_version":1})",
+        "duplicate-key.json");
+    runner.Expect(
+        !duplicateKeyFailure.Succeeded() && duplicateKeyFailure.error.has_value() &&
+            duplicateKeyFailure.error->code == BlenderLevelLoadErrorCode::JsonSyntax &&
+            duplicateKeyFailure.error->line == 1 &&
+            duplicateKeyFailure.error->column > 0,
+        "Blender Level JSON parser should reject duplicate keys with source coordinates");
+
+    const auto unicodeFailure = loader.LoadJsonString(
+        R"({"name":"\uD800"})",
+        "invalid-unicode.json");
+    runner.Expect(
+        !unicodeFailure.Succeeded() && unicodeFailure.error.has_value() &&
+            unicodeFailure.error->code == BlenderLevelLoadErrorCode::JsonSyntax,
+        "Blender Level JSON parser should reject unpaired Unicode surrogates");
+
+    std::string invalidUtf8 = "{\"name\":\"";
+    invalidUtf8.push_back(static_cast<char>(0xFF));
+    invalidUtf8 += "\"}";
+    const auto utf8Failure = loader.LoadJsonString(invalidUtf8, "invalid-utf8.json");
+    runner.Expect(
+        !utf8Failure.Succeeded() && utf8Failure.error.has_value() &&
+            utf8Failure.error->code == BlenderLevelLoadErrorCode::InvalidUtf8 &&
+            utf8Failure.error->line == 1,
+        "Blender Level loader should reject invalid UTF-8 before parsing");
+
+    BlenderLevelJsonLimits oneObjectLimits{};
+    oneObjectLimits.maximumObjects = 1;
+    const auto objectLimitFailure =
+        BlenderLevelJsonLoader(oneObjectLimits).LoadJsonString(sample, "object-limit.json");
+    runner.Expect(
+        !objectLimitFailure.Succeeded() && objectLimitFailure.error.has_value() &&
+            objectLimitFailure.error->code == BlenderLevelLoadErrorCode::ResourceLimit,
+        "Blender Level loader should enforce the configured total Object limit");
+
+    BlenderLevelJsonLimits byteLimits{};
+    byteLimits.maximumFileBytes = 16;
+    const auto byteLimitFailure =
+        BlenderLevelJsonLoader(byteLimits).LoadJsonString(sample, "byte-limit.json");
+    runner.Expect(
+        !byteLimitFailure.Succeeded() && byteLimitFailure.error.has_value() &&
+            byteLimitFailure.error->code == BlenderLevelLoadErrorCode::FileTooLarge,
+        "Blender Level loader should enforce the configured input byte limit");
+
+    const auto missingFile = loader.LoadFile(
+        std::filesystem::path{"Resources"} / "Levels" / "Blender" / "__missing__.json");
+    runner.Expect(
+        !missingFile.Succeeded() && missingFile.error.has_value() &&
+            missingFile.error->code == BlenderLevelLoadErrorCode::FileOpenFailed,
+        "Blender Level loader should report a missing source file without throwing");
+}
+
+void TestBlenderSceneImportReimport(RegressionRunner& runner) {
+    using ge3::level::BlenderEnemyType;
+    using ge3::level::BlenderLevelCollider;
+    using ge3::level::BlenderLevelData;
+    using ge3::level::BlenderLevelJsonLoader;
+    using ge3::level::BlenderLevelObject;
+    using ge3::level::BlenderSpawnKind;
+
+    const std::filesystem::path samplePath =
+        std::filesystem::path{"Resources"} / "Levels" / "Blender" /
+        "sample_level_v1.json";
+    const auto loaded = BlenderLevelJsonLoader(
+        ge3::level::BlenderLevelJsonLimits{}).LoadFile(samplePath);
+    runner.Expect(
+        loaded.Succeeded(),
+        "Blender Scene import regression should load the fixed v1 fixture");
+    if (!loaded.Succeeded()) return;
+
+    BlenderLevelData source = *loaded.data;
+    source.objects[1].fileName = "turret_mesh";
+    source.objects[1].transform.rotationDegrees.z = 90.0;
+    source.objects[1].collider = BlenderLevelCollider{
+        "BOX", {1.0, 2.0, 3.0}, {2.0, 4.0, 6.0}};
+    source.objects[0].children.push_back(source.objects[1]);
+    source.objects.erase(source.objects.begin() + 1);
+
+    EditorAssetRegistry assets;
+    EditorAssetRecord mesh{};
+    mesh.kind = EditorAssetKind::Mesh;
+    mesh.id = "turret_mesh";
+    mesh.guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    mesh.logicalPath = "Models/turret_mesh.obj";
+    mesh.sourcePath = "Resources/Models/turret_mesh.obj";
+    mesh.referenceable = true;
+    runner.Expect(
+        assets.Register(mesh),
+        "Blender Scene import regression Mesh Asset should register");
+
+    EditorBlenderSceneImportService service(&assets);
+    EditorScene scene;
+    const EditorBlenderSceneImportResult imported = service.Import(
+        source, samplePath, scene);
+    runner.Expect(
+        imported.succeeded && !imported.reimported &&
+            imported.createdObjectCount == 2 &&
+            imported.updatedObjectCount == 0 &&
+            imported.removedObjectCount == 0 &&
+            scene.entities.size() == 3 &&
+            scene.revision == 1,
+        "Blender Scene Import should atomically create an anchor and every source Object");
+
+    const auto componentProperty = [&](
+        const EditorSceneEntity* entity,
+        std::string_view componentType,
+        std::string_view propertyName) {
+        if (entity == nullptr) return std::string{};
+        const EditorSceneComponent* component =
+            scene.FindComponent(*entity, componentType);
+        if (component == nullptr) return std::string{};
+        const auto property = std::find_if(
+            component->properties.begin(),
+            component->properties.end(),
+            [&](const EditorSceneProperty& value) {
+                return value.name == propertyName;
+            });
+        return property != component->properties.end()
+            ? property->value
+            : std::string{};
+    };
+    const auto findImportedObject = [&](std::string_view sourceObjectGuid)
+        -> const EditorSceneEntity* {
+        for (const EditorSceneEntity& entity : scene.entities) {
+            const EditorSceneComponent* sourceComponent =
+                scene.FindComponent(
+                    entity, kEditorBlenderObjectSourceComponentType);
+            if (sourceComponent == nullptr) continue;
+            const auto objectGuid = std::find_if(
+                sourceComponent->properties.begin(),
+                sourceComponent->properties.end(),
+                [&](const EditorSceneProperty& property) {
+                    return property.name == "object_guid" &&
+                        property.value == sourceObjectGuid;
+                });
+            if (objectGuid != sourceComponent->properties.end()) return &entity;
+        }
+        return nullptr;
+    };
+
+    const EditorSceneEntity* anchor =
+        scene.FindEntity(imported.rootEntityGuid);
+    const EditorSceneEntity* player =
+        findImportedObject("22222222222222222222222222222222");
+    const EditorSceneEntity* enemy =
+        findImportedObject("33333333333333333333333333333333");
+    const std::string playerEntityGuid =
+        player != nullptr ? player->guid : std::string{};
+    const std::string enemyEntityGuid =
+        enemy != nullptr ? enemy->guid : std::string{};
+    runner.Expect(
+        anchor != nullptr && player != nullptr && enemy != nullptr &&
+            player->parentGuid == anchor->guid &&
+            enemy->parentGuid == player->guid &&
+            componentProperty(
+                anchor,
+                kEditorBlenderSceneSourceComponentType,
+                "scene_guid") == source.sceneGuid,
+        "Blender Scene Import should preserve source hierarchy and persistent provenance");
+
+    const std::string enemyTranslation = componentProperty(
+        enemy, kEditorTransformComponentType, "translation");
+    const std::string enemyRotation = componentProperty(
+        enemy, kEditorTransformComponentType, "rotation");
+    double rotationX = 0.0;
+    double rotationY = 0.0;
+    double rotationZ = 0.0;
+    std::istringstream rotationInput(enemyRotation);
+    rotationInput >> rotationX >> rotationY >> rotationZ;
+    runner.Expect(
+        enemyTranslation == "10 30 -2" &&
+            std::abs(rotationX) < 0.000001 &&
+            std::abs(rotationY - 1.5707963267948966) < 0.000001 &&
+            std::abs(rotationZ) < 0.000001,
+        "Blender +X/+Z-up/-Y-forward Transform should convert to GE3 +X/+Y-up/+Z-forward radians");
+
+    const EditorSceneComponent* enemySpawn = enemy != nullptr
+        ? scene.FindComponent(*enemy, kEditorGameplaySpawnPointComponentType)
+        : nullptr;
+    const EditorSceneComponent* enemyCollider = enemy != nullptr
+        ? scene.FindComponent(*enemy, kEditorBoxColliderComponentType)
+        : nullptr;
+    const EditorSceneComponent* enemyMesh = enemy != nullptr
+        ? scene.FindComponent(*enemy, kEditorMeshRendererComponentType)
+        : nullptr;
+    runner.Expect(
+        enemySpawn != nullptr &&
+            componentProperty(
+                enemy, kEditorGameplaySpawnPointComponentType, "kind") ==
+                "ENEMY" &&
+            componentProperty(
+                enemy,
+                kEditorGameplaySpawnPointComponentType,
+                "enemy_type") == "TURRET" &&
+            enemyCollider != nullptr &&
+            componentProperty(
+                enemy, kEditorBoxColliderComponentType, "center") ==
+                "1 3 -2" &&
+            componentProperty(
+                enemy, kEditorBoxColliderComponentType, "size") ==
+                "2 6 4" &&
+            enemyMesh != nullptr && enemyMesh->references.size() == 1 &&
+            enemyMesh->references.front().assetGuid ==
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "Blender metadata should become typed Spawn, BOX Collider, and resolved Mesh Renderer Components");
+
+    const uint64_t beforeRepeatedImportRevision = scene.revision;
+    const std::size_t beforeRepeatedImportEntities = scene.entities.size();
+    const EditorBlenderSceneImportResult repeatedImport =
+        service.Import(source, samplePath, scene);
+    runner.Expect(
+        !repeatedImport.succeeded &&
+            repeatedImport.errorCode ==
+                EditorBlenderSceneImportErrorCode::SourceAlreadyImported &&
+            scene.revision == beforeRepeatedImportRevision &&
+            scene.entities.size() == beforeRepeatedImportEntities,
+        "Import should reject an existing scene_guid without mutating EditorScene");
+
+    EditorSceneEntity* mutablePlayer = scene.FindEntity(playerEntityGuid);
+    if (mutablePlayer != nullptr) {
+        mutablePlayer->components.push_back(
+            {"user.gameplay-note", true, {{"text", "preserve me"}}, {}});
+    }
+    EditorSceneEntity* userChild =
+        scene.CreateEntity("User Child", enemyEntityGuid, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    runner.Expect(
+        mutablePlayer != nullptr && userChild != nullptr,
+        "Blender Reimport regression should create user-owned edits");
+
+    BlenderLevelData changed = source;
+    changed.objects[0].transform.translation = {4.0, 5.0, 6.0};
+    changed.objects[0].children.clear();
+    BlenderLevelObject routeMarker{};
+    routeMarker.guid = "44444444444444444444444444444444";
+    routeMarker.blenderType = "EMPTY";
+    routeMarker.name = "RouteMarker";
+    routeMarker.spawnKind = BlenderSpawnKind::None;
+    changed.objects.push_back(routeMarker);
+
+    const uint64_t beforeReimportRevision = scene.revision;
+    const EditorBlenderSceneImportResult reimported =
+        service.Reimport(changed, samplePath, scene);
+    player = findImportedObject("22222222222222222222222222222222");
+    enemy = findImportedObject("33333333333333333333333333333333");
+    const EditorSceneEntity* marker =
+        findImportedObject("44444444444444444444444444444444");
+    userChild = scene.FindEntity("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    runner.Expect(
+        reimported.succeeded && reimported.reimported &&
+            reimported.createdObjectCount == 1 &&
+            reimported.updatedObjectCount == 1 &&
+            reimported.removedObjectCount == 1 &&
+            reimported.preservedUserChildCount == 1 &&
+            scene.revision == beforeReimportRevision + 1 &&
+            player != nullptr && player->guid == playerEntityGuid &&
+            enemy == nullptr && marker != nullptr &&
+            userChild != nullptr && userChild->parentGuid == playerEntityGuid,
+        "Reimport should update/create/remove by Blender GUID while preserving user-owned children");
+    runner.Expect(
+        player != nullptr &&
+            scene.FindComponent(*player, "user.gameplay-note") != nullptr &&
+            componentProperty(
+                player, kEditorTransformComponentType, "translation") ==
+                "4 6 -5",
+        "Reimport should preserve user Components while replacing Blender-managed Transform data");
+
+    EditorDocumentContent encoded{};
+    std::string serializationError;
+    EditorScene decoded;
+    runner.Expect(
+        EditorSceneDocumentProvider::Encode(
+            scene, &encoded, &serializationError) &&
+            EditorSceneDocumentProvider::Decode(
+                encoded, &decoded, &serializationError) &&
+            decoded.FindEntity(playerEntityGuid) != nullptr &&
+            decoded.FindComponent(
+                *decoded.FindEntity(playerEntityGuid),
+                kEditorBlenderObjectSourceComponentType) != nullptr,
+        "Imported provenance and managed Components should persist through the native Scene format");
+
+    BlenderLevelData noPlayer = changed;
+    noPlayer.objects[0].spawnKind = BlenderSpawnKind::None;
+    const uint64_t beforeInvalidRevision = scene.revision;
+    const std::size_t beforeInvalidEntities = scene.entities.size();
+    const EditorBlenderSceneImportResult invalid =
+        service.Reimport(noPlayer, samplePath, scene);
+    runner.Expect(
+        !invalid.succeeded &&
+            invalid.errorCode ==
+                EditorBlenderSceneImportErrorCode::PlayabilityViolation &&
+            scene.revision == beforeInvalidRevision &&
+            scene.entities.size() == beforeInvalidEntities,
+        "A failed playable-level Reimport should leave EditorScene unchanged");
+
+    EditorScene freshScene;
+    const EditorBlenderSceneImportResult missingSource =
+        service.Reimport(changed, samplePath, freshScene);
+    runner.Expect(
+        !missingSource.succeeded &&
+            missingSource.errorCode ==
+                EditorBlenderSceneImportErrorCode::SourceNotImported &&
+            freshScene.entities.empty(),
+        "Reimport should require a matching persistent Blender Scene anchor");
+
+    EditorScene fileImportedScene;
+    const EditorBlenderSceneImportResult fileImported =
+        service.ImportFile(samplePath, fileImportedScene);
+    runner.Expect(
+        fileImported.succeeded &&
+            fileImportedScene.entities.size() == 3,
+        "ImportFile should connect BlenderLevelJsonLoader directly to EditorScene conversion");
+}
+
+void TestBlenderSceneImportEditorIntegration(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" /
+        "blender_scene_import_editor_integration";
+    RemoveTreeIfPresent(root);
+
+    EditorSceneDocumentProvider sceneProvider;
+    EditorDocumentRegistry documentRegistry;
+    std::string error;
+    runner.Expect(
+        documentRegistry.Register(sceneProvider, &error),
+        "Blender editor integration should register the Scene document provider");
+    EditorDocumentManager documentManager(documentRegistry, root);
+    const EditorDocumentOpenResult opened = documentManager.Open(
+        EditorDocumentTypes::Scene,
+        std::filesystem::path{"Scenes"} / "blender_import.scene");
+    runner.Expect(
+        opened.succeeded && opened.id.IsValid(),
+        "Blender editor integration should open an active Scene document");
+    if (!opened.succeeded) {
+        RemoveTreeIfPresent(root);
+        return;
+    }
+
+    EditorTransactionStack transactions;
+    EditorDirtyStateService dirtyState;
+    EditorAssetRegistry assets;
+    uint32_t sceneChangedCount = 0;
+    EditorBlenderSceneImportWorkflow workflow{
+        sceneProvider,
+        transactions,
+        &assets,
+        &documentManager,
+        &dirtyState,
+        [&](const EditorDocumentId&, std::string_view) {
+            ++sceneChangedCount;
+        }};
+    EditorBlenderSceneImportExecutionService executionService{
+        sceneProvider,
+        &documentManager,
+        &dirtyState,
+        [&](const EditorDocumentId&, std::string_view) {
+            ++sceneChangedCount;
+        }};
+
+    const std::filesystem::path samplePath =
+        std::filesystem::path{"Resources"} / "Levels" / "Blender" /
+        "sample_level_v1.json";
+    uint32_t fileSelectionCount = 0;
+    EditorCommandRegistry commands;
+    EditorCommandContext commandContext{};
+    commandContext.canMutateAuthoring = true;
+    EditorToolRegistry tools;
+    EditorContext context{};
+    context.commands = &commands;
+    context.commandContext = &commandContext;
+    context.tools = &tools;
+    context.documentManager = &documentManager;
+    context.blenderSceneImportWorkflow = &workflow;
+    context.blenderSceneImportExecution = &executionService;
+    context.selectBlenderLevelJsonFile = [&]() {
+        ++fileSelectionCount;
+        return std::optional<std::filesystem::path>{samplePath};
+    };
+    EditorBlenderSceneImportCommandProvider commandProvider;
+    commandProvider.RegisterCommands(context);
+
+    const EditorCommand* importCommand =
+        commands.Find("scene.blender.import");
+    const EditorCommand* reimportCommand =
+        commands.Find("scene.blender.reimport");
+    runner.Expect(
+        importCommand != nullptr && reimportCommand != nullptr &&
+            commands.IsEnabled(*importCommand) &&
+            !commands.IsEnabled(*reimportCommand),
+        "File commands should enable Import for an active Scene and gate Reimport until provenance exists");
+
+    RegisterDefaultEditorMenu(tools, commands);
+    const auto importMenu = std::find_if(
+        tools.Menu().Items().begin(),
+        tools.Menu().Items().end(),
+        [](const EditorMenuItemDescriptor& item) {
+            return item.commandId == "scene.blender.import";
+        });
+    runner.Expect(
+        importMenu != tools.Menu().Items().end() &&
+            importMenu->sectionId == "menu.file" &&
+            importMenu->contextualDocumentType == EditorDocumentTypes::Scene,
+        "Blender Level Import should appear in File and be contextual to Scene documents");
+
+    const EditorCommandResult imported =
+        commands.Execute("scene.blender.import");
+    const EditorScene* live = sceneProvider.Scene(opened.id);
+    const EditorDocumentRecord* document = documentManager.Find(opened.id);
+    const std::string dirtyId =
+        "scene.blender-import:" + opened.id.assetGuid;
+    runner.Expect(
+        imported.succeeded && fileSelectionCount == 1 &&
+            live != nullptr && live->entities.size() == 3 &&
+            transactions.UndoDepth() == 1 &&
+            document != nullptr && document->dirty &&
+            dirtyState.IsDirty(dirtyId) &&
+            sceneChangedCount == 1,
+        "File selection should import atomically, record one transaction, notify Scene refresh, and mark Dirty");
+    reimportCommand = commands.Find("scene.blender.reimport");
+    runner.Expect(
+        reimportCommand != nullptr && commands.IsEnabled(*reimportCommand),
+        "Reimport should enable after persistent Blender provenance is present");
+
+    const uint64_t revisionAfterImport =
+        live != nullptr ? live->revision : 0;
+    const uint64_t editRevisionAfterImport =
+        document != nullptr ? document->editRevision : 0;
+    EditorExecutionContext execution;
+    EditorError executionError;
+    runner.Expect(
+        execution.Register(executionService, &executionError) &&
+            transactions.Undo(execution, &executionError),
+        "Blender Scene Import should undo through EditorTransactionStack");
+    live = sceneProvider.Scene(opened.id);
+    document = documentManager.Find(opened.id);
+    runner.Expect(
+        live != nullptr && live->entities.empty() &&
+            live->revision > revisionAfterImport &&
+            transactions.RedoDepth() == 1 &&
+            document != nullptr &&
+            document->editRevision > editRevisionAfterImport &&
+            sceneChangedCount == 2,
+        "Import Undo should restore the exact previous Scene and publish Dirty/refresh changes");
+
+    const uint64_t revisionAfterUndo =
+        live != nullptr ? live->revision : 0;
+    runner.Expect(
+        transactions.Redo(execution, &executionError),
+        "Blender Scene Import should redo through EditorTransactionStack");
+    live = sceneProvider.Scene(opened.id);
+    runner.Expect(
+        live != nullptr && live->entities.size() == 3 &&
+            live->revision > revisionAfterUndo &&
+            transactions.UndoDepth() == 1 &&
+            sceneChangedCount == 3,
+        "Import Redo should restore the imported Scene and republish Dirty/refresh changes");
+
+    const EditorDocumentOpenResult budgetOpened = documentManager.Open(
+        EditorDocumentTypes::Scene,
+        std::filesystem::path{"Scenes"} / "budget_failure.scene");
+    EditorTransactionStack tinyTransactions;
+    EditorError budgetError;
+    tinyTransactions.SetMemoryBudgetBytes(1, &budgetError);
+    EditorDirtyStateService budgetDirty;
+    EditorBlenderSceneImportWorkflow budgetWorkflow{
+        sceneProvider,
+        tinyTransactions,
+        &assets,
+        &documentManager,
+        &budgetDirty};
+    const EditorBlenderSceneImportTransactionResult rejected =
+        budgetWorkflow.Execute(
+            EditorBlenderSceneImportMode::Import,
+            budgetOpened.id,
+            samplePath);
+    const EditorScene* budgetScene = sceneProvider.Scene(budgetOpened.id);
+    const EditorDocumentRecord* budgetDocument =
+        documentManager.Find(budgetOpened.id);
+    runner.Expect(
+        budgetOpened.succeeded && !rejected.succeeded &&
+            budgetScene != nullptr && budgetScene->entities.empty() &&
+            tinyTransactions.UndoDepth() == 0 &&
+            budgetDocument != nullptr && !budgetDocument->dirty &&
+            !budgetDirty.HasDirty(),
+        "Transaction budget rejection should leave Scene and Dirty state unchanged");
+
+    RemoveTreeIfPresent(root);
+}
+
+void TestGameplaySpawnRuntimeService(RegressionRunner& runner) {
+    RailPath railPath;
+    railPath.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 100.0f}, 18.0f, 32.0f},
+    });
+
+    EditorScene scene;
+    const std::string rootGuid = "10101010101010101010101010101010";
+    const std::string playerGuid = "20202020202020202020202020202020";
+    const std::string droneGuid = "30303030303030303030303030303030";
+    const std::string turretGuid = "40404040404040404040404040404040";
+    const std::string bossGuid = "50505050505050505050505050505050";
+    scene.CreateEntity(
+        "Spawn Root", {}, "10101010101010101010101010101010");
+    scene.CreateEntity(
+        "PlayerSpawn",
+        rootGuid,
+        "20202020202020202020202020202020");
+    scene.CreateEntity(
+        "DroneSpawn", {}, "30303030303030303030303030303030");
+    scene.CreateEntity(
+        "TurretSpawn", {}, "40404040404040404040404040404040");
+    scene.CreateEntity(
+        "BossSpawn", {}, "50505050505050505050505050505050");
+    EditorSceneEntity* root = scene.FindEntity(rootGuid);
+    EditorSceneEntity* player = scene.FindEntity(playerGuid);
+    EditorSceneEntity* drone = scene.FindEntity(droneGuid);
+    EditorSceneEntity* turret = scene.FindEntity(turretGuid);
+    EditorSceneEntity* boss = scene.FindEntity(bossGuid);
+
+    const auto addTransform = [&scene](EditorSceneEntity* entity, std::string translation) {
+        if (entity == nullptr) return;
+        EditorSceneComponent* component =
+            scene.FindComponent(*entity, kEditorTransformComponentType);
+        if (component == nullptr) return;
+        component->enabled = true;
+        component->properties = {
+            {"translation", std::move(translation)},
+            {"rotation", "0 0 0"},
+            {"scale", "1 1 1"},
+        };
+    };
+    const auto addSpawn = [](
+        EditorSceneEntity* entity,
+        std::string kind,
+        std::string enemyType) {
+        if (entity == nullptr) return;
+        entity->components.push_back(
+            {std::string(kEditorGameplaySpawnPointComponentType),
+             true,
+             {
+                 {"kind", std::move(kind)},
+                 {"enemy_type", std::move(enemyType)},
+             },
+             {}});
+    };
+    addTransform(root, "0 0 10");
+    addTransform(player, "2 4 10");
+    addSpawn(player, "PLAYER", "NONE");
+    addTransform(drone, "-3 5 35");
+    addSpawn(drone, "ENEMY", "DRONE");
+    addTransform(turret, "6 7 50");
+    addSpawn(turret, "ENEMY", "TURRET");
+    addTransform(boss, "0 9 75");
+    addSpawn(boss, "ENEMY", "BOSS");
+
+    EditorGameplaySpawnRuntimeService service;
+    EditorGameplaySpawnPlan plan;
+    const EditorGameplaySpawnRuntimeResult planned =
+        service.BuildPlan(scene, railPath, &plan);
+    const RailPathSample plannedPlayerRail =
+        railPath.Evaluate(plan.player.railDistance);
+    const Vector3 reconstructedPlayer{
+        plannedPlayerRail.position.x +
+            plannedPlayerRail.right.x * plan.player.lateralOffset +
+            plannedPlayerRail.up.x * plan.player.verticalOffset,
+        plannedPlayerRail.position.y +
+            plannedPlayerRail.right.y * plan.player.lateralOffset +
+            plannedPlayerRail.up.y * plan.player.verticalOffset,
+        plannedPlayerRail.position.z +
+            plannedPlayerRail.right.z * plan.player.lateralOffset +
+            plannedPlayerRail.up.z * plan.player.verticalOffset,
+    };
+    runner.Expect(
+        planned.succeeded && planned.applied &&
+            plan.hasSpawnComponents && plan.enemies.size() == 3 &&
+            std::abs(reconstructedPlayer.x - 2.0f) < 0.1f &&
+            std::abs(reconstructedPlayer.y - 4.0f) < 0.1f &&
+            std::abs(reconstructedPlayer.z - 20.0f) < 0.1f,
+        "Runtime Spawn plan should compose parent Transforms and project PlayerSpawn into rail coordinates"
+        " (result=" + planned.message +
+        ", world=" + std::to_string(plan.player.worldPosition.x) + "," +
+        std::to_string(plan.player.worldPosition.y) + "," +
+        std::to_string(plan.player.worldPosition.z) +
+        ", rail=" + std::to_string(plan.player.railDistance) + "," +
+        std::to_string(plan.player.lateralOffset) + "," +
+        std::to_string(plan.player.verticalOffset) +
+        ", reconstructed=" + std::to_string(reconstructedPlayer.x) + "," +
+        std::to_string(reconstructedPlayer.y) + "," +
+        std::to_string(reconstructedPlayer.z) + ")");
+
+    if (root != nullptr) {
+        root->runtimeEnabled = false;
+        scene.Touch();
+    }
+    EditorGameplaySpawnPlan inactiveHierarchyPlan;
+    const EditorGameplaySpawnRuntimeResult inactiveHierarchy =
+        service.BuildPlan(
+            scene, railPath, &inactiveHierarchyPlan);
+    runner.Expect(
+        !inactiveHierarchy.succeeded &&
+            inactiveHierarchy.message.find("no enabled PLAYER") !=
+                std::string::npos,
+        "Runtime Spawn planning should exclude a Player Spawn disabled by its parent hierarchy");
+    root = scene.FindEntity(rootGuid);
+    if (root != nullptr) {
+        root->runtimeEnabled = true;
+        scene.Touch();
+    }
+
+    CourseEventDispatcher dispatcher;
+    CourseSpawnRuntime spawnRuntime;
+    float runtimeDistance = 3.0f;
+    float playerLateral = 0.0f;
+    float playerVertical = 4.0f;
+    const auto target = [&]() {
+        return EditorGameplaySpawnRuntimeTarget{
+            &railPath,
+            &dispatcher,
+            &spawnRuntime,
+            runtimeDistance,
+            &playerLateral,
+            &playerVertical,
+            [&](float distance) {
+                runtimeDistance = distance;
+                spawnRuntime.Reset();
+            }};
+    };
+
+    const EditorGameplaySpawnRuntimeResult begun =
+        service.Begin(scene, target());
+    const auto hasActor = [&](std::string_view assetId) {
+        return std::any_of(
+            spawnRuntime.Enemies().begin(),
+            spawnRuntime.Enemies().end(),
+            [&](const CourseEnemyActor& enemy) {
+                return enemy.desc.actorAssetId == assetId;
+            });
+    };
+    runner.Expect(
+        begun.succeeded && begun.applied && service.Active() &&
+            begun.enemyCount == 3 &&
+            std::abs(runtimeDistance - plan.player.railDistance) < 0.01f &&
+            std::abs(playerLateral - 2.0f) < 0.1f &&
+            std::abs(playerVertical - 4.0f) < 0.1f &&
+            spawnRuntime.ActiveEnemyCount() == 3 &&
+            hasActor("drone_basic") &&
+            hasActor("cliff_turret") &&
+            hasActor("gatekeeper_boss"),
+        "Runtime Spawn Begin should teleport Player and instantiate each enemy type through existing actor assets");
+
+    service.Stop(target());
+    runner.Expect(
+        !service.Active() &&
+            std::abs(runtimeDistance - 3.0f) < 0.01f &&
+            std::abs(playerLateral) < 0.01f &&
+            std::abs(playerVertical - 4.0f) < 0.01f &&
+            spawnRuntime.ActiveEnemyCount() == 0,
+        "Runtime Spawn Stop should clear session actors and restore the pre-Play Player position");
+
+    EditorSceneComponentRegistry sceneComponents =
+        CreateBuiltInEditorSceneComponentRegistry();
+    EditorSceneRuntimeComponentFactoryRegistry runtimeFactories;
+    std::string runtimeFactoryError;
+    runner.Expect(
+        runtimeFactories.Register(
+            std::make_unique<EditorGameplaySpawnRuntimeFactory>(),
+            &runtimeFactoryError),
+        "Gameplay Spawn should register as a typed Runtime Scene Component Factory");
+    EditorSceneRuntimeInstantiationService runtimeInstantiation;
+    runner.Expect(
+        runtimeInstantiation.Bind(&sceneComponents, &runtimeFactories),
+        "Runtime Scene Instantiation should bind valid registries");
+    EditorGameplaySpawnRuntimeTarget runtimeTarget = target();
+    EditorSceneRuntimeServiceRegistry runtimeServices;
+    runtimeServices.Bind(
+        std::string(kEditorGameplaySpawnRuntimeTargetServiceId),
+        &runtimeTarget);
+    const EditorSceneRuntimeInstantiationResult runtimeBegin =
+        runtimeInstantiation.Begin(scene, runtimeServices);
+    runner.Expect(
+        runtimeBegin.succeeded && runtimeBegin.applied &&
+            runtimeBegin.componentCount == 4 &&
+            runtimeBegin.factoryCount == 1 &&
+            spawnRuntime.ActiveEnemyCount() == 3,
+        "Runtime Scene Instantiation should consume gameplay.spawn-point through its registered Factory");
+    runtimeInstantiation.Stop();
+    runner.Expect(
+        !runtimeInstantiation.Active() &&
+            spawnRuntime.ActiveEnemyCount() == 0 &&
+            std::abs(runtimeDistance - 3.0f) < 0.01f,
+        "Runtime Scene Factory teardown should restore the isolated Spawn session");
+
+    EditorScene missingPlayer;
+    EditorSceneEntity* invalidEnemy = missingPlayer.CreateEntity(
+        "InvalidEnemy", {}, "60606060606060606060606060606060");
+    addTransform(invalidEnemy, "0 0 25");
+    addSpawn(invalidEnemy, "ENEMY", "DRONE");
+    EditorGameplaySpawnPlan invalidPlan;
+    const EditorGameplaySpawnRuntimeResult invalid =
+        service.BuildPlan(missingPlayer, railPath, &invalidPlan);
+    runner.Expect(
+        !invalid.succeeded &&
+            invalid.message.find("no enabled PLAYER") != std::string::npos,
+        "Runtime Spawn validation should reject authored enemies without one PlayerSpawn");
+
+    EditorScene emptyScene;
+    EditorGameplaySpawnPlan emptyPlan;
+    const EditorGameplaySpawnRuntimeResult empty =
+        service.BuildPlan(emptyScene, railPath, &emptyPlan);
+    runner.Expect(
+        empty.succeeded && !empty.applied,
+        "Scenes without gameplay.spawn-point should keep the legacy runtime start unchanged");
+}
+
 void TestSceneEntityComponentFoundation(RegressionRunner& runner) {
     const std::filesystem::path root =
         std::filesystem::path{"generated"} / "editor" / "tests" / "scene_foundation_regression";
@@ -7745,6 +8735,106 @@ void TestSceneEntityComponentFoundation(RegressionRunner& runner) {
             mesh->references.front().assetGuid == createAssetEntity.assetGuid,
         "Asset Drop should preserve an Asset GUID object reference on the typed Component");
 
+    EditorWorldMutationRequest createPatrolRoute{};
+    createPatrolRoute.kind = EditorWorldMutationKind::Create;
+    createPatrolRoute.targets = {worldProvider.RootHandle()};
+    createPatrolRoute.name = "Patrol Route";
+    result = mutations.Execute(
+        createPatrolRoute, transactions, true);
+    const EditorObjectHandle patrolRouteHandle =
+        result.succeeded && !result.resultingSelection.empty()
+        ? result.resultingSelection.front()
+        : EditorObjectHandle{};
+    const EditorSceneEntity* patrolRouteEntity =
+        worldProvider.ResolveEntity(patrolRouteHandle);
+    const std::string patrolRouteGuid = patrolRouteEntity != nullptr
+        ? patrolRouteEntity->guid
+        : std::string{};
+    EditorWorldMutationRequest addPatrolRoute{};
+    addPatrolRoute.kind = EditorWorldMutationKind::AddComponent;
+    addPatrolRoute.targets = {patrolRouteHandle};
+    addPatrolRoute.name = std::string(kEditorSplineRouteComponentType);
+    const EditorWorldMutationResult addedPatrolRoute =
+        mutations.Execute(addPatrolRoute, transactions, true);
+
+    EditorWorldMutationRequest setupPatrol{};
+    setupPatrol.kind = EditorWorldMutationKind::SetupPatrol;
+    setupPatrol.targets = {
+        worldModel.FindByStableId(childHandle.stableId)->handle};
+    setupPatrol.patrolSetup.routeEntityGuid = patrolRouteGuid;
+    setupPatrol.patrolSetup.enemyType = "TURRET";
+    setupPatrol.patrolSetup.speed = 7.5f;
+    setupPatrol.patrolSetup.startDistance = 2.0f;
+    setupPatrol.patrolSetup.traversalMode =
+        EditorPatrolTraversalMode::PingPong;
+    const EditorWorldMutationResult patrolSetupResult =
+        mutations.Execute(setupPatrol, transactions, true);
+    child = scene->FindEntity(childGuid);
+    const EditorSceneComponent* patrolSetupSpawn = child != nullptr
+        ? scene->FindComponent(
+            *child, kEditorGameplaySpawnPointComponentType)
+        : nullptr;
+    const EditorSceneComponent* patrolSetupComponent = child != nullptr
+        ? scene->FindComponent(*child, kEditorPatrolComponentType)
+        : nullptr;
+    const auto patrolSpawnKind = patrolSetupSpawn != nullptr
+        ? std::find_if(
+            patrolSetupSpawn->properties.begin(),
+            patrolSetupSpawn->properties.end(),
+            [](const EditorSceneProperty& property) {
+                return property.name == "kind";
+            })
+        : std::vector<EditorSceneProperty>::const_iterator{};
+    const auto patrolEnemyType = patrolSetupSpawn != nullptr
+        ? std::find_if(
+            patrolSetupSpawn->properties.begin(),
+            patrolSetupSpawn->properties.end(),
+            [](const EditorSceneProperty& property) {
+                return property.name == "enemy_type";
+            })
+        : std::vector<EditorSceneProperty>::const_iterator{};
+    const EditorSceneObjectReference* patrolRouteReference =
+        patrolSetupComponent != nullptr
+        ? FindEditorSceneEntityReference(
+            *patrolSetupComponent,
+            kEditorPatrolRouteReferenceProperty)
+        : nullptr;
+    runner.Expect(
+        addedPatrolRoute.succeeded &&
+            patrolSetupResult.succeeded &&
+            patrolSetupSpawn != nullptr &&
+            patrolSpawnKind != patrolSetupSpawn->properties.end() &&
+            patrolSpawnKind->value == "ENEMY" &&
+            patrolEnemyType != patrolSetupSpawn->properties.end() &&
+            patrolEnemyType->value == "TURRET" &&
+            patrolSetupComponent != nullptr &&
+            patrolRouteReference != nullptr &&
+            patrolRouteReference->entityGuid == patrolRouteGuid &&
+            scene->Validate().Succeeded(),
+        "Patrol Setup should atomically create an ENEMY Spawn Point, Patrol, and typed Route reference");
+
+    const bool patrolSetupUndone =
+        transactions.Undo(executionContext, &executionError);
+    child = scene->FindEntity(childGuid);
+    runner.Expect(
+        patrolSetupUndone && child != nullptr &&
+            scene->FindComponent(
+                *child, kEditorGameplaySpawnPointComponentType) == nullptr &&
+            scene->FindComponent(*child, kEditorPatrolComponentType) == nullptr,
+        "Patrol Setup Undo should remove Spawn Point and Patrol as one transaction");
+    const bool patrolSetupRedone =
+        transactions.Redo(executionContext, &executionError);
+    child = scene->FindEntity(childGuid);
+    runner.Expect(
+        patrolSetupRedone && child != nullptr &&
+            scene->FindComponent(
+                *child, kEditorGameplaySpawnPointComponentType) != nullptr &&
+            scene->FindComponent(*child, kEditorPatrolComponentType) != nullptr,
+        "Patrol Setup Redo should restore the complete configured dependency set");
+    transactions.Undo(executionContext, &executionError);
+    scene->DeleteEntity(patrolRouteGuid);
+    worldModel.Refresh();
+
     EditorWorldMutationRequest reparent{};
     reparent.kind = EditorWorldMutationKind::Reparent;
     reparent.targets = {childHandle};
@@ -7753,6 +8843,46 @@ void TestSceneEntityComponentFoundation(RegressionRunner& runner) {
     child = scene->FindEntity(childGuid);
     runner.Expect(result.succeeded && child != nullptr && child->parentGuid == parentGuid,
         "Scene hierarchy reparent should persist the parent Entity GUID");
+
+    EditorWorldMutationRequest runtimeEnabled{};
+    runtimeEnabled.kind =
+        EditorWorldMutationKind::SetRuntimeEnabled;
+    runtimeEnabled.targets = {
+        worldModel.FindByStableId(parentHandle.stableId)->handle};
+    runtimeEnabled.value = false;
+    result = mutations.Execute(
+        runtimeEnabled, transactions, true);
+    parent = scene->FindEntity(parentGuid);
+    child = scene->FindEntity(childGuid);
+    const EditorWorldObjectRecord* parentWorldRecord =
+        worldModel.FindByStableId(parentHandle.stableId);
+    const EditorWorldObjectRecord* childWorldRecord =
+        worldModel.FindByStableId(childHandle.stableId);
+    runner.Expect(
+        result.succeeded &&
+            parent != nullptr &&
+            child != nullptr &&
+            !parent->runtimeEnabled &&
+            child->runtimeEnabled &&
+            !scene->IsRuntimeActiveInHierarchy(parentGuid) &&
+            !scene->IsRuntimeActiveInHierarchy(childGuid) &&
+            parentWorldRecord != nullptr &&
+            childWorldRecord != nullptr &&
+            !parentWorldRecord->runtimeEnabled &&
+            !childWorldRecord->runtimeActiveInHierarchy,
+        "Runtime Enabled should persist self state and propagate effective inactivity through the Entity hierarchy");
+    runner.Expect(
+        transactions.Undo(executionContext, &executionError) &&
+            scene->FindEntity(parentGuid) != nullptr &&
+            scene->FindEntity(parentGuid)->runtimeEnabled &&
+            scene->IsRuntimeActiveInHierarchy(childGuid),
+        "Entity Runtime Enabled should undo through the shared World transaction path");
+    runner.Expect(
+        transactions.Redo(executionContext, &executionError) &&
+            scene->FindEntity(parentGuid) != nullptr &&
+            !scene->FindEntity(parentGuid)->runtimeEnabled &&
+            !scene->IsRuntimeActiveInHierarchy(childGuid),
+        "Entity Runtime Enabled should redo and restore hierarchical Runtime inactivity");
 
     EditorWorldMutationRequest addComponent{};
     addComponent.kind = EditorWorldMutationKind::AddComponent;
@@ -7771,6 +8901,22 @@ void TestSceneEntityComponentFoundation(RegressionRunner& runner) {
         "Component undo should restore the exact pre-edit Scene snapshot");
     runner.Expect(transactions.Redo(executionContext, &executionError),
         "Scene Component addition should redo through generic World transactions");
+
+    EditorWorldMutationRequest disableComponent{};
+    disableComponent.kind = EditorWorldMutationKind::SetComponentEnabled;
+    disableComponent.targets = {
+        worldModel.FindByStableId(childHandle.stableId)->handle};
+    disableComponent.componentType =
+        std::string(kEditorAudioSourceComponentType);
+    disableComponent.value = false;
+    result = mutations.Execute(disableComponent, transactions, true);
+    child = scene->FindEntity(childGuid);
+    const EditorSceneComponent* disabledAudio = child != nullptr
+        ? scene->FindComponent(*child, kEditorAudioSourceComponentType)
+        : nullptr;
+    runner.Expect(
+        result.succeeded && disabledAudio != nullptr && !disabledAudio->enabled,
+        "Details Component Enabled checkbox should mutate Scene state transactionally");
 
     runner.Expect(documentManager.MarkDirty(opened.id, "Scene foundation regression"),
         "Scene mutation should mark the Scene Document dirty");
@@ -7793,15 +8939,3920 @@ void TestSceneEntityComponentFoundation(RegressionRunner& runner) {
     const EditorSceneComponent* reloadedMesh = reloadedChild != nullptr
         ? scene->FindComponent(*reloadedChild, kEditorMeshRendererComponentType)
         : nullptr;
+    const EditorSceneComponent* reloadedAudio = reloadedChild != nullptr
+        ? scene->FindComponent(*reloadedChild, kEditorAudioSourceComponentType)
+        : nullptr;
     runner.Expect(reloadedParent != nullptr && reloadedChild != nullptr &&
             reloadedChild->parentGuid == parentGuid && reloadedMesh != nullptr &&
+            !reloadedParent->runtimeEnabled &&
+            reloadedChild->runtimeEnabled &&
+            !scene->IsRuntimeActiveInHierarchy(childGuid) &&
+            reloadedAudio != nullptr && !reloadedAudio->enabled &&
             !reloadedMesh->references.empty() &&
             reloadedMesh->references.front().assetGuid == createAssetEntity.assetGuid,
-        "Scene Save/Reload should preserve Entity GUIDs, hierarchy, Component types, and references");
+        "Scene Save/Reload should preserve Entity GUIDs, Runtime hierarchy state, Component types, and references");
     runner.Expect(scene != nullptr && scene->Validate().Succeeded(),
         "reloaded Scene should pass hierarchy, GUID, Component, and reference validation");
 
     std::filesystem::remove_all(root, cleanupError);
+}
+
+void TestSceneComponentRegistryAndRuntimeInstantiation(
+    RegressionRunner& runner) {
+    EditorSceneComponentRegistry componentRegistry =
+        CreateBuiltInEditorSceneComponentRegistry();
+    const EditorSceneComponentDescriptor* spawnDescriptor =
+        componentRegistry.Find(kEditorGameplaySpawnPointComponentType);
+    const EditorSceneComponentPropertyDescriptor* spawnKind =
+        spawnDescriptor != nullptr
+        ? FindEditorSceneComponentPropertyDescriptor(*spawnDescriptor, "kind")
+        : nullptr;
+    const EditorSceneComponent meshDefault =
+        componentRegistry.CreateDefault(kEditorMeshRendererComponentType);
+    runner.Expect(
+        componentRegistry.Count() >= 15 &&
+            spawnDescriptor != nullptr &&
+            spawnDescriptor->runtimePolicy ==
+                EditorSceneRuntimeInstantiationPolicy::Required &&
+            spawnKind != nullptr &&
+            spawnKind->kind == EditorScenePropertyKind::Enumeration &&
+            spawnKind->enumValues.size() == 2 &&
+            meshDefault.typeId == kEditorMeshRendererComponentType,
+        "Scene Component Registry should own built-in identity, typed properties, defaults, and Runtime policy");
+
+    EditorSceneComponentDescriptor runtimeDescriptor{};
+    runtimeDescriptor.typeId = "test.runtime-component";
+    runtimeDescriptor.displayName = "Test Runtime Component";
+    runtimeDescriptor.category = "Regression";
+    runtimeDescriptor.runtimePolicy =
+        EditorSceneRuntimeInstantiationPolicy::Required;
+    runtimeDescriptor.properties.push_back(
+        {"enabledByTest", "Enabled By Test",
+         EditorScenePropertyKind::Boolean, "true", {}, true});
+    std::string error;
+    runner.Expect(
+        componentRegistry.Register(runtimeDescriptor, &error) &&
+            !componentRegistry.Register(runtimeDescriptor, &error),
+        "Scene Component Registry should accept one descriptor and reject duplicate Type IDs");
+
+    EditorScene scene;
+    EditorSceneEntity* entity = scene.CreateEntity(
+        "Runtime Entity", {}, "90909090909090909090909090909090");
+    runner.Expect(
+        entity != nullptr &&
+            scene.AddComponent(
+                entity->guid,
+                runtimeDescriptor.typeId,
+                nullptr,
+                &componentRegistry),
+        "Scene should construct registered Component defaults through the injected Registry");
+
+    struct FactoryState {
+        std::size_t instantiateCount = 0;
+        std::size_t destroyCount = 0;
+        std::size_t componentCount = 0;
+        uint64_t sourceHash = 0;
+        bool fail = false;
+        std::size_t failuresRemaining = 0;
+    };
+    class RecordingFactory final : public IEditorSceneRuntimeComponentFactory {
+    public:
+        RecordingFactory(std::string typeId, int32_t priority, FactoryState* state)
+            : typeId_(std::move(typeId)), priority_(priority), state_(state) {}
+
+        std::string_view TypeId() const noexcept override { return typeId_; }
+        int32_t Priority() const noexcept override { return priority_; }
+        EditorSceneRuntimeFactoryResult Instantiate(
+            const EditorScene&,
+            const std::vector<EditorSceneRuntimeComponentRecord>& components,
+            const EditorSceneRuntimeServiceRegistry&) override {
+            ++state_->instantiateCount;
+            state_->componentCount = components.size();
+            state_->sourceHash =
+                components.empty() ? 0 : components.front().sourceHash;
+            if (state_->fail || state_->failuresRemaining > 0) {
+                if (state_->failuresRemaining > 0) {
+                    --state_->failuresRemaining;
+                }
+                return {false, false, {}, "intentional runtime factory failure"};
+            }
+            return {true, true, {}, "recording factory applied"};
+        }
+        void Destroy() noexcept override { ++state_->destroyCount; }
+
+    private:
+        std::string typeId_;
+        int32_t priority_ = 0;
+        FactoryState* state_ = nullptr;
+    };
+
+    FactoryState state{};
+    EditorSceneRuntimeComponentFactoryRegistry factoryRegistry;
+    runner.Expect(
+        factoryRegistry.Register(
+            std::make_unique<RecordingFactory>(
+                runtimeDescriptor.typeId, 10, &state),
+            &error),
+        "Runtime Scene Factory Registry should register a unique typed Factory");
+    EditorSceneRuntimeInstantiationService runtime;
+    runner.Expect(
+        runtime.Bind(&componentRegistry, &factoryRegistry),
+        "Runtime Scene Instantiation should bind its Component and Factory registries");
+    EditorSceneRuntimeServiceRegistry services;
+    const EditorSceneRuntimeInstantiationResult begun =
+        runtime.Begin(scene, services);
+    runner.Expect(
+        begun.succeeded && begun.applied &&
+            begun.componentCount == 1 &&
+            begun.factoryCount == 1 &&
+            runtime.Active() &&
+            runtime.SourceRevision() == scene.revision &&
+            state.instantiateCount == 1 &&
+            state.componentCount == 1 &&
+            state.sourceHash != 0 &&
+            runtime.Objects().Count() == 1,
+        "Runtime Scene Instantiation should batch enabled Components by Type ID and retain stable source revision/hash");
+    const std::string runtimeEntityGuid =
+        entity != nullptr ? entity->guid : std::string{};
+    const std::string runtimeStableId =
+        runtimeEntityGuid + ":" + runtimeDescriptor.typeId;
+    const EditorSceneRuntimeObjectRecord* initialRuntimeObject =
+        runtime.Objects().Find(runtimeStableId);
+    const EditorSceneRuntimeObjectHandle initialHandle =
+        initialRuntimeObject != nullptr
+        ? initialRuntimeObject->handle
+        : EditorSceneRuntimeObjectHandle{};
+    const uint64_t initialSourceHash =
+        initialRuntimeObject != nullptr
+        ? initialRuntimeObject->source.sourceHash
+        : 0;
+    runner.Expect(
+        initialRuntimeObject != nullptr &&
+            initialHandle.Valid() &&
+            runtime.Objects().Resolve(initialHandle) == initialRuntimeObject,
+        "Runtime Scene Object Registry should resolve a stable source through a generation-checked Handle");
+
+    const EditorSceneRuntimeInstantiationResult unchanged =
+        runtime.Reconcile(scene, services);
+    const EditorSceneRuntimeObjectRecord* unchangedRuntimeObject =
+        runtime.Objects().Find(runtimeStableId);
+    runner.Expect(
+        unchanged.succeeded && !unchanged.applied &&
+            unchanged.addedCount == 0 &&
+            unchanged.modifiedCount == 0 &&
+            unchanged.removedCount == 0 &&
+            state.instantiateCount == 1 &&
+            state.destroyCount == 0 &&
+            unchangedRuntimeObject != nullptr &&
+            unchangedRuntimeObject->handle == initialHandle,
+        "Runtime Scene Reconcile should preserve Factory state and Handles when source hashes are unchanged");
+
+    EditorSceneComponent* runtimeComponent =
+        entity != nullptr
+        ? scene.FindComponent(*entity, runtimeDescriptor.typeId)
+        : nullptr;
+    EditorSceneProperty* enabledByTest =
+        runtimeComponent != nullptr && !runtimeComponent->properties.empty()
+        ? &runtimeComponent->properties.front()
+        : nullptr;
+    if (enabledByTest != nullptr) {
+        enabledByTest->value = "false";
+        scene.Touch();
+    }
+    const EditorSceneRuntimeInstantiationResult modified =
+        runtime.Reconcile(scene, services);
+    const EditorSceneRuntimeObjectRecord* modifiedRuntimeObject =
+        runtime.Objects().Find(runtimeStableId);
+    const EditorSceneRuntimeObjectHandle modifiedHandle =
+        modifiedRuntimeObject != nullptr
+        ? modifiedRuntimeObject->handle
+        : EditorSceneRuntimeObjectHandle{};
+    runner.Expect(
+        modified.succeeded && modified.applied &&
+            modified.modifiedCount == 1 &&
+            modified.addedCount == 0 &&
+            modified.removedCount == 0 &&
+            state.instantiateCount == 2 &&
+            state.destroyCount == 1 &&
+            modifiedRuntimeObject != nullptr &&
+            modifiedRuntimeObject->source.sourceHash != initialSourceHash &&
+            modifiedHandle.index == initialHandle.index &&
+            modifiedHandle.generation != initialHandle.generation &&
+            runtime.Objects().Resolve(initialHandle) == nullptr,
+        "Runtime Scene Reconcile should recreate the owning Factory and invalidate stale Handles for modified sources");
+
+    const uint64_t revisionBeforeFailedReconcile = runtime.SourceRevision();
+    const uint64_t hashBeforeFailedReconcile =
+        modifiedRuntimeObject != nullptr
+        ? modifiedRuntimeObject->source.sourceHash
+        : 0;
+    if (enabledByTest != nullptr) {
+        enabledByTest->value = "true";
+        scene.Touch();
+    }
+    state.failuresRemaining = 1;
+    const EditorSceneRuntimeInstantiationResult rejectedModification =
+        runtime.Reconcile(scene, services);
+    const EditorSceneRuntimeObjectRecord* restoredRuntimeObject =
+        runtime.Objects().Find(runtimeStableId);
+    runner.Expect(
+        !rejectedModification.succeeded &&
+            runtime.Active() &&
+            runtime.SourceRevision() == revisionBeforeFailedReconcile &&
+            runtime.Objects().Count() == 1 &&
+            restoredRuntimeObject != nullptr &&
+            restoredRuntimeObject->handle == modifiedHandle &&
+            restoredRuntimeObject->source.sourceHash ==
+                hashBeforeFailedReconcile &&
+            state.sourceHash == hashBeforeFailedReconcile,
+        "Failed Runtime Scene Reconcile should restore the previous Factory state and leave Registry Handles uncommitted");
+
+    EditorSceneEntity* secondEntity = scene.CreateEntity(
+        "Second Runtime Entity", {}, "91919191919191919191919191919191");
+    runner.Expect(
+        secondEntity != nullptr &&
+            scene.AddComponent(
+                secondEntity->guid,
+                runtimeDescriptor.typeId,
+                nullptr,
+                &componentRegistry),
+        "Runtime Scene Reconcile regression should add a second registered Component");
+    const EditorSceneRuntimeInstantiationResult added =
+        runtime.Reconcile(scene, services);
+    const std::string secondStableId =
+        secondEntity != nullptr
+        ? secondEntity->guid + ":" + runtimeDescriptor.typeId
+        : std::string{};
+    runner.Expect(
+        added.succeeded && added.applied &&
+            added.addedCount == 1 &&
+            added.modifiedCount == 1 &&
+            runtime.Objects().Count() == 2 &&
+            runtime.Objects().Find(secondStableId) != nullptr &&
+            state.componentCount == 2,
+        "Runtime Scene Reconcile should batch added and previously rejected modified Components into one Factory replacement");
+
+    EditorSceneEntity* runtimeEntity =
+        scene.FindEntity(runtimeEntityGuid);
+    runtimeComponent =
+        runtimeEntity != nullptr
+        ? scene.FindComponent(*runtimeEntity, runtimeDescriptor.typeId)
+        : nullptr;
+    if (runtimeComponent != nullptr) {
+        runtimeComponent->enabled = false;
+        scene.Touch();
+    }
+    const EditorSceneRuntimeInstantiationResult disabled =
+        runtime.Reconcile(scene, services);
+    runner.Expect(
+        disabled.succeeded && disabled.applied &&
+            disabled.removedCount == 1 &&
+            runtime.Objects().Count() == 1 &&
+            runtime.Objects().Find(runtimeStableId) == nullptr &&
+            runtime.Objects().Resolve(modifiedHandle) == nullptr &&
+            state.componentCount == 1,
+        "Disabling a Component should reconcile as Runtime removal and invalidate its Handle");
+
+    const EditorSceneRuntimeInstantiationResult duplicateBegin =
+        runtime.Begin(scene, services);
+    runner.Expect(
+        !duplicateBegin.succeeded,
+        "Runtime Scene Instantiation should reject overlapping Play sessions");
+    std::string activeBindError;
+    runner.Expect(
+        !runtime.Bind(
+            &componentRegistry,
+            &factoryRegistry,
+            &activeBindError) &&
+            !activeBindError.empty() &&
+            runtime.Active(),
+        "Runtime Scene Instantiation should reject Registry rebinding without destroying an active session");
+    const EditorSceneRuntimeObjectHandle survivingHandle =
+        runtime.Objects().Find(secondStableId) != nullptr
+        ? runtime.Objects().Find(secondStableId)->handle
+        : EditorSceneRuntimeObjectHandle{};
+    const std::size_t destroyCountBeforeStop = state.destroyCount;
+    runtime.Stop();
+    runner.Expect(
+        !runtime.Active() &&
+            state.destroyCount == destroyCountBeforeStop + 1 &&
+            runtime.Objects().Count() == 0 &&
+            runtime.Objects().Resolve(survivingHandle) == nullptr,
+        "Runtime Scene Stop should destroy applied Factories, clear tracked Objects, and invalidate outstanding Handles");
+
+    EditorSceneComponentDescriptor failingDescriptor{};
+    failingDescriptor.typeId = "test.runtime-failure";
+    failingDescriptor.displayName = "Test Runtime Failure";
+    failingDescriptor.category = "Regression";
+    failingDescriptor.runtimePolicy =
+        EditorSceneRuntimeInstantiationPolicy::Required;
+    runner.Expect(
+        componentRegistry.Register(failingDescriptor, &error) &&
+            scene.AddComponent(
+                runtimeEntityGuid,
+                failingDescriptor.typeId,
+                nullptr,
+                &componentRegistry),
+        "Regression Scene should accept a second required Runtime Component");
+
+    FactoryState successfulBeforeFailure{};
+    FactoryState failingState{};
+    failingState.fail = true;
+    EditorSceneRuntimeComponentFactoryRegistry rollbackFactories;
+    runner.Expect(
+        rollbackFactories.Register(
+            std::make_unique<RecordingFactory>(
+                runtimeDescriptor.typeId, 10, &successfulBeforeFailure),
+            &error) &&
+            rollbackFactories.Register(
+                std::make_unique<RecordingFactory>(
+                failingDescriptor.typeId, 20, &failingState),
+            &error),
+        "Runtime Scene rollback test Factories should register in deterministic priority order");
+    EditorSceneRuntimeInstantiationService rollbackRuntime;
+    runner.Expect(
+        rollbackRuntime.Bind(&componentRegistry, &rollbackFactories),
+        "Rollback Runtime Scene Instantiation should bind valid registries");
+    const EditorSceneRuntimeInstantiationResult failed =
+        rollbackRuntime.Begin(scene, services);
+    runner.Expect(
+        !failed.succeeded && !rollbackRuntime.Active() &&
+            successfulBeforeFailure.instantiateCount == 1 &&
+            successfulBeforeFailure.destroyCount == 1 &&
+            failingState.instantiateCount == 1 &&
+            failingState.destroyCount == 1,
+        "Runtime Scene Instantiation failure should roll back the failing Factory and all previously applied Factories");
+
+    EditorSceneRuntimeComponentFactoryRegistry missingFactoryRegistry;
+    EditorSceneRuntimeInstantiationService missingFactoryRuntime;
+    runner.Expect(
+        missingFactoryRuntime.Bind(
+            &componentRegistry, &missingFactoryRegistry),
+        "Missing-Factory Runtime Scene Instantiation should still bind valid registries");
+    const EditorSceneRuntimeInstantiationResult missing =
+        missingFactoryRuntime.Begin(scene, services);
+    runner.Expect(
+        !missing.succeeded &&
+            missing.message.find("Required Runtime Scene Component Factory") !=
+                std::string::npos,
+        "Required Runtime Components should fail Play deterministically when their Factory is absent");
+
+    EditorSceneRuntimeComponentFactoryRegistry builtInFactories;
+    runner.Expect(
+        RegisterBuiltInEditorSceneRuntimeFactories(
+            builtInFactories, &error) &&
+            RegisterBuiltInEditorSceneRuntimeFactories(
+                builtInFactories, &error) &&
+            builtInFactories.Count() == 7 &&
+            builtInFactories.Find(kEditorMeshRendererComponentType) != nullptr &&
+            builtInFactories.Find(kEditorGameplaySpawnPointComponentType) != nullptr &&
+            builtInFactories.Find(kEditorSplineRouteComponentType) != nullptr &&
+            builtInFactories.Find(kEditorPatrolComponentType) != nullptr &&
+            builtInFactories.Find(kEditorGimmickComponentType) != nullptr &&
+            builtInFactories.Find(
+                kEditorGimmickEventBindingComponentType) != nullptr &&
+            builtInFactories.Find(
+                kEditorGimmickEventSequenceComponentType) != nullptr,
+        "Built-in Runtime Factory registration should be idempotent and expose Mesh, Spawn, Spline, Patrol, Gimmick, Event Binding, and Event Sequence factories");
+
+    EditorAssetRegistry meshAssets;
+    EditorAssetRecord meshAsset{};
+    meshAsset.kind = EditorAssetKind::Mesh;
+    meshAsset.id = "runtime_mesh";
+    meshAsset.guid = "abababababababababababababababab";
+    meshAsset.logicalPath = "Models/runtime_mesh.obj";
+    meshAsset.sourcePath = "Resources/Models/runtime_mesh.obj";
+    meshAsset.displayName = "Runtime Mesh";
+    meshAsset.referenceable = true;
+    runner.Expect(
+        meshAssets.Register(meshAsset),
+        "Mesh Renderer Runtime Factory regression Asset should register");
+
+    EditorScene meshScene;
+    const std::string meshParentGuid =
+        "93939393939393939393939393939393";
+    EditorSceneEntity* meshParent = meshScene.CreateEntity(
+        "Runtime Mesh Parent", {}, meshParentGuid);
+    EditorSceneEntity* meshEntity = meshScene.CreateEntity(
+        "Runtime Mesh Entity",
+        meshParentGuid,
+        "92929292929292929292929292929292");
+    const std::string meshEntityGuid =
+        meshEntity != nullptr ? meshEntity->guid : std::string{};
+    runner.Expect(
+        meshParent != nullptr &&
+            meshEntity != nullptr &&
+            meshScene.AddComponent(
+                meshEntityGuid,
+                std::string(kEditorMeshRendererComponentType),
+                nullptr,
+                &componentRegistry),
+        "Mesh Renderer Runtime Factory regression Scene should create a registered Mesh Component");
+    meshEntity = meshScene.FindEntity(meshEntityGuid);
+    EditorSceneComponent* meshComponent =
+        meshEntity != nullptr
+        ? meshScene.FindComponent(
+            *meshEntity, kEditorMeshRendererComponentType)
+        : nullptr;
+    if (meshComponent != nullptr) {
+        meshComponent->references.push_back(
+            {"asset", {}, meshAsset.guid});
+        meshScene.Touch();
+    }
+
+    EditorMeshRendererRuntimeWorld meshWorld;
+    EditorMeshRendererRuntimeTarget meshTarget{
+        &meshAssets,
+        &meshWorld};
+    EditorSceneRuntimeServiceRegistry meshServices;
+    meshServices.Bind(
+        std::string(kEditorMeshRendererRuntimeTargetServiceId),
+        &meshTarget);
+    EditorSceneRuntimeInstantiationService meshRuntime;
+    runner.Expect(
+        meshRuntime.Bind(&componentRegistry, &builtInFactories),
+        "Mesh Renderer Runtime Factory regression service should bind built-in registries");
+    const EditorSceneRuntimeInstantiationResult meshBegun =
+        meshRuntime.Begin(meshScene, meshServices);
+    const std::string meshStableId =
+        meshEntityGuid + ":" +
+        std::string(kEditorMeshRendererComponentType);
+    runner.Expect(
+        meshBegun.succeeded && meshBegun.applied &&
+            meshBegun.componentCount == 1 &&
+            meshBegun.factoryCount == 1 &&
+            meshWorld.Active() &&
+            meshWorld.Instances().size() == 1 &&
+            meshWorld.Find(meshStableId) != nullptr &&
+            meshRuntime.Objects().Find(meshStableId) != nullptr,
+        "Mesh Renderer Runtime Factory should resolve a durable Mesh Asset and publish a stable Runtime instance");
+
+    meshParent = meshScene.FindEntity(meshParentGuid);
+    if (meshParent != nullptr) {
+        meshParent->runtimeEnabled = false;
+        meshScene.Touch();
+    }
+    const EditorSceneRuntimeInstantiationResult hierarchyRemoved =
+        meshRuntime.Reconcile(meshScene, meshServices);
+    runner.Expect(
+        hierarchyRemoved.succeeded &&
+            hierarchyRemoved.applied &&
+            hierarchyRemoved.removedCount == 1 &&
+            !meshWorld.Active() &&
+            meshRuntime.Objects().Find(meshStableId) == nullptr,
+        "Runtime Scene Reconcile should remove a Mesh Renderer when an ancestor becomes Runtime Disabled");
+
+    meshParent = meshScene.FindEntity(meshParentGuid);
+    if (meshParent != nullptr) {
+        meshParent->runtimeEnabled = true;
+        meshScene.Touch();
+    }
+    const EditorSceneRuntimeInstantiationResult hierarchyAdded =
+        meshRuntime.Reconcile(meshScene, meshServices);
+    runner.Expect(
+        hierarchyAdded.succeeded &&
+            hierarchyAdded.applied &&
+            hierarchyAdded.addedCount == 1 &&
+            meshWorld.Active() &&
+            meshWorld.Find(meshStableId) != nullptr &&
+            meshRuntime.Objects().Find(meshStableId) != nullptr,
+        "Runtime Scene Reconcile should recreate a Mesh Renderer when its hierarchy becomes Runtime Active");
+
+    meshEntity = meshScene.FindEntity(meshEntityGuid);
+    meshComponent =
+        meshEntity != nullptr
+        ? meshScene.FindComponent(
+            *meshEntity, kEditorMeshRendererComponentType)
+        : nullptr;
+    if (meshComponent != nullptr) {
+        meshComponent->enabled = false;
+        meshScene.Touch();
+    }
+    const EditorSceneRuntimeInstantiationResult meshRemoved =
+        meshRuntime.Reconcile(meshScene, meshServices);
+    runner.Expect(
+        meshRemoved.succeeded && meshRemoved.applied &&
+            meshRemoved.removedCount == 1 &&
+            !meshWorld.Active() &&
+            meshWorld.Instances().empty() &&
+            meshRuntime.Objects().Count() == 0,
+        "Mesh Renderer Runtime Factory Reconcile should destroy disabled Runtime Mesh instances");
+    meshRuntime.Stop();
+}
+
+void TestSplineRouteComponentAndEvaluation(
+    RegressionRunner& runner) {
+    EditorSceneComponentRegistry registry =
+        CreateBuiltInEditorSceneComponentRegistry();
+    const EditorSceneComponentDescriptor* descriptor =
+        registry.Find(kEditorSplineRouteComponentType);
+    EditorSceneComponent sceneComponent =
+        registry.CreateDefault(kEditorSplineRouteComponentType);
+    EditorSplineRouteComponent defaultRoute{};
+    std::string error;
+    runner.Expect(
+        descriptor != nullptr &&
+            descriptor->category == "Gameplay" &&
+            descriptor->properties.size() == 6 &&
+            EditorSplineRouteComponent::FromSceneComponent(
+                sceneComponent, defaultRoute, &error) &&
+            defaultRoute.controlPoints.size() == 2 &&
+            defaultRoute.interpolation ==
+                EditorSplineRouteInterpolation::CatmullRom,
+        "Spline Route should register typed defaults and decode them through one validated Component adapter");
+
+    EditorSplineRouteComponent authored{};
+    authored.controlPoints = {
+        {"start", {0.0f, 0.0f, 0.0f}},
+        {"bend_a", {8.0f, 0.0f, 2.0f}},
+        {"bend_b", {10.0f, 2.0f, 12.0f}},
+        {"end", {22.0f, 0.0f, 16.0f}},
+    };
+    authored.interpolation =
+        EditorSplineRouteInterpolation::CatmullRom;
+    authored.reparameterizationSteps = 32;
+    const uint64_t authoredHash = authored.ContentHash();
+    EditorSplineRouteComponent roundTrip{};
+    runner.Expect(
+        authored.WriteToSceneComponent(sceneComponent, &error) &&
+            EditorSplineRouteComponent::FromSceneComponent(
+                sceneComponent, roundTrip, &error) &&
+            roundTrip.ContentHash() == authoredHash &&
+            roundTrip.controlPoints[2].id == "bend_b",
+        "Spline Route Scene serialization should preserve stable point IDs, positions, and evaluation settings");
+
+    EditorSplineRouteEvaluationService evaluation;
+    const bool built = evaluation.Build(roundTrip, &error);
+    const EditorSplineRouteSample start =
+        evaluation.EvaluateDistance(0.0f);
+    const EditorSplineRouteSample end =
+        evaluation.EvaluateDistance(evaluation.TotalLength());
+    const auto approximatelyEqual = [](float left, float right) {
+        return std::abs(left - right) < 0.001f;
+    };
+    runner.Expect(
+        built && evaluation.Valid() &&
+            evaluation.SegmentCount() == 3 &&
+            evaluation.ArcLengthTable().size() ==
+                3u * authored.reparameterizationSteps + 1u &&
+            evaluation.TotalLength() > 25.0f &&
+            start.valid && end.valid &&
+            approximatelyEqual(start.position.x, 0.0f) &&
+            approximatelyEqual(start.position.z, 0.0f) &&
+            approximatelyEqual(end.position.x, 22.0f) &&
+            approximatelyEqual(end.position.z, 16.0f),
+        "Spline evaluation should build a bounded Arc Length Table and preserve open-route endpoints");
+
+    float minimumStep = (std::numeric_limits<float>::max)();
+    float maximumStep = 0.0f;
+    EditorSplineRouteSample previous =
+        evaluation.EvaluateNormalized(0.0f);
+    for (uint32_t index = 1; index <= 12; ++index) {
+        const EditorSplineRouteSample current =
+            evaluation.EvaluateNormalized(
+                static_cast<float>(index) / 12.0f);
+        const float x = current.position.x - previous.position.x;
+        const float y = current.position.y - previous.position.y;
+        const float z = current.position.z - previous.position.z;
+        const float step = std::sqrt(x * x + y * y + z * z);
+        minimumStep = (std::min)(minimumStep, step);
+        maximumStep = (std::max)(maximumStep, step);
+        previous = current;
+    }
+    const EditorSplineRouteSample middle =
+        evaluation.EvaluateNormalized(0.5f);
+    const float tangentLength = std::sqrt(
+        middle.tangent.x * middle.tangent.x +
+        middle.tangent.y * middle.tangent.y +
+        middle.tangent.z * middle.tangent.z);
+    const float rotationLength = std::sqrt(
+        middle.rotation.x * middle.rotation.x +
+        middle.rotation.y * middle.rotation.y +
+        middle.rotation.z * middle.rotation.z +
+        middle.rotation.w * middle.rotation.w);
+    runner.Expect(
+        minimumStep > 0.0f &&
+            maximumStep / minimumStep < 1.2f &&
+            std::abs(tangentLength - 1.0f) < 0.001f &&
+            std::abs(rotationLength - 1.0f) < 0.001f,
+        "Arc Length evaluation should produce approximately constant-distance samples and normalized orientation");
+
+    const Vector3 query{
+        middle.position.x,
+        middle.position.y + 3.0f,
+        middle.position.z};
+    const float nearestDistance =
+        evaluation.FindNearestDistance(query);
+    runner.Expect(
+        nearestDistance >= 0.0f &&
+            std::abs(nearestDistance - middle.distance) <
+                evaluation.TotalLength() * 0.03f,
+        "Spline nearest-point lookup should recover a stable route distance for Editor placement tools");
+
+    EditorSplineRouteComponent closed{};
+    closed.interpolation = EditorSplineRouteInterpolation::Linear;
+    closed.closedLoop = true;
+    closed.reparameterizationSteps = 8;
+    closed.controlPoints = {
+        {"a", {0.0f, 0.0f, 0.0f}},
+        {"b", {10.0f, 0.0f, 0.0f}},
+        {"c", {10.0f, 0.0f, 10.0f}},
+        {"d", {0.0f, 0.0f, 10.0f}},
+    };
+    EditorSplineRouteEvaluationService closedEvaluation;
+    const bool closedBuilt = closedEvaluation.Build(closed, &error);
+    const EditorSplineRouteSample wrappedPositive =
+        closedEvaluation.EvaluateDistance(
+            closedEvaluation.TotalLength() + 2.0f,
+            EditorSplineRouteDistanceMode::Wrap);
+    const EditorSplineRouteSample wrappedReference =
+        closedEvaluation.EvaluateDistance(
+            2.0f, EditorSplineRouteDistanceMode::Wrap);
+    const EditorSplineRouteSample wrappedNegative =
+        closedEvaluation.EvaluateDistance(
+            -2.0f, EditorSplineRouteDistanceMode::Wrap);
+    const EditorSplineRouteSample wrappedEnd =
+        closedEvaluation.EvaluateDistance(
+            closedEvaluation.TotalLength() - 2.0f,
+            EditorSplineRouteDistanceMode::Wrap);
+    runner.Expect(
+        closedBuilt &&
+            approximatelyEqual(closedEvaluation.TotalLength(), 40.0f) &&
+            approximatelyEqual(
+                wrappedPositive.position.x,
+                wrappedReference.position.x) &&
+            approximatelyEqual(
+                wrappedPositive.position.z,
+                wrappedReference.position.z) &&
+            approximatelyEqual(
+                wrappedNegative.position.x,
+                wrappedEnd.position.x) &&
+            approximatelyEqual(
+                wrappedNegative.position.z,
+                wrappedEnd.position.z),
+        "Closed Spline Routes should wrap positive and negative distances deterministically");
+
+    EditorScene invalidScene;
+    EditorSceneEntity* invalidEntity = invalidScene.CreateEntity(
+        "Invalid Route", {},
+        "92929292929292929292929292929292");
+    runner.Expect(
+        invalidEntity != nullptr &&
+            invalidScene.AddComponent(
+                invalidEntity->guid,
+                std::string(kEditorSplineRouteComponentType),
+                nullptr,
+                &registry),
+        "Spline validation regression should create the registered Component");
+    EditorSceneComponent* invalidComponent =
+        invalidEntity != nullptr
+        ? invalidScene.FindComponent(
+            *invalidEntity, kEditorSplineRouteComponentType)
+        : nullptr;
+    if (invalidComponent != nullptr) {
+        const auto points = std::find_if(
+            invalidComponent->properties.begin(),
+            invalidComponent->properties.end(),
+            [](const EditorSceneProperty& property) {
+                return property.name == "controlPoints";
+            });
+        if (points != invalidComponent->properties.end()) {
+            points->value =
+                "v1|duplicate,0,0,0;duplicate,10,0,0";
+        }
+    }
+    const EditorSceneValidationReport invalidReport =
+        invalidScene.Validate();
+    runner.Expect(
+        !invalidReport.Succeeded() &&
+            std::any_of(
+                invalidReport.errors.begin(),
+                invalidReport.errors.end(),
+                [](const std::string& message) {
+                    return message.find("Spline Route") !=
+                        std::string::npos;
+                }),
+        "Scene validation should reject malformed Spline control-point identity before Runtime consumption");
+}
+
+void TestGimmickDefinitionRegistryAndComponent(
+    RegressionRunner& runner) {
+    EditorGimmickDefinitionRegistry definitions =
+        CreateBuiltInEditorGimmickDefinitionRegistry();
+    const EditorGimmickDefinition* door =
+        definitions.Find("gimmick.door");
+    const EditorGimmickDefinition* switchDefinition =
+        definitions.Find("gimmick.switch");
+    const EditorGimmickDefinition* movingPlatform =
+        definitions.Find("gimmick.moving-platform");
+    const EditorGimmickParameterDefinition* switchTarget =
+        definitions.FindParameter("gimmick.switch", "target");
+    const EditorGimmickParameterDefinition* doorDistance =
+        definitions.FindParameter(
+            "gimmick.door", "openDistance");
+    runner.Expect(
+        definitions.Count() == 5 &&
+            door != nullptr &&
+            switchDefinition != nullptr &&
+            movingPlatform != nullptr &&
+            switchTarget != nullptr &&
+            switchTarget->kind ==
+                EditorGimmickParameterKind::EntityReference &&
+            switchTarget->required &&
+            switchTarget->
+                entityReferenceTargetComponentType ==
+                kEditorGimmickComponentType &&
+            doorDistance != nullptr &&
+            doorDistance->hasNumericRange &&
+            doorDistance->minimumValue > 0.0,
+        "Gimmick Definition Registry should publish built-in factories, typed parameters, reference constraints, and numeric ranges");
+
+    EditorGimmickDefinition duplicate = *door;
+    std::string error;
+    const bool duplicateRejected =
+        !definitions.Register(std::move(duplicate), &error);
+    EditorGimmickDefinition invalid{};
+    invalid.typeId = "gimmick.invalid-range";
+    invalid.displayName = "Invalid";
+    invalid.runtimeFactoryId = "runtime.gimmick.invalid";
+    EditorGimmickParameterDefinition invalidParameter{};
+    invalidParameter.id = "value";
+    invalidParameter.displayName = "Value";
+    invalidParameter.kind =
+        EditorGimmickParameterKind::Float;
+    invalidParameter.defaultValue = "5";
+    invalidParameter.hasNumericRange = true;
+    invalidParameter.minimumValue = 10.0;
+    invalidParameter.maximumValue = 0.0;
+    invalid.parameters.push_back(
+        std::move(invalidParameter));
+    const bool invalidRejected =
+        !definitions.Register(std::move(invalid), &error);
+    runner.Expect(
+        duplicateRejected && invalidRejected,
+        "Gimmick Definition Registry should reject duplicate IDs and malformed parameter contracts");
+
+    EditorGimmickComponent switchComponent{};
+    switchComponent.definitionId = "gimmick.switch";
+    const bool switchDefaults =
+        switchComponent.ApplyDefinitionDefaults(
+            definitions, &error);
+    switchComponent.activationMode =
+        EditorGimmickActivationMode::Triggered;
+    switchComponent.oneShot = true;
+    switchComponent.cooldown = 1.5f;
+    if (!switchComponent.entityReferences.empty()) {
+        switchComponent.entityReferences.front().entityGuid =
+            "80808080808080808080808080808080";
+    }
+    if (!switchComponent.parameters.empty()) {
+        switchComponent.parameters.front().value = "false";
+    }
+    EditorSceneComponent serializedSwitch{};
+    const bool switchSerialized =
+        switchDefaults &&
+        switchComponent.WriteToSceneComponent(
+            serializedSwitch, definitions, &error);
+    EditorGimmickComponent decodedSwitch{};
+    const bool switchDecoded =
+        switchSerialized &&
+        EditorGimmickComponent::FromSceneComponent(
+            serializedSwitch,
+            decodedSwitch,
+            definitions,
+            &error);
+    runner.Expect(
+        switchDecoded &&
+            decodedSwitch.definitionId ==
+                "gimmick.switch" &&
+            decodedSwitch.activationMode ==
+                EditorGimmickActivationMode::Triggered &&
+            decodedSwitch.oneShot &&
+            std::abs(decodedSwitch.cooldown - 1.5f) <
+                0.001f &&
+            decodedSwitch.parameters.size() == 1 &&
+            decodedSwitch.parameters.front().value == "false" &&
+            decodedSwitch.entityReferences.size() == 2 &&
+            decodedSwitch.entityReferences.front().entityGuid ==
+                "80808080808080808080808080808080" &&
+            decodedSwitch.ContentHash() ==
+                switchComponent.ContentHash(),
+        "EditorGimmickComponent should round-trip common settings, Definition parameters, typed references, and stable content identity");
+
+    std::vector<EditorGimmickParameterValue> quotedValues{
+        {"message", "open door; then say \"ready\""},
+        {"offset", "1 2 3"},
+    };
+    const std::string encodedValues =
+        SerializeEditorGimmickParameterValues(quotedValues);
+    std::vector<EditorGimmickParameterValue> decodedValues;
+    runner.Expect(
+        DeserializeEditorGimmickParameterValues(
+            encodedValues, decodedValues, &error) &&
+            decodedValues.size() == quotedValues.size() &&
+            decodedValues[0].id == "message" &&
+            decodedValues[0].value ==
+                "open door; then say \"ready\"",
+        "Gimmick parameter serialization should preserve spaces, delimiters, and quoted authoring text");
+
+    EditorGimmickEventBindingComponent authoredBindings{};
+    authoredBindings.bindings = {
+        {
+            "open-primary",
+            EditorGimmickRuntimeEventKind::TriggerEntered,
+            "80808080808080808080808080808080",
+            EditorGimmickRuntimeCommandKind::Activate,
+            "payload with spaces; and \"quotes\"",
+            20,
+            true,
+            true,
+        },
+        {
+            "toggle-secondary",
+            EditorGimmickRuntimeEventKind::TriggerEntered,
+            "81818181818181818181818181818181",
+            EditorGimmickRuntimeCommandKind::Toggle,
+            {},
+            10,
+            true,
+            false,
+        },
+    };
+    authoredBindings.bindings.front().delaySeconds = 0.25;
+    authoredBindings.bindings.front().
+        repeatIntervalSeconds = 0.5;
+    authoredBindings.bindings.front().repeatCount = 3;
+    EditorSceneComponent serializedBindings{};
+    const bool bindingsSerialized =
+        authoredBindings.WriteToSceneComponent(
+            serializedBindings, &error);
+    EditorGimmickEventBindingComponent decodedBindings{};
+    const bool bindingsDecoded =
+        bindingsSerialized &&
+        EditorGimmickEventBindingComponent::
+            FromSceneComponent(
+                serializedBindings,
+                decodedBindings,
+                &error);
+    runner.Expect(
+        bindingsDecoded &&
+            serializedBindings.references.size() == 2 &&
+            decodedBindings.bindings.size() == 2 &&
+            decodedBindings.bindings.front().id ==
+                "toggle-secondary" &&
+            decodedBindings.bindings.back().payload ==
+                "payload with spaces; and \"quotes\"" &&
+            decodedBindings.bindings.back().delaySeconds ==
+                0.25 &&
+            decodedBindings.bindings.back().
+                    repeatIntervalSeconds == 0.5 &&
+            decodedBindings.bindings.back().repeatCount == 3 &&
+            decodedBindings.ContentHash() ==
+                authoredBindings.ContentHash(),
+        "Gimmick Event Binding Component should round-trip deterministic ordered entries, typed target references, payload text, and stable identity");
+
+    EditorGimmickEventSequenceComponent authoredSequence{};
+    authoredSequence.sourceEvent =
+        EditorGimmickRuntimeEventKind::TriggerEntered;
+    authoredSequence.playbackPolicy =
+        EditorGimmickEventSequencePlaybackPolicy::
+            IgnoreWhilePlaying;
+    authoredSequence.steps = {
+        {
+            "step-open",
+            0.25,
+            "80808080808080808080808080808080",
+            EditorGimmickRuntimeCommandKind::Activate,
+            "first payload",
+            20,
+            true,
+        },
+        {
+            "step-close",
+            1.5,
+            "81818181818181818181818181818181",
+            EditorGimmickRuntimeCommandKind::Deactivate,
+            "second payload with \"quotes\"",
+            10,
+            true,
+        },
+    };
+    EditorSceneComponent serializedSequence{};
+    const bool sequenceSerialized =
+        authoredSequence.WriteToSceneComponent(
+            serializedSequence, &error);
+    EditorGimmickEventSequenceComponent decodedSequence{};
+    const bool sequenceDecoded =
+        sequenceSerialized &&
+        EditorGimmickEventSequenceComponent::
+            FromSceneComponent(
+                serializedSequence,
+                decodedSequence,
+                &error);
+    runner.Expect(
+        sequenceDecoded &&
+            serializedSequence.references.size() == 2 &&
+            decodedSequence.sourceEvent ==
+                EditorGimmickRuntimeEventKind::TriggerEntered &&
+            decodedSequence.playbackPolicy ==
+                EditorGimmickEventSequencePlaybackPolicy::
+                    IgnoreWhilePlaying &&
+            decodedSequence.steps.size() == 2 &&
+            decodedSequence.steps.front().id == "step-open" &&
+            decodedSequence.steps.back().timeSeconds == 1.5 &&
+            decodedSequence.steps.back().payload ==
+                "second payload with \"quotes\"" &&
+            decodedSequence.ContentHash() ==
+                authoredSequence.ContentHash(),
+        "Gimmick Event Sequence Component should round-trip ordered timeline steps, timing, playback policy, payloads, typed references, and stable identity");
+
+    EditorSceneComponentRegistry components =
+        CreateBuiltInEditorSceneComponentRegistry();
+    const EditorSceneComponentDescriptor* gimmickDescriptor =
+        components.Find(kEditorGimmickComponentType);
+    const EditorSceneComponentPropertyDescriptor*
+        targetDescriptor =
+        gimmickDescriptor != nullptr
+        ? FindEditorSceneComponentPropertyDescriptor(
+            *gimmickDescriptor, "target")
+        : nullptr;
+    const EditorSceneComponentPropertyDescriptor*
+        routeDescriptor =
+        gimmickDescriptor != nullptr
+        ? FindEditorSceneComponentPropertyDescriptor(
+            *gimmickDescriptor, "route")
+        : nullptr;
+    const EditorSceneComponent defaultSceneGimmick =
+        components.CreateDefault(kEditorGimmickComponentType);
+    const EditorSceneComponentDescriptor* bindingDescriptor =
+        components.Find(
+            kEditorGimmickEventBindingComponentType);
+    const EditorSceneComponent defaultBindingComponent =
+        components.CreateDefault(
+            kEditorGimmickEventBindingComponentType);
+    const EditorSceneComponentDescriptor* sequenceDescriptor =
+        components.Find(
+            kEditorGimmickEventSequenceComponentType);
+    const EditorSceneComponent defaultSequenceComponent =
+        components.CreateDefault(
+            kEditorGimmickEventSequenceComponentType);
+    EditorGimmickEventSequenceComponent parsedDefaultSequence{};
+    EditorGimmickEventBindingComponent
+        parsedDefaultBindings{};
+    EditorGimmickComponent parsedDefault{};
+    runner.Expect(
+        gimmickDescriptor != nullptr &&
+            gimmickDescriptor->runtimePolicy ==
+                EditorSceneRuntimeInstantiationPolicy::Required &&
+            targetDescriptor != nullptr &&
+            targetDescriptor->kind ==
+                EditorScenePropertyKind::EntityReference &&
+            targetDescriptor->
+                entityReferenceTargetComponentType ==
+                kEditorGimmickComponentType &&
+            routeDescriptor != nullptr &&
+            routeDescriptor->
+                entityReferenceTargetComponentType ==
+                kEditorSplineRouteComponentType &&
+            EditorGimmickComponent::FromSceneComponent(
+                defaultSceneGimmick,
+                parsedDefault,
+                definitions,
+                &error) &&
+            parsedDefault.definitionId == "gimmick.door" &&
+            bindingDescriptor != nullptr &&
+            bindingDescriptor->runtimePolicy ==
+                EditorSceneRuntimeInstantiationPolicy::Required &&
+            EditorGimmickEventBindingComponent::
+                FromSceneComponent(
+                    defaultBindingComponent,
+                    parsedDefaultBindings,
+                    &error) &&
+            parsedDefaultBindings.bindings.empty() &&
+            sequenceDescriptor != nullptr &&
+            sequenceDescriptor->runtimePolicy ==
+                EditorSceneRuntimeInstantiationPolicy::Required &&
+            EditorGimmickEventSequenceComponent::
+                FromSceneComponent(
+                    defaultSequenceComponent,
+                    parsedDefaultSequence,
+                    &error) &&
+            parsedDefaultSequence.steps.empty(),
+        "Scene Component Registry should require the registered Gimmick Runtime Factory and expose typed Entity Picker slots with a valid Door default");
+
+    EditorScene sequenceMutationScene{};
+    const std::string sequenceOwnerGuid =
+        "91919191919191919191919191919191";
+    const std::string sequenceTargetGuid =
+        "92929292929292929292929292929292";
+    EditorSceneEntity* sequenceOwner =
+        sequenceMutationScene.CreateEntity(
+            "Sequence Owner",
+            {},
+            sequenceOwnerGuid);
+    EditorSceneEntity* sequenceTarget =
+        sequenceMutationScene.CreateEntity(
+            "Sequence Target",
+            {},
+            sequenceTargetGuid);
+    const bool sequenceMutationSetup =
+        sequenceOwner != nullptr &&
+        sequenceTarget != nullptr &&
+        sequenceMutationScene.AddComponent(
+            sequenceOwnerGuid,
+            std::string(kEditorGimmickEventSequenceComponentType),
+            nullptr,
+            &components) &&
+        sequenceMutationScene.AddComponent(
+            sequenceTargetGuid,
+            std::string(kEditorGimmickComponentType),
+            nullptr,
+            &components);
+    EditorGimmickEventSequenceMutation addSequenceStep{};
+    addSequenceStep.kind =
+        EditorGimmickEventSequenceMutationKind::Add;
+    addSequenceStep.value.id = "stable-step-a";
+    addSequenceStep.value.timeSeconds = 0.75;
+    addSequenceStep.value.targetEntityGuid =
+        sequenceTarget != nullptr ? sequenceTargetGuid : "";
+    const bool firstSequenceMutation =
+        sequenceMutationSetup &&
+        ApplyEditorGimmickEventSequenceMutation(
+            sequenceMutationScene,
+            sequenceOwnerGuid,
+            addSequenceStep,
+            &error);
+    EditorGimmickEventSequenceMutation duplicateId =
+        addSequenceStep;
+    duplicateId.value.timeSeconds = 1.0;
+    const bool duplicateSequenceStepRejected =
+        firstSequenceMutation &&
+        !ApplyEditorGimmickEventSequenceMutation(
+            sequenceMutationScene,
+            sequenceOwnerGuid,
+            duplicateId,
+            &error);
+    EditorGimmickEventSequenceMutation settingsMutation{};
+    settingsMutation.kind =
+        EditorGimmickEventSequenceMutationKind::SetSettings;
+    settingsMutation.sourceEvent =
+        EditorGimmickRuntimeEventKind::TriggerExited;
+    settingsMutation.playbackPolicy =
+        EditorGimmickEventSequencePlaybackPolicy::AllowParallel;
+    const bool sequenceSettingsMutated =
+        ApplyEditorGimmickEventSequenceMutation(
+            sequenceMutationScene,
+            sequenceOwnerGuid,
+            settingsMutation,
+            &error);
+    const EditorSceneEntity* mutatedOwner =
+        sequenceMutationScene.FindEntity(
+            "91919191919191919191919191919191");
+    const EditorSceneComponent* mutatedSequenceComponent =
+        mutatedOwner != nullptr
+        ? sequenceMutationScene.FindComponent(
+            *mutatedOwner,
+            kEditorGimmickEventSequenceComponentType)
+        : nullptr;
+    EditorGimmickEventSequenceComponent mutatedSequence{};
+    runner.Expect(
+        duplicateSequenceStepRejected &&
+            sequenceSettingsMutated &&
+            mutatedSequenceComponent != nullptr &&
+            EditorGimmickEventSequenceComponent::
+                FromSceneComponent(
+                    *mutatedSequenceComponent,
+                    mutatedSequence,
+                    &error) &&
+            mutatedSequence.steps.size() == 1 &&
+            mutatedSequence.steps.front().id ==
+                "stable-step-a" &&
+            mutatedSequence.sourceEvent ==
+                EditorGimmickRuntimeEventKind::TriggerExited &&
+            mutatedSequence.playbackPolicy ==
+                EditorGimmickEventSequencePlaybackPolicy::
+                    AllowParallel &&
+            mutatedSequenceComponent->references.size() == 1,
+        "Gimmick Event Sequence Mutation should atomically preserve stable step identity, typed targets, settings, and reject duplicate IDs");
+
+    EditorGimmickComponent missingTarget{};
+    missingTarget.definitionId = "gimmick.switch";
+    missingTarget.ApplyDefinitionDefaults(
+        definitions, nullptr);
+    runner.Expect(
+        !missingTarget.Validate(definitions, &error) &&
+            error.find("target") != std::string::npos,
+        "Gimmick validation should reject a missing required typed Entity Reference");
+
+    EditorGimmickComponent invalidDoor{};
+    EditorGimmickParameterValue* openDistance = nullptr;
+    for (EditorGimmickParameterValue& parameter :
+         invalidDoor.parameters) {
+        if (parameter.id == "openDistance") {
+            openDistance = &parameter;
+            break;
+        }
+    }
+    if (openDistance != nullptr) {
+        openDistance->value = "-1";
+    }
+    runner.Expect(
+        openDistance != nullptr &&
+            !invalidDoor.Validate(definitions, &error) &&
+            error.find("outside") != std::string::npos,
+        "Gimmick validation should reject authored values outside Definition numeric ranges");
+
+    EditorScene scene;
+    const std::string doorGuid =
+        "80808080808080808080808080808080";
+    const std::string switchGuid =
+        "81818181818181818181818181818181";
+    scene.CreateEntity("Door", {}, doorGuid);
+    scene.CreateEntity("Switch", {}, switchGuid);
+    const bool doorAdded = scene.AddComponent(
+        doorGuid,
+        std::string(kEditorGimmickComponentType),
+        nullptr,
+        &components);
+    const bool switchAdded = scene.AddComponent(
+        switchGuid, serializedSwitch);
+    const EditorSceneValidationReport validScene =
+        scene.Validate(&components);
+    runner.Expect(
+        doorAdded && switchAdded &&
+            validScene.Succeeded(),
+        "Scene validation should accept a Switch whose required target resolves to a Gimmick Entity");
+
+    EditorScene invalidReferenceScene = scene;
+    EditorSceneEntity* invalidSwitch =
+        invalidReferenceScene.FindEntity(switchGuid);
+    EditorSceneComponent* invalidSwitchComponent =
+        invalidSwitch != nullptr
+        ? invalidReferenceScene.FindComponent(
+            *invalidSwitch,
+            kEditorGimmickComponentType)
+        : nullptr;
+    if (invalidSwitchComponent != nullptr) {
+        invalidSwitchComponent->references.push_back(
+            {"route", doorGuid, {}});
+    }
+    const EditorSceneValidationReport invalidReferenceReport =
+        invalidReferenceScene.Validate(&components);
+    runner.Expect(
+        !invalidReferenceReport.Succeeded() &&
+            std::any_of(
+                invalidReferenceReport.errors.begin(),
+                invalidReferenceReport.errors.end(),
+                [](const std::string& message) {
+                    return message.find("editor.spline-route") !=
+                        std::string::npos;
+                }),
+        "Scene validation should reject a Gimmick reference whose target lacks the registered Component type");
+
+    EditorScene mutationScene;
+    const std::string mutationGuid =
+        "82828282828282828282828282828282";
+    mutationScene.CreateEntity(
+        "Transactional Gimmick", {}, mutationGuid);
+    const bool mutationComponentAdded =
+        mutationScene.AddComponent(
+            mutationGuid,
+            std::string(kEditorGimmickComponentType),
+            nullptr,
+            &components);
+    const EditorDocumentId mutationDocument{
+        "gimmick-details-transaction",
+        std::string(EditorDocumentTypes::Scene)};
+    SceneWorldObjectProvider mutationProvider;
+    mutationProvider.Bind(
+        &mutationScene,
+        mutationDocument,
+        &components,
+        &definitions);
+    EditorWorldObjectRegistry mutationRegistry;
+    const bool mutationProviderRegistered =
+        mutationRegistry.Register(mutationProvider, &error);
+    EditorWorldModel mutationModel(mutationRegistry);
+    const EditorWorldModelRefreshResult mutationRefresh =
+        mutationModel.Refresh();
+    EditorWorldMutationService mutationService(
+        mutationRegistry, mutationModel);
+    EditorWorldMutationExecutionService mutationExecution(
+        mutationRegistry, &mutationModel);
+    EditorExecutionContext mutationExecutionContext;
+    EditorError mutationExecutionError;
+    const bool mutationExecutionRegistered =
+        mutationExecutionContext.Register(
+            mutationExecution, &mutationExecutionError);
+    const EditorWorldObjectRecord* mutationRecord =
+        mutationModel.FindByObjectGuid(
+            mutationProvider.ProviderId(), mutationGuid);
+    EditorTransactionStack mutationTransactions;
+
+    EditorWorldMutationRequest changeDefinition{};
+    changeDefinition.kind =
+        EditorWorldMutationKind::SetGimmickDefinition;
+    if (mutationRecord != nullptr) {
+        changeDefinition.targets = {
+            mutationRecord->handle};
+    }
+    changeDefinition.componentType =
+        std::string(kEditorGimmickComponentType);
+    changeDefinition.propertyValue = "gimmick.switch";
+    const EditorWorldMutationResult definitionResult =
+        mutationService.Execute(
+            changeDefinition,
+            mutationTransactions,
+            true);
+    const EditorSceneEntity* mutatedEntity =
+        mutationScene.FindEntity(mutationGuid);
+    const EditorSceneComponent* mutatedComponent =
+        mutatedEntity != nullptr
+        ? mutationScene.FindComponent(
+            *mutatedEntity, kEditorGimmickComponentType)
+        : nullptr;
+    EditorGimmickComponent rebuiltSwitch{};
+    const bool rebuiltSwitchParsed =
+        mutatedComponent != nullptr &&
+        EditorGimmickComponent::FromSceneComponent(
+            *mutatedComponent,
+            rebuiltSwitch,
+            definitions,
+            &error,
+            EditorGimmickValidationPolicy::Authoring);
+    const EditorSceneValidationReport authoringReport =
+        mutationScene.Validate(&components);
+    runner.Expect(
+        mutationComponentAdded &&
+            mutationProviderRegistered &&
+            mutationRefresh.succeeded &&
+            mutationExecutionRegistered &&
+            mutationRecord != nullptr &&
+            definitionResult.succeeded &&
+            definitionResult.changed &&
+            mutationTransactions.UndoDepth() == 1 &&
+            rebuiltSwitchParsed &&
+            rebuiltSwitch.definitionId ==
+                "gimmick.switch" &&
+            rebuiltSwitch.parameters.size() == 1 &&
+            rebuiltSwitch.parameters.front().id == "toggle" &&
+            rebuiltSwitch.parameters.front().value == "true" &&
+            rebuiltSwitch.entityReferences.size() == 2 &&
+            std::all_of(
+                rebuiltSwitch.entityReferences.begin(),
+                rebuiltSwitch.entityReferences.end(),
+                [](const EditorGimmickEntityReferenceValue&
+                       reference) {
+                    return reference.entityGuid.empty();
+                }) &&
+            authoringReport.Succeeded() &&
+            std::any_of(
+                authoringReport.warnings.begin(),
+                authoringReport.warnings.end(),
+                [](const std::string& message) {
+                    return message.find("Play will reject") !=
+                        std::string::npos;
+                }),
+        "Gimmick Definition mutation should rebuild only the selected Definition's defaults in one authoring Transaction");
+
+    const bool definitionUndone =
+        mutationTransactions.Undo(
+            mutationExecutionContext,
+            &mutationExecutionError);
+    mutatedEntity = mutationScene.FindEntity(mutationGuid);
+    mutatedComponent = mutatedEntity != nullptr
+        ? mutationScene.FindComponent(
+            *mutatedEntity, kEditorGimmickComponentType)
+        : nullptr;
+    EditorGimmickComponent restoredDoor{};
+    const bool restoredDoorParsed =
+        mutatedComponent != nullptr &&
+        EditorGimmickComponent::FromSceneComponent(
+            *mutatedComponent,
+            restoredDoor,
+            definitions,
+            &error);
+    runner.Expect(
+        definitionUndone &&
+            restoredDoorParsed &&
+            restoredDoor.definitionId == "gimmick.door" &&
+            restoredDoor.parameters.size() == 4 &&
+            restoredDoor.entityReferences.size() == 1 &&
+            mutationTransactions.UndoDepth() == 0 &&
+            mutationTransactions.RedoDepth() == 1,
+        "Undo should restore the prior Gimmick Definition and its complete parameter layout atomically");
+
+    const bool definitionRedone =
+        mutationTransactions.Redo(
+            mutationExecutionContext,
+            &mutationExecutionError);
+    mutatedEntity = mutationScene.FindEntity(mutationGuid);
+    mutatedComponent = mutatedEntity != nullptr
+        ? mutationScene.FindComponent(
+            *mutatedEntity, kEditorGimmickComponentType)
+        : nullptr;
+    EditorGimmickComponent redoneSwitch{};
+    const bool redoneSwitchParsed =
+        mutatedComponent != nullptr &&
+        EditorGimmickComponent::FromSceneComponent(
+            *mutatedComponent,
+            redoneSwitch,
+            definitions,
+            &error,
+            EditorGimmickValidationPolicy::Authoring);
+    runner.Expect(
+        definitionRedone &&
+            redoneSwitchParsed &&
+            redoneSwitch.definitionId == "gimmick.switch" &&
+            redoneSwitch.parameters.size() == 1 &&
+            redoneSwitch.parameters.front().value == "true" &&
+            mutationTransactions.UndoDepth() == 1,
+        "Redo should restore the rebuilt Gimmick Definition state as the same atomic Transaction");
+
+    EditorWorldMutationRequest setToggle{};
+    setToggle.kind =
+        EditorWorldMutationKind::SetGimmickParameter;
+    mutationRecord = mutationModel.FindByObjectGuid(
+        mutationProvider.ProviderId(), mutationGuid);
+    if (mutationRecord != nullptr) {
+        setToggle.targets = {mutationRecord->handle};
+    }
+    setToggle.componentType =
+        std::string(kEditorGimmickComponentType);
+    setToggle.property = "toggle";
+    setToggle.propertyValue = "false";
+    const EditorWorldMutationResult toggleResult =
+        mutationService.Execute(
+            setToggle,
+            mutationTransactions,
+            true);
+    mutatedEntity = mutationScene.FindEntity(mutationGuid);
+    mutatedComponent = mutatedEntity != nullptr
+        ? mutationScene.FindComponent(
+            *mutatedEntity, kEditorGimmickComponentType)
+        : nullptr;
+    EditorGimmickComponent toggledSwitch{};
+    const bool toggledSwitchParsed =
+        mutatedComponent != nullptr &&
+        EditorGimmickComponent::FromSceneComponent(
+            *mutatedComponent,
+            toggledSwitch,
+            definitions,
+            &error,
+            EditorGimmickValidationPolicy::Authoring);
+    runner.Expect(
+        toggleResult.succeeded &&
+            toggledSwitchParsed &&
+            toggledSwitch.parameters.size() == 1 &&
+            toggledSwitch.parameters.front().id == "toggle" &&
+            toggledSwitch.parameters.front().value == "false" &&
+            mutationTransactions.UndoDepth() == 2,
+        "Dedicated Gimmick parameter mutation should validate and transact only the active Definition's scalar parameter");
+
+    const bool toggleUndone =
+        mutationTransactions.Undo(
+            mutationExecutionContext,
+            &mutationExecutionError);
+    mutatedEntity = mutationScene.FindEntity(mutationGuid);
+    mutatedComponent = mutatedEntity != nullptr
+        ? mutationScene.FindComponent(
+            *mutatedEntity, kEditorGimmickComponentType)
+        : nullptr;
+    EditorGimmickComponent toggleUndoState{};
+    const bool toggleUndoParsed =
+        mutatedComponent != nullptr &&
+        EditorGimmickComponent::FromSceneComponent(
+            *mutatedComponent,
+            toggleUndoState,
+            definitions,
+            &error,
+            EditorGimmickValidationPolicy::Authoring);
+    runner.Expect(
+        toggleUndone &&
+            toggleUndoParsed &&
+            toggleUndoState.parameters.size() == 1 &&
+            toggleUndoState.parameters.front().value == "true" &&
+            mutationTransactions.UndoDepth() == 1,
+        "Gimmick parameter edits should share the World TransactionStack and undo independently");
+
+    EditorScene bindingMutationScene;
+    const std::string bindingMutationSourceGuid =
+        "83838383838383838383838383838383";
+    const std::string bindingMutationTargetGuid =
+        "84848484848484848484848484848484";
+    const std::string bindingMutationNonGimmickGuid =
+        "85858585858585858585858585858585";
+    bindingMutationScene.CreateEntity(
+        "Binding Source", {}, bindingMutationSourceGuid);
+    bindingMutationScene.CreateEntity(
+        "Binding Target", {}, bindingMutationTargetGuid);
+    bindingMutationScene.CreateEntity(
+        "Not A Gimmick", {}, bindingMutationNonGimmickGuid);
+    const bool bindingMutationSourceReady =
+        bindingMutationScene.AddComponent(
+            bindingMutationSourceGuid,
+            std::string(kEditorGimmickComponentType),
+            nullptr,
+            &components) &&
+        bindingMutationScene.AddComponent(
+            bindingMutationSourceGuid,
+            std::string(
+                kEditorGimmickEventBindingComponentType),
+            nullptr,
+            &components) &&
+        bindingMutationScene.AddComponent(
+            bindingMutationSourceGuid,
+            std::string(
+                kEditorGimmickEventSequenceComponentType),
+            nullptr,
+            &components);
+    const bool bindingMutationTargetReady =
+        bindingMutationScene.AddComponent(
+            bindingMutationTargetGuid,
+            std::string(kEditorGimmickComponentType),
+            nullptr,
+            &components);
+    const EditorDocumentId bindingMutationDocument{
+        "event-binding-details-transaction",
+        std::string(EditorDocumentTypes::Scene)};
+    SceneWorldObjectProvider bindingMutationProvider;
+    bindingMutationProvider.Bind(
+        &bindingMutationScene,
+        bindingMutationDocument,
+        &components,
+        &definitions);
+    EditorWorldObjectRegistry bindingMutationRegistry;
+    const bool bindingMutationProviderRegistered =
+        bindingMutationRegistry.Register(
+            bindingMutationProvider, &error);
+    EditorWorldModel bindingMutationModel(
+        bindingMutationRegistry);
+    const EditorWorldModelRefreshResult
+        bindingMutationRefresh =
+            bindingMutationModel.Refresh();
+    EditorWorldMutationService bindingMutationService(
+        bindingMutationRegistry, bindingMutationModel);
+    EditorWorldMutationExecutionService
+        bindingMutationExecution(
+            bindingMutationRegistry,
+            &bindingMutationModel);
+    EditorExecutionContext bindingMutationExecutionContext;
+    EditorError bindingMutationExecutionError;
+    const bool bindingMutationExecutionRegistered =
+        bindingMutationExecutionContext.Register(
+            bindingMutationExecution,
+            &bindingMutationExecutionError);
+    const EditorWorldObjectRecord* bindingSourceRecord =
+        bindingMutationModel.FindByObjectGuid(
+            bindingMutationProvider.ProviderId(),
+            bindingMutationSourceGuid);
+    EditorTransactionStack bindingTransactions;
+
+    EditorWorldMutationRequest addBindingRequest{};
+    addBindingRequest.kind =
+        EditorWorldMutationKind::MutateGimmickEventBinding;
+    if (bindingSourceRecord != nullptr) {
+        addBindingRequest.targets = {
+            bindingSourceRecord->handle};
+    }
+    addBindingRequest.eventBindingMutation.kind =
+        EditorGimmickEventBindingMutationKind::Add;
+    addBindingRequest.eventBindingMutation.value = {
+        "details-binding",
+        EditorGimmickRuntimeEventKind::InteractionPressed,
+        bindingMutationTargetGuid,
+        EditorGimmickRuntimeCommandKind::Activate,
+        "initial payload",
+        10,
+        true,
+        false,
+    };
+    const EditorWorldMutationResult addBindingResult =
+        bindingMutationService.Execute(
+            addBindingRequest,
+            bindingTransactions,
+            true);
+    const EditorSceneEntity* bindingMutationSource =
+        bindingMutationScene.FindEntity(
+            bindingMutationSourceGuid);
+    const EditorSceneComponent* bindingMutationSceneComponent =
+        bindingMutationSource != nullptr
+        ? bindingMutationScene.FindComponent(
+            *bindingMutationSource,
+            kEditorGimmickEventBindingComponentType)
+        : nullptr;
+    EditorGimmickEventBindingComponent addedBindings{};
+    const bool addedBindingsParsed =
+        bindingMutationSceneComponent != nullptr &&
+        EditorGimmickEventBindingComponent::FromSceneComponent(
+            *bindingMutationSceneComponent,
+            addedBindings,
+            &error);
+    runner.Expect(
+        bindingMutationSourceReady &&
+            bindingMutationTargetReady &&
+            bindingMutationProviderRegistered &&
+            bindingMutationRefresh.succeeded &&
+            bindingMutationExecutionRegistered &&
+            bindingSourceRecord != nullptr &&
+            addBindingResult.succeeded &&
+            addBindingResult.document ==
+                bindingMutationDocument &&
+            bindingTransactions.UndoDepth() == 1 &&
+            addedBindingsParsed &&
+            addedBindings.bindings.size() == 1 &&
+            addedBindings.bindings.front().targetEntityGuid ==
+                bindingMutationTargetGuid &&
+            bindingMutationSceneComponent->references.size() == 1,
+        "Event Binding Details Add mutation should atomically write structured data and its typed Entity reference in one Transaction");
+
+    EditorWorldMutationRequest invalidTargetRequest =
+        addBindingRequest;
+    invalidTargetRequest.eventBindingMutation.kind =
+        EditorGimmickEventBindingMutationKind::Replace;
+    invalidTargetRequest.eventBindingMutation.bindingId =
+        "details-binding";
+    invalidTargetRequest.eventBindingMutation.value =
+        addedBindings.bindings.front();
+    invalidTargetRequest.eventBindingMutation.value.
+        targetEntityGuid = bindingMutationNonGimmickGuid;
+    const EditorWorldMutationResult invalidTargetResult =
+        bindingMutationService.Execute(
+            invalidTargetRequest,
+            bindingTransactions,
+            true);
+    runner.Expect(
+        !invalidTargetResult.succeeded &&
+            bindingTransactions.UndoDepth() == 1,
+        "Event Binding mutation should reject an Entity Picker target that does not satisfy the Gimmick Component type contract");
+
+    EditorWorldMutationRequest replaceBindingRequest =
+        addBindingRequest;
+    replaceBindingRequest.eventBindingMutation.kind =
+        EditorGimmickEventBindingMutationKind::Replace;
+    replaceBindingRequest.eventBindingMutation.bindingId =
+        "details-binding";
+    replaceBindingRequest.eventBindingMutation.value =
+        addedBindings.bindings.front();
+    replaceBindingRequest.eventBindingMutation.value.sourceEvent =
+        EditorGimmickRuntimeEventKind::TriggerEntered;
+    replaceBindingRequest.eventBindingMutation.value.targetCommand =
+        EditorGimmickRuntimeCommandKind::Toggle;
+    replaceBindingRequest.eventBindingMutation.value.payload =
+        "changed payload";
+    replaceBindingRequest.eventBindingMutation.value.priority = -5;
+    replaceBindingRequest.eventBindingMutation.value.oneShot = true;
+    const EditorWorldMutationResult replaceBindingResult =
+        bindingMutationService.Execute(
+            replaceBindingRequest,
+            bindingTransactions,
+            true);
+    bindingMutationSource =
+        bindingMutationScene.FindEntity(
+            bindingMutationSourceGuid);
+    bindingMutationSceneComponent =
+        bindingMutationSource != nullptr
+        ? bindingMutationScene.FindComponent(
+            *bindingMutationSource,
+            kEditorGimmickEventBindingComponentType)
+        : nullptr;
+    EditorGimmickEventBindingComponent replacedBindings{};
+    const bool replacedBindingsParsed =
+        bindingMutationSceneComponent != nullptr &&
+        EditorGimmickEventBindingComponent::FromSceneComponent(
+            *bindingMutationSceneComponent,
+            replacedBindings,
+            &error);
+    runner.Expect(
+        replaceBindingResult.succeeded &&
+            bindingTransactions.UndoDepth() == 2 &&
+            replacedBindingsParsed &&
+            replacedBindings.bindings.front().sourceEvent ==
+                EditorGimmickRuntimeEventKind::TriggerEntered &&
+            replacedBindings.bindings.front().targetCommand ==
+                EditorGimmickRuntimeCommandKind::Toggle &&
+            replacedBindings.bindings.front().payload ==
+                "changed payload" &&
+            replacedBindings.bindings.front().priority == -5 &&
+            replacedBindings.bindings.front().oneShot,
+        "Event Binding Details Replace mutation should commit all authored fields as one validated Transaction");
+
+    const bool bindingReplaceUndone =
+        bindingTransactions.Undo(
+            bindingMutationExecutionContext,
+            &bindingMutationExecutionError);
+    bindingMutationSource =
+        bindingMutationScene.FindEntity(
+            bindingMutationSourceGuid);
+    bindingMutationSceneComponent =
+        bindingMutationSource != nullptr
+        ? bindingMutationScene.FindComponent(
+            *bindingMutationSource,
+            kEditorGimmickEventBindingComponentType)
+        : nullptr;
+    EditorGimmickEventBindingComponent bindingUndoState{};
+    const bool bindingUndoParsed =
+        bindingMutationSceneComponent != nullptr &&
+        EditorGimmickEventBindingComponent::FromSceneComponent(
+            *bindingMutationSceneComponent,
+            bindingUndoState,
+            &error);
+    runner.Expect(
+        bindingReplaceUndone &&
+            bindingUndoParsed &&
+            bindingUndoState.bindings.size() == 1 &&
+            bindingUndoState.bindings.front().payload ==
+                "initial payload" &&
+            !bindingUndoState.bindings.front().oneShot &&
+            bindingTransactions.UndoDepth() == 1 &&
+            bindingTransactions.RedoDepth() == 1,
+        "Undo should restore Event Binding data and dynamic typed references from the same atomic snapshot");
+
+    EditorWorldMutationRequest addSequenceRequest{};
+    addSequenceRequest.kind =
+        EditorWorldMutationKind::MutateGimmickEventSequence;
+    bindingSourceRecord =
+        bindingMutationModel.FindByObjectGuid(
+            bindingMutationProvider.ProviderId(),
+            bindingMutationSourceGuid);
+    if (bindingSourceRecord != nullptr) {
+        addSequenceRequest.targets = {
+            bindingSourceRecord->handle};
+    }
+    addSequenceRequest.eventSequenceMutation.kind =
+        EditorGimmickEventSequenceMutationKind::Add;
+    addSequenceRequest.eventSequenceMutation.value = {
+        "details-step",
+        0.5,
+        bindingMutationTargetGuid,
+        EditorGimmickRuntimeCommandKind::Activate,
+        "timeline payload",
+        7,
+        true,
+    };
+    const EditorWorldMutationResult addSequenceResult =
+        bindingMutationService.Execute(
+            addSequenceRequest,
+            bindingTransactions,
+            true);
+    bindingMutationSource =
+        bindingMutationScene.FindEntity(
+            bindingMutationSourceGuid);
+    const EditorSceneComponent* sequenceSceneComponent =
+        bindingMutationSource != nullptr
+        ? bindingMutationScene.FindComponent(
+            *bindingMutationSource,
+            kEditorGimmickEventSequenceComponentType)
+        : nullptr;
+    EditorGimmickEventSequenceComponent transactionSequence{};
+    const bool transactionSequenceParsed =
+        sequenceSceneComponent != nullptr &&
+        EditorGimmickEventSequenceComponent::
+            FromSceneComponent(
+                *sequenceSceneComponent,
+                transactionSequence,
+                &error);
+    runner.Expect(
+        addSequenceResult.succeeded &&
+            bindingTransactions.UndoDepth() == 2 &&
+            bindingTransactions.RedoDepth() == 0 &&
+            transactionSequenceParsed &&
+            transactionSequence.steps.size() == 1 &&
+            transactionSequence.steps.front().targetEntityGuid ==
+                bindingMutationTargetGuid &&
+            sequenceSceneComponent->references.size() == 1,
+        "Timeline Details Add should atomically transact sequenceData and its typed target reference while clearing stale Redo history");
+
+    const bool sequenceAddUndone =
+        bindingTransactions.Undo(
+            bindingMutationExecutionContext,
+            &bindingMutationExecutionError);
+    bindingMutationSource =
+        bindingMutationScene.FindEntity(
+            bindingMutationSourceGuid);
+    sequenceSceneComponent =
+        bindingMutationSource != nullptr
+        ? bindingMutationScene.FindComponent(
+            *bindingMutationSource,
+            kEditorGimmickEventSequenceComponentType)
+        : nullptr;
+    EditorGimmickEventSequenceComponent sequenceUndoState{};
+    runner.Expect(
+        sequenceAddUndone &&
+            sequenceSceneComponent != nullptr &&
+            EditorGimmickEventSequenceComponent::
+                FromSceneComponent(
+                    *sequenceSceneComponent,
+                    sequenceUndoState,
+                    &error) &&
+            sequenceUndoState.steps.empty() &&
+            sequenceSceneComponent->references.empty() &&
+            bindingTransactions.UndoDepth() == 1,
+        "Timeline Details Undo should restore sequence data and dynamic references from one Scene snapshot");
+
+    EditorGimmickDefinitionRuntimeFactoryRegistry
+        definitionRuntimeFactories;
+    const bool definitionFactoriesRegistered =
+        RegisterBuiltInEditorGimmickDefinitionRuntimeFactories(
+            definitionRuntimeFactories,
+            definitions,
+            &error);
+    const bool definitionFactoriesIdempotent =
+        RegisterBuiltInEditorGimmickDefinitionRuntimeFactories(
+            definitionRuntimeFactories,
+            definitions,
+            &error);
+    runner.Expect(
+        definitionFactoriesRegistered &&
+            definitionFactoriesIdempotent &&
+            definitionRuntimeFactories.Count() ==
+                definitions.Count() &&
+            definitionRuntimeFactories.Find(
+                "runtime.gimmick.door") != nullptr &&
+            definitionRuntimeFactories.Find(
+                "runtime.gimmick.switch") != nullptr &&
+            definitionRuntimeFactories.FindByDefinition(
+                "gimmick.moving-platform") != nullptr &&
+            definitionRuntimeFactories.ValidateAgainstDefinitions(
+                definitions, &error),
+        "Definition Runtime Factory Registry should register one stable, idempotent Factory mapping for every Gimmick Definition");
+
+    EditorSceneRuntimeComponentFactoryRegistry
+        gimmickComponentFactories;
+    const bool gimmickFactoryRegistered =
+        gimmickComponentFactories.Register(
+            std::make_unique<EditorGimmickRuntimeFactory>(),
+            &error);
+    EditorGimmickRuntimeWorld gimmickRuntimeWorld;
+    EditorGimmickRuntimeTarget gimmickRuntimeTarget{
+        &definitions,
+        &definitionRuntimeFactories,
+        &gimmickRuntimeWorld};
+    EditorSceneRuntimeServiceRegistry gimmickRuntimeServices;
+    const bool gimmickTargetBound =
+        gimmickRuntimeServices.Bind(
+            std::string(kEditorGimmickRuntimeTargetServiceId),
+            &gimmickRuntimeTarget);
+    EditorSceneRuntimeInstantiationService
+        gimmickInstantiation;
+    const bool gimmickInstantiationBound =
+        gimmickInstantiation.Bind(
+            &components,
+            &gimmickComponentFactories,
+            &error);
+    const EditorSceneRuntimeInstantiationResult
+        gimmickBegin =
+            gimmickInstantiation.Begin(
+                scene, gimmickRuntimeServices);
+    const EditorGimmickRuntimeInstance* runtimeDoor =
+        gimmickRuntimeWorld.FindByEntity(doorGuid);
+    const EditorGimmickRuntimeInstance* runtimeSwitch =
+        gimmickRuntimeWorld.FindByEntity(switchGuid);
+    const EditorGimmickEntityReferenceValue* runtimeTarget =
+        runtimeSwitch != nullptr
+        ? runtimeSwitch->FindEntityReference("target")
+        : nullptr;
+    runner.Expect(
+        gimmickFactoryRegistered &&
+            gimmickTargetBound &&
+            gimmickInstantiationBound &&
+            gimmickBegin.succeeded &&
+            gimmickBegin.applied &&
+            gimmickBegin.factoryCount == 1 &&
+            gimmickRuntimeWorld.Active() &&
+            gimmickRuntimeWorld.Instances().size() == 2 &&
+            runtimeDoor != nullptr &&
+            runtimeDoor->definitionId == "gimmick.door" &&
+            runtimeDoor->runtimeFactoryId ==
+                "runtime.gimmick.door" &&
+            runtimeSwitch != nullptr &&
+            runtimeSwitch->definitionId ==
+                "gimmick.switch" &&
+            runtimeSwitch->runtimeFactoryId ==
+                "runtime.gimmick.switch" &&
+            runtimeTarget != nullptr &&
+            runtimeTarget->entityGuid == doorGuid,
+        "EditorGimmickRuntimeFactory should strictly decode Components, resolve typed Entity references, and dispatch through Definition-specific Factories");
+
+    const auto* doorBehavior =
+        runtimeDoor != nullptr
+        ? dynamic_cast<
+            const EditorDoorGimmickRuntimeBehavior*>(
+                runtimeDoor->behavior.get())
+        : nullptr;
+    const auto* switchBehavior =
+        runtimeSwitch != nullptr
+        ? dynamic_cast<
+            const EditorSwitchGimmickRuntimeBehavior*>(
+                runtimeSwitch->behavior.get())
+        : nullptr;
+    const bool switchCommandQueued =
+        gimmickRuntimeWorld.EnqueueCommand(
+            switchGuid,
+            EditorGimmickRuntimeCommandKind::Activate,
+            "regression.interaction",
+            {},
+            &error);
+    gimmickRuntimeWorld.Update(0.0f);
+    runtimeDoor =
+        gimmickRuntimeWorld.FindByEntity(doorGuid);
+    runtimeSwitch =
+        gimmickRuntimeWorld.FindByEntity(switchGuid);
+    doorBehavior =
+        runtimeDoor != nullptr
+        ? dynamic_cast<
+            const EditorDoorGimmickRuntimeBehavior*>(
+                runtimeDoor->behavior.get())
+        : nullptr;
+    switchBehavior =
+        runtimeSwitch != nullptr
+        ? dynamic_cast<
+            const EditorSwitchGimmickRuntimeBehavior*>(
+                runtimeSwitch->behavior.get())
+        : nullptr;
+    runner.Expect(
+        switchCommandQueued &&
+            doorBehavior != nullptr &&
+            switchBehavior != nullptr &&
+            switchBehavior->DispatchCount() == 1 &&
+            runtimeSwitch->lifecycle.State() ==
+                EditorGimmickRuntimeState::Completed &&
+            runtimeSwitch->lifecycle.ActivationCount() == 1 &&
+            gimmickRuntimeWorld.Commands().PendingCount() == 1 &&
+            doorBehavior->OpenFraction() == 0.0f,
+        "Switch Behavior should complete a one-shot Lifecycle and defer its target command to the next frame");
+
+    gimmickRuntimeWorld.Update(0.375f);
+    runtimeDoor =
+        gimmickRuntimeWorld.FindByEntity(doorGuid);
+    doorBehavior =
+        runtimeDoor != nullptr
+        ? dynamic_cast<
+            const EditorDoorGimmickRuntimeBehavior*>(
+                runtimeDoor->behavior.get())
+        : nullptr;
+    runner.Expect(
+        doorBehavior != nullptr &&
+            runtimeDoor->lifecycle.State() ==
+                EditorGimmickRuntimeState::Active &&
+            doorBehavior->TargetOpen() &&
+            std::abs(
+                doorBehavior->OpenFraction() - 0.5f) <
+                0.001f &&
+            std::abs(
+                doorBehavior->CurrentOffset() - 1.5f) <
+                0.001f,
+        "Door Behavior should consume the deferred Switch command and interpolate its authored open distance");
+
+    const bool runtimeColliderAdded =
+        scene.AddComponent(
+            doorGuid,
+            std::string(kEditorBoxColliderComponentType),
+            nullptr,
+            &components);
+    EditorMeshRendererRuntimeWorld adapterMeshWorld;
+    const bool adapterMeshWorldBuilt =
+        adapterMeshWorld.Replace(scene, {}, &error);
+    EditorGimmickPresentationPhysicsAdapter
+        presentationPhysicsAdapter;
+    const bool adapterReconciled =
+        presentationPhysicsAdapter.Reconcile(
+            scene,
+            adapterMeshWorld,
+            gimmickRuntimeWorld,
+            &error);
+    const EditorGimmickPresentationState*
+        halfOpenPresentation =
+            presentationPhysicsAdapter.FindPresentation(
+                doorGuid);
+    const EditorGimmickRuntimePhysicsBody*
+        halfOpenPhysics =
+            presentationPhysicsAdapter.FindPhysicsBody(
+                doorGuid);
+    const EditorGimmickRuntimePhysicsRayHit
+        halfOpenRayHit =
+            presentationPhysicsAdapter.Raycast(
+                {-10.0f, 0.0f, 0.0f},
+                {1.0f, 0.0f, 0.0f},
+                100.0f);
+    const EditorSceneEntity* authoredDoor =
+        scene.FindEntity(doorGuid);
+    const EditorSceneComponent* authoredDoorTransform =
+        authoredDoor != nullptr
+        ? scene.FindComponent(
+              *authoredDoor,
+              kEditorTransformComponentType)
+        : nullptr;
+    const auto authoredTranslation =
+        authoredDoorTransform != nullptr
+        ? std::find_if(
+              authoredDoorTransform->properties.begin(),
+              authoredDoorTransform->properties.end(),
+              [](const EditorSceneProperty& property) {
+                  return property.name == "translation";
+              })
+        : std::vector<EditorSceneProperty>::
+              const_iterator{};
+    runner.Expect(
+        runtimeColliderAdded &&
+            adapterMeshWorldBuilt &&
+            adapterReconciled &&
+            presentationPhysicsAdapter.Active() &&
+            halfOpenPresentation != nullptr &&
+            std::abs(
+                halfOpenPresentation->
+                    runtimeTranslation.x -
+                1.5f) < 0.001f &&
+            std::abs(
+                halfOpenPresentation->
+                    translationOffset.x -
+                1.5f) < 0.001f &&
+            halfOpenPhysics != nullptr &&
+            std::abs(
+                halfOpenPhysics->boundsMin.x -
+                0.5f) < 0.001f &&
+            std::abs(
+                halfOpenPhysics->boundsMax.x -
+                2.5f) < 0.001f &&
+            halfOpenRayHit.valid &&
+            halfOpenRayHit.entityGuid == doorGuid &&
+            authoredDoorTransform != nullptr &&
+            authoredTranslation !=
+                authoredDoorTransform->properties.end() &&
+            authoredTranslation->value == "0 0 0",
+        "Gimmick Presentation/Physics Adapter should apply the Door pose to a transient render Scene and queryable Box Collision without mutating authoring Transform data");
+
+    gimmickRuntimeWorld.Update(0.375f);
+    runtimeDoor =
+        gimmickRuntimeWorld.FindByEntity(doorGuid);
+    doorBehavior =
+        runtimeDoor != nullptr
+        ? dynamic_cast<
+            const EditorDoorGimmickRuntimeBehavior*>(
+                runtimeDoor->behavior.get())
+        : nullptr;
+    const bool closeQueued =
+        gimmickRuntimeWorld.EnqueueCommand(
+            doorGuid,
+            EditorGimmickRuntimeCommandKind::Toggle,
+            switchGuid,
+            {},
+            &error);
+    gimmickRuntimeWorld.Update(0.75f);
+    runtimeDoor =
+        gimmickRuntimeWorld.FindByEntity(doorGuid);
+    doorBehavior =
+        runtimeDoor != nullptr
+        ? dynamic_cast<
+            const EditorDoorGimmickRuntimeBehavior*>(
+                runtimeDoor->behavior.get())
+        : nullptr;
+    runner.Expect(
+        closeQueued &&
+            doorBehavior != nullptr &&
+            !doorBehavior->TargetOpen() &&
+            doorBehavior->OpenFraction() == 0.0f &&
+            runtimeDoor->lifecycle.State() ==
+                EditorGimmickRuntimeState::Ready &&
+            runtimeDoor->lifecycle.ActivationCount() == 1,
+        "Door Toggle should close through the same Behavior and finish the reusable Lifecycle");
+    const bool closedAdapterSynced =
+        presentationPhysicsAdapter.Sync(
+            gimmickRuntimeWorld, &error);
+    const EditorGimmickPresentationState*
+        closedPresentation =
+            presentationPhysicsAdapter.FindPresentation(
+                doorGuid);
+    const EditorGimmickRuntimePhysicsBody*
+        closedPhysics =
+            presentationPhysicsAdapter.FindPhysicsBody(
+                doorGuid);
+    runner.Expect(
+        closedAdapterSynced &&
+            closedPresentation != nullptr &&
+            std::abs(
+                closedPresentation->
+                    runtimeTranslation.x) < 0.001f &&
+            closedPhysics != nullptr &&
+            std::abs(
+                closedPhysics->boundsMin.x + 1.0f) <
+                0.001f &&
+            std::abs(
+                closedPhysics->boundsMax.x - 1.0f) <
+                0.001f,
+        "Presentation and primitive Physics should return to the authored Door pose in the same Runtime sync");
+
+    EditorGimmickRuntimeEventRouter interactionEventRouter;
+    EditorGimmickRuntimeInteractionSystem interactionSystem;
+    interactionSystem.Update(
+        EditorGimmickRuntimeInteractionInput{
+            &gimmickRuntimeWorld,
+            &interactionEventRouter,
+            &presentationPhysicsAdapter,
+            {-10.0f, 0.0f, 0.0f},
+            {1.0f, 0.0f, 0.0f},
+            "runtime.test-player",
+            false,
+            true});
+    interactionSystem.Update(
+        EditorGimmickRuntimeInteractionInput{
+            &gimmickRuntimeWorld,
+            &interactionEventRouter,
+            &presentationPhysicsAdapter,
+            {-10.0f, 0.0f, 0.0f},
+            {1.0f, 0.0f, 0.0f},
+            "runtime.test-player",
+            true,
+            true});
+    const EditorGimmickRuntimeInteractionSnapshot
+        pressedInteraction = interactionSystem.Snapshot();
+    const std::size_t commandsAfterInteractionPress =
+        gimmickRuntimeWorld.Commands().PendingCount();
+    interactionSystem.Update(
+        EditorGimmickRuntimeInteractionInput{
+            &gimmickRuntimeWorld,
+            &interactionEventRouter,
+            &presentationPhysicsAdapter,
+            {-10.0f, 0.0f, 0.0f},
+            {1.0f, 0.0f, 0.0f},
+            "runtime.test-player",
+            true,
+            true});
+    const bool interactionHeldDidNotRepeat =
+        gimmickRuntimeWorld.Commands().PendingCount() ==
+            commandsAfterInteractionPress &&
+        !interactionSystem.Snapshot().interactionPressed &&
+        !interactionSystem.Snapshot().commandAccepted;
+    gimmickRuntimeWorld.Update(0.0f);
+    runtimeDoor =
+        gimmickRuntimeWorld.FindByEntity(doorGuid);
+    doorBehavior =
+        runtimeDoor != nullptr
+        ? dynamic_cast<
+              const EditorDoorGimmickRuntimeBehavior*>(
+              runtimeDoor->behavior.get())
+        : nullptr;
+    runner.Expect(
+        pressedInteraction.active &&
+            pressedInteraction.focused &&
+            pressedInteraction.interactionPressed &&
+            pressedInteraction.commandAccepted &&
+            pressedInteraction.focusedEntityGuid == doorGuid &&
+            pressedInteraction.acceptedCommandCount == 1 &&
+            interactionEventRouter.Snapshot().
+                    routedEventCount == 1 &&
+            interactionEventRouter.Snapshot().
+                    lastEventKind ==
+                EditorGimmickRuntimeEventKind::
+                    InteractionPressed &&
+            interactionHeldDidNotRepeat &&
+            doorBehavior != nullptr &&
+            doorBehavior->TargetOpen(),
+        "Runtime Interaction System should focus the nearest Interaction Gimmick, enqueue one Toggle on the input edge, and debounce a held input");
+    gimmickRuntimeWorld.EnqueueCommand(
+        doorGuid,
+        EditorGimmickRuntimeCommandKind::Reset,
+        "runtime.regression",
+        {},
+        nullptr);
+    gimmickRuntimeWorld.Update(0.0f);
+    presentationPhysicsAdapter.Sync(
+        gimmickRuntimeWorld, nullptr);
+
+    EditorScene triggerScene;
+    const std::string triggerGuid =
+        "84848484848484848484848484848484";
+    triggerScene.CreateEntity(
+        "Triggered Door", {}, triggerGuid);
+    triggerScene.AddComponent(
+        triggerGuid,
+        std::string(kEditorGimmickComponentType),
+        nullptr,
+        &components);
+    triggerScene.AddComponent(
+        triggerGuid,
+        std::string(kEditorBoxColliderComponentType),
+        nullptr,
+        &components);
+    EditorSceneEntity* triggerEntity =
+        triggerScene.FindEntity(triggerGuid);
+    EditorSceneComponent* triggerGimmick =
+        triggerEntity != nullptr
+        ? triggerScene.FindComponent(
+              *triggerEntity, kEditorGimmickComponentType)
+        : nullptr;
+    EditorGimmickComponent triggerAuthored{};
+    const bool triggerDecoded =
+        triggerGimmick != nullptr &&
+        EditorGimmickComponent::FromSceneComponent(
+            *triggerGimmick,
+            triggerAuthored,
+            definitions,
+            &error);
+    triggerAuthored.activationMode =
+        EditorGimmickActivationMode::Triggered;
+    const bool triggerWritten =
+        triggerDecoded &&
+        triggerAuthored.WriteToSceneComponent(
+            *triggerGimmick,
+            definitions,
+            &error);
+
+    EditorSceneRuntimeComponentFactoryRegistry
+        triggerComponentFactories;
+    const bool triggerFactoryRegistered =
+        triggerComponentFactories.Register(
+            std::make_unique<EditorGimmickRuntimeFactory>(),
+            &error);
+    EditorGimmickRuntimeWorld triggerWorld;
+    EditorGimmickRuntimeTarget triggerTarget{
+        &definitions,
+        &definitionRuntimeFactories,
+        &triggerWorld};
+    EditorSceneRuntimeServiceRegistry triggerServices;
+    const bool triggerTargetBound = triggerServices.Bind(
+        std::string(kEditorGimmickRuntimeTargetServiceId),
+        &triggerTarget);
+    EditorSceneRuntimeInstantiationService triggerInstantiation;
+    const bool triggerInstantiationBound =
+        triggerInstantiation.Bind(
+            &components,
+            &triggerComponentFactories,
+            &error);
+    const EditorSceneRuntimeInstantiationResult triggerBegin =
+        triggerInstantiation.Begin(
+            triggerScene, triggerServices);
+    EditorMeshRendererRuntimeWorld triggerMeshWorld;
+    const bool triggerMeshBuilt =
+        triggerMeshWorld.Replace(triggerScene, {}, &error);
+    EditorGimmickPresentationPhysicsAdapter triggerPhysics;
+    const bool triggerPhysicsBuilt =
+        triggerPhysics.Reconcile(
+            triggerScene,
+            triggerMeshWorld,
+            triggerWorld,
+            &error);
+    EditorGimmickRuntimeEventRouter triggerEventRouter;
+    EditorGimmickRuntimeTriggerSystem triggerSystem;
+    EditorGimmickRuntimeTriggerInput triggerFrame{};
+    triggerFrame.world = &triggerWorld;
+    triggerFrame.eventRouter = &triggerEventRouter;
+    triggerFrame.physics = &triggerPhysics;
+    triggerFrame.subjects.push_back(
+        {"runtime.test-player",
+         {-0.5f, -0.5f, -0.5f},
+         {0.5f, 0.5f, 0.5f},
+         true});
+    triggerSystem.Update(triggerFrame);
+    const EditorGimmickRuntimeTriggerSnapshot triggerEnter =
+        triggerSystem.Snapshot();
+    const std::size_t triggerEnterCommands =
+        triggerWorld.Commands().PendingCount();
+    triggerSystem.Update(triggerFrame);
+    const EditorGimmickRuntimeTriggerSnapshot triggerStay =
+        triggerSystem.Snapshot();
+    const bool triggerStayDidNotRepeat =
+        triggerWorld.Commands().PendingCount() ==
+            triggerEnterCommands;
+    triggerWorld.Update(0.0f);
+    const EditorGimmickRuntimeInstance* triggeredDoor =
+        triggerWorld.FindByEntity(triggerGuid);
+    const auto* triggeredDoorBehavior =
+        triggeredDoor != nullptr
+        ? dynamic_cast<
+              const EditorDoorGimmickRuntimeBehavior*>(
+              triggeredDoor->behavior.get())
+        : nullptr;
+    triggerFrame.subjects.front().boundsMin =
+        {20.0f, 20.0f, 20.0f};
+    triggerFrame.subjects.front().boundsMax =
+        {21.0f, 21.0f, 21.0f};
+    triggerSystem.Update(triggerFrame);
+    const EditorGimmickRuntimeTriggerSnapshot triggerExit =
+        triggerSystem.Snapshot();
+    triggerWorld.Update(0.0f);
+    triggeredDoor = triggerWorld.FindByEntity(triggerGuid);
+    triggeredDoorBehavior =
+        triggeredDoor != nullptr
+        ? dynamic_cast<
+              const EditorDoorGimmickRuntimeBehavior*>(
+              triggeredDoor->behavior.get())
+        : nullptr;
+    runner.Expect(
+        triggerWritten &&
+            triggerFactoryRegistered &&
+            triggerTargetBound &&
+            triggerInstantiationBound &&
+            triggerBegin.succeeded &&
+            triggerMeshBuilt &&
+            triggerPhysicsBuilt &&
+            triggerEnter.enteredThisFrame == 1 &&
+            triggerEnter.acceptedCommandCount == 1 &&
+            triggerStay.stayedThisFrame == 1 &&
+            triggerStay.enteredThisFrame == 0 &&
+            triggerStay.ignoredEventCount == 1 &&
+            triggerStayDidNotRepeat &&
+            triggerExit.exitedThisFrame == 1 &&
+            triggerExit.acceptedCommandCount == 2 &&
+            triggeredDoorBehavior != nullptr &&
+            !triggeredDoorBehavior->TargetOpen() &&
+            triggerEventRouter.Snapshot().
+                    routedEventCount == 2 &&
+            triggerEventRouter.Snapshot().
+                    ignoredEventCount == 1 &&
+            triggerSystem.Contacts().empty(),
+        "Runtime Trigger System should emit deterministic Enter and Exit commands while suppressing repeated activation during Stay");
+    triggerInstantiation.Stop();
+    triggerWorld.Clear();
+
+    EditorScene bindingScene;
+    const std::string bindingSourceGuid =
+        "85858585858585858585858585858585";
+    const std::string bindingTargetAGuid =
+        "86868686868686868686868686868686";
+    const std::string bindingTargetBGuid =
+        "87878787878787878787878787878787";
+    const std::string bindingNonGimmickGuid =
+        "88888888888888888888888888888888";
+    bindingScene.CreateEntity(
+        "Binding Source", {}, bindingSourceGuid);
+    bindingScene.CreateEntity(
+        "Binding Target A", {}, bindingTargetAGuid);
+    bindingScene.CreateEntity(
+        "Binding Target B", {}, bindingTargetBGuid);
+    bindingScene.CreateEntity(
+        "Binding Non-Gimmick Target",
+        {},
+        bindingNonGimmickGuid);
+    bool bindingSceneBuilt = true;
+    for (const std::string* guid : {
+             &bindingSourceGuid,
+             &bindingTargetAGuid,
+             &bindingTargetBGuid}) {
+        bindingSceneBuilt =
+            bindingScene.AddComponent(
+                *guid,
+                std::string(kEditorGimmickComponentType),
+                nullptr,
+                &components) &&
+            bindingSceneBuilt;
+    }
+    bindingSceneBuilt =
+        bindingScene.AddComponent(
+            bindingSourceGuid,
+            std::string(
+                kEditorGimmickEventBindingComponentType),
+            nullptr,
+            &components) &&
+        bindingSceneBuilt;
+    EditorSceneEntity* bindingSource =
+        bindingScene.FindEntity(bindingSourceGuid);
+    EditorSceneComponent* bindingSceneComponent =
+        bindingSource != nullptr
+        ? bindingScene.FindComponent(
+              *bindingSource,
+              kEditorGimmickEventBindingComponentType)
+        : nullptr;
+    EditorGimmickEventBindingComponent
+        bindingSceneAuthored{};
+    bindingSceneAuthored.bindings = {
+        {
+            "target-a-once",
+            EditorGimmickRuntimeEventKind::
+                InteractionPressed,
+            bindingTargetAGuid,
+            EditorGimmickRuntimeCommandKind::Activate,
+            "binding.target-a",
+            20,
+            true,
+            true,
+        },
+        {
+            "target-b",
+            EditorGimmickRuntimeEventKind::
+                InteractionPressed,
+            bindingTargetBGuid,
+            EditorGimmickRuntimeCommandKind::Toggle,
+            "binding.target-b",
+            10,
+            true,
+            false,
+        },
+        {
+            "missing-disabled",
+            EditorGimmickRuntimeEventKind::
+                InteractionPressed,
+            bindingNonGimmickGuid,
+            EditorGimmickRuntimeCommandKind::Activate,
+            {},
+            30,
+            false,
+            false,
+        },
+        {
+            "target-a-delayed",
+            EditorGimmickRuntimeEventKind::
+                InteractionPressed,
+            bindingTargetAGuid,
+            EditorGimmickRuntimeCommandKind::Reset,
+            "binding.target-a.delayed",
+            15,
+            true,
+            false,
+            0.5,
+            0.0,
+            1,
+        },
+    };
+    const bool bindingSceneWritten =
+        bindingSceneComponent != nullptr &&
+        bindingSceneAuthored.WriteToSceneComponent(
+            *bindingSceneComponent,
+            &error);
+
+    EditorSceneRuntimeComponentFactoryRegistry
+        bindingFactories;
+    const bool bindingGimmickFactoryRegistered =
+        bindingFactories.Register(
+            std::make_unique<EditorGimmickRuntimeFactory>(),
+            &error);
+    const bool bindingRuntimeFactoryRegistered =
+        bindingFactories.Register(
+            std::make_unique<
+                EditorGimmickEventBindingRuntimeFactory>(),
+            &error);
+    EditorGimmickRuntimeWorld bindingWorld;
+    EditorGimmickRuntimeTarget bindingGimmickTarget{
+        &definitions,
+        &definitionRuntimeFactories,
+        &bindingWorld};
+    EditorGimmickRuntimeEventBindingRegistry bindingRegistry;
+    EditorGimmickEventBindingRuntimeTarget
+        bindingRuntimeTarget{
+            &bindingRegistry,
+            &bindingWorld};
+    EditorSceneRuntimeServiceRegistry bindingServices;
+    const bool bindingGimmickTargetBound =
+        bindingServices.Bind(
+            std::string(kEditorGimmickRuntimeTargetServiceId),
+            &bindingGimmickTarget);
+    const bool bindingTargetBound =
+        bindingServices.Bind(
+            std::string(
+                kEditorGimmickEventBindingRuntimeTargetServiceId),
+            &bindingRuntimeTarget);
+    EditorSceneRuntimeInstantiationService
+        bindingInstantiation;
+    const bool bindingInstantiationBound =
+        bindingInstantiation.Bind(
+            &components,
+            &bindingFactories,
+            &error);
+    const EditorSceneRuntimeInstantiationResult bindingBegin =
+        bindingInstantiation.Begin(
+            bindingScene,
+            bindingServices);
+    EditorGimmickRuntimeEventRouter bindingRouter;
+    EditorGimmickRuntimeDelayedEventScheduler
+        bindingDelayedEvents;
+    bindingRouter.BindEventBindingRegistry(&bindingRegistry);
+    bindingRouter.BindDelayedEventScheduler(
+        &bindingDelayedEvents);
+    const bool firstBroadcast = bindingRouter.Broadcast(
+        bindingWorld,
+        bindingSourceGuid,
+        EditorGimmickRuntimeEventKind::InteractionPressed,
+        "runtime.test-player",
+        "broadcast.inherited",
+        true,
+        &error);
+    const std::size_t firstBroadcastCommands =
+        bindingWorld.Commands().PendingCount();
+    bindingWorld.Update(0.0f);
+    const EditorGimmickRuntimeInstance*
+        bindingRuntimeTargetA =
+            bindingWorld.FindByEntity(bindingTargetAGuid);
+    const EditorGimmickRuntimeInstance*
+        bindingRuntimeTargetB =
+            bindingWorld.FindByEntity(bindingTargetBGuid);
+    const uint64_t firstTargetASequence =
+        bindingRuntimeTargetA != nullptr
+        ? bindingRuntimeTargetA->lastCommandSequence
+        : 0;
+    const uint64_t firstTargetBSequence =
+        bindingRuntimeTargetB != nullptr
+        ? bindingRuntimeTargetB->lastCommandSequence
+        : 0;
+
+    std::vector<EditorGimmickRuntimeEventBinding>
+        reconciledBindings = bindingRegistry.Bindings();
+    for (EditorGimmickRuntimeEventBinding& binding :
+         reconciledBindings) {
+        binding.consumed = false;
+    }
+    bindingRegistry.SuspendForReconcile();
+    const bool bindingRegistryReplaced =
+        bindingRegistry.Replace(
+            std::move(reconciledBindings),
+            bindingWorld,
+            &error);
+    const bool oneShotPreserved =
+        bindingRegistry.ConsumedCount() == 1;
+    const bool secondBroadcast = bindingRouter.Broadcast(
+        bindingWorld,
+        bindingSourceGuid,
+        EditorGimmickRuntimeEventKind::InteractionPressed,
+        "runtime.test-player",
+        "broadcast.second",
+        true,
+        &error);
+    const std::size_t secondBroadcastCommands =
+        bindingWorld.Commands().PendingCount();
+    bindingWorld.Update(0.0f);
+    bindingRuntimeTargetA =
+        bindingWorld.FindByEntity(bindingTargetAGuid);
+
+    std::ostringstream bindingBroadcastDiagnostic;
+    bindingBroadcastDiagnostic
+        << "Runtime Event Binding Registry and Broadcast should "
+           "fan out deterministically"
+        << " scene=" << bindingSceneBuilt
+        << " written=" << bindingSceneWritten
+        << " begin=" << bindingBegin.succeeded
+        << " beginMessage=" << bindingBegin.message
+        << " factories=" << bindingBegin.factoryCount
+        << " warnings=" << bindingBegin.warnings.size()
+        << " bindings=" << bindingRegistry.Bindings().size()
+        << " unresolved=" << bindingRegistry.UnresolvedCount()
+        << " first=" << firstBroadcast
+        << " firstCommands=" << firstBroadcastCommands
+        << " seqA=" << firstTargetASequence
+        << " seqB=" << firstTargetBSequence
+        << " replaced=" << bindingRegistryReplaced
+        << " oneShot=" << oneShotPreserved
+        << " second=" << secondBroadcast
+        << " secondCommands=" << secondBroadcastCommands
+        << " finalSeqA="
+        << (bindingRuntimeTargetA != nullptr
+                ? bindingRuntimeTargetA->lastCommandSequence
+                : 0)
+        << " broadcasts="
+        << bindingRouter.Snapshot().broadcastCount
+        << " matches="
+        << bindingRouter.Snapshot().
+               broadcastBindingMatchCount
+        << " commands="
+        << bindingRouter.Snapshot().broadcastCommandCount;
+    runner.Expect(
+        bindingSceneBuilt &&
+            bindingSceneWritten &&
+            bindingGimmickFactoryRegistered &&
+            bindingRuntimeFactoryRegistered &&
+            bindingGimmickTargetBound &&
+            bindingTargetBound &&
+            bindingInstantiationBound &&
+            bindingBegin.succeeded &&
+            bindingBegin.factoryCount == 2 &&
+            !bindingBegin.warnings.empty() &&
+            bindingRegistry.Active() &&
+            bindingRegistry.Bindings().size() == 4 &&
+            bindingRegistry.UnresolvedCount() == 1 &&
+            firstBroadcast &&
+            firstBroadcastCommands == 3 &&
+            firstTargetBSequence > 0 &&
+            firstTargetASequence >
+                firstTargetBSequence &&
+            bindingRegistryReplaced &&
+            oneShotPreserved &&
+            secondBroadcast &&
+            secondBroadcastCommands == 2 &&
+            bindingRuntimeTargetA != nullptr &&
+            bindingRuntimeTargetA->lastCommandSequence ==
+                firstTargetASequence &&
+            bindingRouter.Snapshot().broadcastCount == 2 &&
+            bindingRouter.Snapshot().
+                    broadcastBindingMatchCount == 5 &&
+            bindingRouter.Snapshot().
+                    broadcastCommandCount == 5 &&
+            bindingRouter.Snapshot().
+                    broadcastScheduledCount == 2 &&
+            bindingDelayedEvents.Snapshot().pendingCount == 2,
+        bindingBroadcastDiagnostic.str());
+
+    const bool delayedBeforeDue =
+        bindingDelayedEvents.Update(
+            0.49,
+            bindingWorld,
+            bindingRouter,
+            &error) &&
+        bindingWorld.Commands().PendingCount() == 0 &&
+        bindingDelayedEvents.Snapshot().pendingCount == 2;
+    const bool delayedAtDue =
+        bindingDelayedEvents.Update(
+            0.01,
+            bindingWorld,
+            bindingRouter,
+            &error) &&
+        bindingWorld.Commands().PendingCount() == 2 &&
+        bindingDelayedEvents.Snapshot().pendingCount == 0;
+    bindingWorld.Update(0.0f);
+
+    EditorGimmickRuntimeDelayedEventRequest repeating{};
+    repeating.event = {
+        EditorGimmickRuntimeEventKind::ResetRequested,
+        bindingTargetBGuid,
+        bindingSourceGuid,
+        "scheduler.repeat",
+        true};
+    repeating.delaySeconds = 0.25;
+    repeating.repeatIntervalSeconds = 0.25;
+    repeating.repeatCount = 3;
+    uint64_t repeatingHandle = 0;
+    const bool repeatingScheduled =
+        bindingDelayedEvents.ScheduleAfter(
+            repeating, &repeatingHandle, &error);
+    const bool repeatNotEarly =
+        bindingDelayedEvents.Update(
+            0.24,
+            bindingWorld,
+            bindingRouter,
+            &error) &&
+        bindingWorld.Commands().PendingCount() == 0;
+    const bool repeatFirst =
+        bindingDelayedEvents.Update(
+            0.01,
+            bindingWorld,
+            bindingRouter,
+            &error) &&
+        bindingWorld.Commands().PendingCount() == 1;
+    const bool repeatCatchUp =
+        bindingDelayedEvents.Update(
+            0.50,
+            bindingWorld,
+            bindingRouter,
+            &error) &&
+        bindingWorld.Commands().PendingCount() == 3 &&
+        bindingDelayedEvents.Snapshot().pendingCount == 0;
+    bindingWorld.Update(0.0f);
+
+    std::vector<
+        EditorGimmickRuntimeDelayedEventSequenceStep>
+        cancellableSequence{
+            {
+                0.1,
+                {
+                    EditorGimmickRuntimeEventKind::ResetRequested,
+                    bindingTargetAGuid,
+                    bindingSourceGuid,
+                    "sequence.first",
+                    true},
+                20,
+                EditorGimmickRuntimeScheduledDelivery::Dispatch,
+            },
+            {
+                0.2,
+                {
+                    EditorGimmickRuntimeEventKind::ResetRequested,
+                    bindingTargetBGuid,
+                    bindingSourceGuid,
+                    "sequence.second",
+                    true},
+                10,
+                EditorGimmickRuntimeScheduledDelivery::Dispatch,
+            },
+        };
+    uint64_t sequenceGroup = 0;
+    const bool sequenceScheduled =
+        bindingDelayedEvents.ScheduleSequence(
+            std::move(cancellableSequence),
+            &sequenceGroup,
+            &error);
+    const std::size_t sequenceCancelled =
+        bindingDelayedEvents.CancelGroup(sequenceGroup);
+    const uint64_t dispatchCountBeforeCancelledUpdate =
+        bindingDelayedEvents.Snapshot().dispatchedCount;
+    const bool cancelledSequenceStayedSilent =
+        bindingDelayedEvents.Update(
+            1.0,
+            bindingWorld,
+            bindingRouter,
+            &error) &&
+        bindingDelayedEvents.Snapshot().dispatchedCount ==
+            dispatchCountBeforeCancelledUpdate;
+    runner.Expect(
+        delayedBeforeDue &&
+            delayedAtDue &&
+            repeatingScheduled &&
+            repeatingHandle != 0 &&
+            repeatNotEarly &&
+            repeatFirst &&
+            repeatCatchUp &&
+            sequenceScheduled &&
+            sequenceGroup != 0 &&
+            sequenceCancelled == 2 &&
+            cancelledSequenceStayedSilent &&
+            bindingDelayedEvents.Snapshot().scheduledCount == 5 &&
+            bindingDelayedEvents.Snapshot().dispatchedCount == 5 &&
+            bindingDelayedEvents.Snapshot().cancelledCount == 2,
+        "Delayed Event Scheduler should fire at deterministic integer-clock deadlines, catch up finite repeats, and cancel atomic event sequences by group");
+
+    EditorGimmickRuntimeEventSequenceRegistry
+        runtimeSequenceRegistry;
+    EditorGimmickRuntimeEventSequence runtimeSequence{};
+    runtimeSequence.stableId =
+        bindingSourceGuid + ":event-sequence";
+    runtimeSequence.sourceEntityGuid = bindingSourceGuid;
+    runtimeSequence.sourceEvent =
+        EditorGimmickRuntimeEventKind::TriggerExited;
+    runtimeSequence.playbackPolicy =
+        EditorGimmickEventSequencePlaybackPolicy::
+            IgnoreWhilePlaying;
+    runtimeSequence.sourceHash = 42;
+    runtimeSequence.steps = {
+        {
+            "reset-a",
+            0.1,
+            bindingTargetAGuid,
+            EditorGimmickRuntimeCommandKind::Reset,
+            "timeline.a",
+            20,
+            true,
+        },
+        {
+            "reset-b",
+            0.2,
+            bindingTargetBGuid,
+            EditorGimmickRuntimeCommandKind::Reset,
+            "timeline.b",
+            10,
+            true,
+        },
+    };
+    const bool runtimeSequenceRegistered =
+        runtimeSequenceRegistry.Replace(
+            {runtimeSequence},
+            bindingWorld,
+            &error);
+    bindingRouter.BindEventSequenceRegistry(
+        &runtimeSequenceRegistry);
+    const uint64_t sequenceStartBefore =
+        bindingRouter.Snapshot().broadcastSequenceStartCount;
+    const bool timelineStarted = bindingRouter.Broadcast(
+        bindingWorld,
+        bindingSourceGuid,
+        EditorGimmickRuntimeEventKind::TriggerExited,
+        "runtime.timeline-test",
+        "fallback",
+        true,
+        &error);
+    const bool timelineDuplicateHandled =
+        bindingRouter.Broadcast(
+            bindingWorld,
+            bindingSourceGuid,
+            EditorGimmickRuntimeEventKind::TriggerExited,
+            "runtime.timeline-test",
+            "fallback",
+            true,
+            &error);
+    const bool timelineFirstStep =
+        bindingDelayedEvents.Update(
+            0.1,
+            bindingWorld,
+            bindingRouter,
+            &error);
+    const bool timelineSecondStep =
+        bindingDelayedEvents.Update(
+            0.1,
+            bindingWorld,
+            bindingRouter,
+            &error);
+    runner.Expect(
+        runtimeSequenceRegistered &&
+            timelineStarted &&
+            timelineDuplicateHandled &&
+            timelineFirstStep &&
+            timelineSecondStep &&
+            bindingRouter.Snapshot().
+                    broadcastSequenceStartCount ==
+                sequenceStartBefore + 1 &&
+            bindingRouter.Snapshot().
+                    broadcastSequenceIgnoredCount >= 1 &&
+            !bindingDelayedEvents.HasPendingOwner(
+                runtimeSequence.stableId),
+        "Runtime Event Sequence should expand Timeline steps into the deterministic Scheduler and enforce IGNORE_WHILE_PLAYING");
+    bindingRouter.BindEventSequenceRegistry(nullptr);
+    runtimeSequenceRegistry.Clear();
+
+    const bool staleOwnerBroadcast = bindingRouter.Broadcast(
+        bindingWorld,
+        bindingSourceGuid,
+        EditorGimmickRuntimeEventKind::InteractionPressed,
+        "runtime.test-player",
+        "broadcast.before-reconcile",
+        true,
+        &error);
+    bindingWorld.Update(0.0f);
+    std::vector<EditorGimmickRuntimeEventBinding>
+        editedRuntimeBindings = bindingRegistry.Bindings();
+    for (EditorGimmickRuntimeEventBinding& binding :
+         editedRuntimeBindings) {
+        if (binding.bindingId == "target-a-delayed") {
+            ++binding.sourceHash;
+        }
+    }
+    bindingRegistry.SuspendForReconcile();
+    const bool editedBindingRegistryReplaced =
+        bindingRegistry.Replace(
+            std::move(editedRuntimeBindings),
+            bindingWorld,
+            &error);
+    bindingRouter.Reconcile(bindingWorld);
+    runner.Expect(
+        staleOwnerBroadcast &&
+            editedBindingRegistryReplaced &&
+            bindingDelayedEvents.Snapshot().pendingCount == 0 &&
+            bindingDelayedEvents.Snapshot().cancelledCount == 3 &&
+            bindingDelayedEvents.Snapshot().lastError.find(
+                "stale Binding") != std::string::npos,
+        "Delayed Event Scheduler Reconcile should cancel pending events whose authored Binding source hash changed during hot reload");
+    bindingInstantiation.Stop();
+    bindingWorld.Clear();
+
+    EditorGimmickRuntimeLifecycle cooldownLifecycle;
+    const bool cooldownConfigured =
+        cooldownLifecycle.Configure(
+            EditorGimmickActivationMode::Triggered,
+            false,
+            1.0f);
+    const bool cooldownActivated =
+        cooldownLifecycle.Activate();
+    const bool cooldownFinished =
+        cooldownLifecycle.FinishActivation();
+    cooldownLifecycle.Update(0.4f);
+    const bool cooldownBlocked =
+        !cooldownLifecycle.Activate() &&
+        cooldownLifecycle.State() ==
+            EditorGimmickRuntimeState::Cooldown &&
+        std::abs(
+            cooldownLifecycle.CooldownRemaining() - 0.6f) <
+            0.001f;
+    cooldownLifecycle.Update(0.6f);
+    runner.Expect(
+        cooldownConfigured &&
+            cooldownActivated &&
+            cooldownFinished &&
+            cooldownBlocked &&
+            cooldownLifecycle.State() ==
+                EditorGimmickRuntimeState::Ready &&
+            cooldownLifecycle.Activate(),
+        "Common Gimmick Lifecycle should enforce deterministic Cooldown transitions before reactivation");
+
+    EditorGimmickRuntimeInstance policyInstance;
+    policyInstance.stableId = "runtime.policy-test";
+    policyInstance.entityGuid = "runtime.policy-test-entity";
+    policyInstance.activationMode =
+        EditorGimmickActivationMode::Triggered;
+    policyInstance.oneShot = false;
+    policyInstance.cooldown = 1.0f;
+    const bool policyLifecycleConfigured =
+        policyInstance.lifecycle.Configure(
+            policyInstance.activationMode,
+            policyInstance.oneShot,
+            policyInstance.cooldown);
+    EditorGimmickRuntimeActivationPolicy activationPolicy;
+    const EditorGimmickRuntimeActivationDecision
+        readyPolicyDecision = activationPolicy.Evaluate(
+            policyInstance,
+            EditorGimmickRuntimeEventKind::TriggerEntered);
+    policyInstance.lifecycle.Activate();
+    policyInstance.lifecycle.FinishActivation();
+    const EditorGimmickRuntimeActivationDecision
+        cooldownPolicyDecision = activationPolicy.Evaluate(
+            policyInstance,
+            EditorGimmickRuntimeEventKind::TriggerEntered);
+    const EditorGimmickRuntimeActivationDecision
+        modeMismatchDecision = activationPolicy.Evaluate(
+            policyInstance,
+            EditorGimmickRuntimeEventKind::InteractionPressed);
+    const EditorGimmickRuntimeActivationDecision
+        unauthorizedDecision = activationPolicy.Evaluate(
+            policyInstance,
+            EditorGimmickRuntimeEventKind::TriggerEntered,
+            false);
+    policyInstance.lifecycle.Update(1.0f);
+    const EditorGimmickRuntimeActivationDecision
+        recoveredPolicyDecision = activationPolicy.Evaluate(
+            policyInstance,
+            EditorGimmickRuntimeEventKind::TriggerEntered);
+    runner.Expect(
+        policyLifecycleConfigured &&
+            readyPolicyDecision.ShouldRoute() &&
+            readyPolicyDecision.command ==
+                EditorGimmickRuntimeCommandKind::Activate &&
+            cooldownPolicyDecision.kind ==
+                EditorGimmickRuntimeActivationDecisionKind::
+                    Ignore &&
+            modeMismatchDecision.kind ==
+                EditorGimmickRuntimeActivationDecisionKind::
+                    Reject &&
+            unauthorizedDecision.kind ==
+                EditorGimmickRuntimeActivationDecisionKind::
+                    Reject &&
+            recoveredPolicyDecision.ShouldRoute(),
+        "Runtime Activation Policy should route eligible events, ignore Cooldown, reject mode or ownership mismatches, and recover deterministically");
+
+    EditorSceneEntity* reconcileSwitch =
+        scene.FindEntity(switchGuid);
+    EditorSceneComponent* reconcileSwitchComponent =
+        reconcileSwitch != nullptr
+        ? scene.FindComponent(
+            *reconcileSwitch, kEditorGimmickComponentType)
+        : nullptr;
+    EditorGimmickComponent reconcileSwitchData{};
+    const bool reconcileSwitchParsed =
+        reconcileSwitchComponent != nullptr &&
+        EditorGimmickComponent::FromSceneComponent(
+            *reconcileSwitchComponent,
+            reconcileSwitchData,
+            definitions,
+            &error);
+    if (reconcileSwitchParsed &&
+        !reconcileSwitchData.parameters.empty()) {
+        reconcileSwitchData.parameters.front().value = "true";
+    }
+    const bool reconcileSwitchWritten =
+        reconcileSwitchParsed &&
+        reconcileSwitchData.WriteToSceneComponent(
+            *reconcileSwitchComponent,
+            definitions,
+            &error);
+    if (reconcileSwitchWritten) scene.Touch();
+    const EditorSceneRuntimeInstantiationResult
+        gimmickReconcile =
+            gimmickInstantiation.Reconcile(
+                scene, gimmickRuntimeServices);
+    runtimeSwitch =
+        gimmickRuntimeWorld.FindByEntity(switchGuid);
+    const EditorGimmickParameterValue* runtimeToggle =
+        runtimeSwitch != nullptr
+        ? runtimeSwitch->FindParameter("toggle")
+        : nullptr;
+    switchBehavior =
+        runtimeSwitch != nullptr
+        ? dynamic_cast<
+            const EditorSwitchGimmickRuntimeBehavior*>(
+                runtimeSwitch->behavior.get())
+        : nullptr;
+    runner.Expect(
+        reconcileSwitchWritten &&
+            gimmickReconcile.succeeded &&
+            gimmickReconcile.applied &&
+            gimmickReconcile.modifiedCount == 1 &&
+            runtimeToggle != nullptr &&
+            runtimeToggle->value == "true" &&
+            switchBehavior != nullptr &&
+            switchBehavior->ToggleTarget() &&
+            switchBehavior->DispatchCount() == 1 &&
+            runtimeSwitch->lifecycle.State() ==
+                EditorGimmickRuntimeState::Completed,
+        "Gimmick Reconcile should apply authored configuration while preserving same-Definition Lifecycle and Behavior state");
+
+    EditorSceneEntity* reconcileDoor =
+        scene.FindEntity(doorGuid);
+    EditorSceneComponent* reconcileDoorComponent =
+        reconcileDoor != nullptr
+        ? scene.FindComponent(
+            *reconcileDoor, kEditorGimmickComponentType)
+        : nullptr;
+    EditorGimmickComponent damageVolume{};
+    damageVolume.definitionId =
+        "gimmick.damage-volume";
+    const bool damageDefaults =
+        damageVolume.ApplyDefinitionDefaults(
+            definitions, &error);
+    const bool damageWritten =
+        damageDefaults &&
+        reconcileDoorComponent != nullptr &&
+        damageVolume.WriteToSceneComponent(
+            *reconcileDoorComponent,
+            definitions,
+            &error);
+    if (damageWritten) scene.Touch();
+    const EditorSceneRuntimeInstantiationResult
+        definitionReconcile =
+            gimmickInstantiation.Reconcile(
+                scene, gimmickRuntimeServices);
+    runtimeDoor =
+        gimmickRuntimeWorld.FindByEntity(doorGuid);
+    runner.Expect(
+        damageWritten &&
+            definitionReconcile.succeeded &&
+            definitionReconcile.modifiedCount == 1 &&
+            runtimeDoor != nullptr &&
+            runtimeDoor->definitionId ==
+                "gimmick.damage-volume" &&
+            runtimeDoor->runtimeFactoryId ==
+                "runtime.gimmick.damage-volume" &&
+            runtimeDoor->FindParameter("damage") != nullptr &&
+            runtimeDoor->FindParameter("openDistance") == nullptr,
+        "Definition changes should Reconcile through the newly selected Definition-specific Runtime Factory");
+
+    gimmickInstantiation.Stop();
+    EditorScene unresolvedRuntimeScene;
+    const std::string unresolvedGuid =
+        "83838383838383838383838383838383";
+    unresolvedRuntimeScene.CreateEntity(
+        "Unresolved Runtime Switch", {}, unresolvedGuid);
+    unresolvedRuntimeScene.AddComponent(
+        unresolvedGuid,
+        std::string(kEditorGimmickComponentType),
+        nullptr,
+        &components);
+    EditorSceneEntity* unresolvedEntity =
+        unresolvedRuntimeScene.FindEntity(unresolvedGuid);
+    EditorSceneComponent* unresolvedComponent =
+        unresolvedEntity != nullptr
+        ? unresolvedRuntimeScene.FindComponent(
+            *unresolvedEntity, kEditorGimmickComponentType)
+        : nullptr;
+    EditorGimmickComponent unresolvedSwitch{};
+    unresolvedSwitch.definitionId = "gimmick.switch";
+    const bool unresolvedDefaults =
+        unresolvedSwitch.ApplyDefinitionDefaults(
+            definitions, &error);
+    const bool unresolvedWritten =
+        unresolvedDefaults &&
+        unresolvedComponent != nullptr &&
+        unresolvedSwitch.WriteToSceneComponent(
+            *unresolvedComponent,
+            definitions,
+            &error,
+            EditorGimmickValidationPolicy::Authoring);
+    const EditorSceneRuntimeInstantiationResult unresolvedBegin =
+        gimmickInstantiation.Begin(
+            unresolvedRuntimeScene,
+            gimmickRuntimeServices);
+    runner.Expect(
+        unresolvedWritten &&
+            !unresolvedBegin.succeeded &&
+            unresolvedBegin.message.find("target") !=
+                std::string::npos &&
+            !gimmickRuntimeWorld.Active(),
+        "Play-time Gimmick instantiation should reject unresolved required Entity references that Authoring permits as warnings");
+}
+
+void TestGimmickEventSequenceAcceptance(
+    RegressionRunner& runner) {
+    std::string error;
+    EditorSceneComponentRegistry components =
+        CreateBuiltInEditorSceneComponentRegistry();
+    EditorGimmickDefinitionRegistry definitions =
+        CreateBuiltInEditorGimmickDefinitionRegistry();
+    EditorScene authoredScene;
+    const std::string sourceGuid =
+        "a1000000000000000000000000000001";
+    const std::string doorAGuid =
+        "a2000000000000000000000000000002";
+    const std::string doorBGuid =
+        "a3000000000000000000000000000003";
+    authoredScene.CreateEntity(
+        "Sequence Controller", {}, sourceGuid);
+    authoredScene.CreateEntity("Door A", {}, doorAGuid);
+    authoredScene.CreateEntity("Door B", {}, doorBGuid);
+
+    const auto addDoor = [&](
+        std::string_view guid,
+        EditorGimmickActivationMode mode) {
+        EditorGimmickComponent door{};
+        if (!door.ApplyDefinitionDefaults(
+                definitions, &error)) {
+            return false;
+        }
+        door.activationMode = mode;
+        EditorSceneComponent sceneComponent{};
+        if (!door.WriteToSceneComponent(
+                sceneComponent, definitions, &error)) {
+            return false;
+        }
+        return authoredScene.AddComponent(guid, sceneComponent) &&
+            authoredScene.AddComponent(
+                guid,
+                std::string(kEditorBoxColliderComponentType),
+                nullptr,
+                &components);
+    };
+    const bool sourceReady = addDoor(
+        sourceGuid, EditorGimmickActivationMode::Automatic);
+    const bool doorAReady = addDoor(
+        doorAGuid, EditorGimmickActivationMode::Triggered);
+    const bool doorBReady = addDoor(
+        doorBGuid, EditorGimmickActivationMode::Triggered);
+
+    EditorGimmickEventSequenceComponent authoredSequence{};
+    authoredSequence.sourceEvent =
+        EditorGimmickRuntimeEventKind::Automatic;
+    authoredSequence.playbackPolicy =
+        EditorGimmickEventSequencePlaybackPolicy::
+            IgnoreWhilePlaying;
+    authoredSequence.steps = {
+        {
+            "open-door-a",
+            0.0,
+            doorAGuid,
+            EditorGimmickRuntimeCommandKind::Activate,
+            "acceptance.open-a",
+            30,
+            true,
+        },
+        {
+            "open-door-b",
+            1.0,
+            doorBGuid,
+            EditorGimmickRuntimeCommandKind::Activate,
+            "acceptance.open-b",
+            20,
+            true,
+        },
+        {
+            "close-door-a",
+            2.0,
+            doorAGuid,
+            EditorGimmickRuntimeCommandKind::Deactivate,
+            "acceptance.close-a",
+            10,
+            true,
+        },
+    };
+    EditorSceneComponent authoredSequenceComponent{};
+    const bool sequenceAuthored =
+        authoredSequence.WriteToSceneComponent(
+            authoredSequenceComponent, &error) &&
+        authoredScene.AddComponent(
+            sourceGuid,
+            std::move(authoredSequenceComponent));
+
+    EditorDocumentContent encodedScene{};
+    EditorScene loadedScene{};
+    const bool sceneRoundTripped =
+        EditorSceneDocumentProvider::Encode(
+            authoredScene, &encodedScene, &error) &&
+        EditorSceneDocumentProvider::Decode(
+            encodedScene, &loadedScene, &error);
+    const EditorSceneValidationReport loadedValidation =
+        loadedScene.Validate(&components);
+    const EditorSceneEntity* loadedSource =
+        loadedScene.FindEntity(sourceGuid);
+    const EditorSceneComponent* loadedSequenceComponent =
+        loadedSource != nullptr
+        ? loadedScene.FindComponent(
+            *loadedSource,
+            kEditorGimmickEventSequenceComponentType)
+        : nullptr;
+    EditorGimmickEventSequenceComponent loadedSequence{};
+    const bool loadedSequenceParsed =
+        loadedSequenceComponent != nullptr &&
+        EditorGimmickEventSequenceComponent::
+            FromSceneComponent(
+                *loadedSequenceComponent,
+                loadedSequence,
+                &error);
+    runner.Expect(
+        sourceReady &&
+            doorAReady &&
+            doorBReady &&
+            sequenceAuthored &&
+            sceneRoundTripped &&
+            loadedValidation.Succeeded() &&
+            loadedSequenceParsed &&
+            loadedSequence.ContentHash() ==
+                authoredSequence.ContentHash() &&
+            loadedSequence.steps.size() == 3 &&
+            loadedSequenceComponent->references.size() == 3,
+        "Event Sequence acceptance Scene should survive save/reload with stable step order, timing, payload, and typed Entity references");
+
+    EditorGimmickDefinitionRuntimeFactoryRegistry
+        definitionFactories;
+    EditorSceneRuntimeComponentFactoryRegistry
+        runtimeFactories;
+    const bool factoriesReady =
+        RegisterBuiltInEditorGimmickDefinitionRuntimeFactories(
+            definitionFactories,
+            definitions,
+            &error) &&
+        runtimeFactories.Register(
+            std::make_unique<EditorGimmickRuntimeFactory>(),
+            &error) &&
+        runtimeFactories.Register(
+            std::make_unique<
+                EditorGimmickEventSequenceRuntimeFactory>(),
+            &error);
+    EditorGimmickRuntimeWorld runtimeWorld;
+    EditorGimmickRuntimeTarget gimmickTarget{
+        &definitions,
+        &definitionFactories,
+        &runtimeWorld};
+    EditorGimmickRuntimeEventSequenceRegistry
+        sequenceRegistry;
+    EditorGimmickEventSequenceRuntimeTarget sequenceTarget{
+        &sequenceRegistry,
+        &runtimeWorld};
+    EditorSceneRuntimeServiceRegistry runtimeServices;
+    const bool servicesReady =
+        runtimeServices.Bind(
+            std::string(kEditorGimmickRuntimeTargetServiceId),
+            &gimmickTarget) &&
+        runtimeServices.Bind(
+            std::string(
+                kEditorGimmickEventSequenceRuntimeTargetServiceId),
+            &sequenceTarget);
+    EditorSceneRuntimeInstantiationService instantiation;
+    const bool instantiationBound =
+        instantiation.Bind(
+            &components, &runtimeFactories, &error);
+    const EditorSceneRuntimeInstantiationResult begun =
+        instantiation.Begin(loadedScene, runtimeServices);
+    sequenceRegistry.FinalizeReconcile();
+
+    EditorGimmickRuntimeDelayedEventScheduler scheduler;
+    EditorGimmickRuntimeEventRouter router;
+    router.BindEventSequenceRegistry(&sequenceRegistry);
+    router.BindDelayedEventScheduler(&scheduler);
+    EditorMeshRendererRuntimeWorld meshWorld;
+    const bool meshWorldReady =
+        meshWorld.Replace(loadedScene, {}, &error);
+    EditorGimmickPresentationPhysicsAdapter adapter;
+    const bool adapterReady =
+        adapter.Reconcile(
+            loadedScene, meshWorld, runtimeWorld, &error);
+    runner.Expect(
+        factoriesReady &&
+            servicesReady &&
+            instantiationBound &&
+            begun.succeeded &&
+            begun.applied &&
+            begun.factoryCount == 2 &&
+            runtimeWorld.Active() &&
+            runtimeWorld.Instances().size() == 3 &&
+            sequenceRegistry.Active() &&
+            sequenceRegistry.Sequences().size() == 1 &&
+            sequenceRegistry.UnresolvedStepCount() == 0 &&
+            meshWorldReady &&
+            adapterReady,
+        "Event Sequence acceptance Play startup should instantiate Gimmicks and one fully resolved Runtime timeline before gameplay begins");
+
+    const bool broadcastAccepted = router.Broadcast(
+        runtimeWorld,
+        sourceGuid,
+        EditorGimmickRuntimeEventKind::Automatic,
+        "acceptance.player",
+        "acceptance.fallback",
+        true,
+        &error);
+    const uint64_t pendingAfterBroadcast =
+        scheduler.Snapshot().pendingCount;
+    const bool firstStepDispatched =
+        scheduler.Update(0.0, runtimeWorld, router, &error);
+    runtimeWorld.Update(0.375f);
+    const bool firstPoseSynced =
+        adapter.Sync(runtimeWorld, &error);
+    const EditorGimmickPresentationState* doorAHalfPose =
+        adapter.FindPresentation(doorAGuid);
+    const EditorGimmickRuntimePhysicsBody* doorAHalfBody =
+        adapter.FindPhysicsBody(doorAGuid);
+    runner.Expect(
+        broadcastAccepted &&
+            pendingAfterBroadcast == 3 &&
+            firstStepDispatched &&
+            scheduler.Snapshot().pendingCount == 2 &&
+            firstPoseSynced &&
+            doorAHalfPose != nullptr &&
+            std::abs(
+                doorAHalfPose->translationOffset.x - 1.5f) <
+                0.001f &&
+            doorAHalfBody != nullptr &&
+            std::abs(doorAHalfBody->boundsMin.x - 0.5f) <
+                0.001f &&
+            std::abs(doorAHalfBody->boundsMax.x - 2.5f) <
+                0.001f,
+        "Timeline t=0 should activate Door A and drive matching transient render Transform and Collision to the half-open pose");
+
+    const uint64_t firedBeforeDoorB =
+        scheduler.Snapshot().dispatchedCount;
+    const bool remainedBeforeDoorB =
+        scheduler.Update(
+            0.999, runtimeWorld, router, &error) &&
+        scheduler.Snapshot().dispatchedCount ==
+            firedBeforeDoorB;
+    const bool doorBDispatched =
+        scheduler.Update(
+            0.001, runtimeWorld, router, &error);
+    runtimeWorld.Update(0.375f);
+    const bool secondPoseSynced =
+        adapter.Sync(runtimeWorld, &error);
+    const EditorGimmickPresentationState* doorBHalfPose =
+        adapter.FindPresentation(doorBGuid);
+    runner.Expect(
+        remainedBeforeDoorB &&
+            doorBDispatched &&
+            scheduler.Snapshot().dispatchedCount ==
+                firedBeforeDoorB + 1 &&
+            scheduler.Snapshot().pendingCount == 1 &&
+            secondPoseSynced &&
+            doorBHalfPose != nullptr &&
+            std::abs(
+                doorBHalfPose->translationOffset.x - 1.5f) <
+                0.001f,
+        "Timeline should not fire early and should activate only Door B at the exact one-second deadline");
+
+    const bool remainedBeforeClose =
+        scheduler.Update(
+            0.999, runtimeWorld, router, &error);
+    const uint64_t firedBeforeClose =
+        scheduler.Snapshot().dispatchedCount;
+    const bool closeDispatched =
+        scheduler.Update(
+            0.001, runtimeWorld, router, &error);
+    runtimeWorld.Update(0.75f);
+    const bool finalPoseSynced =
+        adapter.Sync(runtimeWorld, &error);
+    const EditorGimmickPresentationState* closedDoorAPose =
+        adapter.FindPresentation(doorAGuid);
+    const EditorGimmickRuntimePhysicsBody* closedDoorABody =
+        adapter.FindPhysicsBody(doorAGuid);
+    runner.Expect(
+        remainedBeforeClose &&
+            closeDispatched &&
+            scheduler.Snapshot().dispatchedCount ==
+                firedBeforeClose + 1 &&
+            scheduler.Snapshot().pendingCount == 0 &&
+            finalPoseSynced &&
+            closedDoorAPose != nullptr &&
+            std::abs(
+                closedDoorAPose->translationOffset.x) < 0.001f &&
+            closedDoorABody != nullptr &&
+            std::abs(closedDoorABody->boundsMin.x + 1.0f) <
+                0.001f &&
+            std::abs(closedDoorABody->boundsMax.x - 1.0f) <
+                0.001f,
+        "Timeline t=2 should deactivate Door A and restore both its transient Transform and Collision without mutating authoring data");
+
+    const uint64_t ignoredBefore =
+        router.Snapshot().broadcastSequenceIgnoredCount;
+    const bool ignoreFirst = router.Broadcast(
+        runtimeWorld,
+        sourceGuid,
+        EditorGimmickRuntimeEventKind::Automatic,
+        "acceptance.player",
+        {},
+        true,
+        &error);
+    const bool ignoreSecond = router.Broadcast(
+        runtimeWorld,
+        sourceGuid,
+        EditorGimmickRuntimeEventKind::Automatic,
+        "acceptance.player",
+        {},
+        true,
+        &error);
+    const bool ignorePolicyAccepted =
+        ignoreFirst &&
+        ignoreSecond &&
+        scheduler.Snapshot().pendingCount == 3 &&
+        router.Snapshot().broadcastSequenceIgnoredCount ==
+            ignoredBefore + 1;
+    scheduler.CancelByOwner(
+        sequenceRegistry.Sequences().front().stableId);
+
+    EditorGimmickRuntimeEventSequence policySequence =
+        sequenceRegistry.Sequences().front();
+    policySequence.playbackPolicy =
+        EditorGimmickEventSequencePlaybackPolicy::Restart;
+    const bool restartRegistryReady =
+        sequenceRegistry.Replace(
+            {policySequence}, runtimeWorld, &error);
+    const uint64_t cancelledBeforeRestart =
+        scheduler.Snapshot().cancelledCount;
+    const bool restartFirst = router.Broadcast(
+        runtimeWorld,
+        sourceGuid,
+        EditorGimmickRuntimeEventKind::Automatic,
+        "acceptance.player",
+        {},
+        true,
+        &error);
+    const bool restartSecond = router.Broadcast(
+        runtimeWorld,
+        sourceGuid,
+        EditorGimmickRuntimeEventKind::Automatic,
+        "acceptance.player",
+        {},
+        true,
+        &error);
+    const bool restartPolicyAccepted =
+        restartRegistryReady &&
+        restartFirst &&
+        restartSecond &&
+        scheduler.Snapshot().pendingCount == 3 &&
+        scheduler.Snapshot().cancelledCount ==
+            cancelledBeforeRestart + 3;
+    scheduler.CancelByOwner(policySequence.stableId);
+
+    policySequence.playbackPolicy =
+        EditorGimmickEventSequencePlaybackPolicy::AllowParallel;
+    const bool parallelRegistryReady =
+        sequenceRegistry.Replace(
+            {policySequence}, runtimeWorld, &error);
+    const bool parallelFirst = router.Broadcast(
+        runtimeWorld,
+        sourceGuid,
+        EditorGimmickRuntimeEventKind::Automatic,
+        "acceptance.player",
+        {},
+        true,
+        &error);
+    const bool parallelSecond = router.Broadcast(
+        runtimeWorld,
+        sourceGuid,
+        EditorGimmickRuntimeEventKind::Automatic,
+        "acceptance.player",
+        {},
+        true,
+        &error);
+    const bool parallelPolicyAccepted =
+        parallelRegistryReady &&
+        parallelFirst &&
+        parallelSecond &&
+        scheduler.Snapshot().pendingCount == 6;
+    runner.Expect(
+        ignorePolicyAccepted &&
+            restartPolicyAccepted &&
+            parallelPolicyAccepted,
+        "Event Sequence acceptance should enforce IGNORE_WHILE_PLAYING, RESTART, and ALLOW_PARALLEL against real pending Scheduler groups");
+
+    ++policySequence.sourceHash;
+    const bool hotReloaded =
+        sequenceRegistry.Replace(
+            {policySequence}, runtimeWorld, &error);
+    router.Reconcile(runtimeWorld);
+    runner.Expect(
+        hotReloaded &&
+            scheduler.Snapshot().pendingCount == 0 &&
+            scheduler.Snapshot().lastError.find(
+                "Binding/Sequence") != std::string::npos,
+        "Event Sequence hot reload should cancel every pending step whose authored source hash changed during Reconcile");
+
+    router.BindEventSequenceRegistry(nullptr);
+    router.BindDelayedEventScheduler(nullptr);
+    scheduler.Reset();
+    instantiation.Stop();
+    sequenceRegistry.Clear();
+    runtimeWorld.Clear();
+}
+
+void TestTypedSceneEntityReference(
+    RegressionRunner& runner) {
+    EditorSceneComponentRegistry components =
+        CreateBuiltInEditorSceneComponentRegistry();
+    EditorSceneComponentDescriptor linkDescriptor{};
+    linkDescriptor.typeId = "test.typed-entity-link";
+    linkDescriptor.displayName = "Typed Entity Link";
+    linkDescriptor.category = "Regression";
+    EditorSceneComponentPropertyDescriptor routeReference{};
+    routeReference.name = "route";
+    routeReference.displayName = "Route";
+    routeReference.kind =
+        EditorScenePropertyKind::EntityReference;
+    routeReference.required = false;
+    routeReference.entityReferenceTargetComponentType =
+        std::string(kEditorSplineRouteComponentType);
+    linkDescriptor.properties.push_back(routeReference);
+    std::string error;
+    const bool descriptorRegistered =
+        components.Register(linkDescriptor, &error);
+    const EditorSceneComponentDescriptor* registered =
+        components.Find(linkDescriptor.typeId);
+    const EditorSceneComponentPropertyDescriptor* registeredReference =
+        registered != nullptr
+        ? FindEditorSceneComponentPropertyDescriptor(
+            *registered, "route")
+        : nullptr;
+    runner.Expect(
+        descriptorRegistered &&
+            registeredReference != nullptr &&
+            registeredReference->kind ==
+                EditorScenePropertyKind::EntityReference &&
+            registeredReference->
+                entityReferenceTargetComponentType ==
+                kEditorSplineRouteComponentType,
+        "Scene Component descriptors should publish typed Entity Reference target constraints");
+
+    EditorScene scene;
+    const std::string ownerGuid =
+        "76767676767676767676767676767676";
+    const std::string routeGuid =
+        "77777777777777777777777777777777";
+    const std::string wrongTypeGuid =
+        "78787878787878787878787878787878";
+    scene.CreateEntity("Reference Owner", {}, ownerGuid);
+    scene.CreateEntity("Patrol Route", {}, routeGuid);
+    scene.CreateEntity("Wrong Type", {}, wrongTypeGuid);
+    const bool authored =
+        scene.AddComponent(
+            ownerGuid,
+            linkDescriptor.typeId,
+            nullptr,
+            &components) &&
+        scene.AddComponent(
+            routeGuid,
+            std::string(kEditorSplineRouteComponentType),
+            nullptr,
+            &components);
+    EditorSceneEntity* owner = scene.FindEntity(ownerGuid);
+    EditorSceneEntity* route = scene.FindEntity(routeGuid);
+    EditorSceneComponent* link =
+        owner != nullptr
+        ? scene.FindComponent(*owner, linkDescriptor.typeId)
+        : nullptr;
+    runner.Expect(
+        authored && owner != nullptr && route != nullptr &&
+            link != nullptr &&
+            link->properties.empty() &&
+            link->references.empty() &&
+            MatchesEditorSceneEntityReferenceTarget(
+                scene, *route, *registeredReference) &&
+            !MatchesEditorSceneEntityReferenceTarget(
+                scene,
+                *scene.FindEntity(wrongTypeGuid),
+                *registeredReference),
+        "Entity Reference defaults should live outside scalar properties and filter Picker candidates by Component type");
+
+    const EditorDocumentId document{
+        "typed-entity-reference",
+        std::string(EditorDocumentTypes::Scene)};
+    SceneWorldObjectProvider worldProvider;
+    worldProvider.Bind(&scene, document, &components);
+    EditorWorldObjectRegistry worldRegistry;
+    const bool providerRegistered =
+        worldRegistry.Register(worldProvider, &error);
+    EditorWorldModel worldModel(worldRegistry);
+    const EditorWorldModelRefreshResult refreshed =
+        worldModel.Refresh();
+    EditorWorldMutationService mutations(
+        worldRegistry, worldModel);
+    EditorWorldMutationExecutionService execution(
+        worldRegistry, &worldModel);
+    EditorExecutionContext executionContext;
+    EditorError executionError;
+    const bool executionRegistered =
+        executionContext.Register(
+            execution, &executionError);
+    const EditorWorldObjectRecord* ownerRecord =
+        worldModel.FindByObjectGuid(
+            worldProvider.ProviderId(), ownerGuid);
+    EditorTransactionStack transactions;
+    EditorWorldMutationRequest setReference{};
+    setReference.kind =
+        EditorWorldMutationKind::SetComponentEntityReference;
+    if (ownerRecord != nullptr) {
+        setReference.targets = {ownerRecord->handle};
+    }
+    setReference.componentType = linkDescriptor.typeId;
+    setReference.property = "route";
+    setReference.entityGuid = routeGuid;
+    const EditorWorldMutationResult setResult =
+        mutations.Execute(
+            setReference, transactions, true);
+    owner = scene.FindEntity(ownerGuid);
+    link = owner != nullptr
+        ? scene.FindComponent(*owner, linkDescriptor.typeId)
+        : nullptr;
+    const EditorSceneObjectReference* storedReference =
+        link != nullptr
+        ? FindEditorSceneEntityReference(*link, "route")
+        : nullptr;
+    runner.Expect(
+        providerRegistered && refreshed.succeeded &&
+            executionRegistered &&
+            setResult.succeeded && setResult.changed &&
+            storedReference != nullptr &&
+            storedReference->entityGuid == routeGuid &&
+            storedReference->assetGuid.empty() &&
+            ResolveEditorSceneEntityReference(
+                scene,
+                *owner,
+                *link,
+                *registeredReference) == route,
+        "Entity Picker mutation should store a typed Entity GUID reference transactionally");
+
+    setReference.entityGuid = wrongTypeGuid;
+    const EditorWorldMutationResult rejected =
+        mutations.Execute(
+            setReference, transactions, true);
+    owner = scene.FindEntity(ownerGuid);
+    link = owner != nullptr
+        ? scene.FindComponent(*owner, linkDescriptor.typeId)
+        : nullptr;
+    storedReference = link != nullptr
+        ? FindEditorSceneEntityReference(*link, "route")
+        : nullptr;
+    runner.Expect(
+        !rejected.succeeded &&
+            storedReference != nullptr &&
+            storedReference->entityGuid == routeGuid,
+        "Entity Reference mutation should reject a target that lacks the descriptor's required Component");
+
+    const bool undone =
+        transactions.Undo(
+            executionContext, &executionError);
+    owner = scene.FindEntity(ownerGuid);
+    link = owner != nullptr
+        ? scene.FindComponent(*owner, linkDescriptor.typeId)
+        : nullptr;
+    runner.Expect(
+        undone && link != nullptr &&
+            FindEditorSceneEntityReference(
+                *link, "route") == nullptr,
+        "Entity Reference edits should undo through the shared World transaction stack");
+    const bool redone =
+        transactions.Redo(
+            executionContext, &executionError);
+    owner = scene.FindEntity(ownerGuid);
+    link = owner != nullptr
+        ? scene.FindComponent(*owner, linkDescriptor.typeId)
+        : nullptr;
+    storedReference = link != nullptr
+        ? FindEditorSceneEntityReference(*link, "route")
+        : nullptr;
+    runner.Expect(
+        redone && storedReference != nullptr &&
+            storedReference->entityGuid == routeGuid,
+        "Entity Reference edits should redo and restore the exact typed target");
+}
+
+void TestSplineRouteToolAndPatrolRuntime(
+    RegressionRunner& runner) {
+    EditorSceneComponentRegistry components =
+        CreateBuiltInEditorSceneComponentRegistry();
+    const EditorSceneComponentDescriptor* patrolDescriptor =
+        components.Find(kEditorPatrolComponentType);
+    const EditorSceneComponentDescriptor* routeDescriptor =
+        components.Find(kEditorSplineRouteComponentType);
+    const EditorSceneComponentPropertyDescriptor*
+        patrolRouteReference =
+        patrolDescriptor != nullptr
+        ? FindEditorSceneComponentPropertyDescriptor(
+            *patrolDescriptor,
+            kEditorPatrolRouteReferenceProperty)
+        : nullptr;
+    runner.Expect(
+        patrolDescriptor != nullptr &&
+            patrolDescriptor->runtimePolicy ==
+                EditorSceneRuntimeInstantiationPolicy::Required &&
+            patrolRouteReference != nullptr &&
+            patrolRouteReference->kind ==
+                EditorScenePropertyKind::EntityReference &&
+            patrolRouteReference->
+                entityReferenceTargetComponentType ==
+                kEditorSplineRouteComponentType &&
+            patrolRouteReference->
+                entityReferenceDefaultsToSelf &&
+            routeDescriptor != nullptr &&
+            routeDescriptor->runtimePolicy ==
+                EditorSceneRuntimeInstantiationPolicy::Optional,
+        "Patrol and Spline Route should publish explicit Runtime policies");
+
+    const std::string routeGuid =
+        "73737373737373737373737373737373";
+    const std::string enemyGuid =
+        "74747474747474747474747474747474";
+    EditorScene scene;
+    scene.CreateEntity("Runtime Route", {}, routeGuid);
+    scene.CreateEntity("Patrol Enemy", {}, enemyGuid);
+    const bool added =
+        scene.AddComponent(
+            routeGuid,
+            std::string(kEditorSplineRouteComponentType),
+            nullptr, &components) &&
+        scene.AddComponent(
+            enemyGuid,
+            std::string(kEditorPatrolComponentType),
+            nullptr, &components) &&
+        scene.AddComponent(
+            enemyGuid,
+            std::string(kEditorGameplaySpawnPointComponentType),
+            nullptr, &components);
+    EditorSceneEntity* routeEntity = scene.FindEntity(routeGuid);
+    EditorSceneEntity* enemyEntity = scene.FindEntity(enemyGuid);
+    EditorSceneComponent* routeSceneComponent =
+        routeEntity != nullptr
+        ? scene.FindComponent(
+            *routeEntity, kEditorSplineRouteComponentType)
+        : nullptr;
+    EditorSceneComponent* patrolSceneComponent =
+        enemyEntity != nullptr
+        ? scene.FindComponent(
+            *enemyEntity, kEditorPatrolComponentType)
+        : nullptr;
+    EditorSceneComponent* enemySpawnComponent =
+        enemyEntity != nullptr
+        ? scene.FindComponent(
+            *enemyEntity,
+            kEditorGameplaySpawnPointComponentType)
+        : nullptr;
+    if (enemySpawnComponent != nullptr) {
+        for (EditorSceneProperty& property :
+             enemySpawnComponent->properties) {
+            if (property.name == "kind") property.value = "ENEMY";
+            if (property.name == "enemy_type") {
+                property.value = "DRONE";
+            }
+        }
+    }
+    EditorSplineRouteComponent route{};
+    route.interpolation = EditorSplineRouteInterpolation::Linear;
+    route.controlPoints = {
+        {"start", {-0.4f, 0.0f, 0.5f}},
+        {"end", {0.4f, 0.0f, 20.5f}},
+    };
+    EditorPatrolComponent patrol{};
+    patrol.routeEntityGuid = routeGuid;
+    patrol.speed = 5.0f;
+    std::string error;
+    const bool serialized =
+        routeSceneComponent != nullptr &&
+        route.WriteToSceneComponent(*routeSceneComponent, &error) &&
+        patrolSceneComponent != nullptr &&
+        patrol.WriteToSceneComponent(*patrolSceneComponent, &error);
+    if (routeEntity != nullptr) {
+        EditorSceneComponent* transform =
+            scene.FindComponent(
+                *routeEntity, kEditorTransformComponentType);
+        if (transform != nullptr && !transform->properties.empty()) {
+            transform->properties[0].value = "2 0 10";
+        }
+    }
+    scene.Touch();
+    runner.Expect(
+        added && serialized &&
+            FindEditorSceneEntityReference(
+                *patrolSceneComponent,
+                kEditorPatrolRouteReferenceProperty) != nullptr &&
+            FindEditorSceneEntityReference(
+                *patrolSceneComponent,
+                kEditorPatrolRouteReferenceProperty)->
+                entityGuid == routeGuid &&
+            std::none_of(
+                patrolSceneComponent->properties.begin(),
+                patrolSceneComponent->properties.end(),
+                [](const EditorSceneProperty& property) {
+                    return property.name == "routeEntityGuid";
+                }),
+        "Scene should serialize Patrol Route as a typed Entity Reference instead of a string GUID");
+
+    RailPath railPath;
+    railPath.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 100.0f}, 18.0f, 32.0f},
+    });
+    CourseSpawnRuntime spawnRuntime;
+    CourseEnemyActorDesc enemy{};
+    enemy.waveId = "editor.scene.spawn:" + enemyGuid;
+    enemy.lifetime = 1000.0f;
+    spawnRuntime.SpawnEnemyActor(std::move(enemy));
+    EditorPatrolRuntimeWorld patrolWorld;
+    EditorPatrolRuntimeTarget patrolTarget{
+        &patrolWorld, &spawnRuntime, &railPath};
+    EditorSceneRuntimeServiceRegistry runtimeServices;
+    runtimeServices.Bind(
+        std::string(kEditorPatrolRuntimeTargetServiceId),
+        &patrolTarget);
+    EditorSceneRuntimeComponentFactoryRegistry factories;
+    class ExistingEnemySpawnFactory final
+        : public IEditorSceneRuntimeComponentFactory {
+    public:
+        std::string_view TypeId() const noexcept override {
+            return kEditorGameplaySpawnPointComponentType;
+        }
+        int32_t Priority() const noexcept override { return 100; }
+        EditorSceneRuntimeFactoryResult Instantiate(
+            const EditorScene&,
+            const std::vector<
+                EditorSceneRuntimeComponentRecord>& records,
+            const EditorSceneRuntimeServiceRegistry&) override {
+            return {
+                true, !records.empty(), {},
+                "Regression enemy already exists."};
+        }
+        void Destroy() noexcept override {}
+    };
+    const bool registered =
+        factories.Register(
+            std::make_unique<ExistingEnemySpawnFactory>(),
+            &error) &&
+        factories.Register(
+            std::make_unique<EditorSplineRouteRuntimeFactory>(),
+            &error) &&
+        factories.Register(
+            std::make_unique<EditorPatrolRuntimeFactory>(),
+            &error);
+    EditorSceneRuntimeInstantiationService instantiation;
+    const bool bound =
+        instantiation.Bind(&components, &factories, &error);
+    const EditorSceneRuntimeInstantiationResult begun =
+        instantiation.Begin(scene, runtimeServices);
+    patrolWorld.Update(1.0f);
+    const CourseEnemyActor* movedEnemy =
+        spawnRuntime.Enemies().empty()
+        ? nullptr : &spawnRuntime.Enemies().front();
+    Vector3 movedWorld{};
+    if (movedEnemy != nullptr) {
+        const RailPathSample sample = railPath.Evaluate(
+            movedEnemy->desc.spawnDistance +
+            movedEnemy->desc.distanceOffset);
+        movedWorld = {
+            sample.position.x +
+                sample.right.x * movedEnemy->desc.lateralOffset +
+                sample.up.x * movedEnemy->desc.verticalOffset,
+            sample.position.y +
+                sample.right.y * movedEnemy->desc.lateralOffset +
+                sample.up.y * movedEnemy->desc.verticalOffset,
+            sample.position.z +
+                sample.right.z * movedEnemy->desc.lateralOffset +
+                sample.up.z * movedEnemy->desc.verticalOffset,
+        };
+    }
+    runner.Expect(
+        registered && bound && begun.succeeded && begun.applied &&
+            begun.componentCount == 3 &&
+            begun.factoryCount == 3 &&
+            patrolWorld.Routes().size() == 1 &&
+            patrolWorld.Patrols().size() == 1 &&
+            movedEnemy != nullptr &&
+            std::abs(patrolWorld.Patrols()[0].distance - 5.0f) <
+                0.001f &&
+            std::abs(movedWorld.x - 1.8f) < 0.15f &&
+            std::abs(movedWorld.z - 15.5f) < 0.15f,
+        "Patrol Runtime should compose hierarchy Transform and move the spawned Enemy by arc distance");
+
+    routeEntity = scene.FindEntity(routeGuid);
+    routeSceneComponent = routeEntity != nullptr
+        ? scene.FindComponent(
+            *routeEntity, kEditorSplineRouteComponentType)
+        : nullptr;
+    route.controlPoints[1].position.z = 40.5f;
+    if (routeSceneComponent != nullptr) {
+        route.WriteToSceneComponent(*routeSceneComponent, &error);
+    }
+    scene.Touch();
+    const uint64_t revisionBefore = patrolWorld.Revision();
+    const EditorSceneRuntimeInstantiationResult reconciled =
+        instantiation.Reconcile(scene, runtimeServices);
+    runner.Expect(
+        reconciled.succeeded && reconciled.applied &&
+            reconciled.modifiedCount == 1 &&
+            patrolWorld.Revision() > revisionBefore &&
+            patrolWorld.Patrols().size() == 1 &&
+            patrolWorld.Routes().size() == 1 &&
+            patrolWorld.Routes()[0].evaluator.TotalLength() > 39.0f,
+        "Spline edits should Reconcile their Runtime Route without recreating Patrol bindings");
+    EditorScene missingRoute = scene;
+    missingRoute.RemoveComponent(
+        routeGuid, kEditorSplineRouteComponentType);
+    const EditorSceneValidationReport missingRouteReport =
+        missingRoute.Validate();
+    runner.Expect(
+        !missingRouteReport.Succeeded() &&
+            std::any_of(
+                missingRouteReport.errors.begin(),
+                missingRouteReport.errors.end(),
+                [](const std::string& message) {
+                    return message.find("Active Patrol route") !=
+                        std::string::npos;
+                }),
+        "Scene validation should reject an active Patrol whose Route was removed before Reconcile");
+    instantiation.Stop();
+    runner.Expect(
+        !patrolWorld.Active(),
+        "Runtime teardown should clear Patrol bindings and Route evaluators");
+
+    EditorScene toolScene;
+    const std::string toolGuid =
+        "75757575757575757575757575757575";
+    toolScene.CreateEntity("Editable Route", {}, toolGuid);
+    toolScene.AddComponent(
+        toolGuid,
+        std::string(kEditorSplineRouteComponentType),
+        nullptr, &components);
+    EditorSceneEntity* toolEntity = toolScene.FindEntity(toolGuid);
+    EditorSceneComponent* toolRouteScene =
+        toolEntity != nullptr
+        ? toolScene.FindComponent(
+            *toolEntity, kEditorSplineRouteComponentType)
+        : nullptr;
+    EditorSplineRouteComponent toolRoute{};
+    toolRoute.interpolation = EditorSplineRouteInterpolation::Linear;
+    toolRoute.controlPoints = {
+        {"left", {-0.4f, 0.0f, 0.5f}},
+        {"right", {0.4f, 0.0f, 0.5f}},
+    };
+    if (toolRouteScene != nullptr) {
+        toolRoute.WriteToSceneComponent(*toolRouteScene, &error);
+    }
+    const EditorDocumentId document{
+        "spline-tool-scene",
+        std::string(EditorDocumentTypes::Scene)};
+    SceneWorldObjectProvider provider;
+    provider.Bind(&toolScene, document, &components);
+    EditorWorldObjectRegistry worldRegistry;
+    worldRegistry.Register(provider, &error);
+    EditorWorldModel worldModel(worldRegistry);
+    worldModel.Refresh();
+    EditorWorldMutationService mutations(worldRegistry, worldModel);
+    EditorWorldMutationExecutionService execution(
+        worldRegistry, &worldModel);
+    EditorExecutionContext executionContext;
+    EditorError executionError{};
+    executionContext.Register(execution, &executionError);
+    EditorSelection selection;
+    const EditorWorldObjectRecord* routeRecord =
+        worldModel.FindByObjectGuid(provider.ProviderId(), toolGuid);
+    if (routeRecord != nullptr) {
+        selection.SetPrimary(routeRecord->handle);
+    }
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        EditorPanelRect{0.0f, 0.0f, 100.0f, 100.0f},
+        100, 100, MakeIdentity4x4()});
+    EditorModeRegistry toolRegistry;
+    RegisterDefaultEditorModes(toolRegistry);
+    uint32_t commits = 0;
+    RegisterSplineRouteTools(
+        toolRegistry,
+        EditorSplineRouteToolServices{
+            &mutations, &worldModel, &provider, &selection,
+            [&](const EditorWorldMutationResult&) { ++commits; }});
+    EditorToolManager manager(toolRegistry);
+    EditorTransactionStack transactions;
+    EditorInteractiveToolEnvironment environment{};
+    environment.selection = &selection;
+    environment.coordinates = &coordinates;
+    environment.execution = &executionContext;
+    environment.activeDocumentKey = document.Key();
+    environment.documentEditRevision = 1;
+    environment.documentGeneration = 1;
+    environment.selectionRevision = selection.Revision();
+    environment.canMutateAuthoring = true;
+    environment.viewportAvailable = true;
+    const bool initialized =
+        manager.Initialize("editor.mode.paths", &error);
+    const bool started = initialized &&
+        manager.StartTool(
+            "editor.tool.splineControlPoints",
+            environment, transactions, &error);
+    if (started && manager.ActiveTool() != nullptr) {
+        manager.ActiveTool()->SetProperty(
+            "Operation", "ADD", error);
+        manager.ActiveTool()->SetProperty(
+            "Edit Plane", "XY", error);
+        manager.ActiveTool()->SetProperty(
+            "Grid Snap", "false", error);
+        manager.Tick(
+            environment,
+            EditorInteractiveToolFrameInput{
+                50.0f, 50.0f, true, true, false, false},
+            transactions);
+    }
+    toolEntity = toolScene.FindEntity(toolGuid);
+    toolRouteScene = toolEntity != nullptr
+        ? toolScene.FindComponent(
+            *toolEntity, kEditorSplineRouteComponentType)
+        : nullptr;
+    EditorSplineRouteComponent editedRoute{};
+    const bool parsedEdited =
+        toolRouteScene != nullptr &&
+        EditorSplineRouteComponent::FromSceneComponent(
+            *toolRouteScene, editedRoute, &error);
+    runner.Expect(
+        started && parsedEdited &&
+            editedRoute.controlPoints.size() == 3 &&
+            transactions.UndoDepth() == 1 && commits == 1,
+        "Viewport Spline ADD should commit one stable point as exactly one Transaction");
+    const bool undoSucceeded =
+        transactions.Undo(executionContext, &executionError);
+    toolEntity = toolScene.FindEntity(toolGuid);
+    toolRouteScene = toolEntity != nullptr
+        ? toolScene.FindComponent(
+            *toolEntity, kEditorSplineRouteComponentType)
+        : nullptr;
+    EditorSplineRouteComponent restoredRoute{};
+    const bool restored =
+        toolRouteScene != nullptr &&
+        EditorSplineRouteComponent::FromSceneComponent(
+            *toolRouteScene, restoredRoute, &error);
+    runner.Expect(
+        undoSucceeded && restored &&
+            restoredRoute.controlPoints.size() == 2,
+        "Viewport Spline transaction should restore control points through Undo");
 }
 
 void TestProductionTransformGizmo(RegressionRunner& runner) {
@@ -8140,6 +13191,33 @@ void TestViewportOverlayLayerSystem(RegressionRunner& runner) {
 }
 
 void TestEditorModeInteractiveToolFramework(RegressionRunner& runner) {
+    EditorInteractiveToolProperty symbolicChoice{
+        "Operation",
+        "MOVE",
+        "Spline operation",
+        EditorInteractiveToolPropertyEditKind::Choice,
+        0.0f,
+        0.0f,
+        {"MOVE", "ADD", "DELETE"}};
+    symbolicChoice.choiceValues = {"MOVE", "ADD", "DELETE"};
+    runner.Expect(
+        ResolveEditorInteractiveToolChoiceIndex(symbolicChoice) == 0 &&
+            SerializeEditorInteractiveToolChoice(symbolicChoice, 1) == "ADD",
+        "Tool Properties Choice should serialize symbolic values instead of numeric indices");
+
+    const EditorInteractiveToolProperty legacyIndexedChoice{
+        "Material Layer",
+        "2",
+        "Legacy indexed choice",
+        EditorInteractiveToolPropertyEditKind::Choice,
+        0.0f,
+        3.0f,
+        {"Layer 0", "Layer 1", "Layer 2", "Layer 3"}};
+    runner.Expect(
+        ResolveEditorInteractiveToolChoiceIndex(legacyIndexedChoice) == 2 &&
+            SerializeEditorInteractiveToolChoice(legacyIndexedChoice, 3) == "3",
+        "Tool Properties Choice should preserve legacy numeric-index serialization");
+
     EditorModeRegistry registry;
     RegisterDefaultEditorModes(registry);
     runner.Expect(registry.ModeCount() == 2, "default Editor Mode registry should expose Select and Inspect modes");
@@ -8488,6 +13566,23 @@ void TestProductionTerrainSculptPaintToolPack(RegressionRunner& runner) {
     runner.Expect(!edits.ApplyStroke(sculpt, &error),
         "terrain edit layer should reject duplicate stroke identity");
 
+    TerrainEditLayer stableSmooth;
+    const std::vector<TerrainBrushStamp> smoothSource{
+        makeStamp("terrain-smooth-source", "terrain-smooth-source-0",
+            TerrainEditOperation::Sculpt, 24.0f, 8.0f)};
+    std::vector<TerrainBrushStamp> overlappingSmooth{
+        makeStamp("terrain-stroke-smooth", "terrain-stamp-smooth-0",
+            TerrainEditOperation::Smooth, 24.0f, -4.0f),
+        makeStamp("terrain-stroke-smooth", "terrain-stamp-smooth-1",
+            TerrainEditOperation::Smooth, 25.0f, -4.0f)};
+    runner.Expect(stableSmooth.ApplyStroke(smoothSource, &error) &&
+            stableSmooth.ApplyStroke(overlappingSmooth, &error),
+        "Terrain Smooth should accept one immutable-pass correction field");
+    const float stableSmoothCenter =
+        stableSmooth.Evaluate(24.0f, 0.0f).radialOffset;
+    runner.Expect(stableSmoothCenter > 3.9f && stableSmoothCenter < 4.1f,
+        "overlapping Smooth samples should be normalized instead of doubling into a spike");
+
     CourseAsset course;
     course.BuildFallbackCanyon(18.0f);
     const EditorDocumentId document{
@@ -8500,21 +13595,38 @@ void TestProductionTerrainSculptPaintToolPack(RegressionRunner& runner) {
     EditorError executionError{};
     runner.Expect(execution.Register(terrainExecution, &executionError),
         "Terrain command execution should register through the domain-neutral context");
-    auto command = std::make_shared<EditorTerrainEditUndoCommand>(document.Key(), sculpt);
+    TerrainEditLayer beforeSculptSnapshot = course.terrainEditLayer;
+    TerrainEditLayer afterSculptSnapshot = beforeSculptSnapshot;
+    runner.Expect(afterSculptSnapshot.ApplyStroke(sculpt, &error),
+        "Terrain command test should construct a durable post-stroke snapshot");
+    auto command = std::make_shared<EditorTerrainEditUndoCommand>(
+        document.Key(),
+        beforeSculptSnapshot,
+        afterSculptSnapshot,
+        afterSculptSnapshot.DirtyRegionFor(sculpt),
+        sculpt);
     EditorTransactionStack transactions;
     const EditorObjectHandle terrainTarget{
         EditorDomainId::TerrainGeneration,
         BuildEditorWorldStableId(document, "course", "root"), 0, 1, "Terrain"};
     const EditorUndoResult applied = command->Apply(EditorTransactionApplyMode::Redo, execution);
+    const uint64_t beforeSnapshotHash =
+        beforeSculptSnapshot.ContentHashForRange(0.0f, 64.0f);
+    const uint64_t afterSnapshotHash =
+        afterSculptSnapshot.ContentHashForRange(0.0f, 64.0f);
     runner.Expect(applied.succeeded && committedDirty.valid &&
             transactions.PushCommand("Sculpt Terrain Stroke", terrainTarget, command, &executionError) &&
             transactions.UndoDepth() == 1 && course.terrainEditLayer.Stamps().size() == 1,
         "one compact Terrain command should publish one stroke as one Transaction");
     runner.Expect(transactions.Undo(execution, &executionError) &&
             course.terrainEditLayer.Stamps().empty() &&
+            course.terrainEditLayer.ContentHashForRange(0.0f, 64.0f) ==
+                beforeSnapshotHash &&
             transactions.Redo(execution, &executionError) &&
-            course.terrainEditLayer.Stamps().size() == 1,
-        "Terrain stroke Undo/Redo should atomically remove and restore stable stamps");
+            course.terrainEditLayer.Stamps().size() == 1 &&
+            course.terrainEditLayer.ContentHashForRange(0.0f, 64.0f) ==
+                afterSnapshotHash,
+        "Terrain stroke Undo/Redo should atomically restore Before/After layer snapshots");
 
     runner.Expect(course.terrainEditLayer.ApplyStroke(paint, &error),
         "Course should accept a second durable Paint stroke");
@@ -8634,6 +13746,45 @@ void TestProductionTerrainSculptPaintToolPack(RegressionRunner& runner) {
         "Terrain release should atomically Accept one bounded stroke as one Transaction");
 
     const std::size_t committedStampCount = toolCourse.terrainEditLayer.Stamps().size();
+    runner.Expect(manager.StartTool(
+            "editor.tool.terrainSmooth", environment, toolTransactions, &error),
+        "Smooth should activate through the production Terrain framework");
+    manager.Tick(environment, routeTerrainPointer(10.0f, true, true, false), toolTransactions);
+    manager.Tick(environment, routeTerrainPointer(20.0f, false, true, false), toolTransactions);
+    const std::vector<EditorInteractiveToolProperty> smoothProperties =
+        manager.ActiveTool() != nullptr
+            ? manager.ActiveTool()->Properties()
+            : std::vector<EditorInteractiveToolProperty>{};
+    const auto smoothPasses = std::find_if(
+        smoothProperties.begin(),
+        smoothProperties.end(),
+        [](const EditorInteractiveToolProperty& property) {
+            return property.name == "Smooth Apply Passes";
+        });
+    const auto undoSnapshot = std::find_if(
+        smoothProperties.begin(),
+        smoothProperties.end(),
+        [](const EditorInteractiveToolProperty& property) {
+            return property.name == "Undo Snapshot";
+        });
+    runner.Expect(
+        smoothPasses != smoothProperties.end() && smoothPasses->value == "2" &&
+            undoSnapshot != smoothProperties.end() &&
+            undoSnapshot->value == "Captured" &&
+            runtimeTerrain.previewEditLayer.Validate(&error),
+        "Smooth preview should expose two immutable 3x3 Apply passes and a stroke snapshot");
+    const float smoothPreviewCorrection =
+        runtimeTerrain.previewEditLayer.Evaluate(15.0f, 0.0f).radialOffset;
+    runner.Expect(std::isfinite(smoothPreviewCorrection) &&
+            std::abs(smoothPreviewCorrection) <= 2.0f,
+        "double-buffer Smooth preview should remain bounded by its source neighborhood");
+    manager.RequestCancel();
+    manager.Tick(environment, {}, toolTransactions);
+    runner.Expect(runtimeTerrain.previewEditLayer.Stamps().empty() &&
+            toolCourse.terrainEditLayer.Stamps().size() == committedStampCount &&
+            toolTransactions.UndoDepth() == 1,
+        "cancelling Smooth should restore the stroke-start authoring state and history");
+
     runner.Expect(manager.StartTool("editor.tool.terrainPaint", environment, toolTransactions, &error),
         "Paint tool should activate through the same Terrain framework");
     runner.Expect(
@@ -8832,6 +13983,12 @@ void TestProductionModelingGeometryFramework(RegressionRunner& runner) {
     runner.Expect(modes.FindMode("editor.mode.modeling") != nullptr &&
             modes.ToolsForMode("editor.mode.modeling").size() == 6,
         "Modeling mode should expose selection, creation, topology, normals, and collision tools");
+    const EditorInteractiveToolDescriptor* faceSelectionDescriptor =
+        modes.FindTool("editor.tool.geometrySelectFaces");
+    runner.Expect(faceSelectionDescriptor != nullptr &&
+            faceSelectionDescriptor->selectionBoundary ==
+                EditorInteractiveToolSelectionBoundary::PrimaryObjectChange,
+        "face selection should lock its target Entity while allowing sub-element selection changes");
     EditorViewportCoordinateService coordinates;
     coordinates.Update(EditorViewportCoordinateContext{
         {0.0f, 0.0f, 100.0f, 100.0f}, 100, 100, MakeIdentity4x4()});
@@ -8858,6 +14015,25 @@ void TestProductionModelingGeometryFramework(RegressionRunner& runner) {
     runner.Expect(!manager.HasActiveTool() && toolWorkspace.HasGeometry() &&
             toolTransactions.UndoDepth() == 1,
         "accepting primitive creation should create one Transaction and durable Geometry");
+
+    runner.Expect(manager.StartTool(
+            "editor.tool.geometrySelectFaces", environment, toolTransactions, &error),
+        "Select Faces should enter a persistent sub-element selection session");
+    EditorInteractiveToolEnvironment samePrimarySelectionChange = environment;
+    samePrimarySelectionChange.selectionRevision += 1;
+    manager.Tick(samePrimarySelectionChange, {}, toolTransactions);
+    runner.Expect(manager.HasActiveTool(),
+        "same-Entity selection revision noise must not close Select Faces properties");
+    EditorSelection changedToolSelection;
+    changedToolSelection.SetPrimary(EditorObjectHandle{
+        EditorDomainId::SceneEntity, "another-scene-entity", 0, 1, "Another Entity"});
+    EditorInteractiveToolEnvironment changedPrimarySelection = environment;
+    changedPrimarySelection.selection = &changedToolSelection;
+    changedPrimarySelection.selectionRevision = environment.selectionRevision + 1;
+    manager.Tick(changedPrimarySelection, {}, toolTransactions);
+    runner.Expect(!manager.HasActiveTool() &&
+            manager.LastEndReason() == EditorInteractiveToolEndReason::SelectionChanged,
+        "Select Faces should still cancel safely when its target Entity actually changes");
 
     toolWorkspace.SelectFace(toolWorkspace.AuthoredMesh()->triangles[0].guid, false);
     const uint64_t authoredHash = toolWorkspace.AuthoredMesh()->ContentHash();
@@ -9020,6 +14196,23 @@ void TestProductionMeshBakeAssetPipeline(RegressionRunner& runner) {
             runtimeCache.ResolveForRenderer(bakedGuid, 99).lodIndex == 2 &&
             runtimeCache.ResolveForPhysics(bakedGuid).Valid(),
         "Renderer and Physics should consume validated views from the same runtime Mesh cache");
+    EditorMeshAssetChangeTracker meshAssetChanges(root);
+    const EditorMeshAssetChangeSet initialMeshChanges = meshAssetChanges.Poll(registry);
+    EditorProductionMeshRuntimeCache reconciledCache(root);
+    const EditorProductionMeshRuntimeReconcileResult coldReconcile =
+        reconciledCache.ReconcileAssets(registry, initialMeshChanges);
+    runner.Expect(initialMeshChanges.changes.size() == 1 &&
+            initialMeshChanges.changes.front().kind == EditorMeshAssetChangeKind::Added &&
+            coldReconcile.skippedCold == 1 && reconciledCache.Count() == 0,
+        "Mesh Asset change tracking should discover durable assets without eagerly loading cold content");
+    runner.Expect(reconciledCache.Load(*bakedRecord, &error),
+        "a referenced Production Mesh should enter the runtime cache on demand");
+    const EditorProductionMeshRuntimeHandle initialMeshHandle =
+        reconciledCache.Handle(bakedGuid);
+    runner.Expect(initialMeshHandle.Valid() &&
+            reconciledCache.Resolve(initialMeshHandle) != nullptr &&
+            meshAssetChanges.Poll(registry).Empty(),
+        "unchanged Mesh Assets should preserve stable generation handles");
 
     EditorProductionScenePipeline scenePipeline;
     const Matrix4x4 identity = MakeIdentity4x4();
@@ -9031,6 +14224,39 @@ void TestProductionMeshBakeAssetPipeline(RegressionRunner& runner) {
             scenePipeline.RenderPackets().empty() &&
             scenePipeline.Stats().visibleInstances == 1,
         "E-6 should derive CPU render/physics instances without requiring a GPU device");
+    const EditorProductionMeshPresentationDiagnostic* presentation =
+        scenePipeline.FindPresentationDiagnostic(entity->guid);
+    runner.Expect(
+        presentation != nullptr &&
+            presentation->assetResolved &&
+            presentation->runtimeCacheReady &&
+            presentation->hierarchyVisible &&
+            presentation->frustumVisible &&
+            !presentation->gpuAssetReady &&
+            presentation->renderPacketCount == 0 &&
+            !presentation->lastFailure.empty(),
+        "Production Mesh Presentation diagnostics should identify the exact "
+        "stage that prevented a draw submission");
+    scenePipeline.SetDrawMode(
+        EditorProductionMeshDrawMode::ForceDirect);
+    runner.Expect(
+        scenePipeline.DrawMode() ==
+                EditorProductionMeshDrawMode::ForceDirect &&
+            !EditorProductionScenePipeline::ShouldUseGpuDriven(
+                EditorProductionMeshDrawMode::ForceDirect,
+                true) &&
+            EditorProductionScenePipeline::ShouldUseGpuDriven(
+                EditorProductionMeshDrawMode::Auto,
+                true) &&
+            !EditorProductionScenePipeline::ShouldUseGpuDriven(
+                EditorProductionMeshDrawMode::Auto,
+                false) &&
+            EditorProductionScenePipeline::ShouldUseGpuDriven(
+                EditorProductionMeshDrawMode::ForceGpuDriven,
+                false),
+        "Production Mesh Draw Mode should deterministically select Direct, "
+        "Auto fallback, or forced GPU-driven presentation");
+    scenePipeline.SetDrawMode(EditorProductionMeshDrawMode::Auto);
     const EditorProductionSceneRayHit sceneHit = scenePipeline.Raycast(
         {0.0f, 0.0f, -10.0f}, {0.0f, 0.0f, 1.0f}, 100.0f);
     runner.Expect(sceneHit.valid && sceneHit.entityGuid == entity->guid &&
@@ -9078,6 +14304,45 @@ void TestProductionMeshBakeAssetPipeline(RegressionRunner& runner) {
             rebake.change.after.record->id == "commercial_box" &&
             rebake.change.after.sourceHash != prepared.change.after.sourceHash,
         "Rebake should preserve durable Asset identity while replacing source-hashed artifacts");
+    auto rebakeCommand = std::make_shared<EditorMeshBakeUndoCommand>(rebake.change);
+    const EditorUndoResult rebakeApplied = rebakeCommand->Apply(
+        EditorTransactionApplyMode::Redo, execution);
+    const EditorMeshAssetChangeSet rebakeChanges = meshAssetChanges.Poll(registry);
+    const EditorProductionMeshRuntimeReconcileResult rebakeReconcile =
+        reconciledCache.ReconcileAssets(registry, rebakeChanges);
+    const EditorProductionMeshRuntimeHandle rebakedMeshHandle =
+        reconciledCache.Handle(bakedGuid);
+    runner.Expect(rebakeApplied.succeeded && rebakeChanges.changes.size() == 1 &&
+            rebakeChanges.changes.front().kind == EditorMeshAssetChangeKind::Modified &&
+            rebakeReconcile.updated == 1 && rebakedMeshHandle.Valid() &&
+            rebakedMeshHandle.generation > initialMeshHandle.generation &&
+            reconciledCache.Resolve(initialMeshHandle) == nullptr &&
+            reconciledCache.Resolve(rebakedMeshHandle) != nullptr,
+        "ReconcileAssets should atomically publish a new Mesh generation and invalidate stale handles");
+
+    const std::filesystem::path rebakedCookedPath =
+        root / rebake.change.paths.cooked;
+    std::vector<unsigned char> invalidRebakeBytes =
+        rebake.change.after.cookedBytes.value_or(std::vector<unsigned char>{});
+    if (invalidRebakeBytes.size() > 20) invalidRebakeBytes[20] ^= 0x5au;
+    WriteBinaryFile(rebakedCookedPath, invalidRebakeBytes);
+    std::error_code stampError;
+    const auto corruptedWriteTime =
+        std::filesystem::last_write_time(rebakedCookedPath, stampError);
+    if (!stampError) {
+        std::filesystem::last_write_time(
+            rebakedCookedPath, corruptedWriteTime + std::chrono::seconds(2), stampError);
+    }
+    const EditorMeshAssetChangeSet corruptedChanges = meshAssetChanges.Poll(registry);
+    const EditorProductionMeshRuntimeReconcileResult corruptedReconcile =
+        reconciledCache.ReconcileAssets(registry, corruptedChanges);
+    runner.Expect(corruptedChanges.changes.size() == 1 &&
+            corruptedReconcile.failed == 1 &&
+            !corruptedReconcile.diagnostics.empty() &&
+            reconciledCache.Resolve(rebakedMeshHandle) != nullptr &&
+            reconciledCache.Handle(bakedGuid).generation == rebakedMeshHandle.generation,
+        "a corrupt Mesh hot reload should retain the last-known-good runtime generation");
+    WriteBinaryFile(rebakedCookedPath, *rebake.change.after.cookedBytes);
 
     SceneWorldObjectProvider provider;
     provider.Bind(&scene, document);
@@ -9119,6 +14384,1351 @@ void TestProductionMeshBakeAssetPipeline(RegressionRunner& runner) {
             "editor.tool.meshBake", locked, toolTransactions, &error),
         "Play/Sim authoring lock should reject Production Mesh Bake");
 
+    runner.Expect(registry.Remove(EditorAssetKind::Mesh, "commercial_box"),
+        "Mesh Asset removal setup should update the registry");
+    const EditorMeshAssetChangeSet removedChanges = meshAssetChanges.Poll(registry);
+    const EditorProductionMeshRuntimeReconcileResult removedReconcile =
+        reconciledCache.ReconcileAssets(registry, removedChanges);
+    runner.Expect(removedChanges.changes.size() == 1 &&
+            removedChanges.changes.front().kind == EditorMeshAssetChangeKind::Removed &&
+            removedReconcile.removed == 1 &&
+            reconciledCache.Resolve(rebakedMeshHandle) == nullptr,
+        "ReconcileAssets should retire resident generations when a Mesh Asset is removed");
+
+    RemoveTreeIfPresent(root);
+}
+
+void TestProductionMeshEditableSourceLoader(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" /
+        "production_mesh_editable_source";
+    RemoveTreeIfPresent(root);
+
+    EditorProductionMeshAssetDocument document{};
+    document.assetGuid = GenerateEditorAssetGuid();
+    document.assetId = "ball_production";
+    document.geometry =
+        EditorGeometryMesh::MakeBox({1.0f, 1.5f, 2.0f});
+    document.sourceGeometryHash = document.geometry.ContentHash();
+    document.settings = {};
+    std::string sourceText;
+    std::string error;
+    runner.Expect(
+        document.Serialize(sourceText, &error),
+        "Production Mesh editable-source fixture should serialize");
+
+    const std::filesystem::path sourcePath =
+        root / "ball_production.mesh";
+    WriteBinaryFile(
+        sourcePath,
+        std::vector<unsigned char>(sourceText.begin(), sourceText.end()));
+    EditorAssetRegistry registry;
+    EditorAssetRecord record = MakeAsset(
+        EditorAssetKind::Mesh,
+        document.assetId,
+        sourcePath.generic_string(),
+        true,
+        document.assetGuid);
+    record.sourceTimestamp = 42;
+    runner.Expect(
+        registry.Register(record),
+        "Production Mesh editable-source fixture should register by GUID");
+
+    const uint32_t registryRevision = registry.Revision();
+    EditorProductionMeshEditableSourceLoader loader{
+        std::filesystem::current_path()};
+    EditorProductionMeshEditableSourceLoadResult loaded =
+        loader.Load(registry, document.assetGuid);
+    runner.Expect(
+        loaded.Succeeded() &&
+            loaded.source.assetGuid == document.assetGuid &&
+            loaded.source.assetId == document.assetId &&
+            loaded.source.sourceGeometryHash ==
+                document.sourceGeometryHash &&
+            loaded.source.geometry.ContentHash() ==
+                document.sourceGeometryHash &&
+            loaded.source.buildSettingsHash ==
+                document.settings.ContentHash() &&
+            loaded.source.sourceTimestamp == 42 &&
+            loaded.source.registryRevision == registryRevision &&
+            loaded.source.Validate(&error),
+        "GUID-only load should clone the authoritative source Geometry with "
+        "matching source and build hashes; status=" +
+            std::string(ToString(loaded.status)) +
+            " message='" + loaded.message + "' validation='" + error + "'");
+    runner.Expect(
+        registry.Revision() == registryRevision &&
+            loaded.source.sourcePath ==
+                std::filesystem::weakly_canonical(sourcePath),
+        "editable-source loading should not mutate the Asset Registry and "
+        "should return a canonical project path");
+
+    loaded.source.geometry.vertices.front().position.x += 7.0f;
+    runner.Expect(
+        loaded.source.geometry.ContentHash() !=
+                document.sourceGeometryHash &&
+            document.geometry.ContentHash() ==
+                document.sourceGeometryHash,
+        "the returned Geometry should own an independent editable copy");
+    const EditorProductionMeshEditableSourceLoadResult reloaded =
+        loader.Load(registry, document.assetGuid);
+    runner.Expect(
+        reloaded.Succeeded() &&
+            reloaded.source.geometry.ContentHash() ==
+                document.sourceGeometryHash,
+        "editing one loaded copy should not affect a subsequent source load");
+
+    constexpr std::string_view kBallProductionGuid =
+        "a7853409f86661149beaecb724ea5104";
+    EditorAssetRegistry ballRegistry;
+    EditorAssetRecord ballRecord = MakeAsset(
+        EditorAssetKind::Mesh,
+        "ball_production",
+        "Resources/Generated/Imported/ball_production.mesh",
+        true,
+        std::string(kBallProductionGuid));
+    const EditorProductionMeshEditableSourceLoadResult ballLoaded =
+        ballRegistry.Register(std::move(ballRecord))
+        ? loader.Load(ballRegistry, kBallProductionGuid)
+        : EditorProductionMeshEditableSourceLoadResult{};
+    runner.Expect(
+        ballLoaded.Succeeded() &&
+            ballLoaded.source.assetId == "ball_production" &&
+            ballLoaded.source.sourceGeometryHash != 0 &&
+            ballLoaded.source.geometry.ContentHash() ==
+                ballLoaded.source.sourceGeometryHash,
+        "the real ball_production GUID should clone its retained authoring "
+        "Geometry without Scene or UI state");
+
+    EditorAssetRegistry missingRegistry;
+    runner.Expect(
+        loader.Load(missingRegistry, document.assetGuid).status ==
+            EditorProductionMeshEditableSourceLoadStatus::AssetNotFound,
+        "an unregistered Production Mesh GUID should be rejected");
+
+    EditorAssetRegistry wrongKindRegistry;
+    EditorAssetRecord wrongKind = record;
+    wrongKind.kind = EditorAssetKind::Texture;
+    wrongKind.id = "ball_texture";
+    runner.Expect(
+        wrongKindRegistry.Register(wrongKind) &&
+            loader.Load(wrongKindRegistry, document.assetGuid).status ==
+                EditorProductionMeshEditableSourceLoadStatus::WrongAssetKind,
+        "a non-Mesh Asset using the requested GUID should be rejected");
+
+    EditorAssetRegistry ambiguousRegistry;
+    EditorAssetRecord duplicate = record;
+    duplicate.id = "ball_production_duplicate";
+    runner.Expect(
+        ambiguousRegistry.Register(record) &&
+            ambiguousRegistry.Register(duplicate) &&
+            loader.Load(ambiguousRegistry, document.assetGuid).status ==
+                EditorProductionMeshEditableSourceLoadStatus::
+                    AmbiguousAssetGuid,
+        "duplicate Asset GUIDs should be rejected instead of choosing an "
+        "arbitrary editing source");
+
+    EditorAssetRegistry mismatchedRegistry;
+    EditorAssetRecord mismatch = record;
+    mismatch.guid = GenerateEditorAssetGuid();
+    runner.Expect(
+        mismatchedRegistry.Register(mismatch) &&
+            loader.Load(mismatchedRegistry, mismatch.guid).status ==
+                EditorProductionMeshEditableSourceLoadStatus::
+                    IdentityMismatch,
+        "Registry and Production Mesh document identities should match");
+
+    std::string corruptSource = sourceText;
+    const std::string originalHash =
+        "sourceHash=" + std::to_string(document.sourceGeometryHash);
+    const std::size_t hashPosition = corruptSource.find(originalHash);
+    if (hashPosition != std::string::npos) {
+        corruptSource.replace(
+            hashPosition,
+            originalHash.size(),
+            "sourceHash=1");
+    }
+    WriteBinaryFile(
+        sourcePath,
+        std::vector<unsigned char>(
+            corruptSource.begin(),
+            corruptSource.end()));
+    runner.Expect(
+        hashPosition != std::string::npos &&
+            loader.Load(registry, document.assetGuid).status ==
+                EditorProductionMeshEditableSourceLoadStatus::SourceInvalid,
+        "a stale source Geometry hash should be rejected before editing");
+
+    RemoveTreeIfPresent(root);
+}
+
+void TestCreateEditableCopyInteractiveTool(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" /
+        "create_editable_copy_tool";
+    RemoveTreeIfPresent(root);
+
+    EditorProductionMeshAssetDocument sourceDocument{};
+    sourceDocument.assetGuid = GenerateEditorAssetGuid();
+    sourceDocument.assetId = "interactive_source";
+    sourceDocument.geometry =
+        EditorGeometryMesh::MakeBox({1.0f, 2.0f, 3.0f});
+    sourceDocument.sourceGeometryHash =
+        sourceDocument.geometry.ContentHash();
+    std::string sourceText;
+    std::string error;
+    runner.Expect(
+        sourceDocument.Serialize(sourceText, &error),
+        "Create Editable Copy source fixture should serialize");
+    const std::filesystem::path sourcePath =
+        root / "interactive_source.mesh";
+    WriteBinaryFile(
+        sourcePath,
+        std::vector<unsigned char>(
+            sourceText.begin(),
+            sourceText.end()));
+
+    EditorAssetRegistry assets;
+    EditorAssetRecord sourceRecord = MakeAsset(
+        EditorAssetKind::Mesh,
+        sourceDocument.assetId,
+        sourcePath.generic_string(),
+        true,
+        sourceDocument.assetGuid);
+    sourceRecord.sourceTimestamp = 77;
+    runner.Expect(
+        assets.Register(sourceRecord),
+        "Create Editable Copy source fixture should register");
+
+    const EditorDocumentId document{
+        "create-editable-copy-scene",
+        std::string(EditorDocumentTypes::Scene)};
+    EditorScene scene;
+    EditorSceneEntity* entity = scene.CreateEntity(
+        "Production Mesh",
+        {},
+        "create-editable-copy-entity");
+    const EditorSceneObjectReference assetReference{
+        "asset",
+        {},
+        sourceDocument.assetGuid};
+    runner.Expect(
+        entity != nullptr &&
+            scene.AddComponent(
+                entity->guid,
+                std::string(kEditorMeshRendererComponentType),
+                &assetReference),
+        "Create Editable Copy target should reference a Production Mesh Asset");
+
+    SceneWorldObjectProvider provider;
+    provider.Bind(&scene, document);
+    const EditorObjectHandle target{
+        EditorDomainId::SceneEntity,
+        BuildEditorWorldStableId(
+            document,
+            provider.ProviderId(),
+            entity->guid),
+        0,
+        1,
+        entity->name};
+    EditorSelection selection;
+    selection.SetPrimary(target);
+    EditorGeometryWorkspace workspace;
+    workspace.Bind(&provider, &selection, document);
+    runner.Expect(
+        workspace.CanEdit() && !workspace.HasGeometry() &&
+            workspace.MeshAssetGuid() == sourceDocument.assetGuid,
+        "Geometry Workspace should expose the selected Mesh Renderer Asset GUID");
+
+    EditorProductionMeshEditableSourceLoader loader{
+        std::filesystem::current_path()};
+    std::optional<EditorCreateEditableCopyCommitRequest> acceptedRequest;
+    uint32_t commitRequestCount = 0;
+    EditorCreateEditableCopyToolBinding binding{};
+    binding.workspace = &workspace;
+    binding.assetRegistry = &assets;
+    binding.sourceLoader = &loader;
+    binding.onCommitRequested =
+        [&](const EditorCreateEditableCopyCommitRequest& request) {
+            acceptedRequest = request;
+            ++commitRequestCount;
+        };
+
+    EditorModeRegistry modes;
+    RegisterDefaultEditorModes(modes);
+    EditorGeometryToolBinding geometryBinding{&workspace, {}};
+    RegisterProductionGeometryTools(modes, &geometryBinding);
+    RegisterProductionCreateEditableCopyTools(modes, &binding);
+    const EditorInteractiveToolDescriptor* descriptor =
+        modes.FindTool("editor.tool.geometryCreateEditableCopy");
+    const std::vector<const EditorInteractiveToolDescriptor*>
+        modelingPalette =
+            modes.ToolsForMode("editor.mode.modeling");
+    runner.Expect(
+        descriptor != nullptr &&
+            modelingPalette.size() == 7 &&
+            std::find(
+                modelingPalette.begin(),
+                modelingPalette.end(),
+                descriptor) != modelingPalette.end() &&
+            descriptor->transactionPolicy ==
+                EditorInteractiveToolTransactionPolicy::
+                    SingleCommandOnAccept &&
+            descriptor->selectionBoundary ==
+                EditorInteractiveToolSelectionBoundary::PrimaryObjectChange,
+        "Modeling Palette should formally expose Create Editable Copy with "
+        "one Scene Transaction on Accept");
+
+    uint32_t geometryChangeNotifications = 0;
+    EditorGeometryExecutionService geometryExecution;
+    geometryExecution.Bind(
+        document,
+        &scene,
+        [&](std::string_view changedEntityGuid) {
+            if (changedEntityGuid == entity->guid) {
+                ++geometryChangeNotifications;
+            }
+        });
+    EditorExecutionContext execution;
+    EditorError executionError{};
+    runner.Expect(
+        execution.Register(geometryExecution, &executionError),
+        "Create Editable Copy should register its Geometry execution boundary");
+
+    const uint64_t revisionBeforeInvalidApply = scene.revision;
+    const EditorGeometryPropertyState invalidAtomicState{
+        std::nullopt,
+        std::nullopt,
+        sourceDocument.assetGuid,
+        std::nullopt};
+    const EditorUndoResult invalidAtomicApply =
+        geometryExecution.ApplyGeometryState(
+            document.Key(),
+            entity->guid,
+            invalidAtomicState);
+    runner.Expect(
+        !invalidAtomicApply.succeeded &&
+            scene.revision == revisionBeforeInvalidApply &&
+            scene.FindComponent(
+                *scene.FindEntity(entity->guid),
+                kEditorMeshRendererComponentType)->properties.empty() &&
+            geometryChangeNotifications == 0,
+        "invalid partial source metadata should fail before any Scene mutation");
+
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        {0.0f, 0.0f, 100.0f, 100.0f},
+        100,
+        100,
+        MakeIdentity4x4()});
+    EditorInteractiveToolEnvironment environment{};
+    environment.selection = &selection;
+    environment.coordinates = &coordinates;
+    environment.execution = &execution;
+    environment.activeDocumentKey = document.Key();
+    environment.documentEditRevision = scene.revision;
+    environment.documentGeneration = 1;
+    environment.selectionRevision = selection.Revision();
+    environment.canMutateAuthoring = true;
+    environment.viewportAvailable = true;
+    EditorTransactionStack transactions;
+    EditorToolManager manager(modes);
+    runner.Expect(
+        manager.Initialize("editor.mode.modeling", &error),
+        "Create Editable Copy test should initialize Modeling mode");
+
+    const uint64_t sceneRevisionBeforePreview = scene.revision;
+    const uint32_t assetRevisionBeforePreview = assets.Revision();
+    runner.Expect(
+        manager.StartTool(
+            "editor.tool.geometryCreateEditableCopy",
+            environment,
+            transactions,
+            &error) &&
+            workspace.HasPreview() &&
+            workspace.DisplayMesh() != nullptr &&
+            workspace.DisplayMesh()->ContentHash() ==
+                sourceDocument.sourceGeometryHash &&
+            scene.revision == sceneRevisionBeforePreview &&
+            assets.Revision() == assetRevisionBeforePreview &&
+            transactions.UndoDepth() == 0 &&
+            commitRequestCount == 0,
+        "Create Editable Copy should preview an identical in-memory source clone without mutating Scene, Asset, or history");
+    const auto* activeTool =
+        dynamic_cast<const EditorCreateEditableCopyTool*>(
+            manager.ActiveTool());
+    const EditorCreateEditableCopyCommitRequest* pending =
+        activeTool != nullptr
+        ? activeTool->PendingCommitRequest()
+        : nullptr;
+    runner.Expect(
+        activeTool != nullptr && activeTool->PreviewState().ready &&
+            pending != nullptr && pending->Validate(&error) &&
+            pending->sourceIdentity.assetGuid ==
+                sourceDocument.assetGuid &&
+            pending->sourceIdentity.sourceGeometryHash ==
+                sourceDocument.sourceGeometryHash,
+        "preview should retain a validated durable source GUID/hash identity");
+
+    manager.RequestCancel();
+    manager.Tick(environment, {}, transactions);
+    runner.Expect(
+        !manager.HasActiveTool() && !workspace.HasPreview() &&
+            commitRequestCount == 0 &&
+            scene.revision == sceneRevisionBeforePreview &&
+            assets.Revision() == assetRevisionBeforePreview &&
+            transactions.UndoDepth() == 0,
+        "Create Editable Copy Cancel should discard only transient Geometry");
+
+    runner.Expect(
+        manager.StartTool(
+            "editor.tool.geometryCreateEditableCopy",
+            environment,
+            transactions,
+            &error),
+        "Create Editable Copy should restart after Cancel");
+    manager.RequestAccept();
+    manager.Tick(environment, {}, transactions);
+    const EditorSceneComponent* meshComponent =
+        scene.FindComponent(
+            *scene.FindEntity(entity->guid),
+            kEditorMeshRendererComponentType);
+    runner.Expect(
+        !manager.HasActiveTool() && !workspace.HasPreview() &&
+            commitRequestCount == 1 &&
+            acceptedRequest.has_value() &&
+            acceptedRequest->Validate(&error) &&
+            acceptedRequest->editableGeometryHash ==
+                sourceDocument.sourceGeometryHash &&
+            meshComponent != nullptr &&
+            workspace.HasGeometry() &&
+            workspace.AuthoredMesh()->ContentHash() ==
+                sourceDocument.sourceGeometryHash &&
+            ReadEditorProductionMeshEditableSourceMetadata(*meshComponent).
+                HasIdentity() &&
+            ReadEditorProductionMeshEditableSourceMetadata(*meshComponent).
+                identity.assetGuid == sourceDocument.assetGuid &&
+            ReadEditorProductionMeshEditableSourceMetadata(*meshComponent).
+                identity.sourceGeometryHash ==
+                    sourceDocument.sourceGeometryHash &&
+            scene.revision == sceneRevisionBeforePreview + 1 &&
+            geometryChangeNotifications == 1 &&
+            transactions.UndoDepth() == 1,
+        "Accept should atomically commit Geometry and source GUID/hash as one Transaction");
+
+    runner.Expect(
+        transactions.Undo(execution, &executionError),
+        "Create Editable Copy should Undo through the shared Transaction Stack");
+    workspace.RefreshFromScene();
+    meshComponent = scene.FindComponent(
+        *scene.FindEntity(entity->guid),
+        kEditorMeshRendererComponentType);
+    runner.Expect(
+        !workspace.HasGeometry() &&
+            meshComponent != nullptr &&
+            meshComponent->properties.empty() &&
+            !ReadEditorProductionMeshEditableSourceMetadata(*meshComponent).
+                HasIdentity() &&
+            geometryChangeNotifications == 2 &&
+            transactions.UndoDepth() == 0 &&
+            transactions.RedoDepth() == 1,
+        "Undo should remove Geometry and source identity together without leaving partial metadata");
+
+    runner.Expect(
+        transactions.Redo(execution, &executionError),
+        "Create Editable Copy should Redo through the shared Transaction Stack");
+    workspace.RefreshFromScene();
+    meshComponent = scene.FindComponent(
+        *scene.FindEntity(entity->guid),
+        kEditorMeshRendererComponentType);
+    runner.Expect(
+        workspace.HasGeometry() &&
+            workspace.AuthoredMesh()->ContentHash() ==
+                sourceDocument.sourceGeometryHash &&
+            meshComponent != nullptr &&
+            ReadEditorProductionMeshEditableSourceMetadata(*meshComponent).
+                HasIdentity() &&
+            geometryChangeNotifications == 3 &&
+            transactions.UndoDepth() == 1 &&
+            transactions.RedoDepth() == 0,
+        "Redo should restore the same Geometry and provenance identity atomically");
+
+    runner.Expect(
+        transactions.Undo(execution, &executionError),
+        "stale-Registry safety setup should return to the Production Mesh state");
+    workspace.RefreshFromScene();
+    environment.documentEditRevision = scene.revision;
+
+    runner.Expect(
+        manager.StartTool(
+            "editor.tool.geometryCreateEditableCopy",
+            environment,
+            transactions,
+            &error),
+        "Create Editable Copy should start before stale-Registry safety test");
+    EditorAssetRecord unrelated = MakeAsset(
+        EditorAssetKind::Mesh,
+        "unrelated_mesh",
+        (root / "unrelated.mesh").generic_string(),
+        true,
+        GenerateEditorAssetGuid());
+    runner.Expect(
+        assets.Register(std::move(unrelated)),
+        "stale-Registry safety fixture should change Registry revision");
+    manager.RequestAccept();
+    manager.Tick(environment, {}, transactions);
+    runner.Expect(
+        manager.HasActiveTool() &&
+            commitRequestCount == 1 &&
+            manager.LastMessage().find("Asset Registry changed") !=
+                std::string::npos &&
+            !workspace.HasGeometry() &&
+            geometryChangeNotifications == 4 &&
+            transactions.UndoDepth() == 0,
+        "Accept should reject a stale Asset Registry snapshot instead of committing the wrong source");
+    manager.RequestCancel();
+    manager.Tick(environment, {}, transactions);
+
+    EditorInteractiveToolEnvironment locked = environment;
+    locked.playSessionActive = true;
+    locked.canMutateAuthoring = false;
+    runner.Expect(
+        !manager.StartTool(
+            "editor.tool.geometryCreateEditableCopy",
+            locked,
+            transactions,
+            &error),
+        "Play/Sim authoring lock should reject Create Editable Copy");
+
+    RemoveTreeIfPresent(root);
+}
+
+void TestCreateEditableCopyBakeRuntimeReconcileE2E(
+    RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" /
+        "editable_copy_bake_reconcile_e2e";
+    RemoveTreeIfPresent(root);
+    std::string error;
+
+    const EditorDocumentId document{
+        "editable-copy-bake-reconcile-scene",
+        std::string(EditorDocumentTypes::Scene)};
+    EditorScene scene;
+    EditorSceneEntity* sourceEntity = scene.CreateEntity(
+        "Source Authoring Mesh",
+        {},
+        "editable-copy-e2e-source");
+    runner.Expect(
+        sourceEntity != nullptr &&
+            scene.AddComponent(
+                sourceEntity->guid,
+                std::string(kEditorMeshRendererComponentType)),
+        "E2E source authoring entity should own a Mesh Renderer");
+
+    const EditorGeometryMesh sourceGeometry =
+        EditorGeometryMesh::MakeBox({1.0f, 1.5f, 2.0f});
+    const uint64_t sourceGeometryHash =
+        sourceGeometry.ContentHash();
+    std::string sourceGeometryText;
+    runner.Expect(
+        sourceGeometry.Serialize(sourceGeometryText, &error),
+        "E2E source Geometry should serialize");
+    EditorSceneComponent* sourceComponent =
+        scene.FindComponent(
+            *sourceEntity,
+            kEditorMeshRendererComponentType);
+    sourceComponent->properties.push_back({
+        std::string(kEditorEditableGeometryProperty),
+        sourceGeometryText});
+    scene.Touch();
+
+    EditorAssetRegistry registry;
+    // The execution service publishes an absolute source path to its live cache.
+    // Keep that cache rooted at the process working directory; the independent
+    // observer cache below intentionally uses the fixture root with Registry-
+    // relative paths to exercise ReconcileAssets().
+    EditorProductionMeshRuntimeCache commandRuntimeCache;
+    EditorMeshBakePipeline bakePipeline;
+    bakePipeline.Bind(document, &scene, &registry, root);
+    EditorMeshBuildSettings initialSettings{};
+    initialSettings.lodCount = 3;
+    initialSettings.collisionMode =
+        EditorMeshCollisionBuildMode::Box;
+    const EditorGeneratedCollision sourceCollision =
+        GenerateEditorGeometryBoxCollision(sourceGeometry);
+    EditorMeshBakePrepared initialBake{};
+    runner.Expect(
+        bakePipeline.Prepare(
+            sourceEntity->guid,
+            sourceGeometry,
+            &sourceCollision,
+            "editable_copy_e2e_mesh",
+            initialSettings,
+            initialBake,
+            &error) &&
+            !initialBake.rebake,
+        "E2E fixture should prepare its initial Production Mesh");
+
+    EditorMeshBakeExecutionService bakeExecution;
+    bakeExecution.Bind(
+        document,
+        &scene,
+        &registry,
+        &commandRuntimeCache,
+        root);
+    EditorGeometryExecutionService geometryExecution;
+    geometryExecution.Bind(document, &scene);
+    EditorExecutionContext execution;
+    EditorError executionError{};
+    runner.Expect(
+        execution.Register(bakeExecution, &executionError) &&
+            execution.Register(geometryExecution, &executionError),
+        "E2E should register Mesh Bake and Geometry execution services");
+    EditorMeshBakeUndoCommand initialBakeCommand{
+        initialBake.change};
+    runner.Expect(
+        initialBakeCommand.Apply(
+            EditorTransactionApplyMode::Redo,
+            execution).succeeded,
+        "E2E fixture should publish its initial Production Mesh");
+
+    const EditorAssetRecord* initialRecord =
+        registry.Find(
+            EditorAssetKind::Mesh,
+            "editable_copy_e2e_mesh");
+    const std::string productionGuid =
+        initialRecord != nullptr ? initialRecord->guid : std::string{};
+    const bool initialRuntimeLoaded =
+        commandRuntimeCache.Find(productionGuid) != nullptr;
+    const bool initialRendererReady =
+        commandRuntimeCache.ResolveForRenderer(
+            productionGuid,
+            0).Valid();
+    const bool initialPhysicsReady =
+        commandRuntimeCache.ResolveForPhysics(
+            productionGuid).Valid();
+    runner.Expect(
+        initialRecord != nullptr &&
+            IsDurableEditorAssetGuid(productionGuid) &&
+            initialRuntimeLoaded &&
+            initialRendererReady &&
+            initialPhysicsReady,
+        "initial Production Mesh should be available to Renderer and Physics"
+        " (published=" + std::string(initialRuntimeLoaded ? "ready" : "failed") +
+        ", renderer=" + (initialRendererReady ? "ready" : "failed") +
+        ", physics=" + (initialPhysicsReady ? "ready" : "failed") +
+        ")");
+
+    EditorMeshAssetChangeTracker changeTracker{root};
+    const EditorMeshAssetChangeSet initialChanges =
+        changeTracker.Poll(registry);
+    EditorProductionMeshRuntimeCache reconciledCache{root};
+    runner.Expect(
+        initialChanges.changes.size() == 1 &&
+            initialRecord != nullptr &&
+            reconciledCache.Load(*initialRecord, &error),
+        "E2E runtime observer should establish a resident initial generation");
+    const EditorProductionMeshRuntimeHandle initialHandle =
+        reconciledCache.Handle(productionGuid);
+
+    EditorSceneEntity* editEntity = scene.CreateEntity(
+        "Editable Production Instance",
+        {},
+        "editable-copy-e2e-target");
+    const EditorSceneObjectReference sourceReference{
+        "asset",
+        {},
+        productionGuid};
+    runner.Expect(
+        editEntity != nullptr &&
+            scene.AddComponent(
+                editEntity->guid,
+                std::string(kEditorMeshRendererComponentType),
+                &sourceReference),
+        "E2E target should begin as a Production Mesh-only Scene Entity");
+
+    SceneWorldObjectProvider provider;
+    provider.Bind(&scene, document);
+    EditorSelection selection;
+    selection.SetPrimary({
+        EditorDomainId::SceneEntity,
+        BuildEditorWorldStableId(
+            document,
+            provider.ProviderId(),
+            editEntity->guid),
+        0,
+        1,
+        editEntity->name});
+    EditorGeometryWorkspace workspace;
+    workspace.Bind(&provider, &selection, document);
+    EditorProductionMeshEditableSourceLoader sourceLoader{root};
+    EditorCreateEditableCopyToolBinding createBinding{
+        &workspace,
+        &registry,
+        &sourceLoader,
+        {}};
+    EditorGeometryToolBinding geometryBinding{&workspace, {}};
+    EditorMeshBakeToolBinding bakeBinding{
+        &workspace,
+        &bakePipeline,
+        {}};
+
+    EditorModeRegistry modes;
+    RegisterDefaultEditorModes(modes);
+    RegisterProductionGeometryTools(modes, &geometryBinding);
+    RegisterProductionCreateEditableCopyTools(
+        modes,
+        &createBinding);
+    RegisterProductionMeshBakeTools(modes, &bakeBinding);
+    runner.Expect(
+        modes.ToolsForMode("editor.mode.modeling").size() == 8,
+        "E2E Modeling Palette should contain Geometry, Editable Copy, and Bake tools");
+
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        {0.0f, 0.0f, 100.0f, 100.0f},
+        100,
+        100,
+        MakeIdentity4x4()});
+    EditorInteractiveToolEnvironment environment{};
+    environment.selection = &selection;
+    environment.coordinates = &coordinates;
+    environment.execution = &execution;
+    environment.activeDocumentKey = document.Key();
+    environment.documentEditRevision = scene.revision;
+    environment.documentGeneration = 1;
+    environment.selectionRevision = selection.Revision();
+    environment.canMutateAuthoring = true;
+    environment.viewportAvailable = true;
+    EditorTransactionStack transactions;
+    EditorToolManager manager{modes};
+    runner.Expect(
+        manager.Initialize("editor.mode.modeling", &error) &&
+            manager.StartTool(
+                "editor.tool.geometryCreateEditableCopy",
+                environment,
+                transactions,
+                &error),
+        "E2E should start Create Editable Copy from the Production Mesh GUID");
+    manager.RequestAccept();
+    manager.Tick(environment, {}, transactions);
+    workspace.RefreshFromScene();
+    const EditorSceneComponent* editComponent =
+        scene.FindComponent(
+            *scene.FindEntity(editEntity->guid),
+            kEditorMeshRendererComponentType);
+    EditorProductionMeshEditableSourceMetadataReadResult metadata =
+        editComponent != nullptr
+        ? ReadEditorProductionMeshEditableSourceMetadata(*editComponent)
+        : EditorProductionMeshEditableSourceMetadataReadResult{
+            EditorProductionMeshEditableSourceMetadataState::Invalid};
+    runner.Expect(
+        workspace.HasGeometry() &&
+            workspace.AuthoredMesh()->ContentHash() ==
+                sourceGeometryHash &&
+            metadata.HasIdentity() &&
+            metadata.identity.assetGuid == productionGuid &&
+            metadata.identity.sourceGeometryHash ==
+                sourceGeometryHash &&
+            transactions.UndoDepth() == 1,
+        "Create Editable Copy should retain the original Production GUID/hash in one Transaction");
+
+    const EditorGeometryMesh* authored = workspace.AuthoredMesh();
+    runner.Expect(
+        authored != nullptr && authored->triangles.size() >= 2,
+        "E2E editable copy should expose topology for Modeling");
+    workspace.SelectFace(authored->triangles[0].guid, false);
+    workspace.SelectFace(authored->triangles[1].guid, true);
+    environment.documentEditRevision = scene.revision;
+    runner.Expect(
+        manager.StartTool(
+            "editor.tool.geometryExtrudeFaces",
+            environment,
+            transactions,
+            &error) &&
+            manager.ActiveTool() != nullptr &&
+            manager.ActiveTool()->SetProperty(
+                "Distance",
+                "0.500",
+                error),
+        "E2E should create a changed Dynamic Geometry preview");
+    manager.RequestAccept();
+    manager.Tick(environment, {}, transactions);
+    workspace.RefreshFromScene();
+    const uint64_t editedGeometryHash =
+        workspace.AuthoredMesh() != nullptr
+        ? workspace.AuthoredMesh()->ContentHash()
+        : 0;
+    editComponent = scene.FindComponent(
+        *scene.FindEntity(editEntity->guid),
+        kEditorMeshRendererComponentType);
+    metadata =
+        editComponent != nullptr
+        ? ReadEditorProductionMeshEditableSourceMetadata(*editComponent)
+        : EditorProductionMeshEditableSourceMetadataReadResult{
+            EditorProductionMeshEditableSourceMetadataState::Invalid};
+    runner.Expect(
+        editedGeometryHash != 0 &&
+            editedGeometryHash != sourceGeometryHash &&
+            metadata.HasIdentity() &&
+            metadata.identity.sourceGeometryHash ==
+                sourceGeometryHash &&
+            transactions.UndoDepth() == 2,
+        "Modeling should change Geometry while retaining its pre-bake source identity");
+
+    environment.documentEditRevision = scene.revision;
+    runner.Expect(
+        manager.StartTool(
+            "editor.tool.meshBake",
+            environment,
+            transactions,
+            &error),
+        "E2E should prepare Bake from the edited Dynamic Geometry");
+    bool preparedAsRebuild = false;
+    if (manager.ActiveTool() != nullptr) {
+        const std::vector<EditorInteractiveToolProperty> properties =
+            manager.ActiveTool()->Properties();
+        const auto bakeType = std::find_if(
+            properties.begin(),
+            properties.end(),
+            [](const EditorInteractiveToolProperty& property) {
+                return property.name == "Bake Type";
+            });
+        preparedAsRebuild =
+            bakeType != properties.end() &&
+            bakeType->value == "Rebake";
+    }
+    runner.Expect(
+        preparedAsRebuild,
+        "Bake should consume editable-source GUID and rebuild the original Asset");
+    manager.RequestAccept();
+    manager.Tick(environment, {}, transactions);
+    workspace.RefreshFromScene();
+
+    const EditorAssetRecord* rebuiltRecord =
+        registry.FindByGuid(productionGuid);
+    const std::filesystem::path rebuiltSourcePath =
+        rebuiltRecord != nullptr
+        ? root / rebuiltRecord->sourcePath
+        : std::filesystem::path{};
+    EditorProductionMeshAssetDocument rebuiltDocument{};
+    std::string rebuiltSourceText;
+    if (!rebuiltSourcePath.empty()) {
+        const std::vector<unsigned char> bytes =
+            ReadBinaryFile(rebuiltSourcePath);
+        rebuiltSourceText.assign(bytes.begin(), bytes.end());
+    }
+    editComponent = scene.FindComponent(
+        *scene.FindEntity(editEntity->guid),
+        kEditorMeshRendererComponentType);
+    metadata =
+        editComponent != nullptr
+        ? ReadEditorProductionMeshEditableSourceMetadata(*editComponent)
+        : EditorProductionMeshEditableSourceMetadataReadResult{
+            EditorProductionMeshEditableSourceMetadataState::Invalid};
+    runner.Expect(
+        rebuiltRecord != nullptr &&
+            rebuiltRecord->guid == productionGuid &&
+            EditorProductionMeshAssetDocument::Deserialize(
+                rebuiltSourceText,
+                rebuiltDocument,
+                &error) &&
+            rebuiltDocument.sourceGeometryHash ==
+                editedGeometryHash &&
+            metadata.HasIdentity() &&
+            metadata.identity.assetGuid == productionGuid &&
+            metadata.identity.sourceGeometryHash ==
+                editedGeometryHash &&
+            transactions.UndoDepth() == 3,
+        "Bake should preserve GUID, update source Hash, and commit as one Transaction");
+
+    const EditorMeshAssetChangeSet rebuildChanges =
+        changeTracker.Poll(registry);
+    const EditorProductionMeshRuntimeReconcileResult rebuildResult =
+        reconciledCache.ReconcileAssets(
+            registry,
+            rebuildChanges);
+    const EditorProductionMeshRuntimeHandle rebuiltHandle =
+        reconciledCache.Handle(productionGuid);
+    runner.Expect(
+        rebuildChanges.changes.size() == 1 &&
+            rebuildChanges.changes.front().kind ==
+                EditorMeshAssetChangeKind::Modified &&
+            rebuildResult.updated == 1 &&
+            rebuiltHandle.Valid() &&
+            rebuiltHandle.generation > initialHandle.generation &&
+            reconciledCache.Resolve(initialHandle) == nullptr &&
+            reconciledCache.Resolve(rebuiltHandle) != nullptr &&
+            reconciledCache.Resolve(rebuiltHandle)->
+                mesh.sourceGeometryHash == editedGeometryHash &&
+            reconciledCache.ResolveForRenderer(
+                productionGuid,
+                0).Valid() &&
+            reconciledCache.ResolveForPhysics(
+                productionGuid).Valid(),
+        "Runtime Reconcile should atomically replace Renderer/Physics generation");
+
+    runner.Expect(
+        transactions.Undo(execution, &executionError),
+        "E2E Bake should be undoable without undoing the Modeling edit");
+    workspace.RefreshFromScene();
+    const EditorMeshAssetChangeSet undoChanges =
+        changeTracker.Poll(registry);
+    const EditorProductionMeshRuntimeReconcileResult undoReconcile =
+        reconciledCache.ReconcileAssets(registry, undoChanges);
+    const EditorProductionMeshRuntimeHandle undoHandle =
+        reconciledCache.Handle(productionGuid);
+    editComponent = scene.FindComponent(
+        *scene.FindEntity(editEntity->guid),
+        kEditorMeshRendererComponentType);
+    metadata =
+        editComponent != nullptr
+        ? ReadEditorProductionMeshEditableSourceMetadata(*editComponent)
+        : EditorProductionMeshEditableSourceMetadataReadResult{
+            EditorProductionMeshEditableSourceMetadataState::Invalid};
+    runner.Expect(
+        undoReconcile.updated == 1 &&
+            undoHandle.generation > rebuiltHandle.generation &&
+            reconciledCache.Resolve(rebuiltHandle) == nullptr &&
+            reconciledCache.Resolve(undoHandle) != nullptr &&
+            reconciledCache.Resolve(undoHandle)->
+                mesh.sourceGeometryHash == sourceGeometryHash &&
+            metadata.HasIdentity() &&
+            metadata.identity.sourceGeometryHash ==
+                sourceGeometryHash &&
+            workspace.AuthoredMesh()->ContentHash() ==
+                editedGeometryHash &&
+            transactions.UndoDepth() == 2 &&
+            transactions.RedoDepth() == 1,
+        "Bake Undo should restore old Asset/runtime generation and provenance while keeping edited Geometry");
+
+    runner.Expect(
+        transactions.Redo(execution, &executionError),
+        "E2E Bake should redo through the shared Transaction Stack");
+    workspace.RefreshFromScene();
+    const EditorMeshAssetChangeSet redoChanges =
+        changeTracker.Poll(registry);
+    const EditorProductionMeshRuntimeReconcileResult redoReconcile =
+        reconciledCache.ReconcileAssets(registry, redoChanges);
+    const EditorProductionMeshRuntimeHandle redoHandle =
+        reconciledCache.Handle(productionGuid);
+    runner.Expect(
+        redoReconcile.updated == 1 &&
+            redoHandle.generation > undoHandle.generation &&
+            reconciledCache.Resolve(undoHandle) == nullptr &&
+            reconciledCache.Resolve(redoHandle) != nullptr &&
+            reconciledCache.Resolve(redoHandle)->
+                mesh.sourceGeometryHash == editedGeometryHash &&
+            transactions.UndoDepth() == 3 &&
+            transactions.RedoDepth() == 0,
+        "Bake Redo should republish the edited Asset as a new runtime generation");
+
+    rebuiltRecord = registry.FindByGuid(productionGuid);
+    const std::filesystem::path cookedPath =
+        rebuiltRecord != nullptr
+        ? root / EditorCookedMeshPath(rebuiltRecord->sourcePath)
+        : std::filesystem::path{};
+    std::vector<unsigned char> validCookedBytes =
+        ReadBinaryFile(cookedPath);
+    std::vector<unsigned char> corruptCookedBytes =
+        validCookedBytes;
+    if (corruptCookedBytes.size() > 20) {
+        corruptCookedBytes[20] ^= 0x5au;
+    }
+    WriteBinaryFile(cookedPath, corruptCookedBytes);
+    std::error_code stampError;
+    const auto corruptWriteTime =
+        std::filesystem::last_write_time(cookedPath, stampError);
+    if (!stampError) {
+        std::filesystem::last_write_time(
+            cookedPath,
+            corruptWriteTime + std::chrono::seconds(2),
+            stampError);
+    }
+    const EditorMeshAssetChangeSet corruptChanges =
+        changeTracker.Poll(registry);
+    const EditorProductionMeshRuntimeReconcileResult corruptResult =
+        reconciledCache.ReconcileAssets(
+            registry,
+            corruptChanges);
+    runner.Expect(
+        corruptChanges.changes.size() == 1 &&
+            corruptResult.failed == 1 &&
+            !corruptResult.diagnostics.empty() &&
+            reconciledCache.Handle(productionGuid).generation ==
+                redoHandle.generation &&
+            reconciledCache.Resolve(redoHandle) != nullptr,
+        "corrupt hot reload should retain the last-known-good runtime generation");
+    WriteBinaryFile(cookedPath, validCookedBytes);
+
+    RemoveTreeIfPresent(root);
+}
+
+void TestProductionMeshEditableSourceMetadata(RegressionRunner& runner) {
+    EditorSceneComponentRegistry components =
+        CreateBuiltInEditorSceneComponentRegistry();
+    const EditorSceneComponentDescriptor* meshDescriptor =
+        components.Find(kEditorMeshRendererComponentType);
+    const EditorSceneComponentPropertyDescriptor* guidDescriptor =
+        meshDescriptor != nullptr
+        ? FindEditorSceneComponentPropertyDescriptor(
+            *meshDescriptor,
+            kEditorEditableSourceAssetGuidProperty)
+        : nullptr;
+    const EditorSceneComponentPropertyDescriptor* hashDescriptor =
+        meshDescriptor != nullptr
+        ? FindEditorSceneComponentPropertyDescriptor(
+            *meshDescriptor,
+            kEditorEditableSourceGeometryHashProperty)
+        : nullptr;
+    EditorSceneComponent defaultMesh =
+        components.CreateDefault(kEditorMeshRendererComponentType);
+    runner.Expect(
+        guidDescriptor != nullptr &&
+            hashDescriptor != nullptr &&
+            !guidDescriptor->required &&
+            !hashDescriptor->required &&
+            guidDescriptor->readOnly &&
+            hashDescriptor->readOnly &&
+            defaultMesh.properties.empty(),
+        "Mesh Renderer should register optional read-only editable-source "
+        "identity without materializing empty metadata on default Components");
+
+    const EditorProductionMeshEditableSourceIdentity identity{
+        GenerateEditorAssetGuid(),
+        ~uint64_t{0}};
+    std::string error;
+    runner.Expect(
+        WriteEditorProductionMeshEditableSourceMetadata(
+            defaultMesh,
+            identity,
+            &error),
+        "typed metadata write should accept the full non-zero uint64 hash "
+        "range; error='" + error + "'");
+    const auto written =
+        ReadEditorProductionMeshEditableSourceMetadata(defaultMesh);
+    runner.Expect(
+        written.HasIdentity() &&
+            written.identity.assetGuid == identity.assetGuid &&
+            written.identity.sourceGeometryHash ==
+                identity.sourceGeometryHash,
+        "typed metadata read should recover the exact source GUID/hash pair");
+
+    defaultMesh.properties.push_back({
+        std::string(kEditorEditableSourceAssetGuidProperty),
+        identity.assetGuid});
+    const auto duplicate =
+        ReadEditorProductionMeshEditableSourceMetadata(defaultMesh);
+    runner.Expect(
+        !duplicate.Succeeded() &&
+            duplicate.state ==
+                EditorProductionMeshEditableSourceMetadataState::Invalid,
+        "duplicate provenance properties should be rejected as ambiguous");
+    runner.Expect(
+        WriteEditorProductionMeshEditableSourceMetadata(
+            defaultMesh,
+            identity,
+            &error) &&
+            ReadEditorProductionMeshEditableSourceMetadata(defaultMesh).
+                HasIdentity(),
+        "typed metadata write should atomically normalize an existing "
+        "malformed pair");
+
+    EditorSceneComponent incomplete =
+        components.CreateDefault(kEditorMeshRendererComponentType);
+    incomplete.properties.push_back({
+        std::string(kEditorEditableSourceAssetGuidProperty),
+        identity.assetGuid});
+    runner.Expect(
+        !ReadEditorProductionMeshEditableSourceMetadata(incomplete).
+            Succeeded(),
+        "a GUID without its source Geometry hash should be invalid");
+
+    const EditorSceneComponent beforeInvalidWrite = defaultMesh;
+    const EditorProductionMeshEditableSourceIdentity invalidIdentity{
+        "auto-provisional",
+        0};
+    runner.Expect(
+        !WriteEditorProductionMeshEditableSourceMetadata(
+            defaultMesh,
+            invalidIdentity,
+            &error) &&
+            defaultMesh.properties.size() ==
+                beforeInvalidWrite.properties.size(),
+        "an invalid identity should be rejected without mutating the "
+        "Component");
+
+    EditorScene scene;
+    EditorSceneEntity* entity = scene.CreateEntity(
+        "Editable Copy",
+        {},
+        "81818181818181818181818181818181");
+    runner.Expect(
+        entity != nullptr &&
+            scene.AddComponent(
+                entity->guid,
+                std::string(kEditorMeshRendererComponentType),
+                nullptr,
+                &components),
+        "editable-source metadata Scene fixture should create a Mesh Renderer");
+    entity = scene.FindEntity("81818181818181818181818181818181");
+    EditorSceneComponent* sceneMesh =
+        entity != nullptr
+        ? scene.FindComponent(
+            *entity,
+            kEditorMeshRendererComponentType)
+        : nullptr;
+    EditorGeometryMesh sourceGeometry =
+        EditorGeometryMesh::MakeBox({1.0f, 1.0f, 1.0f});
+    const uint64_t sourceHash = sourceGeometry.ContentHash();
+    EditorGeometryMesh editedGeometry = sourceGeometry;
+    editedGeometry.vertices.front().position.x += 0.25f;
+    std::string editedGeometryText;
+    runner.Expect(
+        sceneMesh != nullptr &&
+            editedGeometry.Serialize(editedGeometryText, &error),
+        "editable-source metadata fixture Geometry should serialize");
+    if (sceneMesh != nullptr) {
+        sceneMesh->properties.push_back({
+            std::string(kEditorEditableGeometryProperty),
+            editedGeometryText});
+        WriteEditorProductionMeshEditableSourceMetadata(
+            *sceneMesh,
+            {identity.assetGuid, sourceHash},
+            &error);
+    }
+    runner.Expect(
+        editedGeometry.ContentHash() != sourceHash &&
+            scene.Validate(&components).Succeeded(),
+        "source hash should remain valid provenance after editable Geometry "
+        "changes instead of being compared with the current Geometry hash");
+
+    EditorDocumentContent encoded;
+    EditorScene decoded;
+    runner.Expect(
+        EditorSceneDocumentProvider::Encode(scene, &encoded, &error) &&
+            EditorSceneDocumentProvider::Decode(
+                encoded,
+                &decoded,
+                &error),
+        "Scene save/reload should round-trip editable-source metadata; "
+        "error='" + error + "'");
+    const EditorSceneEntity* decodedEntity =
+        decoded.FindEntity("81818181818181818181818181818181");
+    const EditorSceneComponent* decodedMesh =
+        decodedEntity != nullptr
+        ? decoded.FindComponent(
+            *decodedEntity,
+            kEditorMeshRendererComponentType)
+        : nullptr;
+    const auto decodedMetadata =
+        decodedMesh != nullptr
+        ? ReadEditorProductionMeshEditableSourceMetadata(*decodedMesh)
+        : EditorProductionMeshEditableSourceMetadataReadResult{
+            EditorProductionMeshEditableSourceMetadataState::Invalid};
+    runner.Expect(
+        decodedMetadata.HasIdentity() &&
+            decodedMetadata.identity.assetGuid == identity.assetGuid &&
+            decodedMetadata.identity.sourceGeometryHash == sourceHash &&
+            decoded.Validate(&components).Succeeded(),
+        "reloaded Scene should preserve and validate the exact Production "
+        "Mesh editing-source identity");
+
+    if (sceneMesh != nullptr) {
+        sceneMesh->properties.erase(
+            std::remove_if(
+                sceneMesh->properties.begin(),
+                sceneMesh->properties.end(),
+                [](const EditorSceneProperty& property) {
+                    return property.name ==
+                        kEditorEditableGeometryProperty;
+                }),
+            sceneMesh->properties.end());
+    }
+    runner.Expect(
+        !scene.Validate(&components).Succeeded(),
+        "source identity without an editable Geometry payload should fail "
+        "Scene validation");
+    runner.Expect(
+        sceneMesh != nullptr &&
+            ClearEditorProductionMeshEditableSourceMetadata(
+                *sceneMesh,
+                &error) &&
+            !ReadEditorProductionMeshEditableSourceMetadata(*sceneMesh).
+                HasIdentity(),
+        "metadata clear should remove the GUID/hash pair together");
+}
+
+void TestObjProductionImportBridge(RegressionRunner& runner) {
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} /
+        "editor" /
+        "tests" /
+        "obj_production_import";
+    RemoveTreeIfPresent(root);
+    const std::filesystem::path sourceRelative =
+        std::filesystem::path{"Resources"} /
+        "Source" /
+        "bridge_cube.obj";
+    const std::filesystem::path sourceAbsolute = root / sourceRelative;
+    const std::string cubeObj =
+        "o BridgeCube\n"
+        "v -1 -1 -1\n"
+        "v 1 -1 -1\n"
+        "v 1 1 -1\n"
+        "v -1 1 -1\n"
+        "v -1 -1 1\n"
+        "v 1 -1 1\n"
+        "v 1 1 1\n"
+        "v -1 1 1\n"
+        "f 1 3 2\n"
+        "f 1 4 3\n"
+        "f 5 6 7\n"
+        "f 5 7 8\n"
+        "f 1 2 6\n"
+        "f 1 6 5\n"
+        "f 4 8 7\n"
+        "f 4 7 3\n"
+        "f 1 5 8\n"
+        "f 1 8 4\n"
+        "f 2 3 7\n"
+        "f 2 7 6\n";
+    WriteTextFile(sourceAbsolute, cubeObj);
+
+    EditorAssetRegistry registry;
+    EditorAssetRecord source{};
+    source.kind = EditorAssetKind::Mesh;
+    source.id = "bridge_cube";
+    source.guid = "obj-production-source-guid";
+    source.displayName = "Bridge Cube";
+    source.sourcePath = sourceRelative.generic_string();
+    source.logicalPath = source.sourcePath;
+    source.metadataPath = source.sourcePath + ".meta";
+    source.referenceable = true;
+    source.hasMetadata = true;
+    source.provisionalGuid = false;
+    runner.Expect(
+        registry.Register(source),
+        "OBJ Production Import test source should register with durable identity");
+
+    EditorProductionMeshRuntimeCache runtimeCache(root);
+    EditorObjProductionImportBridge bridge(registry, &runtimeCache, root);
+    EditorObjProductionImportRequest request{};
+    request.sourceAssetGuid = source.guid;
+    request.outputAssetName = "bridge_cube_production";
+    request.settings.lodCount = 3;
+    request.settings.collisionMode = EditorMeshCollisionBuildMode::Box;
+    const EditorObjProductionImportResult imported =
+        bridge.ImportAndBake(request);
+    const EditorAssetRecord* production =
+        registry.Find(EditorAssetKind::Mesh, request.outputAssetName);
+    const std::filesystem::path productionSource =
+        production != nullptr
+        ? root / production->sourcePath
+        : std::filesystem::path{};
+    const std::filesystem::path productionCooked =
+        production != nullptr
+        ? root / EditorCookedMeshPath(production->sourcePath)
+        : std::filesystem::path{};
+    const std::filesystem::path productionCollision =
+        production != nullptr
+        ? root / EditorCookedCollisionPath(production->sourcePath)
+        : std::filesystem::path{};
+    const bool initialImportValid =
+        imported.succeeded &&
+            !imported.reimported &&
+            imported.vertexCount >= 8 &&
+            imported.triangleCount == 12 &&
+            imported.lodCount == 3 &&
+            production != nullptr &&
+            IsDurableEditorAssetGuid(production->guid) &&
+            std::filesystem::path(production->sourcePath).extension() ==
+                ".mesh" &&
+            std::filesystem::exists(productionSource) &&
+            std::filesystem::exists(productionCooked) &&
+            std::filesystem::exists(productionCollision) &&
+            std::filesystem::exists(root / production->metadataPath);
+    runner.Expect(
+        initialImportValid,
+        "selected OBJ should atomically publish durable Production source, LOD, "
+        "Collision, and metadata artifacts; result='" + imported.message +
+            "' vertices=" + std::to_string(imported.vertexCount) +
+            " triangles=" + std::to_string(imported.triangleCount) +
+             " lods=" + std::to_string(imported.lodCount));
+    runner.Expect(
+        production != nullptr &&
+            EditorObjProductionImportBridge::IsProductionForSource(
+                *production,
+                source,
+                root),
+        "Placement should be able to resolve the generated Production Mesh back to its source Mesh");
+
+    EditorAssetRecord supportedSource = source;
+    bool supportedSourceExtensions = true;
+    for (const char* extension : {".obj", ".gltf", ".glb", ".fbx"}) {
+        supportedSource.sourcePath =
+            (std::filesystem::path{"Resources"} / "Source" /
+             (std::string{"supported"} + extension))
+                .generic_string();
+        supportedSourceExtensions = supportedSourceExtensions &&
+            EditorObjProductionImportBridge::CanImport(supportedSource);
+    }
+    runner.Expect(
+        supportedSourceExtensions,
+        "Placement auto-import should accept supported OBJ, glTF, GLB, and FBX source Mesh formats");
+    const std::string productionGuid =
+        production != nullptr ? production->guid : std::string{};
+    const EditorProductionMeshRuntimeHandle initialHandle =
+        runtimeCache.Handle(productionGuid);
+    runner.Expect(
+        initialHandle.Valid() &&
+            runtimeCache.ResolveForRenderer(productionGuid, 0).Valid() &&
+            runtimeCache.ResolveForPhysics(productionGuid).Valid(),
+        "OBJ Production Import should publish immediately consumable Renderer and Physics views");
+
+    WriteTextFile(
+        sourceAbsolute,
+        cubeObj + "v 0 2 0\nf 4 8 9\nf 8 7 9\nf 7 3 9\nf 3 4 9\n");
+    const EditorObjProductionImportResult reimported =
+        bridge.ImportAndBake(request);
+    const EditorAssetRecord* productionAfter =
+        registry.Find(EditorAssetKind::Mesh, request.outputAssetName);
+    const EditorProductionMeshRuntimeHandle reimportedHandle =
+        runtimeCache.Handle(productionGuid);
+    runner.Expect(
+        reimported.succeeded &&
+            reimported.reimported &&
+            productionAfter != nullptr &&
+            productionAfter->guid == productionGuid &&
+            reimported.triangleCount == 16 &&
+            reimportedHandle.Valid() &&
+            reimportedHandle.generation > initialHandle.generation &&
+            runtimeCache.Resolve(initialHandle) == nullptr &&
+            runtimeCache.Resolve(reimportedHandle) != nullptr,
+        "OBJ Reimport should preserve durable GUID while atomically replacing the runtime generation");
+
+    EditorAssetRegistry compatibilityRegistry;
+    EditorAssetRecord durableBall{};
+    durableBall.kind = EditorAssetKind::Mesh;
+    durableBall.id = "ball";
+    durableBall.guid = "durable-ball-guid";
+    durableBall.sourcePath = "Resources/ball/ball.obj";
+    durableBall.logicalPath = durableBall.sourcePath;
+    durableBall.metadataPath = durableBall.sourcePath + ".meta";
+    durableBall.referenceable = true;
+    durableBall.hasMetadata = true;
+    compatibilityRegistry.Register(durableBall);
+    CourseMeshAssetAdapter{}.RegisterAssets(compatibilityRegistry);
+    const EditorAssetRecord* preservedBall =
+        compatibilityRegistry.Find(EditorAssetKind::Mesh, "ball");
+    runner.Expect(
+        preservedBall != nullptr &&
+            preservedBall->guid == durableBall.guid &&
+            preservedBall->hasMetadata &&
+            !preservedBall->provisionalGuid,
+        "Course compatibility Asset registration must preserve Folder Indexer durable metadata");
+
     RemoveTreeIfPresent(root);
 }
 
@@ -9146,6 +15756,99 @@ void TestPanelLayoutGeometry(RegressionRunner& runner) {
     runner.Expect(
         layout.BottomDockRect().y >= layout.ViewportRect().y + layout.ViewportRect().height,
         "bottom dock should be below viewport");
+    const EditorPanelRect normalContentBrowser =
+        layout.ContentBrowserPresentationRect(false);
+    const EditorPanelRect maximizedContentBrowser =
+        layout.ContentBrowserPresentationRect(true);
+    runner.Expect(
+        normalContentBrowser.x == layout.ContentBrowserRect().x &&
+            normalContentBrowser.y == layout.ContentBrowserRect().y &&
+            normalContentBrowser.width == layout.ContentBrowserRect().width &&
+            normalContentBrowser.height == layout.ContentBrowserRect().height,
+        "restored Content Browser presentation should use its docked panel rect");
+    runner.Expect(
+        maximizedContentBrowser.x == layout.ViewportRect().x &&
+            maximizedContentBrowser.y == layout.ViewportRect().y &&
+            maximizedContentBrowser.width == layout.BottomDockRect().width &&
+            maximizedContentBrowser.height ==
+                layout.ViewportRect().height + layout.BottomDockRect().height,
+        "maximized Content Browser should cover the central editor workspace");
+    runner.Expect(
+        ResolveEditorAssetViewHeight(0.0f) == 180.0f &&
+            ResolveEditorAssetViewHeight(72.0f) == 180.0f,
+        "Content Browser should preserve a 180 px minimum Asset View");
+    runner.Expect(
+        ResolveEditorAssetViewHeight(420.0f) == 420.0f,
+        "Content Browser should allow Asset View to consume additional available height");
+
+    EditorContentDrawerService contentDrawer;
+    runner.Expect(
+        !contentDrawer.IsVisible() &&
+            contentDrawer.State() == EditorContentDrawerState::Closed,
+        "Content Drawer should start closed");
+    runner.Expect(
+        contentDrawer.Open() && contentDrawer.ConsumeFocusRequest(),
+        "opening Content Drawer should request keyboard focus");
+    contentDrawer.Tick(0.16f);
+    const EditorPanelRect drawerRect =
+        contentDrawer.ResolvePresentationRect(maximizedContentBrowser);
+    runner.Expect(
+        contentDrawer.State() == EditorContentDrawerState::Open &&
+            drawerRect.Valid() &&
+            drawerRect.width == maximizedContentBrowser.width &&
+            drawerRect.height >= 300.0f &&
+            std::abs(
+                drawerRect.y + drawerRect.height -
+                maximizedContentBrowser.y -
+                maximizedContentBrowser.height) < 0.001f,
+        "open Content Drawer should overlay the bottom of the central workspace");
+    runner.Expect(
+        contentDrawer.Contains(
+            drawerRect,
+            drawerRect.x + 1.0f,
+            drawerRect.y + 1.0f) &&
+            contentDrawer.BlocksViewportPointer(
+                drawerRect,
+                drawerRect.x + 1.0f,
+                drawerRect.y + 1.0f,
+                false),
+        "Content Drawer should own pointer input inside its overlay");
+    runner.Expect(
+        contentDrawer.SetPinned(true) &&
+            !contentDrawer.HandleOutsidePointerPress(
+                drawerRect,
+                drawerRect.x - 1.0f,
+                drawerRect.y - 1.0f,
+                true,
+                false) &&
+            !contentDrawer.BlocksViewportPointer(
+                drawerRect,
+                drawerRect.x - 1.0f,
+                drawerRect.y - 1.0f,
+                true),
+        "pinned Content Drawer should allow interaction outside its overlay");
+    runner.Expect(
+        contentDrawer.SetPinned(false) &&
+            contentDrawer.HandleOutsidePointerPress(
+                drawerRect,
+                drawerRect.x - 1.0f,
+                drawerRect.y - 1.0f,
+                true,
+                false) &&
+            contentDrawer.State() == EditorContentDrawerState::Closing,
+        "transient Content Drawer should close on an outside pointer press");
+    contentDrawer.Tick(0.16f);
+    runner.Expect(
+        !contentDrawer.IsVisible() &&
+            contentDrawer.State() == EditorContentDrawerState::Closed,
+        "Content Drawer close transition should reach the closed state");
+    contentDrawer.Open();
+    contentDrawer.Tick(0.16f);
+    runner.Expect(
+        contentDrawer.DockInLayout() &&
+            !contentDrawer.IsVisible() &&
+            contentDrawer.Openness() == 0.0f,
+        "Dock in Layout should close Content Drawer immediately");
 
     const EditorPanelRect squarePanel{100.0f, 50.0f, 800.0f, 800.0f};
     const EditorPanelRect widescreenSurface = ResolveEditorViewportRenderSurfaceRect(
@@ -9156,6 +15859,71 @@ void TestPanelLayoutGeometry(RegressionRunner& runner) {
             std::abs(widescreenSurface.width - 800.0f) < 0.001f &&
             std::abs(widescreenSurface.height - 450.0f) < 0.001f,
         "viewport input coordinates should use the fitted render surface instead of letterbox bars");
+}
+
+void TestEditorFramePacingAndViewportRealtime(RegressionRunner& runner) {
+    EditorFramePacingSettings settings{};
+    runner.Expect(
+        EditorFramePacingService::Resolve(
+            EditorFramePacingInput{
+                false, false, true, true, false, true},
+            settings).mode == EditorFramePacingMode::PlaySession,
+        "Play/Sim should select the interactive 60 FPS pacing tier");
+    runner.Expect(
+        EditorFramePacingService::Resolve(
+            EditorFramePacingInput{
+                false, false, true, false, false, false},
+            settings).mode == EditorFramePacingMode::IdleEditor,
+        "a stopped non-realtime Viewport should select the idle pacing tier");
+    runner.Expect(
+        EditorFramePacingService::Resolve(
+            EditorFramePacingInput{
+                false, false, false, true, true, true},
+            settings).mode == EditorFramePacingMode::Background,
+        "background throttling should take precedence over active editor work");
+    runner.Expect(
+        EditorFramePacingService::Resolve(
+            EditorFramePacingInput{
+                false, true, false, true, true, true},
+            settings).mode == EditorFramePacingMode::Minimized,
+        "minimized throttling should take precedence over background throttling");
+    const EditorFramePacingDecision profiling =
+        EditorFramePacingService::Resolve(
+            EditorFramePacingInput{
+                true, true, false, true, true, true},
+            settings);
+    runner.Expect(
+        profiling.mode == EditorFramePacingMode::ProfilingUncapped &&
+            profiling.targetFps == 0,
+        "explicit profiling mode should be the only uncapped editor tier");
+
+    EditorViewportRealtimePolicy realtime;
+    runner.Expect(
+        realtime.Evaluate({}).continuous,
+        "Viewport Realtime should start enabled");
+    runner.Expect(
+        realtime.SetRealtimeEnabled(false) &&
+            !realtime.Evaluate({}).continuous &&
+            realtime.RedrawRequested(),
+        "disabling Realtime should stop continuous redraw and request one final redraw");
+    realtime.AcknowledgeViewportRendered();
+    runner.Expect(
+        !realtime.RedrawRequested(),
+        "render acknowledgement should consume the one-shot redraw request");
+    runner.Expect(
+        realtime.Evaluate(
+            EditorViewportRealtimeInput{true, false, false}).continuous &&
+            realtime.Evaluate(
+                EditorViewportRealtimeInput{false, true, false}).continuous &&
+            realtime.Evaluate(
+                EditorViewportRealtimeInput{false, false, true}).continuous,
+        "Play/Sim, Viewport capture, and interactive tools should override Realtime Off");
+    runner.Expect(
+        realtime.ToggleRealtime() &&
+            realtime.RealtimeEnabled() &&
+            realtime.Evaluate({}).reason ==
+                EditorViewportRealtimeReason::UserEnabled,
+        "Realtime toggle should restore continuous Viewport updates");
 }
 
 void TestTerrainChunkPresentationContinuityPolicy(RegressionRunner& runner) {
@@ -9277,6 +16045,27 @@ void TestViewportInputOwnershipRouting(RegressionRunner& runner) {
             interaction.State().viewportPrimaryDown &&
             interaction.HasPrimaryCapture(),
         "viewport-owned ImGui image input should route exclusively to the active interactive tool");
+    EditorSelection lockedSelection;
+    const EditorObjectHandle lockedTarget{
+        EditorDomainId::SceneEntity, "scene:locked-modeling-target", 0, 1, "Modeling Target"};
+    lockedSelection.SetPrimary(lockedTarget);
+    const uint32_t lockedRevision = lockedSelection.Revision();
+    std::vector<EditorViewportPickResult> competingPicks{
+        MakeEditorViewportPickResult(
+            EditorViewportPickSource::CourseViewport,
+            EditorDomainId::CourseTerrainPlacement,
+            "course-terrain",
+            4,
+            1,
+            "Competing Course Pick")};
+    EditorViewportSelectionBridge selectionBridge;
+    selectionBridge.Sync(EditorViewportSelectionBridgeInput{
+        &lockedSelection, &interaction, &competingPicks});
+    runner.Expect(
+        lockedSelection.Revision() == lockedRevision &&
+            lockedSelection.Primary() != nullptr &&
+            lockedSelection.Primary()->SameObject(lockedTarget),
+        "interactive viewport tools should lock top-level selection against competing pick sync");
 
     input.mouseX = 950.0f;
     input.primaryPressed = false;
@@ -10815,7 +17604,33 @@ int RunEditorCoreRegressionTests() {
         {"generic document model", [&]() { TestGenericDocumentModel(runner); }},
         {"editor world model", [&]() { TestEditorWorldModel(runner); }},
         {"world outliner mutations", [&]() { TestWorldOutlinerMutations(runner); }},
+        {"blender level json loader", [&]() { TestBlenderLevelJsonLoader(runner); }},
+        {"blender scene import reimport", [&]() { TestBlenderSceneImportReimport(runner); }},
+        {"blender scene import editor integration", [&]() {
+             TestBlenderSceneImportEditorIntegration(runner);
+         }},
+        {"gameplay spawn runtime service", [&]() {
+             TestGameplaySpawnRuntimeService(runner);
+         }},
         {"scene entity component foundation", [&]() { TestSceneEntityComponentFoundation(runner); }},
+        {"scene component registry and runtime instantiation", [&]() {
+             TestSceneComponentRegistryAndRuntimeInstantiation(runner);
+         }},
+        {"spline route component and evaluation", [&]() {
+             TestSplineRouteComponentAndEvaluation(runner);
+         }},
+        {"gimmick definition registry and component", [&]() {
+             TestGimmickDefinitionRegistryAndComponent(runner);
+         }},
+        {"gimmick event sequence e2e acceptance", [&]() {
+             TestGimmickEventSequenceAcceptance(runner);
+         }},
+        {"typed scene entity reference", [&]() {
+             TestTypedSceneEntityReference(runner);
+         }},
+        {"spline route tool and patrol runtime", [&]() {
+             TestSplineRouteToolAndPatrolRuntime(runner);
+         }},
         {"production transform gizmo", [&]() { TestProductionTransformGizmo(runner); }},
         {"viewport overlay layer system", [&]() { TestViewportOverlayLayerSystem(runner); }},
         {"editor mode interactive tool framework", [&]() { TestEditorModeInteractiveToolFramework(runner); }},
@@ -10826,7 +17641,23 @@ int RunEditorCoreRegressionTests() {
         {"editor notification toast lifecycle", [&]() { TestEditorNotificationToastLifecycle(runner); }},
         {"production modeling geometry framework", [&]() { TestProductionModelingGeometryFramework(runner); }},
         {"production mesh bake asset pipeline", [&]() { TestProductionMeshBakeAssetPipeline(runner); }},
+        {"production mesh editable source loader", [&]() {
+             TestProductionMeshEditableSourceLoader(runner);
+         }},
+        {"create editable copy interactive tool", [&]() {
+             TestCreateEditableCopyInteractiveTool(runner);
+         }},
+        {"editable copy bake runtime reconcile e2e", [&]() {
+             TestCreateEditableCopyBakeRuntimeReconcileE2E(runner);
+         }},
+        {"production mesh editable source metadata", [&]() {
+             TestProductionMeshEditableSourceMetadata(runner);
+         }},
+        {"obj production import bake bridge", [&]() { TestObjProductionImportBridge(runner); }},
         {"panel layout geometry", [&]() { TestPanelLayoutGeometry(runner); }},
+        {"editor frame pacing and viewport realtime", [&]() {
+             TestEditorFramePacingAndViewportRealtime(runner);
+         }},
         {"viewport input ownership routing", [&]() { TestViewportInputOwnershipRouting(runner); }},
         {"editor viewport fly camera", [&]() { TestEditorViewportFlyCamera(runner); }},
         {"bone socket foundation", [&]() { TestBoneSocketFoundation(runner); }},

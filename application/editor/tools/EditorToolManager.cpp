@@ -1,11 +1,38 @@
 #include "EditorToolManager.h"
 
+#include "../../AppLogFile.h"
 #include "../EditorTransactionStack.h"
 #include "../core/EditorError.h"
 
+#include <fstream>
+#include <sstream>
 #include <utility>
 
 namespace editor {
+namespace {
+
+void TraceInteractiveToolEvent(
+    std::string_view event,
+    std::string_view toolId,
+    std::string_view message,
+    const EditorInteractiveToolEnvironment* environment = nullptr) {
+    std::ofstream log = app::OpenRotatingLog("logs/editor_interactive_tools.log");
+    if (!log) return;
+    log << event << " tool=" << toolId;
+    if (environment != nullptr) {
+        log << " document=" << environment->activeDocumentKey
+            << " viewport=" << (environment->viewportAvailable ? "ready" : "unavailable")
+            << " authoring=" << (environment->canMutateAuthoring ? "open" : "locked")
+            << " play=" << (environment->playSessionActive ? "active" : "stopped")
+            << " editRevision=" << environment->documentEditRevision
+            << " generation=" << environment->documentGeneration
+            << " selectionRevision=" << environment->selectionRevision;
+    }
+    if (!message.empty()) log << " message=" << message;
+    log << '\n';
+}
+
+} // namespace
 
 const char* ToString(EditorInteractiveToolTransactionPolicy policy) {
     switch (policy) {
@@ -110,12 +137,15 @@ bool EditorToolManager::StartTool(
     const EditorInteractiveToolDescriptor* descriptor = registry_.FindTool(toolId);
     if (descriptor == nullptr) {
         if (outError != nullptr) *outError = "Interactive tool is not registered.";
+        TraceInteractiveToolEvent(
+            "start-rejected", toolId, "Interactive tool is not registered.", &environment);
         return false;
     }
     std::string error;
     if (!ValidateActivation(*descriptor, environment, error)) {
         lastMessage_ = error;
         if (outError != nullptr) *outError = error;
+        TraceInteractiveToolEvent("start-rejected", toolId, error, &environment);
         return false;
     }
     CancelActiveTool(EditorInteractiveToolEndReason::CancelledByUser);
@@ -124,12 +154,14 @@ bool EditorToolManager::StartTool(
         error = "Interactive tool builder returned no tool instance.";
         lastMessage_ = error;
         if (outError != nullptr) *outError = error;
+        TraceInteractiveToolEvent("start-rejected", toolId, error, &environment);
         return false;
     }
     if (!tool->Activate(environment, error)) {
         if (error.empty()) error = "Interactive tool rejected activation.";
         lastMessage_ = error;
         if (outError != nullptr) *outError = error;
+        TraceInteractiveToolEvent("start-rejected", toolId, error, &environment);
         return false;
     }
     activeToolId_ = descriptor->id;
@@ -138,6 +170,11 @@ bool EditorToolManager::StartTool(
     activationDocumentEditRevision_ = environment.documentEditRevision;
     activationDocumentGeneration_ = environment.documentGeneration;
     activationSelectionRevision_ = environment.selectionRevision;
+    activationHadPrimarySelection_ =
+        environment.selection != nullptr && environment.selection->Primary() != nullptr;
+    activationPrimarySelection_ = activationHadPrimarySelection_
+        ? *environment.selection->Primary()
+        : EditorObjectHandle{};
     activationTransactionRevision_ = transactions.Revision();
     activationRegistryRevision_ = registry_.Revision();
     activationUndoDepth_ = transactions.UndoDepth();
@@ -145,6 +182,7 @@ bool EditorToolManager::StartTool(
     cancelRequested_ = false;
     ++activationSerial_;
     lastMessage_ = descriptor->label + " preview started.";
+    TraceInteractiveToolEvent("start-succeeded", toolId, lastMessage_, &environment);
     return true;
 }
 
@@ -170,7 +208,18 @@ EditorInteractiveToolEndReason EditorToolManager::BoundaryViolation(
     }
     if (descriptor.cancelOnSelectionChange &&
         environment.selectionRevision != activationSelectionRevision_) {
-        return EditorInteractiveToolEndReason::SelectionChanged;
+        if (descriptor.selectionBoundary ==
+            EditorInteractiveToolSelectionBoundary::AnySelectionChange) {
+            return EditorInteractiveToolEndReason::SelectionChanged;
+        }
+        const EditorObjectHandle* currentPrimary =
+            environment.selection != nullptr ? environment.selection->Primary() : nullptr;
+        const bool hasCurrentPrimary = currentPrimary != nullptr;
+        if (activationHadPrimarySelection_ != hasCurrentPrimary ||
+            (activationHadPrimarySelection_ &&
+             !activationPrimarySelection_.SameObject(*currentPrimary))) {
+            return EditorInteractiveToolEndReason::SelectionChanged;
+        }
     }
     if (descriptor.requiresViewport && !environment.viewportAvailable) {
         return EditorInteractiveToolEndReason::ViewportUnavailable;
@@ -315,12 +364,19 @@ bool EditorToolManager::CancelActiveTool(EditorInteractiveToolEndReason reason) 
 void EditorToolManager::Finish(
     EditorInteractiveToolEndReason reason,
     std::string message) {
+    const std::string finishedToolId = activeToolId_;
     activeTool_.reset();
     activeToolId_.clear();
+    activationPrimarySelection_ = {};
+    activationHadPrimarySelection_ = false;
     acceptRequested_ = false;
     cancelRequested_ = false;
     lastEndReason_ = reason;
     lastMessage_ = std::move(message);
+    TraceInteractiveToolEvent(
+        "finished",
+        finishedToolId,
+        std::string(ToString(reason)) + ": " + lastMessage_);
 }
 
 const EditorModeDescriptor* EditorToolManager::ActiveMode() const {

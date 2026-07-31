@@ -82,6 +82,9 @@ struct EditorInteractiveToolProperty {
     float maximum = 0.0f;
     std::vector<std::string> choices;
     uint32_t previewColor = 0;
+    // Optional serialized values corresponding one-to-one with choices.
+    // Empty preserves the legacy numeric-index contract.
+    std::vector<std::string> choiceValues;
 };
 
 struct EditorInteractiveToolCommit {

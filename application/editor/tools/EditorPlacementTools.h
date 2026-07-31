@@ -3,6 +3,7 @@
 #include "EditorModeRegistry.h"
 
 #include <functional>
+#include <string_view>
 
 namespace editor {
 
@@ -11,6 +12,7 @@ class EditorAssetSelection;
 class EditorSelection;
 class EditorWorldModel;
 class EditorWorldMutationService;
+class EditorProductionMeshRuntimeCache;
 class SceneWorldObjectProvider;
 struct EditorWorldMutationResult;
 
@@ -22,6 +24,8 @@ struct EditorPlacementToolServices {
     EditorAssetRegistry* assets = nullptr;
     EditorAssetSelection* assetSelection = nullptr;
     std::function<void(const EditorWorldMutationResult&)> onCommitted;
+    EditorProductionMeshRuntimeCache* productionMeshCache = nullptr;
+    std::function<void(std::string_view)> onAssetPrepared;
 };
 
 void RegisterProductionPlacementTools(

@@ -49,6 +49,7 @@ public:
     const EditorPanelRect& ContentBrowserRect() const { return contentBrowserRect_; }
     const EditorPanelRect& DiagnosticsRect() const { return diagnosticsRect_; }
     const EditorPanelRect& ViewportRect() const { return viewportRect_; }
+    EditorPanelRect ContentBrowserPresentationRect(bool maximized) const;
     uint32_t Revision() const { return revision_; }
 
 private:

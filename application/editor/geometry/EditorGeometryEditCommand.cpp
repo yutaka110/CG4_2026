@@ -1,6 +1,7 @@
 #include "EditorGeometryEditCommand.h"
 
 #include "../core/EditorExecutionContext.h"
+#include "../mesh/EditorProductionMeshEditableSourceMetadata.h"
 #include "../scene/EditorScene.h"
 
 #include <algorithm>
@@ -41,7 +42,13 @@ void ApplyProperty(
 std::size_t StateBytes(const EditorGeometryPropertyState& state) {
     return sizeof(state) +
         (state.geometry.has_value() ? state.geometry->capacity() : 0) +
-        (state.collision.has_value() ? state.collision->capacity() : 0);
+        (state.collision.has_value() ? state.collision->capacity() : 0) +
+        (state.sourceAssetGuid.has_value()
+            ? state.sourceAssetGuid->capacity()
+            : 0) +
+        (state.sourceGeometryHash.has_value()
+            ? state.sourceGeometryHash->capacity()
+            : 0);
 }
 
 } // namespace
@@ -96,12 +103,47 @@ EditorUndoResult EditorGeometryExecutionService::ApplyGeometryState(
                 "Geometry command contains invalid generated collision data.");
         }
     }
+    if (state.sourceAssetGuid.has_value() !=
+        state.sourceGeometryHash.has_value()) {
+        return EditorUndoResult::Failure(
+            EditorErrorCode::InvalidArgument,
+            "Editable source GUID and Geometry hash must be applied as one pair.");
+    }
+    EditorSceneComponent replacement = *component;
+    ApplyProperty(
+        replacement,
+        kEditorEditableGeometryProperty,
+        state.geometry);
+    ApplyProperty(
+        replacement,
+        kEditorGeneratedCollisionProperty,
+        state.collision);
+    ApplyProperty(
+        replacement,
+        kEditorEditableSourceAssetGuidProperty,
+        state.sourceAssetGuid);
+    ApplyProperty(
+        replacement,
+        kEditorEditableSourceGeometryHashProperty,
+        state.sourceGeometryHash);
+    const EditorProductionMeshEditableSourceMetadataReadResult metadata =
+        ReadEditorProductionMeshEditableSourceMetadata(replacement);
+    if (!metadata.Succeeded()) {
+        return EditorUndoResult::Failure(
+            EditorErrorCode::InvalidArgument,
+            metadata.message.empty()
+                ? "Editable source metadata is invalid."
+                : metadata.message);
+    }
     const bool changed =
         PropertyValue(*component, kEditorEditableGeometryProperty) != state.geometry ||
-        PropertyValue(*component, kEditorGeneratedCollisionProperty) != state.collision;
+        PropertyValue(*component, kEditorGeneratedCollisionProperty) != state.collision ||
+        PropertyValue(*component, kEditorEditableSourceAssetGuidProperty) !=
+            state.sourceAssetGuid ||
+        PropertyValue(*component, kEditorEditableSourceGeometryHashProperty) !=
+            state.sourceGeometryHash;
     if (!changed) return EditorUndoResult::Success("Geometry state is already current.");
-    ApplyProperty(*component, kEditorEditableGeometryProperty, state.geometry);
-    ApplyProperty(*component, kEditorGeneratedCollisionProperty, state.collision);
+    component->properties.swap(replacement.properties);
     scene_->Touch();
     if (onChanged_) onChanged_(entityGuid);
     return EditorUndoResult::Success("Editable Geometry state applied.");

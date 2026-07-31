@@ -114,11 +114,14 @@ void DrawEditorDocumentTabs(EditorContext& context) {
                 if (record.conflict != EditorDocumentConflictState::None) tabLabel += "!";
                 tabLabel += "##" + record.id.Key();
                 bool keepOpen = true;
-                const ImGuiTabItemFlags tabFlags =
-                    documents.Active() != nullptr && documents.Active()->id == record.id
-                    ? ImGuiTabItemFlags_SetSelected
-                    : ImGuiTabItemFlags_None;
-                if (ImGui::BeginTabItem(tabLabel.c_str(), &keepOpen, tabFlags)) {
+                // The ImGui tab bar owns the visible selection after initial
+                // creation. Forcing SetSelected from the document manager on
+                // every frame prevents a user click from ever selecting a
+                // different open document.
+                if (ImGui::BeginTabItem(
+                        tabLabel.c_str(),
+                        &keepOpen,
+                        ImGuiTabItemFlags_None)) {
                     documents.SetActive(record.id);
                     ImGui::TextDisabled("%s", record.id.type.c_str());
                     DrawDocumentTooltip(record);

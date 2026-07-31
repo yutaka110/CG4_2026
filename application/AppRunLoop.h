@@ -44,7 +44,21 @@
 #include "editor/EditorPropertyEditSession.h"
 #include "editor/EditorTransactionStack.h"
 #include "editor/EditorViewportCameraController.h"
+#include "editor/EditorPlaySessionState.h"
 #include "editor/EditorViewportAuthoringInputGuard.h"
+#include "editor/scene/EditorGameplaySpawnRuntimeFactory.h"
+#include "editor/scene/EditorBuiltInRuntimeFactoryRegistration.h"
+#include "editor/scene/EditorGimmickRuntimeFactory.h"
+#include "editor/scene/EditorGimmickPresentationPhysicsAdapter.h"
+#include "editor/scene/EditorGimmickRuntimeEventRouter.h"
+#include "editor/scene/EditorGimmickRuntimeEventBindingRegistry.h"
+#include "editor/scene/EditorGimmickRuntimeDelayedEventScheduler.h"
+#include "editor/scene/EditorGimmickRuntimeEventSequenceRegistry.h"
+#include "editor/scene/EditorGimmickRuntimeInteractionSystem.h"
+#include "editor/scene/EditorGimmickRuntimeTriggerSystem.h"
+#include "editor/scene/EditorMeshRendererRuntimeFactory.h"
+#include "editor/scene/EditorPatrolRuntimeFactory.h"
+#include "editor/scene/EditorSceneRuntimeInstantiation.h"
 
 class AppFrameRenderer;
 class AppImGuiLayer;
@@ -143,6 +157,9 @@ private:
     void ApplyRailShooterCourse();
     bool SaveRailShooterCourse(std::string* errorMessage = nullptr);
     void TeleportRailShooterCourse(float distance);
+    bool BeginEditorGameplaySpawns(std::string* errorMessage);
+    bool ReconcileEditorSceneRuntime(std::string* errorMessage);
+    void StopEditorGameplaySpawns();
     void LogCourseEvents(const std::vector<CourseEventMarker>& events);
     void ApplyRailShooterVisualPresets(float distance);
     void DrawRailLockOnDebugPanel();
@@ -180,7 +197,14 @@ private:
     bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
+    // The free editor camera and the possessed game-camera view must not
+    // share transform state. Ejecting may inspect a frozen runtime without
+    // mutating the camera owned by gameplay/course simulation.
     editor::EditorViewportCameraController editorViewportCamera_{};
+    editor::EditorViewportCameraController editorGameViewportCamera_{};
+    editor::EditorPlaySessionViewportMode lastEditorViewportMode_ =
+        editor::EditorPlaySessionViewportMode::EditorFree;
+    uint64_t lastEditorViewportSessionSerial_ = 0;
     AppRuntimeState& runtimeState_;
     AppSceneResources& scene_;
     AppParticleSystem& particleSystem_;
@@ -201,6 +225,7 @@ private:
     FrameLoopState& frameState_;
     ID3D12CommandQueue* commandQueue_;
     AppFrameCoordinator frameCoordinator_;
+    bool editorFramePacingProfilingMode_ = false;
     AppSceneStateManager sceneStateManager_;
     VfxEngine vfxEngine_;
     HandParticleAttachment handParticleAttachment_{};
@@ -294,6 +319,32 @@ private:
     std::ofstream renderGraphDump_;
     D3D12_RESOURCE_STATES sceneDepthState_ = D3D12_RESOURCE_STATE_DEPTH_WRITE;
     float railShooterDistance_ = 0.0f;
+    float railShooterPlayerLateralOffset_ = 0.0f;
+    float railShooterPlayerVerticalOffset_ = 4.0f;
+    editor::EditorPatrolRuntimeWorld editorPatrolRuntimeWorld_{};
+    editor::EditorGimmickRuntimeWorld
+        editorGimmickRuntimeWorld_{};
+    editor::EditorGimmickPresentationPhysicsAdapter
+        editorGimmickRuntimeAdapter_{};
+    editor::EditorGimmickRuntimeEventRouter
+        editorGimmickRuntimeEventRouter_{};
+    editor::EditorGimmickRuntimeEventBindingRegistry
+        editorGimmickRuntimeEventBindings_{};
+    editor::EditorGimmickRuntimeEventSequenceRegistry
+        editorGimmickRuntimeEventSequences_{};
+    editor::EditorGimmickRuntimeDelayedEventScheduler
+        editorGimmickRuntimeDelayedEvents_{};
+    editor::EditorGimmickRuntimeInteractionSystem
+        editorGimmickRuntimeInteraction_{};
+    editor::EditorGimmickRuntimeTriggerSystem
+        editorGimmickRuntimeTriggers_{};
+    editor::EditorGimmickDefinitionRuntimeFactoryRegistry
+        editorGimmickDefinitionRuntimeFactories_{};
+    editor::EditorSceneRuntimeComponentFactoryRegistry
+        editorSceneRuntimeFactoryRegistry_{};
+    editor::EditorSceneRuntimeInstantiationService
+        editorSceneRuntimeInstantiation_{};
+    uint64_t editorSceneRuntimeLastReconcileAttemptRevision_ = 0;
     uint32_t railShooterFrameIndex_ = 0;
     bool railShooterInitialized_ = false;
     bool gpuDeviceLost_ = false;

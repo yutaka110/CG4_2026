@@ -1,6 +1,9 @@
 #pragma once
 
 #include "EditorWorldObjectRecord.h"
+#include "../scene/EditorGimmickEventBindingMutation.h"
+#include "../scene/EditorGimmickEventSequenceMutation.h"
+#include "../scene/EditorPatrolComponent.h"
 
 #include <cstddef>
 #include <memory>
@@ -17,10 +20,18 @@ enum class EditorWorldMutationKind {
     Delete,
     SetVisibility,
     SetLocked,
+    SetRuntimeEnabled,
     AddComponent,
     RemoveComponent,
+    SetComponentEnabled,
     SetComponentProperty,
     SetComponentAssetReference,
+    SetComponentEntityReference,
+    SetupPatrol,
+    SetGimmickDefinition,
+    SetGimmickParameter,
+    MutateGimmickEventBinding,
+    MutateGimmickEventSequence,
 };
 
 class IEditorWorldMutationPayload {
@@ -58,11 +69,15 @@ struct EditorWorldMutationRequest {
     EditorObjectHandle newParent;
     std::string name;
     std::string assetGuid;
+    std::string entityGuid;
     std::string assetType;
     std::string componentType;
     std::string property;
     std::string propertyValue;
     std::vector<Placement> placements;
+    EditorGimmickEventBindingMutation eventBindingMutation;
+    EditorGimmickEventSequenceMutation eventSequenceMutation;
+    EditorPatrolSetupMutation patrolSetup;
     bool value = false;
 };
 
@@ -72,11 +87,15 @@ struct EditorWorldProviderMutationRequest {
     EditorWorldObjectId newParent;
     std::string name;
     std::string assetGuid;
+    std::string entityGuid;
     std::string assetType;
     std::string componentType;
     std::string property;
     std::string propertyValue;
     std::vector<EditorWorldMutationRequest::Placement> placements;
+    EditorGimmickEventBindingMutation eventBindingMutation;
+    EditorGimmickEventSequenceMutation eventSequenceMutation;
+    EditorPatrolSetupMutation patrolSetup;
     bool value = false;
 };
 

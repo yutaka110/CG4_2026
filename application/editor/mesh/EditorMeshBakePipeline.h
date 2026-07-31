@@ -32,6 +32,8 @@ struct EditorMeshBakeSnapshot {
     std::optional<std::string> bakedGuid;
     std::optional<std::string> sourceHash;
     std::optional<std::string> buildHash;
+    std::optional<std::string> editableSourceAssetGuid;
+    std::optional<std::string> editableSourceGeometryHash;
 };
 
 struct EditorMeshBakeChange {

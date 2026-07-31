@@ -20,6 +20,7 @@ enum class EditorWorldObjectCapability : uint32_t {
     Transform = 1u << 6,
     Create = 1u << 7,
     Components = 1u << 8,
+    RuntimeActivation = 1u << 9,
 };
 
 using EditorWorldObjectCapabilities = uint32_t;
@@ -65,6 +66,8 @@ struct EditorWorldObjectRecord {
     EditorWorldObjectCapabilities capabilities = 0;
     bool visible = true;
     bool locked = false;
+    bool runtimeEnabled = true;
+    bool runtimeActiveInHierarchy = true;
     bool runtimeOnly = false;
     bool missing = false;
     bool virtualNode = false;

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <filesystem>
 #include <functional>
+#include <optional>
 
 namespace editor {
 
@@ -12,6 +14,8 @@ class IEditorAssetWorkspaceStatusProvider;
 class EditorCommandInputRouter;
 class EditorCommandPalette;
 class EditorCommandRegistry;
+class EditorContentDrawerService;
+class EditorFramePacingService;
 class EditorDirtyStateService;
 class EditorDocumentLifecycleService;
 class EditorDocumentManager;
@@ -42,6 +46,7 @@ class EditorTransactionStack;
 class EditorViewportInteractionService;
 class EditorViewportCoordinateService;
 class EditorViewportOverlayService;
+class EditorViewportRealtimePolicy;
 class EditorViewportSelectionBridge;
 class EditorWorldModel;
 class EditorWorldMutationService;
@@ -49,6 +54,8 @@ class SceneWorldObjectProvider;
 class EditorToolManager;
 class EditorExecutionContext;
 class IEditorWorldMutationExecutionService;
+class IEditorBlenderSceneImportExecutionService;
+class EditorBlenderSceneImportWorkflow;
 struct EditorWorldMutationResult;
 struct EditorCommandContext;
 struct EditorSaveApplyPolicyInput;
@@ -91,7 +98,11 @@ struct EditorContext {
     EditorCommandPalette* commandPalette = nullptr;
 
     bool developerToolsVisible = false;
+    bool coursePreviewVisible = false;
+    EditorContentDrawerService* contentDrawer = nullptr;
+    EditorFramePacingService* framePacing = nullptr;
     EditorViewportOverlayService* viewportOverlay = nullptr;
+    EditorViewportRealtimePolicy* viewportRealtimePolicy = nullptr;
     EditorLayoutPersistenceService* layoutPersistence = nullptr;
     EditorWorldMutationService* worldMutations = nullptr;
     SceneWorldObjectProvider* sceneWorldProvider = nullptr;
@@ -107,6 +118,10 @@ struct EditorContext {
     EditorProductionNavigationAuthoringPipeline* navigationAuthoring = nullptr;
     EditorToolManager* interactiveTools = nullptr;
     EditorExecutionContext* interactiveExecution = nullptr;
+    EditorBlenderSceneImportWorkflow* blenderSceneImportWorkflow = nullptr;
+    IEditorBlenderSceneImportExecutionService* blenderSceneImportExecution = nullptr;
+    std::function<std::optional<std::filesystem::path>()>
+        selectBlenderLevelJsonFile;
 
     bool HasCommandServices() const {
         return commands != nullptr && commandContext != nullptr;

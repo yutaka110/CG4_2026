@@ -85,6 +85,9 @@
     <Filter Include="ソース ファイル\application\runtime">
       <UniqueIdentifier>{69b5a8b5-c09a-4a78-b88c-f5d98d8741f6}</UniqueIdentifier>
     </Filter>
+    <Filter Include="ソース ファイル\application\level">
+      <UniqueIdentifier>{b4d4212e-5653-4b2b-bd80-fc08ee60d08f}</UniqueIdentifier>
+    </Filter>
     <Filter Include="ヘッダー ファイル\application\diagnostics">
       <UniqueIdentifier>{a35ef5d2-5188-4f91-9f73-3b332d19c465}</UniqueIdentifier>
     </Filter>
@@ -99,6 +102,9 @@
     </Filter>
     <Filter Include="ヘッダー ファイル\application\runtime">
       <UniqueIdentifier>{70d26cbf-8335-420d-9244-a1575356f7e6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ヘッダー ファイル\application\level">
+      <UniqueIdentifier>{4ace8b91-85bd-4a8b-aa47-c67f64fbca72}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -390,6 +396,15 @@
     <ClCompile Include="application\editor\EditorPanelHost.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
+      <ClCompile Include="application\editor\EditorContentDrawerService.cpp">
+        <Filter>ソース ファイル\application\editor</Filter>
+      </ClCompile>
+      <ClCompile Include="application\editor\EditorFramePacingService.cpp">
+        <Filter>ソース ファイル\application\editor</Filter>
+      </ClCompile>
+      <ClCompile Include="application\editor\EditorViewportRealtimePolicy.cpp">
+        <Filter>ソース ファイル\application\editor</Filter>
+      </ClCompile>
     <ClCompile Include="application\editor\EditorPanelLayoutService.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
@@ -602,9 +617,46 @@
     <ClCompile Include="application\editor\geometry\EditorGeometryWorkspace.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\geometry\EditorGeometryTools.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\mesh\EditorProductionMeshAsset.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\mesh\EditorProductionMeshEditableSourceLoader.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\mesh\EditorProductionMeshEditableSourceMetadata.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\mesh\EditorCreateEditableCopyTool.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\scene\EditorBlenderSceneImportService.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\scene\EditorBlenderSceneImportCommandProvider.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\scene\EditorBlenderSceneImportTransaction.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\scene\EditorBuiltInRuntimeFactoryRegistration.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\scene\EditorGameplaySpawnRuntimeService.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+      <ClCompile Include="application\editor\scene\EditorGameplaySpawnRuntimeFactory.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+      <ClCompile Include="application\editor\scene\EditorMeshRendererRuntimeFactory.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+        <ClCompile Include="application\editor\scene\EditorGimmickDefinitionRegistry.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+        <ClCompile Include="application\editor\scene\EditorGimmickComponent.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+        <ClCompile Include="application\editor\scene\EditorGimmickEventBindingComponent.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+        <ClCompile Include="application\editor\scene\EditorGimmickEventBindingMutation.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+        <ClCompile Include="application\editor\scene\EditorGimmickEventSequenceComponent.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+        <ClCompile Include="application\editor\scene\EditorGimmickEventSequenceMutation.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+        <ClCompile Include="application\editor\scene\EditorGimmickRuntimeEventSequenceRegistry.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+        <ClCompile Include="application\editor\scene\EditorGimmickRuntimeFactory.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+      <ClCompile Include="application\editor\scene\EditorGimmickRuntimeLifecycle.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+      <ClCompile Include="application\editor\scene\EditorGimmickRuntimeCommandQueue.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+      <ClCompile Include="application\editor\scene\EditorGimmickRuntimeBehavior.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+        <ClCompile Include="application\editor\scene\EditorGimmickPresentationPhysicsAdapter.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+        <ClCompile Include="application\editor\scene\EditorGimmickRuntimeActivationPolicy.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+        <ClCompile Include="application\editor\scene\EditorGimmickRuntimeEventBindingRegistry.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+        <ClCompile Include="application\editor\scene\EditorGimmickRuntimeEventRouter.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+        <ClCompile Include="application\editor\scene\EditorGimmickRuntimeDelayedEventScheduler.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+        <ClCompile Include="application\editor\scene\EditorGimmickRuntimeInteractionSystem.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+      <ClCompile Include="application\editor\scene\EditorGimmickRuntimeTriggerSystem.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+      <ClCompile Include="application\editor\scene\EditorPatrolComponent.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+      <ClCompile Include="application\editor\scene\EditorPatrolRuntimeFactory.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\scene\EditorSceneComponentRegistry.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\scene\EditorSceneRuntimeObjectRegistry.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\scene\EditorSceneRuntimeInstantiation.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\scene\EditorSplineRouteComponent.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+      <ClCompile Include="application\editor\scene\EditorSplineRouteEvaluationService.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+      <ClCompile Include="application\editor\tools\EditorSplineRouteTool.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\scene\EditorProductionScenePipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\geometry\EditorTransientMeshRenderPath.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\mesh\EditorMeshBakePipeline.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+    <ClCompile Include="application\editor\mesh\EditorObjProductionImportBridge.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\mesh\EditorMeshBakeTools.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\EditorTransactionPanel.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
@@ -660,6 +712,9 @@
       <Filter>ソース ファイル\application\terrain</Filter>
     </ClCompile>
     <ClCompile Include="application\terrain\TerrainChunkManager.cpp">
+      <Filter>ソース ファイル\application\terrain</Filter>
+    </ClCompile>
+    <ClCompile Include="application\terrain\TerrainMaterialLibrary.cpp">
       <Filter>ソース ファイル\application\terrain</Filter>
     </ClCompile>
     <ClCompile Include="application\terrain\TerrainPresetStore.cpp">
@@ -743,6 +798,9 @@
     </ClCompile>
     <ClCompile Include="application\TechniqueRegistry.cpp">
       <Filter>ソース ファイル</Filter>
+    </ClCompile>
+    <ClCompile Include="application\level\BlenderLevelJsonLoader.cpp">
+      <Filter>ソース ファイル\application\level</Filter>
     </ClCompile>
     <ClCompile Include="application\course\BulletPatternAsset.cpp">
       <Filter>ソース ファイル\application\course</Filter>
@@ -847,6 +905,9 @@
       <Filter>ソース ファイル</Filter>
     </ClCompile>
     <ClCompile Include="application\AppSceneControlsPanel.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
+    <ClCompile Include="application\AppTerrainPbrMaterialsPanel.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
     <ClCompile Include="application\VfxEngine.cpp">
@@ -1208,6 +1269,9 @@
     <ClInclude Include="application\TechniqueRegistry.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
+    <ClInclude Include="application\level\BlenderLevelJsonLoader.h">
+      <Filter>ヘッダー ファイル\application\level</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\BulletPatternAsset.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
@@ -1341,6 +1405,9 @@
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\AppSceneControlsPanel.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\AppTerrainPbrMaterialsPanel.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\AppVfxRuntimeState.h">
@@ -1568,6 +1635,15 @@
     <ClInclude Include="application\editor\EditorPanelHost.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
+      <ClInclude Include="application\editor\EditorContentDrawerService.h">
+        <Filter>ヘッダー ファイル\application\editor</Filter>
+      </ClInclude>
+      <ClInclude Include="application\editor\EditorFramePacingService.h">
+        <Filter>ヘッダー ファイル\application\editor</Filter>
+      </ClInclude>
+      <ClInclude Include="application\editor\EditorViewportRealtimePolicy.h">
+        <Filter>ヘッダー ファイル\application\editor</Filter>
+      </ClInclude>
     <ClInclude Include="application\editor\EditorPanelLayoutService.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
@@ -1723,9 +1799,46 @@
     <ClInclude Include="application\editor\geometry\EditorGeometryWorkspace.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\geometry\EditorGeometryTools.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\mesh\EditorProductionMeshAsset.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\mesh\EditorProductionMeshEditableSourceLoader.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\mesh\EditorProductionMeshEditableSourceMetadata.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\mesh\EditorCreateEditableCopyTool.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\scene\EditorBlenderSceneImportService.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\scene\EditorBlenderSceneImportCommandProvider.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\scene\EditorBlenderSceneImportTransaction.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\scene\EditorBuiltInRuntimeFactoryRegistration.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\scene\EditorGameplaySpawnRuntimeService.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+      <ClInclude Include="application\editor\scene\EditorGameplaySpawnRuntimeFactory.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+      <ClInclude Include="application\editor\scene\EditorMeshRendererRuntimeFactory.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+        <ClInclude Include="application\editor\scene\EditorGimmickDefinitionRegistry.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+        <ClInclude Include="application\editor\scene\EditorGimmickComponent.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+        <ClInclude Include="application\editor\scene\EditorGimmickEventBindingComponent.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+        <ClInclude Include="application\editor\scene\EditorGimmickEventBindingMutation.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+        <ClInclude Include="application\editor\scene\EditorGimmickEventSequenceComponent.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+        <ClInclude Include="application\editor\scene\EditorGimmickEventSequenceMutation.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+        <ClInclude Include="application\editor\scene\EditorGimmickRuntimeEventSequenceRegistry.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+        <ClInclude Include="application\editor\scene\EditorGimmickRuntimeFactory.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+      <ClInclude Include="application\editor\scene\EditorGimmickRuntimeLifecycle.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+      <ClInclude Include="application\editor\scene\EditorGimmickRuntimeCommandQueue.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+      <ClInclude Include="application\editor\scene\EditorGimmickRuntimeBehavior.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+        <ClInclude Include="application\editor\scene\EditorGimmickPresentationPhysicsAdapter.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+        <ClInclude Include="application\editor\scene\EditorGimmickRuntimeActivationPolicy.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+        <ClInclude Include="application\editor\scene\EditorGimmickRuntimeEventBindingRegistry.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+        <ClInclude Include="application\editor\scene\EditorGimmickRuntimeEventRouter.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+        <ClInclude Include="application\editor\scene\EditorGimmickRuntimeDelayedEventScheduler.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+        <ClInclude Include="application\editor\scene\EditorGimmickRuntimeInteractionSystem.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+      <ClInclude Include="application\editor\scene\EditorGimmickRuntimeTriggerSystem.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+      <ClInclude Include="application\editor\scene\EditorPatrolComponent.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+      <ClInclude Include="application\editor\scene\EditorPatrolRuntimeFactory.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\scene\EditorSceneComponentRegistry.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\scene\EditorSceneRuntimeObjectRegistry.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\scene\EditorSceneRuntimeInstantiation.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\scene\EditorSplineRouteComponent.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+      <ClInclude Include="application\editor\scene\EditorSplineRouteEvaluationService.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+      <ClInclude Include="application\editor\tools\EditorSplineRouteTool.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\scene\EditorProductionScenePipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\geometry\EditorTransientMeshRenderPath.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\mesh\EditorMeshBakePipeline.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+    <ClInclude Include="application\editor\mesh\EditorObjProductionImportBridge.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\mesh\EditorMeshBakeTools.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\AnimationStateMachine.h"><Filter>ヘッダー ファイル\application</Filter></ClInclude>
     <ClInclude Include="application\GameplayVisualScript.h"><Filter>ヘッダー ファイル\application</Filter></ClInclude>
@@ -1887,6 +2000,9 @@
       <Filter>ヘッダー ファイル\application\terrain</Filter>
     </ClInclude>
     <ClInclude Include="application\terrain\TerrainGenerationSettings.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="application\terrain\TerrainMaterialLibrary.h">
       <Filter>ヘッダー ファイル\application\terrain</Filter>
     </ClInclude>
     <ClInclude Include="application\terrain\TerrainPresetStore.h">

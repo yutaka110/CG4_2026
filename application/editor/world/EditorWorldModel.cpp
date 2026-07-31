@@ -187,8 +187,10 @@ uint64_t EditorWorldModel::Fingerprint() const {
         hash *= 1099511628211ull;
         hash ^= static_cast<uint64_t>(record.visible) |
             (static_cast<uint64_t>(record.locked) << 1) |
-            (static_cast<uint64_t>(record.runtimeOnly) << 2) |
-            (static_cast<uint64_t>(record.missing) << 3);
+            (static_cast<uint64_t>(record.runtimeEnabled) << 2) |
+            (static_cast<uint64_t>(record.runtimeActiveInHierarchy) << 3) |
+            (static_cast<uint64_t>(record.runtimeOnly) << 4) |
+            (static_cast<uint64_t>(record.missing) << 5);
         hash *= 1099511628211ull;
     }
     return hash;

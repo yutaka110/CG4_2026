@@ -115,4 +115,18 @@ float EditorPanelLayoutService::Clamp(float value, float minimum, float maximum)
     return value;
 }
 
+EditorPanelRect EditorPanelLayoutService::ContentBrowserPresentationRect(
+    bool maximized) const {
+    if (!maximized || !contentRect_.Valid() || !viewportRect_.Valid() ||
+        !bottomDockRect_.Valid()) {
+        return contentBrowserRect_;
+    }
+
+    return EditorPanelRect{
+        viewportRect_.x,
+        viewportRect_.y,
+        bottomDockRect_.width,
+        viewportRect_.height + bottomDockRect_.height};
+}
+
 } // namespace editor

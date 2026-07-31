@@ -1482,6 +1482,25 @@ AppRunLoop::AppRunLoop(
       frameState_(frameState),
       commandQueue_(commandQueue),
       frameCoordinator_(swapChain, engineContext, dev, commandQueue, fence, fenceEvent) {
+    editor::EditorFramePacingSettings framePacingSettings{};
+    framePacingSettings.enabled =
+        ReadEnvironmentUInt("GE3_EDITOR_FRAME_PACING", 1) != 0;
+    framePacingSettings.playFps =
+        ReadEnvironmentUInt("GE3_EDITOR_PLAY_FPS", 60);
+    framePacingSettings.interactionFps =
+        ReadEnvironmentUInt("GE3_EDITOR_INTERACTION_FPS", 60);
+    framePacingSettings.realtimeViewportFps =
+        ReadEnvironmentUInt("GE3_EDITOR_REALTIME_FPS", 60);
+    framePacingSettings.idleEditorFps =
+        ReadEnvironmentUInt("GE3_EDITOR_IDLE_FPS", 30);
+    framePacingSettings.backgroundFps =
+        ReadEnvironmentUInt("GE3_EDITOR_BACKGROUND_FPS", 15);
+    framePacingSettings.minimizedFps =
+        ReadEnvironmentUInt("GE3_EDITOR_MINIMIZED_FPS", 5);
+    imguiLayer_.FramePacingService().SetSettings(framePacingSettings);
+    editorFramePacingProfilingMode_ =
+        ReadEnvironmentUInt("GE3_EDITOR_UNCAPPED_FRAME_RATE", 0) != 0;
+
     const editor::EditorFileRecoveryReport recovery =
         editor::EditorFileRecoveryService(std::filesystem::current_path()).Recover();
     if (!recovery.succeeded || recovery.recoveredPreparedCount > 0) {
@@ -1646,6 +1665,277 @@ void AppRunLoop::TeleportRailShooterCourse(float distance) {
     std::ostringstream line;
     line << "[Course] Teleported authoring preview to distance=" << railShooterDistance_ << "\n";
     OutputDebugStringA(line.str().c_str());
+}
+
+bool AppRunLoop::BeginEditorGameplaySpawns(std::string* errorMessage) {
+    editorGimmickRuntimeEventRouter_.BindEventBindingRegistry(
+        &editorGimmickRuntimeEventBindings_);
+    editorGimmickRuntimeEventRouter_.BindDelayedEventScheduler(
+        &editorGimmickRuntimeDelayedEvents_);
+    editorGimmickRuntimeEventRouter_.BindEventSequenceRegistry(
+        &editorGimmickRuntimeEventSequences_);
+    imguiLayer_.BindEditorGimmickRuntimeDebug(
+        &editorGimmickRuntimeWorld_,
+        &editorGimmickRuntimeAdapter_,
+        &editorGimmickRuntimeEventRouter_,
+        &editorGimmickRuntimeInteraction_,
+        &editorGimmickRuntimeTriggers_);
+    const editor::EditorScene* scene = imguiLayer_.ActiveEditorScene();
+    if (scene == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Active Editor Scene is unavailable.";
+        }
+        return false;
+    }
+
+    std::string registrationError;
+    if (!editor::RegisterBuiltInEditorSceneRuntimeFactories(
+            editorSceneRuntimeFactoryRegistry_,
+            &registrationError)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = registrationError;
+        }
+        return false;
+    }
+    if (!editor::
+            RegisterBuiltInEditorGimmickDefinitionRuntimeFactories(
+                editorGimmickDefinitionRuntimeFactories_,
+                imguiLayer_.GimmickDefinitionRegistry(),
+                &registrationError)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = registrationError;
+        }
+        return false;
+    }
+    std::string bindError;
+    if (!editorSceneRuntimeInstantiation_.Bind(
+            &imguiLayer_.SceneComponentRegistry(),
+            &editorSceneRuntimeFactoryRegistry_,
+            &bindError)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = bindError;
+        }
+        return false;
+    }
+
+    editor::EditorGameplaySpawnRuntimeTarget spawnTarget{
+        &railPath_,
+        &railShooterEventDispatcher_,
+        &railShooterSpawnRuntime_,
+        railShooterDistance_,
+        &railShooterPlayerLateralOffset_,
+        &railShooterPlayerVerticalOffset_,
+        [this](float distance) {
+            TeleportRailShooterCourse(distance);
+        }};
+    editor::EditorSceneRuntimeServiceRegistry runtimeServices;
+    runtimeServices.Bind(
+        std::string(editor::kEditorGameplaySpawnRuntimeTargetServiceId),
+        &spawnTarget);
+    editor::EditorMeshRendererRuntimeTarget meshTarget{
+        &imguiLayer_.AssetRegistry(),
+        &imguiLayer_.MeshRendererRuntimeWorld()};
+    runtimeServices.Bind(
+        std::string(editor::kEditorMeshRendererRuntimeTargetServiceId),
+        &meshTarget);
+    editor::EditorPatrolRuntimeTarget patrolTarget{
+        &editorPatrolRuntimeWorld_,
+        &railShooterSpawnRuntime_,
+        &railPath_};
+    runtimeServices.Bind(
+        std::string(editor::kEditorPatrolRuntimeTargetServiceId),
+        &patrolTarget);
+    editor::EditorGimmickRuntimeTarget gimmickTarget{
+        &imguiLayer_.GimmickDefinitionRegistry(),
+        &editorGimmickDefinitionRuntimeFactories_,
+        &editorGimmickRuntimeWorld_};
+    runtimeServices.Bind(
+        std::string(editor::kEditorGimmickRuntimeTargetServiceId),
+        &gimmickTarget);
+    editor::EditorGimmickEventBindingRuntimeTarget
+        gimmickEventBindingTarget{
+            &editorGimmickRuntimeEventBindings_,
+            &editorGimmickRuntimeWorld_};
+    runtimeServices.Bind(
+        std::string(
+            editor::
+                kEditorGimmickEventBindingRuntimeTargetServiceId),
+        &gimmickEventBindingTarget);
+    editor::EditorGimmickEventSequenceRuntimeTarget
+        gimmickEventSequenceTarget{
+            &editorGimmickRuntimeEventSequences_,
+            &editorGimmickRuntimeWorld_};
+    runtimeServices.Bind(
+        std::string(
+            editor::
+                kEditorGimmickEventSequenceRuntimeTargetServiceId),
+        &gimmickEventSequenceTarget);
+    const editor::EditorSceneRuntimeInstantiationResult result =
+        editorSceneRuntimeInstantiation_.Begin(*scene, runtimeServices);
+    if (!result.succeeded) {
+        if (errorMessage != nullptr) {
+            *errorMessage = result.message;
+        }
+        return false;
+    }
+    editorGimmickRuntimeEventBindings_.FinalizeReconcile();
+    editorGimmickRuntimeEventSequences_.FinalizeReconcile();
+    std::string adapterError;
+    if (!editorGimmickRuntimeAdapter_.Reconcile(
+            *scene,
+            imguiLayer_.MeshRendererRuntimeWorld(),
+            editorGimmickRuntimeWorld_,
+            &adapterError)) {
+        editorSceneRuntimeInstantiation_.Stop();
+        editorGimmickRuntimeWorld_.Clear();
+        if (errorMessage != nullptr) {
+            *errorMessage =
+                "Gimmick Presentation/Physics Adapter rejected "
+                "Runtime Scene: " +
+                adapterError;
+        }
+        return false;
+    }
+    editorGimmickRuntimeEventRouter_.Reconcile(
+        editorGimmickRuntimeWorld_);
+    editorGimmickRuntimeTriggers_.Reconcile(
+        editorGimmickRuntimeWorld_,
+        editorGimmickRuntimeAdapter_);
+    editorSceneRuntimeLastReconcileAttemptRevision_ = result.sourceRevision;
+
+    std::ostringstream line;
+    line << "[RuntimeScene] " << result.message;
+    for (const std::string& warning : result.warnings) {
+        line << " warning=\"" << warning << "\"";
+    }
+    line << "\n";
+    OutputDebugStringA(line.str().c_str());
+    return true;
+}
+
+bool AppRunLoop::ReconcileEditorSceneRuntime(std::string* errorMessage) {
+    if (!editorSceneRuntimeInstantiation_.Active()) return true;
+    const editor::EditorScene* scene = imguiLayer_.ActiveEditorScene();
+    if (scene == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = "Active Editor Scene is unavailable during Reconcile.";
+        }
+        return false;
+    }
+    if (scene->revision == editorSceneRuntimeInstantiation_.SourceRevision() ||
+        scene->revision == editorSceneRuntimeLastReconcileAttemptRevision_) {
+        return true;
+    }
+    editorSceneRuntimeLastReconcileAttemptRevision_ = scene->revision;
+
+    editor::EditorGameplaySpawnRuntimeTarget spawnTarget{
+        &railPath_,
+        &railShooterEventDispatcher_,
+        &railShooterSpawnRuntime_,
+        railShooterDistance_,
+        &railShooterPlayerLateralOffset_,
+        &railShooterPlayerVerticalOffset_,
+        [this](float distance) {
+            TeleportRailShooterCourse(distance);
+        }};
+    editor::EditorSceneRuntimeServiceRegistry runtimeServices;
+    runtimeServices.Bind(
+        std::string(editor::kEditorGameplaySpawnRuntimeTargetServiceId),
+        &spawnTarget);
+    editor::EditorMeshRendererRuntimeTarget meshTarget{
+        &imguiLayer_.AssetRegistry(),
+        &imguiLayer_.MeshRendererRuntimeWorld()};
+    runtimeServices.Bind(
+        std::string(editor::kEditorMeshRendererRuntimeTargetServiceId),
+        &meshTarget);
+    editor::EditorPatrolRuntimeTarget patrolTarget{
+        &editorPatrolRuntimeWorld_,
+        &railShooterSpawnRuntime_,
+        &railPath_};
+    runtimeServices.Bind(
+        std::string(editor::kEditorPatrolRuntimeTargetServiceId),
+        &patrolTarget);
+    editor::EditorGimmickRuntimeTarget gimmickTarget{
+        &imguiLayer_.GimmickDefinitionRegistry(),
+        &editorGimmickDefinitionRuntimeFactories_,
+        &editorGimmickRuntimeWorld_};
+    runtimeServices.Bind(
+        std::string(editor::kEditorGimmickRuntimeTargetServiceId),
+        &gimmickTarget);
+    editor::EditorGimmickEventBindingRuntimeTarget
+        gimmickEventBindingTarget{
+            &editorGimmickRuntimeEventBindings_,
+            &editorGimmickRuntimeWorld_};
+    runtimeServices.Bind(
+        std::string(
+            editor::
+                kEditorGimmickEventBindingRuntimeTargetServiceId),
+        &gimmickEventBindingTarget);
+    editor::EditorGimmickEventSequenceRuntimeTarget
+        gimmickEventSequenceTarget{
+            &editorGimmickRuntimeEventSequences_,
+            &editorGimmickRuntimeWorld_};
+    runtimeServices.Bind(
+        std::string(
+            editor::
+                kEditorGimmickEventSequenceRuntimeTargetServiceId),
+        &gimmickEventSequenceTarget);
+    const editor::EditorSceneRuntimeInstantiationResult result =
+        editorSceneRuntimeInstantiation_.Reconcile(*scene, runtimeServices);
+    if (!result.succeeded) {
+        if (errorMessage != nullptr) *errorMessage = result.message;
+        return false;
+    }
+    editorGimmickRuntimeEventBindings_.FinalizeReconcile();
+    editorGimmickRuntimeEventSequences_.FinalizeReconcile();
+    std::string adapterError;
+    if (!editorGimmickRuntimeAdapter_.Reconcile(
+            *scene,
+            imguiLayer_.MeshRendererRuntimeWorld(),
+            editorGimmickRuntimeWorld_,
+            &adapterError)) {
+        StopEditorGameplaySpawns();
+        if (errorMessage != nullptr) {
+            *errorMessage =
+                "Gimmick Presentation/Physics Adapter failed "
+                "during Reconcile: " +
+                adapterError;
+        }
+        return false;
+    }
+    editorGimmickRuntimeEventRouter_.Reconcile(
+        editorGimmickRuntimeWorld_);
+    editorGimmickRuntimeTriggers_.Reconcile(
+        editorGimmickRuntimeWorld_,
+        editorGimmickRuntimeAdapter_);
+
+    std::ostringstream line;
+    line << "[RuntimeScene] " << result.message;
+    for (const std::string& warning : result.warnings) {
+        line << " warning=\"" << warning << "\"";
+    }
+    line << "\n";
+    OutputDebugStringA(line.str().c_str());
+    return true;
+}
+
+void AppRunLoop::StopEditorGameplaySpawns() {
+    editorGimmickRuntimeInteraction_.Reset();
+    editorGimmickRuntimeTriggers_.Reset();
+    editorGimmickRuntimeEventRouter_.Reset();
+    editorGimmickRuntimeEventRouter_.
+        BindEventBindingRegistry(nullptr);
+    editorGimmickRuntimeEventRouter_.
+        BindDelayedEventScheduler(nullptr);
+    editorGimmickRuntimeEventRouter_.
+        BindEventSequenceRegistry(nullptr);
+    editorGimmickRuntimeDelayedEvents_.Reset();
+    editorGimmickRuntimeAdapter_.Clear();
+    editorSceneRuntimeInstantiation_.Stop();
+    editorGimmickRuntimeEventBindings_.Clear();
+    editorGimmickRuntimeEventSequences_.Clear();
+    editorGimmickRuntimeWorld_.Clear();
+    editorSceneRuntimeLastReconcileAttemptRevision_ = 0;
 }
 
 void AppRunLoop::LogCourseEvents(const std::vector<CourseEventMarker>& events) {
@@ -4486,12 +4776,13 @@ void AppRunLoop::UpdateRailShooterFrame() {
     fireSafetyInput.deltaTime = gameplayDeltaTime;
     fireSafetyInput.cameraReason = previousCameraSafetyFrame.comfortReason;
     railShooterSpawnRuntime_.Update(gameplayDeltaTime, fireSafetyInput);
+    editorPatrolRuntimeWorld_.Update(gameplayDeltaTime);
     CourseCollisionFrameInput collisionInput{};
     collisionInput.deltaTime = gameplayDeltaTime;
     collisionInput.course = &railShooterCourse_;
     collisionInput.player.distance = railShooterDistance_;
-    collisionInput.player.lateralOffset = 0.0f;
-    collisionInput.player.verticalOffset = 4.0f;
+    collisionInput.player.lateralOffset = railShooterPlayerLateralOffset_;
+    collisionInput.player.verticalOffset = railShooterPlayerVerticalOffset_;
     collisionInput.player.radius = 1.6f;
     collisionInput.player.hitPoints = 100.0f;
     CourseCollisionWeaponState baseWeapon{};
@@ -4547,6 +4838,91 @@ void AppRunLoop::UpdateRailShooterFrame() {
     frameState_.viewProjectionMatrix = Multiply(frameState_.viewMatrix, frameState_.projMatrix);
     frameState_.cameraWorldPosition = cameraPosition;
     frameState_.deltaTime = gameplayDeltaTime;
+
+    bool gimmickInteractionAllowed =
+        gameplayDeltaTime > 0.0f &&
+        hwnd_ != nullptr &&
+        GetForegroundWindow() == hwnd_;
+#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
+    gimmickInteractionAllowed =
+        gimmickInteractionAllowed &&
+        (!imguiLayer_.IsVisible() ||
+         (!ImGui::GetIO().WantTextInput &&
+          !ImGui::IsAnyItemActive()));
+#endif
+    const bool gimmickInteractionDown =
+        (GetAsyncKeyState('E') & 0x8000) != 0;
+    editorGimmickRuntimeInteraction_.Update(
+        editor::EditorGimmickRuntimeInteractionInput{
+            &editorGimmickRuntimeWorld_,
+            &editorGimmickRuntimeEventRouter_,
+            &editorGimmickRuntimeAdapter_,
+            cameraPosition,
+            forward,
+            "runtime.player",
+            gimmickInteractionDown,
+            gimmickInteractionAllowed});
+
+    if (gameplayDeltaTime > 0.0f) {
+        const Vector3 playerWorld = RailLocalPoint(
+            railPath_,
+            railShooterDistance_,
+            collisionInput.player.lateralOffset,
+            collisionInput.player.verticalOffset,
+            0.0f);
+        const float playerRadius =
+            (std::max)(0.01f, collisionInput.player.radius);
+        editor::EditorGimmickRuntimeTriggerSubject playerSubject{};
+        playerSubject.entityGuid = "runtime.player";
+        playerSubject.boundsMin = {
+            playerWorld.x - playerRadius,
+            playerWorld.y - playerRadius,
+            playerWorld.z - playerRadius};
+        playerSubject.boundsMax = {
+            playerWorld.x + playerRadius,
+            playerWorld.y + playerRadius,
+            playerWorld.z + playerRadius};
+        editor::EditorGimmickRuntimeTriggerInput triggerInput{};
+        triggerInput.world = &editorGimmickRuntimeWorld_;
+        triggerInput.eventRouter =
+            &editorGimmickRuntimeEventRouter_;
+        triggerInput.physics = &editorGimmickRuntimeAdapter_;
+        triggerInput.subjects.push_back(
+            std::move(playerSubject));
+        editorGimmickRuntimeTriggers_.Update(triggerInput);
+    }
+
+    if (gameplayDeltaTime > 0.0f) {
+        std::string delayedEventError;
+        if (!editorGimmickRuntimeDelayedEvents_.Update(
+                gameplayDeltaTime,
+                editorGimmickRuntimeWorld_,
+                editorGimmickRuntimeEventRouter_,
+                &delayedEventError) &&
+            !delayedEventError.empty()) {
+            OutputDebugStringA(
+                ("[RuntimeScene] Delayed Gimmick event: " +
+                 delayedEventError + "\n")
+                    .c_str());
+        }
+    }
+
+    editorGimmickRuntimeWorld_.Update(gameplayDeltaTime);
+    std::string gimmickAdapterError;
+    if (!editorGimmickRuntimeAdapter_.Sync(
+            editorGimmickRuntimeWorld_,
+            &gimmickAdapterError)) {
+        OutputDebugStringA(
+            ("[RuntimeScene] Gimmick Presentation/Physics sync "
+             "failed: " +
+             gimmickAdapterError + "\n")
+                .c_str());
+        editorGimmickRuntimeAdapter_.Clear();
+        editorGimmickRuntimeInteraction_.Reset();
+        editorGimmickRuntimeTriggers_.Reset();
+        editorGimmickRuntimeDelayedEvents_.Reset();
+        editorGimmickRuntimeEventRouter_.Reset();
+    }
 
     RailLockOnFrameInput lockOnInput{};
     lockOnInput.hwnd = hwnd_;
@@ -4741,6 +5117,78 @@ void AppRunLoop::UpdateRailShooterFrame() {
     runtimeState_.cameraWorldPosition = cameraPosition;
     scene_.UpdateCameraWorldPosition(cameraPosition);
 
+    // Rail Shooter owns its gameplay camera independently from the generic
+    // VFX-preview camera path. When the editor Ejects (or freezes a course
+    // preview without a Play session), replace only the viewport presentation
+    // camera. The RailCameraDirector transform above remains the authoritative
+    // gameplay camera and is restored immediately by Possess.
+    if (imguiLayer_.IsEnabled()) {
+        const editor::EditorPlaySessionState& playSession =
+            imguiLayer_.EditorPlaySession();
+        const editor::EditorPlaySessionViewportMode viewportMode =
+            playSession.ViewportMode();
+        const bool activeSession = playSession.IsActive();
+        const bool useEditorInspectionCamera =
+            (activeSession && playSession.UsesEditorFreeCamera()) ||
+            (!activeSession && runtimeState_.terrain.freezeCourseRuntime);
+        const bool viewportModeChanged =
+            viewportMode != lastEditorViewportMode_ ||
+            playSession.SessionSerial() != lastEditorViewportSessionSerial_;
+
+        if (useEditorInspectionCamera) {
+            editor::EditorViewportCameraSettings cameraSettings{};
+            cameraSettings.moveSpeed =
+                (std::max)(0.0f, runtimeState_.camera.debugMoveSpeed) * 60.0f;
+            cameraSettings.rotationSensitivity =
+                (std::max)(0.0f, runtimeState_.camera.debugRotateSpeed) * 0.15f;
+            cameraSettings.fastMoveMultiplier =
+                runtimeState_.camera.debugFastMoveMultiplier;
+            cameraSettings.slowMoveMultiplier =
+                runtimeState_.camera.debugSlowMoveMultiplier;
+            editorViewportCamera_.SetSettings(cameraSettings);
+
+            if (!editorViewportCamera_.Initialized()) {
+                editorViewportCamera_.Initialize(
+                    runtimeState_.camera.transform,
+                    runtimeState_.camera.fovY,
+                    aspectRatio,
+                    runtimeState_.camera.nearZ,
+                    runtimeState_.camera.farZ);
+            } else {
+                if (viewportModeChanged) {
+                    editorViewportCamera_.SetTransform(
+                        runtimeState_.camera.transform);
+                }
+                editorViewportCamera_.SetLens(
+                    runtimeState_.camera.fovY,
+                    aspectRatio,
+                    runtimeState_.camera.nearZ,
+                    runtimeState_.camera.farZ);
+            }
+
+            // Editor inspection input must continue while gameplay simulation
+            // is frozen and while the Rail Shooter rejects debug-camera input.
+            editorViewportCamera_.Update(
+                imguiLayer_.EditorViewportCameraFrameInput());
+            runtimeState_.cameraWorldPosition =
+                editorViewportCamera_.WorldPosition();
+            frameState_.viewMatrix =
+                editorViewportCamera_.ViewMatrix();
+            frameState_.projMatrix =
+                editorViewportCamera_.ProjectionMatrix();
+            frameState_.viewProjectionMatrix =
+                editorViewportCamera_.ViewProjectionMatrix();
+            frameState_.cameraWorldPosition =
+                editorViewportCamera_.WorldPosition();
+            scene_.UpdateCameraWorldPosition(
+                editorViewportCamera_.WorldPosition());
+        }
+
+        lastEditorViewportMode_ = viewportMode;
+        lastEditorViewportSessionSerial_ =
+            playSession.SessionSerial();
+    }
+
     const auto vfxUpdateStart = RailPerfClock::now();
     vfxEngine_.Update(runtimeState_.vfx, gameplayDeltaTime);
     gRailPerfFrame.vfxUpdateMs = ElapsedMs(vfxUpdateStart, RailPerfClock::now());
@@ -4922,6 +5370,18 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
     const float aspectRatio = metrics.AspectRatio();
     const bool useEditorViewportCamera = imguiLayer_.IsEnabled();
     if (useEditorViewportCamera) {
+        const editor::EditorPlaySessionState& playSession =
+            imguiLayer_.EditorPlaySession();
+        const editor::EditorPlaySessionViewportMode viewportMode =
+            playSession.ViewportMode();
+        const bool activeSession = playSession.IsActive();
+        const bool usePossessedGameCamera =
+            activeSession &&
+            viewportMode ==
+                editor::EditorPlaySessionViewportMode::GameCamera;
+        const bool viewportModeChanged =
+            viewportMode != lastEditorViewportMode_ ||
+            playSession.SessionSerial() != lastEditorViewportSessionSerial_;
         editor::EditorViewportCameraSettings cameraSettings{};
         // Preserve the previous debug-camera tuning while converting its
         // per-frame values to frame-rate independent editor navigation.
@@ -4934,32 +5394,88 @@ void AppRunLoop::UpdateVfxPreviewFrame() {
         cameraSettings.slowMoveMultiplier =
             runtimeState_.camera.debugSlowMoveMultiplier;
         editorViewportCamera_.SetSettings(cameraSettings);
-        if (!editorViewportCamera_.Initialized()) {
-            editorViewportCamera_.Initialize(
-                runtimeState_.camera.transform,
-                runtimeState_.camera.fovY,
-                aspectRatio,
-                runtimeState_.camera.nearZ,
-                runtimeState_.camera.farZ);
+        editorGameViewportCamera_.SetSettings(cameraSettings);
+
+        if (usePossessedGameCamera) {
+            if (!editorGameViewportCamera_.Initialized()) {
+                editorGameViewportCamera_.Initialize(
+                    runtimeState_.camera.transform,
+                    runtimeState_.camera.fovY,
+                    aspectRatio,
+                    runtimeState_.camera.nearZ,
+                    runtimeState_.camera.farZ);
+            } else {
+                editorGameViewportCamera_.SetTransform(
+                    runtimeState_.camera.transform);
+                editorGameViewportCamera_.SetLens(
+                    runtimeState_.camera.fovY,
+                    aspectRatio,
+                    runtimeState_.camera.nearZ,
+                    runtimeState_.camera.farZ);
+            }
+            runtimeState_.cameraWorldPosition =
+                editorGameViewportCamera_.WorldPosition();
+            frameState_.viewMatrix =
+                editorGameViewportCamera_.ViewMatrix();
+            frameState_.projMatrix =
+                editorGameViewportCamera_.ProjectionMatrix();
+            frameState_.viewProjectionMatrix =
+                editorGameViewportCamera_.ViewProjectionMatrix();
         } else {
-            editorViewportCamera_.SetTransform(runtimeState_.camera.transform);
-            editorViewportCamera_.SetLens(
-                runtimeState_.camera.fovY,
-                aspectRatio,
-                runtimeState_.camera.nearZ,
-                runtimeState_.camera.farZ);
+            // Entering an ejected session starts from the exact gameplay
+            // camera pose. Subsequent free-camera motion remains editor-only.
+            const bool seedFromGameCamera =
+                activeSession && viewportModeChanged &&
+                viewportMode ==
+                    editor::EditorPlaySessionViewportMode::EjectedFree;
+            if (!editorViewportCamera_.Initialized()) {
+                editorViewportCamera_.Initialize(
+                    runtimeState_.camera.transform,
+                    runtimeState_.camera.fovY,
+                    aspectRatio,
+                    runtimeState_.camera.nearZ,
+                    runtimeState_.camera.farZ);
+            } else {
+                if (seedFromGameCamera) {
+                    editorViewportCamera_.SetTransform(
+                        runtimeState_.camera.transform);
+                }
+                editorViewportCamera_.SetLens(
+                    runtimeState_.camera.fovY,
+                    aspectRatio,
+                    runtimeState_.camera.nearZ,
+                    runtimeState_.camera.farZ);
+            }
+            editor::EditorViewportCameraInput cameraInput =
+                imguiLayer_.EditorViewportCameraFrameInput();
+            const bool allowEjectedEditorCameraInput =
+                activeSession &&
+                viewportMode ==
+                    editor::EditorPlaySessionViewportMode::EjectedFree;
+            // Runtime camera debug input is a gameplay policy. It must not
+            // disable the editor-owned inspection camera after Eject.
+            if (!runtimeState_.camera.enableDebugInput &&
+                !allowEjectedEditorCameraInput) {
+                cameraInput = {};
+            }
+            editorViewportCamera_.Update(cameraInput);
+            // Preserve legacy authoring-camera behavior while stopped. During
+            // Play/Sim the Runtime Game Camera remains untouched by Eject.
+            if (!activeSession) {
+                runtimeState_.camera.transform =
+                    editorViewportCamera_.CameraTransform();
+            }
+            runtimeState_.cameraWorldPosition =
+                editorViewportCamera_.WorldPosition();
+            frameState_.viewMatrix = editorViewportCamera_.ViewMatrix();
+            frameState_.projMatrix =
+                editorViewportCamera_.ProjectionMatrix();
+            frameState_.viewProjectionMatrix =
+                editorViewportCamera_.ViewProjectionMatrix();
         }
-        editor::EditorViewportCameraInput cameraInput =
-            imguiLayer_.EditorViewportCameraFrameInput();
-        if (!runtimeState_.camera.enableDebugInput) {
-            cameraInput = {};
-        }
-        editorViewportCamera_.Update(cameraInput);
-        runtimeState_.camera.transform = editorViewportCamera_.CameraTransform();
-        runtimeState_.cameraWorldPosition = editorViewportCamera_.WorldPosition();
-        frameState_.viewMatrix = editorViewportCamera_.ViewMatrix();
-        frameState_.projMatrix = editorViewportCamera_.ProjectionMatrix();
-        frameState_.viewProjectionMatrix = editorViewportCamera_.ViewProjectionMatrix();
+        lastEditorViewportMode_ = viewportMode;
+        lastEditorViewportSessionSerial_ =
+            playSession.SessionSerial();
     } else {
         debugCamera_.SetInputEnabled(runtimeState_.camera.enableDebugInput);
         debugCamera_.SetMoveSpeed(runtimeState_.camera.debugMoveSpeed);
@@ -5272,6 +5788,25 @@ void AppRunLoop::RenderFrame() {
     if (gpuDeviceLost_) {
         return;
     }
+    editor::EditorViewportRealtimePolicy& realtimePolicy =
+        imguiLayer_.ViewportRealtimePolicy();
+    const editor::EditorViewportRealtimeSnapshot realtime =
+        realtimePolicy.Evaluate(
+            editor::EditorViewportRealtimeInput{
+                imguiLayer_.EditorPlaySessionActive(),
+                imguiLayer_.EditorViewportInteractionActive(),
+                imguiLayer_.EditorInteractiveToolActive()});
+    imguiLayer_.FramePacingService().Pace(
+        editor::EditorFramePacingInput{
+            editorFramePacingProfilingMode_,
+            hwnd_ != nullptr && IsIconic(hwnd_) != FALSE,
+            hwnd_ == nullptr || GetForegroundWindow() == hwnd_,
+            !imguiLayer_.IsVisible() ||
+                imguiLayer_.EditorPlaySessionActive(),
+            imguiLayer_.EditorViewportInteractionActive() ||
+                imguiLayer_.EditorInteractiveToolActive(),
+            realtime.continuous});
+    realtimePolicy.AcknowledgeViewportRendered();
     sceneStateManager_.Update(*this);
     sceneStateManager_.Render(*this);
 }
@@ -7647,6 +8182,13 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     gRailPerfFrame.waitFrameSlotMs = ElapsedMs(waitStart, RailPerfClock::now());
     ResolveCompletedRailGpuTiming(backBufferIndex);
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterWaitForFrameSlot");
+    bool terrainMaterialReloadRequested =
+        scene_.PollTerrainMaterialHotReload();
+    if (terrainMaterialReloadRequested && !frameCoordinator_.FlushGpu()) {
+        OutputDebugStringA(
+            "[TerrainMaterialHotReload] GPU flush failed; reload deferred.\n");
+        terrainMaterialReloadRequested = false;
+    }
     const auto commandBeginStart = RailPerfClock::now();
     ComPtr<ID3D12GraphicsCommandList> commandList =
         clPool_.Begin(backBufferIndex, appPipelines_.GetMainPSO());
@@ -7655,6 +8197,17 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.commandListBeginFailed");
         closeImguiFrameOnAbort();
         return;
+    }
+    if (terrainMaterialReloadRequested) {
+        std::string terrainMaterialReloadError;
+        if (!scene_.ReloadTerrainMaterialAssets(
+                commandList.Get(),
+                &terrainMaterialReloadError)) {
+            OutputDebugStringA(
+                ("[TerrainMaterialHotReload] " +
+                 terrainMaterialReloadError + "\n")
+                    .c_str());
+        }
     }
     BeginRailGpuTiming(commandList.Get(), backBufferIndex);
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterCommandListBegin");
@@ -7771,11 +8324,24 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             [&](editor::EditorViewportOverlayService& overlay) {
                 BuildRailVisibilityDebugOverlay(overlay);
             },
-            &courseObjectTransactions_});
+            &courseObjectTransactions_,
+            [&](std::string* errorMessage) {
+                return BeginEditorGameplaySpawns(errorMessage);
+            },
+            [&]() {
+                StopEditorGameplaySpawns();
+            }});
     gRailPerfFrame.imguiBuildUiMs = ElapsedMs(imguiBuildUiStart, RailPerfClock::now());
     const auto imguiEndFrameStart = RailPerfClock::now();
     imguiLayer_.EndFrame();
     imguiFrameOpen = false;
+    std::string runtimeSceneReconcileError;
+    if (!ReconcileEditorSceneRuntime(&runtimeSceneReconcileError) &&
+        !runtimeSceneReconcileError.empty()) {
+        OutputDebugStringA(
+            ("[RuntimeScene] Reconcile failed: " +
+             runtimeSceneReconcileError + "\n").c_str());
+    }
     gRailPerfFrame.imguiEndFrameMs = ElapsedMs(imguiEndFrameStart, RailPerfClock::now());
     gRailPerfFrame.imguiMs = ElapsedMs(imguiStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterImgui");

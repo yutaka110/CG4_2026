@@ -14,6 +14,7 @@
 #include "AppRuntimeState.h"
 #include "AppSceneResources.h"
 #include "AppSceneControlsPanel.h"
+#include "AppTerrainPbrMaterialsPanel.h"
 #include "AppVfxDebugDataBuilder.h"
 #include "AppVfxRuntimeQueuesPanel.h"
 #include "AppVfxRuntimeStatusPanel.h"
@@ -77,6 +78,12 @@
 #include "editor/tools/EditorModePanels.h"
 #include "editor/tools/EditorPlacementTools.h"
 #include "editor/world/EditorWorldOutlinerPanel.h"
+#include "editor/scene/EditorBlenderSceneImportTransaction.h"
+#include "editor/scene/EditorGimmickComponent.h"
+#include "editor/scene/EditorGimmickEventBindingComponent.h"
+#include "editor/scene/EditorGimmickEventSequenceComponent.h"
+#include "editor/scene/EditorPatrolComponent.h"
+#include "editor/scene/EditorSplineRouteComponent.h"
 #include "editor/ExistingFeatureProtection.h"
 #include "editor/ExistingFeatureProtectionPanel.h"
 #include "vfx/DistortionRenderer.h"
@@ -96,14 +103,40 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(
 #include <chrono>
 #include <cfloat>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace {
 using EditorUiTimingClock = std::chrono::steady_clock;
+
+std::optional<std::filesystem::path> OpenBlenderLevelJsonDialog(HWND owner) {
+    std::vector<wchar_t> buffer(32768, L'\0');
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFile = buffer.data();
+    dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+    dialog.lpstrFilter =
+        L"Blender Level JSON (*.json)\0*.json\0"
+        L"All Files\0*.*\0";
+    dialog.nFilterIndex = 1;
+    dialog.lpstrTitle = L"Import Blender Level JSON";
+    dialog.lpstrDefExt = L"json";
+    dialog.Flags =
+        OFN_EXPLORER |
+        OFN_FILEMUSTEXIST |
+        OFN_PATHMUSTEXIST |
+        OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameW(&dialog)) {
+        return std::nullopt;
+    }
+    return std::filesystem::path(buffer.data());
+}
 
 double EditorUiElapsedMs(
     EditorUiTimingClock::time_point begin,
@@ -1286,6 +1319,40 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
                         editor::EditorNotificationSeverity::Info,
                         "Placement Tool",
                         result.message);
+                },
+                &editorProductionMeshRuntimeCache_,
+                [this](std::string_view message) {
+                    editorNotifications_.Push(
+                        editor::EditorNotificationSeverity::Info,
+                        "Placement Asset Preparation",
+                        std::string(message));
+                }});
+        editor::RegisterSplineRouteTools(
+            editorModeRegistry_,
+            editor::EditorSplineRouteToolServices{
+                &editorWorldMutationService_,
+                &editorWorldModel_,
+                &editorSceneWorldProvider_,
+                &editorSelection_,
+                [this](const editor::EditorWorldMutationResult& result) {
+                    editorWorldInputSignature_ =
+                        static_cast<uint64_t>(-1);
+                    editorDirtyState_.MarkDirty(
+                        editor::EditorDirtyDomain::Unknown,
+                        "world:" + result.document.assetGuid,
+                        result.document.type + " World",
+                        result.message,
+                        editorDirtyState_.Revision() + 1);
+                    if (editor::EditorDocumentRecord* document =
+                            editorDocumentManager_.Find(
+                                result.document)) {
+                        editorDocumentManager_.MarkDirty(
+                            document->id, result.message);
+                    }
+                    editorNotifications_.Push(
+                        editor::EditorNotificationSeverity::Info,
+                        "Spline Tool",
+                        result.message);
                 }});
         editor::RegisterProductionTerrainBrushTools(
             editorModeRegistry_, &editorTerrainToolBinding_);
@@ -1298,6 +1365,25 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
         };
         editor::RegisterProductionGeometryTools(
             editorModeRegistry_, &editorGeometryToolBinding_);
+        editorCreateEditableCopyToolBinding_.workspace =
+            &editorGeometryWorkspace_;
+        editorCreateEditableCopyToolBinding_.assetRegistry =
+            &editorAssetRegistry_;
+        editorCreateEditableCopyToolBinding_.sourceLoader =
+            &editorProductionMeshEditableSourceLoader_;
+        editorCreateEditableCopyToolBinding_.onCommitRequested =
+            [this](
+                const editor::EditorCreateEditableCopyCommitRequest&
+                    request) {
+                editorNotifications_.Push(
+                    editor::EditorNotificationSeverity::Info,
+                    "Modeling Tool",
+                    "Editable copy created from Production Mesh " +
+                        request.sourceIdentity.assetGuid + ".");
+            };
+        editor::RegisterProductionCreateEditableCopyTools(
+            editorModeRegistry_,
+            &editorCreateEditableCopyToolBinding_);
         editorMeshBakeToolBinding_.workspace = &editorGeometryWorkspace_;
         editorMeshBakeToolBinding_.pipeline = &editorMeshBakePipeline_;
         editorMeshBakeToolBinding_.onCommitted = [this](
@@ -1962,8 +2048,17 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 editorDocumentManager_.MarkDirty(document->id, reason);
             }
         });
+    editor::EditorDocumentId activeSceneDocument = editorSceneDocumentId_;
+    if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active();
+        activeDocument != nullptr && activeDocument->open &&
+        activeDocument->id.type == editor::EditorDocumentTypes::Scene) {
+        activeSceneDocument = activeDocument->id;
+    }
     editorSceneWorldProvider_.Bind(
-        editorSceneDocumentProvider_.Scene(editorSceneDocumentId_), editorSceneDocumentId_);
+        editorSceneDocumentProvider_.Scene(activeSceneDocument),
+        activeSceneDocument,
+        &editorSceneComponentRegistry_,
+        &editorGimmickDefinitionRegistry_);
     editor::EditorDocumentId activeGeometryDocument{};
     if (const editor::EditorDocumentRecord* activeDocument = editorDocumentManager_.Active();
         activeDocument != nullptr && activeDocument->id.type == editor::EditorDocumentTypes::Scene) {
@@ -2015,7 +2110,25 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         ? "Production Mesh Bake reverted."
                         : "Production Mesh artifacts and runtime cache updated.");
             });
+        const editor::EditorMeshAssetChangeSet meshAssetChanges =
+            editorMeshAssetChangeTracker_.Poll(editorAssetRegistry_);
+        const editor::EditorProductionMeshRuntimeReconcileResult meshReconcile =
+            editorProductionMeshRuntimeCache_.ReconcileAssets(
+                editorAssetRegistry_, meshAssetChanges);
+        if (meshReconcile.failed != 0 && !meshReconcile.diagnostics.empty()) {
+            editorNotifications_.Push(
+                editor::EditorNotificationSeverity::Warning,
+                "Mesh Asset Hot Reload",
+                meshReconcile.diagnostics.front());
+        }
         if (context.frameState != nullptr) {
+            const editor::EditorScene& productionMeshScene =
+                editorGimmickRuntimeAdapter_ != nullptr &&
+                    editorGimmickRuntimeAdapter_->Active()
+                ? editorGimmickRuntimeAdapter_->Scene()
+                : editorMeshRendererRuntimeWorld_.Active()
+                ? editorMeshRendererRuntimeWorld_.Scene()
+                : *geometryScene;
             std::string worldPartitionError;
             editorWorldPartitionPipeline_.Sync(
                 *geometryScene,
@@ -2038,8 +2151,12 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 &transientMeshError,
                 &editorWorldPartitionPipeline_.SourceResidentEntities());
             std::string productionSceneError;
+            const std::unordered_set<std::string>* productionResidentEntities =
+                editorPlaySession_.IsActive()
+                    ? &editorWorldPartitionPipeline_.SourceResidentEntities()
+                    : nullptr;
             editorProductionScenePipeline_.Sync(
-                *geometryScene,
+                productionMeshScene,
                 editorAssetRegistry_,
                 editorProductionMeshRuntimeCache_,
                 context.frameState->cameraWorldPosition,
@@ -2048,7 +2165,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 context.editorCompletedFenceValue,
                 context.editorScheduledFenceValue,
                 &productionSceneError,
-                &editorWorldPartitionPipeline_.SourceResidentEntities(),
+                productionResidentEntities,
                 &editorTransientMeshRenderPath_.OverriddenEntities());
             std::string productionNavigationError;
             editorProductionNavigationPipeline_.Sync(
@@ -2119,6 +2236,10 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             const auto& hlodPackets = editorWorldPartitionPipeline_.HlodPackets();
             streamingCandidates.insert(
                 streamingCandidates.end(), hlodPackets.begin(), hlodPackets.end());
+            if (editorProductionScenePipeline_.DrawMode() ==
+                editor::EditorProductionMeshDrawMode::ForceDirect) {
+                streamingCandidates.clear();
+            }
             editorProductionGpuDrivenPipeline_.Sync(
                 streamingCandidates,
                 editorProductionMaterialPipeline_,
@@ -2128,6 +2249,28 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 context.editorCompletedFenceValue,
                 context.editorScheduledFenceValue,
                 &productionVisibilityError);
+            const editor::EditorProductionGpuDrivenStats&
+                gpuDrivenStats =
+                    editorProductionGpuDrivenPipeline_.Stats();
+            editorProductionScenePipeline_.UpdatePresentationRouting(
+                editor::EditorProductionMeshGpuRoutingState{
+                    editorProductionGpuDrivenPipeline_.Ready(),
+                    gpuDrivenStats.dispatchSucceeded,
+                    gpuDrivenStats.readbackAvailable,
+                    gpuDrivenStats.commandLayoutValidated,
+                    editorProductionGpuDrivenPipeline_
+                        .AutoValidationReady(),
+                    gpuDrivenStats.hiZFresh,
+                    gpuDrivenStats.frustumOnlyRetry,
+                    gpuDrivenStats.occlusionQuarantined,
+                    gpuDrivenStats.gpuVisibleInstances,
+                    gpuDrivenStats.frustumRejectedInstances,
+                    gpuDrivenStats.hiZRejectedInstances,
+                    gpuDrivenStats.invalidBatchInstances,
+                    gpuDrivenStats.preparedBatches,
+                    gpuDrivenStats.executedBatches,
+                    editorProductionGpuDrivenPipeline_
+                        .AutoFallbackReason()});
         }
     } else {
         editorGeometryExecution_.Clear();
@@ -2293,7 +2436,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         worldInputSignature *= 1099511628211ull;
     };
     mixWorldInput(runtimeState.terrain.courseObjectEditRevision);
-    if (const editor::EditorScene* scene = editorSceneDocumentProvider_.Scene(editorSceneDocumentId_)) {
+    if (const editor::EditorScene* scene = editorSceneDocumentProvider_.Scene(activeSceneDocument)) {
         mixWorldInput(scene->revision);
         mixWorldInput(scene->entities.size());
     }
@@ -2509,6 +2652,14 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             static_cast<uint32_t>((std::max)(1.0f, editorWorkSize.x)),
             static_cast<uint32_t>((std::max)(1.0f, editorWorkSize.y))});
     const ImGuiIO& imguiIO = ImGui::GetIO();
+    if (!showDeveloperTools_ && editorContentDrawer_.IsVisible()) {
+        editorContentDrawer_.DockInLayout();
+    }
+    editorContentDrawer_.Tick(imguiIO.DeltaTime);
+    const editor::EditorPanelRect contentDrawerWorkspace =
+        editorPanelLayout_.ContentBrowserPresentationRect(true);
+    const editor::EditorPanelRect contentDrawerPresentationRect =
+        editorContentDrawer_.ResolvePresentationRect(contentDrawerWorkspace);
     const editor::EditorViewportRenderTargetState& editorViewportTarget =
         editorViewportRenderTarget_.State();
     const editor::EditorViewportPanelRenderInput viewportSurfaceInput{
@@ -2558,6 +2709,60 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 ? context.frameState->cameraWorldPosition
                 : Vector3{},
             1.0f});
+    {
+        const bool playSessionActive = editorPlaySession_.IsActive();
+        const bool coursePreviewFrozen =
+            runtimeState.terrain.freezeCourseRuntime;
+        if (playSessionActive || coursePreviewFrozen) {
+            std::ostringstream debugState;
+            if (playSessionActive) {
+                debugState
+                    << (editorPlaySession_.RuntimePaused()
+                            ? "FROZEN"
+                            : "RUNTIME LIVE")
+                    << " | "
+                    << editor::ToString(editorPlaySession_.ViewportMode())
+                    << "\nRuntime frame "
+                    << editorPlaySession_.RuntimeFrameCount()
+                    << " | completed steps "
+                    << editorPlaySession_.RuntimeStepCount();
+                if (editorPlaySession_.RuntimeStepRequested()) {
+                    debugState << " | STEP QUEUED";
+                }
+                debugState
+                    << "\nF10: Eject/Possess | RMB+WASD: Move | Q/E: Vertical";
+                if (editorPlaySession_.ViewportEjected()) {
+                    debugState
+                        << "\nCamera input: "
+                        << (editorViewportInteraction_
+                                    .HasViewportCameraCapture()
+                                ? "CAPTURED"
+                                : "Awaiting RMB in Viewport");
+                }
+            } else {
+                debugState
+                    << "COURSE PREVIEW FROZEN | Editor Free Camera"
+                    << "\nRMB+WASD: Move | Q/E: Vertical"
+                    << "\nCourse simulation is stopped; camera inspection remains live.";
+            }
+            editor::EditorViewportOverlayItemOptions options{};
+            options.selected = true;
+            options.iconFallback = false;
+            options.background = true;
+            options.priority = 1000;
+            editorViewportOverlay_
+                .Sink(editor::EditorViewportOverlayLayerId::AuthoringHelpers)
+                .Label(
+                    14.0f,
+                    14.0f,
+                    debugState.str(),
+                    editorPlaySession_.ViewportEjected() ||
+                            (!playSessionActive && coursePreviewFrozen)
+                        ? 0xff72e6ffu
+                        : 0xffffd36bu,
+                    options);
+        }
+    }
     {
         editor::EditorViewportOverlayCommandSink boundsSink =
             editorViewportOverlay_.Sink(editor::EditorViewportOverlayLayerId::AuthoringHelpers);
@@ -2614,11 +2819,36 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     const bool popupOrModalActive = ImGui::IsPopupOpen(
         nullptr,
         ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    const bool contentDrawerWasVisible = editorContentDrawer_.IsVisible();
+    editorContentDrawer_.HandleOutsidePointerPress(
+        contentDrawerPresentationRect,
+        imguiIO.MousePos.x,
+        imguiIO.MousePos.y,
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left),
+        popupOrModalActive || editorConfirmService_.HasPending());
+    const bool contentDrawerBlocksViewport =
+        contentDrawerWasVisible &&
+        editorContentDrawer_.BlocksViewportPointer(
+            contentDrawerPresentationRect,
+            imguiIO.MousePos.x,
+            imguiIO.MousePos.y,
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left));
+    const bool contentDrawerEscapeRequested =
+        editorContentDrawer_.IsVisible() &&
+        !imguiIO.WantTextInput &&
+        !popupOrModalActive &&
+        !editorConfirmService_.HasPending() &&
+        ImGui::IsKeyPressed(ImGuiKey_Escape);
+    if (contentDrawerEscapeRequested) {
+        editorContentDrawer_.Close();
+    }
     const bool cameraCancelRequested =
         editorViewportInteraction_.HasViewportCameraCapture() &&
+        !contentDrawerEscapeRequested &&
         !imguiIO.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Escape);
     editor::EditorViewportInteractionInput viewportInteractionInput{};
-    viewportInteractionInput.viewportRect = viewportSurfaceRect;
+    viewportInteractionInput.viewportRect =
+        editorContentBrowserMaximized_ ? editor::EditorPanelRect{} : viewportSurfaceRect;
     viewportInteractionInput.renderWidth = editorViewportTarget.renderWidth;
     viewportInteractionInput.renderHeight = editorViewportTarget.renderHeight;
     viewportInteractionInput.mouseX = imguiIO.MousePos.x;
@@ -2628,11 +2858,17 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     viewportInteractionInput.imguiWantsMouse = imguiIO.WantCaptureMouse;
     viewportInteractionInput.developerToolsVisible = showDeveloperTools_;
     viewportInteractionInput.viewportFocusMode = viewportFocusMode_;
-    viewportInteractionInput.documentEditable = editableCourse != nullptr;
+    const editor::EditorDocumentRecord* activeViewportDocument =
+        editorDocumentManager_.Active();
+    viewportInteractionInput.documentEditable =
+        activeViewportDocument != nullptr && activeViewportDocument->open;
     viewportInteractionInput.authoringMutationAllowed = !editorPlaySession_.IsActive();
     viewportInteractionInput.playSessionActive = editorPlaySession_.IsActive();
-    viewportInteractionInput.viewportOwnsMouse = true;
-    viewportInteractionInput.viewportUiBlocked = viewportOverlayUiBlocked;
+    viewportInteractionInput.viewportOwnsMouse = !editorContentBrowserMaximized_;
+    viewportInteractionInput.viewportUiBlocked =
+        editorContentBrowserMaximized_ ||
+        contentDrawerBlocksViewport ||
+        viewportOverlayUiBlocked;
     viewportInteractionInput.popupOrModalActive = popupOrModalActive;
     viewportInteractionInput.interactiveToolActive = interactiveToolConsumesViewport;
     viewportInteractionInput.primaryPressed = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
@@ -2841,6 +3077,103 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             context.courseSpeed,
             context.courseRailLength});
     {
+        struct FeatureEvidenceCounts {
+            size_t entities = 0;
+            size_t runtimeDisabledEntities = 0;
+            size_t disabledComponents = 0;
+            size_t meshes = 0;
+            size_t colliders = 0;
+            size_t spawnPoints = 0;
+            size_t splineRoutes = 0;
+            size_t patrols = 0;
+            size_t gimmicks = 0;
+            size_t eventBindings = 0;
+            size_t eventSequences = 0;
+        } evidence;
+
+        const editor::EditorScene* evidenceScene = ActiveEditorScene();
+        if (evidenceScene != nullptr) {
+            evidence.entities = evidenceScene->entities.size();
+            for (const editor::EditorSceneEntity& entity : evidenceScene->entities) {
+                if (!entity.runtimeEnabled) {
+                    ++evidence.runtimeDisabledEntities;
+                }
+                for (const editor::EditorSceneComponent& component : entity.components) {
+                    if (!component.enabled) {
+                        ++evidence.disabledComponents;
+                    }
+                    if (component.typeId == editor::kEditorMeshRendererComponentType) {
+                        ++evidence.meshes;
+                    } else if (component.typeId == editor::kEditorBoxColliderComponentType) {
+                        ++evidence.colliders;
+                    } else if (component.typeId ==
+                               editor::kEditorGameplaySpawnPointComponentType) {
+                        ++evidence.spawnPoints;
+                    } else if (component.typeId ==
+                               editor::kEditorSplineRouteComponentType) {
+                        ++evidence.splineRoutes;
+                    } else if (component.typeId == editor::kEditorPatrolComponentType) {
+                        ++evidence.patrols;
+                    } else if (component.typeId == editor::kEditorGimmickComponentType) {
+                        ++evidence.gimmicks;
+                    } else if (component.typeId ==
+                               editor::kEditorGimmickEventBindingComponentType) {
+                        ++evidence.eventBindings;
+                    } else if (component.typeId ==
+                               editor::kEditorGimmickEventSequenceComponentType) {
+                        ++evidence.eventSequences;
+                    }
+                }
+            }
+        }
+
+        std::ostringstream authoredDetail;
+        authoredDetail
+            << "entities=" << evidence.entities
+            << " mesh=" << evidence.meshes
+            << " collider=" << evidence.colliders
+            << " spawn=" << evidence.spawnPoints
+            << " spline=" << evidence.splineRoutes
+            << " patrol=" << evidence.patrols
+            << " gimmick=" << evidence.gimmicks
+            << " binding=" << evidence.eventBindings
+            << " sequence=" << evidence.eventSequences
+            << " runtimeDisabled=" << evidence.runtimeDisabledEntities
+            << " componentDisabled=" << evidence.disabledComponents
+            << " terrainRevision="
+            << runtimeState.terrain.courseObjectEditRevision;
+        editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
+            "Submission Evidence",
+            "+Alpha Authored Inventory",
+            evidenceScene != nullptr ? "Captured" : "No Scene",
+            authoredDetail.str(),
+            evidenceScene != nullptr ? editor::EditorRuntimeWatchSeverity::Info
+                                     : editor::EditorRuntimeWatchSeverity::Warning,
+            editorDocumentServiceFrame_});
+
+        std::ostringstream captureDetail;
+        captureDetail
+            << "runtime="
+            << (editorPlaySession_.RuntimePaused() ? "Frozen" : "Live")
+            << " stepQueued="
+            << (editorPlaySession_.RuntimeStepRequested() ? "true" : "false")
+            << " viewport=" << editor::ToString(editorPlaySession_.ViewportMode())
+            << " runtimeFrame=" << editorPlaySession_.RuntimeFrameCount()
+            << " completedSteps=" << editorPlaySession_.RuntimeStepCount()
+            << " ejects=" << editorPlaySession_.EjectCount()
+            << " possesses=" << editorPlaySession_.PossessCount()
+            << " controls=[Freeze, Step, F10 Eject/Possess]";
+        editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
+            "Submission Evidence",
+            "Runtime Debug Capture",
+            editorPlaySession_.IsActive()
+                ? (editorPlaySession_.RuntimePaused() ? "Frozen" : "Running")
+                : "Stopped",
+            captureDetail.str(),
+            editor::EditorRuntimeWatchSeverity::Info,
+            editorDocumentServiceFrame_});
+    }
+    {
         const editor::EditorProductionTexturePipelineStats& textureStats =
             editorProductionTexturePipeline_.Stats();
         std::ostringstream detail;
@@ -2932,8 +3265,21 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                << "/" << visibilityStats.rejectedByBatchBudget
                << " dispatch/readback=" << visibilityStats.dispatches
                << "/" << visibilityStats.readbacks
+               << " reject(frustum/hiz/batch)="
+               << visibilityStats.frustumRejectedInstances
+               << "/" << visibilityStats.hiZRejectedInstances
+               << "/" << visibilityStats.invalidBatchInstances
+               << " prepare/submit=" << visibilityStats.preparedBatches
+               << "/" << visibilityStats.executedBatches
+               << " capacity=" << visibilityStats.submittedCommandCapacity
                << " command=" << (visibilityStats.commandLayoutValidated ? "valid" : "pending")
-               << " occlusion=" << (visibilityStats.occlusionEnabled ? "Hi-Z" : "frustum");
+               << " auto=" << (editorProductionGpuDrivenPipeline_.AutoValidationReady()
+                                      ? "indirect"
+                                      : "direct-fallback")
+               << " occlusion=" << (visibilityStats.occlusionEnabled ? "Hi-Z" : "frustum")
+               << " hizFresh=" << (visibilityStats.hiZFresh ? "yes" : "no")
+               << " retry=" << (visibilityStats.frustumOnlyRetry ? "yes" : "no")
+               << " quarantine=" << (visibilityStats.occlusionQuarantined ? "yes" : "no");
         const bool constrained = !visibilityStats.ready ||
             visibilityStats.cpuFallbackPackets != 0 || visibilityStats.ringStalls != 0;
         editorRuntimeInspector_.AddRecord(editor::EditorRuntimeWatchRecord{
@@ -3260,7 +3606,11 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &editorCommandInputRouter_,
         &editorCommandPalette_,
         showDeveloperTools_};
+    editorContext.coursePreviewVisible = context.course != nullptr;
+    editorContext.contentDrawer = &editorContentDrawer_;
+    editorContext.framePacing = &editorFramePacing_;
     editorContext.viewportOverlay = &editorViewportOverlay_;
+    editorContext.viewportRealtimePolicy = &editorViewportRealtimePolicy_;
     editorContext.layoutPersistence = &editorLayoutPersistence_;
     editorContext.worldMutations = &editorWorldMutationService_;
     editorContext.sceneWorldProvider = &editorSceneWorldProvider_;
@@ -3275,6 +3625,39 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     editorContext.navigationAuthoring = &editorProductionNavigationAuthoringPipeline_;
     editorContext.interactiveTools = &editorInteractiveTools_;
     editorContext.interactiveExecution = &editorInteractiveExecution_;
+    auto onBlenderSceneChanged =
+        [this](const editor::EditorDocumentId& document, std::string_view) {
+            if (document.type == editor::EditorDocumentTypes::Scene) {
+                editorSceneDocumentId_ = document;
+                editorSceneWorldProvider_.Bind(
+                    editorSceneDocumentProvider_.Scene(document),
+                    document,
+                    &editorSceneComponentRegistry_,
+                    &editorGimmickDefinitionRegistry_);
+            }
+            editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+            editorSelection_.Clear();
+        };
+    editor::EditorBlenderSceneImportExecutionService
+        blenderSceneImportExecution{
+            editorSceneDocumentProvider_,
+            &editorDocumentManager_,
+            &editorDirtyState_,
+            onBlenderSceneChanged};
+    editor::EditorBlenderSceneImportWorkflow blenderSceneImportWorkflow{
+        editorSceneDocumentProvider_,
+        editorTransactions,
+        &editorAssetRegistry_,
+        &editorDocumentManager_,
+        &editorDirtyState_,
+        onBlenderSceneChanged};
+    editorContext.blenderSceneImportExecution =
+        &blenderSceneImportExecution;
+    editorContext.blenderSceneImportWorkflow =
+        &blenderSceneImportWorkflow;
+    editorContext.selectBlenderLevelJsonFile = [this]() {
+        return OpenBlenderLevelJsonDialog(hwnd_);
+    };
     editorContext.onWorldMutated = [&](const editor::EditorWorldMutationResult& result) {
         if (result.document.type == editor::EditorDocumentTypes::Course) {
             ++runtimeState.terrain.courseObjectEditRevision;
@@ -3322,7 +3705,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     interactiveInput.viewportPrimaryCancelled =
         editorViewportInteraction_.State().primaryCaptureCancelled;
     if (!ImGui::GetIO().WantTextInput) {
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !cameraCancelRequested) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape) &&
+            !cameraCancelRequested &&
+            !contentDrawerEscapeRequested) {
             editorInteractiveTools_.RequestCancel();
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Enter)) editorInteractiveTools_.RequestAccept();
@@ -3340,6 +3725,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         }
         if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_5)) {
             editorInteractiveTools_.ActivateMode("editor.mode.modeling");
+        }
+        if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_6)) {
+            editorInteractiveTools_.ActivateMode("editor.mode.paths");
         }
     }
     editorInteractiveTools_.Tick(
@@ -3387,6 +3775,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editor::EditorCommandInputRouterOptions{
             showDeveloperTools_,
             true});
+    if (editorContentDrawer_.IsVisible()) {
+        editorContentBrowserMaximized_ = false;
+    }
     editorCommandPalette_.Draw(editorContext);
     editor::DrawEditorMenuBar(editorContext);
     editor::DrawEditorToolbar(editorContext);
@@ -3616,6 +4007,13 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 editor::DrawEditorDetailsPanel(
                     editor::EditorDetailsPanelContext{
                         &editorSelection_,
+                        &editorSceneComponentRegistry_,
+                        &editorGimmickDefinitionRegistry_,
+                        editorGimmickRuntimeWorld_,
+                        editorGimmickRuntimeAdapter_,
+                        editorGimmickRuntimeEventRouter_,
+                        editorGimmickRuntimeInteraction_,
+                        editorGimmickRuntimeTriggers_,
                         &editorPropertyRegistry_,
                         &editorPropertyAccessor,
                         &editorPreviewPropertyAccessor,
@@ -3635,7 +4033,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         editorCommandContext.canMutateAuthoring,
                         &editorWorldMutationService_,
                         &editorSceneWorldProvider_,
-                        editorContext.onWorldMutated});
+                        editorContext.onWorldMutated,
+                        &editorProductionScenePipeline_});
             }});
     registerPanel(
         editor::EditorPanelDescriptor{
@@ -3688,6 +4087,22 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             editor::EditorPanelHostArea::RightInspector,
             panelVisible("scene.lighting"),
             [&]() { DrawSceneLightingControlsPanel(runtimeState); }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "terrain.pbrMaterials",
+            "Terrain PBR Materials",
+            "Terrain",
+            editor::EditorPanelHostArea::RightInspector,
+            panelVisible("terrain.pbrMaterials"),
+            [&]() {
+                DrawTerrainPbrMaterialsPanel(
+                    terrainPbrMaterialsPanelState_,
+                    TerrainPbrMaterialsPanelContext{
+                        context.scene,
+                        &editorNotifications_,
+                        hwnd_,
+                        editorCommandContext.canMutateAuthoring});
+            }});
     registerPanel(
         editor::EditorPanelDescriptor{
             "postprocess.inspector",
@@ -3845,7 +4260,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         &editorContentBrowserState_,
                         &editorAssetWorkspaceStatus_,
                         hwnd_,
-                        &pendingExternalAssetImportPaths_});
+                        &pendingExternalAssetImportPaths_,
+                        &editorProductionMeshRuntimeCache_});
             }});
     registerPanel(
         editor::EditorPanelDescriptor{
@@ -4177,12 +4593,16 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     const auto panelDrawStart = EditorUiTimingClock::now();
     editorLayoutPersistence_.CaptureRegistryDefaults(editorPanelRegistry_);
     editorLayoutPersistence_.ValidateActivePanels(editorPanelRegistry_);
-    editorPanelHost_.DrawArea(
-        editorPanelRegistry_,
-        editor::EditorPanelHostArea::Viewport,
-        editorPanelLayout_.ViewportRect(),
-        "Editor Viewport Host",
-        &editorLayoutPersistence_);
+    const bool contentBrowserMaximized =
+        showDeveloperTools_ && editorContentBrowserMaximized_;
+    if (!contentBrowserMaximized) {
+        editorPanelHost_.DrawArea(
+            editorPanelRegistry_,
+            editor::EditorPanelHostArea::Viewport,
+            editorPanelLayout_.ViewportRect(),
+            "Editor Viewport Host",
+            &editorLayoutPersistence_);
+    }
     editorPanelHost_.DrawArea(
         editorPanelRegistry_,
         editor::EditorPanelHostArea::LeftSidebar,
@@ -4195,18 +4615,80 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorPanelLayout_.InspectorRect(),
         "Editor Right Inspector",
         &editorLayoutPersistence_);
+    const std::vector<editor::EditorPanelHostAction>
+        contentBrowserLayoutActions{{
+            contentBrowserMaximized ? "Restore" : "Maximize",
+            contentBrowserMaximized
+                ? "Restore the Viewport and Bottom Dock."
+                : "Expand Content Browser across the central editor workspace.",
+            [this]() {
+                if (!editorContentBrowserMaximized_) {
+                    editorContentDrawer_.DockInLayout();
+                }
+                editorContentBrowserMaximized_ =
+                    !editorContentBrowserMaximized_;
+            }}};
     editorPanelHost_.DrawArea(
         editorPanelRegistry_,
         editor::EditorPanelHostArea::ContentBrowser,
-        editorPanelLayout_.ContentBrowserRect(),
+        editorPanelLayout_.ContentBrowserPresentationRect(contentBrowserMaximized),
         "Editor Content Browser",
-        &editorLayoutPersistence_);
-    editorPanelHost_.DrawArea(
-        editorPanelRegistry_,
-        editor::EditorPanelHostArea::BottomDock,
-        editorPanelLayout_.DiagnosticsRect(),
-        "Editor Bottom Dock",
-        &editorLayoutPersistence_);
+        &editorLayoutPersistence_,
+        &contentBrowserLayoutActions);
+    if (!contentBrowserMaximized) {
+        editorPanelHost_.DrawArea(
+            editorPanelRegistry_,
+            editor::EditorPanelHostArea::BottomDock,
+            editorPanelLayout_.DiagnosticsRect(),
+            "Editor Bottom Dock",
+            &editorLayoutPersistence_);
+    }
+    if (showDeveloperTools_ &&
+        contentDrawerPresentationRect.Valid() &&
+        editorContentDrawer_.IsVisible()) {
+        if (editorContentDrawer_.ConsumeFocusRequest()) {
+            editorInteractiveTools_.RequestCancel();
+            ImGui::SetNextWindowFocus();
+        }
+        const std::vector<editor::EditorPanelHostAction>
+            contentDrawerActions{
+                {
+                    editorContentDrawer_.IsPinned() ? "Unpin" : "Pin",
+                    editorContentDrawer_.IsPinned()
+                        ? "Return to transient Content Drawer behavior."
+                        : "Keep the Content Drawer open while working elsewhere.",
+                    [this]() {
+                        editorContentDrawer_.SetPinned(
+                            !editorContentDrawer_.IsPinned());
+                    },
+                },
+                {
+                    "Dock in Layout",
+                    "Close the Drawer and focus the docked Content Browser.",
+                    [this]() {
+                        editorLayoutPersistence_.SetPanelVisible(
+                            "editor.assets", true);
+                        editorLayoutPersistence_.SetActivePanelFromUser(
+                            editor::EditorPanelHostArea::ContentBrowser,
+                            "editor.assets");
+                        editorContentDrawer_.DockInLayout();
+                    },
+                },
+                {
+                    "Close",
+                    "Close Content Drawer (Ctrl+Space or Escape).",
+                    [this]() {
+                        editorContentDrawer_.Close();
+                    },
+                }};
+        editorPanelHost_.DrawArea(
+            editorPanelRegistry_,
+            editor::EditorPanelHostArea::ContentBrowser,
+            contentDrawerPresentationRect,
+            "Editor Content Drawer",
+            &editorLayoutPersistence_,
+            &contentDrawerActions);
+    }
     interactiveEnvironment.selectionRevision = editorSelection_.Revision();
     interactiveEnvironment.documentEditRevision = 0;
     interactiveEnvironment.documentGeneration = 0;
@@ -4225,7 +4707,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     imguiTiming.panelDrawMs = EditorUiElapsedMs(panelDrawStart, EditorUiTimingClock::now());
 
     const auto layoutPersistenceStart = EditorUiTimingClock::now();
-    if (DrawEditorWorkspaceSplitters(editorPanelLayoutConfig, editorPanelLayout_)) {
+    if (!contentBrowserMaximized &&
+        DrawEditorWorkspaceSplitters(editorPanelLayoutConfig, editorPanelLayout_)) {
         editorPanelLayout_.Configure(editorPanelLayoutConfig);
         editorLayoutPersistence_.CaptureLayout(editorPanelLayoutConfig);
         editorViewportRenderTarget_.Update(
@@ -4275,7 +4758,9 @@ void AppImGuiLayer::Shutdown() {
     editorGeometryWorkspace_.Clear();
     editorMeshBakeExecution_.Clear();
     editorMeshBakePipeline_.Clear();
+    editorMeshAssetChangeTracker_.Reset();
     editorProductionMeshRuntimeCache_.Clear();
+    editorMeshRendererRuntimeWorld_.Clear();
     editorViewportOverlay_.UnregisterProvider(editorProductionNavigationAuthoringPipeline_.Id());
     editorProductionNavigationAuthoringPipeline_.Shutdown();
     editorProductionAiValidationPipeline_.Shutdown();
@@ -4327,6 +4812,22 @@ void AppImGuiLayer::CompleteEditorRuntimeFrameAdvance(bool advanced) {
     if (advanced) {
         editorPlaySession_.CompleteRuntimeFrameAdvance();
     }
+}
+
+editor::EditorScene* AppImGuiLayer::ActiveEditorScene() {
+    if (const editor::EditorDocumentRecord* active = editorDocumentManager_.Active();
+        active != nullptr && active->id.type == editor::EditorDocumentTypes::Scene) {
+        return editorSceneDocumentProvider_.Scene(active->id);
+    }
+    return editorSceneDocumentProvider_.Scene(editorSceneDocumentId_);
+}
+
+const editor::EditorScene* AppImGuiLayer::ActiveEditorScene() const {
+    if (const editor::EditorDocumentRecord* active = editorDocumentManager_.Active();
+        active != nullptr && active->id.type == editor::EditorDocumentTypes::Scene) {
+        return editorSceneDocumentProvider_.Scene(active->id);
+    }
+    return editorSceneDocumentProvider_.Scene(editorSceneDocumentId_);
 }
 
 const editor::EditorViewportRenderTargetState& AppImGuiLayer::EditorViewportRenderTargetState() const {
@@ -4497,6 +4998,14 @@ bool AppImGuiLayer::ShouldAdvanceEditorRuntimeFrame() const {
 
 void AppImGuiLayer::CompleteEditorRuntimeFrameAdvance(bool advanced) {
     (void)advanced;
+}
+
+editor::EditorScene* AppImGuiLayer::ActiveEditorScene() {
+    return editorSceneDocumentProvider_.Scene(editorSceneDocumentId_);
+}
+
+const editor::EditorScene* AppImGuiLayer::ActiveEditorScene() const {
+    return editorSceneDocumentProvider_.Scene(editorSceneDocumentId_);
 }
 
 const editor::EditorViewportRenderTargetState& AppImGuiLayer::EditorViewportRenderTargetState() const {

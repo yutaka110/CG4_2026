@@ -3,6 +3,7 @@
 #include "EditorCommandRegistry.h"
 #include "EditorContext.h"
 #include "EditorLayoutService.h"
+#include "EditorPlaySessionState.h"
 #include "EditorToolRegistration.h"
 #include "EditorTransformGizmoService.h"
 #include "documents/EditorDocumentManager.h"
@@ -44,15 +45,22 @@ void DrawEnabledTooltip(const EditorCommand& command) {
     }
 }
 
-bool ContextAllowsItem(
+} // namespace
+
+bool EditorToolbarItemMatchesContext(
     const EditorContext& context,
     const EditorToolbarItemDescriptor& item) {
+    if (item.requiresCoursePreview && !context.coursePreviewVisible) {
+        return false;
+    }
     if (item.contextualDocumentType.empty()) return true;
     const EditorDocumentRecord* active =
         context.documentManager != nullptr ? context.documentManager->Active() : nullptr;
     return active != nullptr && active->open &&
         active->id.type == item.contextualDocumentType;
 }
+
+namespace {
 
 std::string ToolbarLabel(
     const EditorContext& context,
@@ -66,12 +74,20 @@ std::string ToolbarLabel(
             return state.snapEnabled ? "Snap On" : "Snap Off";
         }
     }
+    if (item.commandId == "editor.toggleViewportPossession" &&
+        context.playSession != nullptr) {
+        return context.playSession->ViewportEjected() ? "Possess" : "Eject";
+    }
     return item.label;
 }
 
 bool ToolbarItemActive(
     const EditorContext& context,
     const EditorToolbarItemDescriptor& item) {
+    if (item.commandId == "editor.toggleViewportPossession") {
+        return context.playSession != nullptr &&
+            context.playSession->ViewportEjected();
+    }
     if (context.transformGizmo == nullptr) return false;
     const EditorTransformGizmoState& state = context.transformGizmo->State();
     if (item.commandId == "editor.transform.translate") {
@@ -138,10 +154,11 @@ void RegisterDefaultEditorToolbar(EditorToolRegistry& registry) {
         {"toolbar.editor.play", "editor.play", "Play", 400, false},
         {"toolbar.editor.simulate", "editor.simulate", "Sim", 410, false},
         {"toolbar.editor.stop", "editor.stop", "Stop", 420, false},
-        {"toolbar.editor.pauseRuntime", "editor.pauseRuntime", "Pause", 430, false},
+        {"toolbar.editor.pauseRuntime", "editor.pauseRuntime", "Freeze", 430, false},
         {"toolbar.editor.resumeRuntime", "editor.resumeRuntime", "Resume", 440, false},
-        {"toolbar.editor.stepRuntime", "editor.stepRuntime", "Step", 450, true},
-        {"toolbar.course.previewFreeze", "course.previewFreeze", "Freeze", 500, false},
+        {"toolbar.editor.stepRuntime", "editor.stepRuntime", "Step", 450, false},
+        {"toolbar.editor.viewportPossession", "editor.toggleViewportPossession", "Eject", 460, true},
+        {"toolbar.course.previewFreeze", "course.previewFreeze", "Course Freeze", 500, false},
         {"toolbar.course.apply", "course.apply", "Apply", 510, false},
         {"toolbar.course.reload", "course.reload", "Reload", 520, true},
         {"toolbar.editor.commandPalette", "editor.commandPalette", "Palette", 900, false},
@@ -159,6 +176,10 @@ void RegisterDefaultEditorToolbar(EditorToolRegistry& registry) {
                 true};
         if (std::string_view(command.id).find("toolbar.course.") == 0) {
             item.contextualDocumentType = std::string(EditorDocumentTypes::Course);
+        }
+        if (std::string_view(command.id) == "toolbar.course.previewFreeze") {
+            item.contextualDocumentType.clear();
+            item.requiresCoursePreview = true;
         }
         registry.RegisterToolbarItem(std::move(item));
     }
@@ -233,7 +254,10 @@ void DrawEditorToolbar(EditorContext& context) {
     }
     std::vector<const EditorToolbarItemDescriptor*> toolbarItems;
     for (const EditorToolbarItemDescriptor* item : context.tools->Toolbar().VisibleItems()) {
-        if (item != nullptr && ContextAllowsItem(context, *item)) toolbarItems.push_back(item);
+        if (item != nullptr &&
+            EditorToolbarItemMatchesContext(context, *item)) {
+            toolbarItems.push_back(item);
+        }
     }
 
     std::vector<const EditorToolbarItemDescriptor*> overflowItems;

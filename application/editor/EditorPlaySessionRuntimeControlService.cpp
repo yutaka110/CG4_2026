@@ -17,6 +17,7 @@ EditorPlaySessionRuntimeControlResult MakeResult(
     result.sessionSerial = playSession.SessionSerial();
     result.runtimePaused = playSession.RuntimePaused();
     result.runtimeStepRequested = playSession.RuntimeStepRequested();
+    result.viewportMode = playSession.ViewportMode();
     result.runtimeFrameCount = playSession.RuntimeFrameCount();
     result.runtimeResetCount = playSession.RuntimeResetCount();
     result.message = std::move(message);
@@ -123,6 +124,44 @@ EditorPlaySessionRuntimeControlResult EditorPlaySessionRuntimeControlService::St
     }
     request.playSession->RequestRuntimeStep();
     const std::string message = "Queued one Play/Sim runtime step.";
+    NotifySuccess(request, message);
+    return MakeResult(*request.playSession, true, message);
+}
+
+EditorPlaySessionRuntimeControlResult EditorPlaySessionRuntimeControlService::Eject(
+    const EditorPlaySessionRuntimeControlRequest& request) const {
+    std::string validationMessage;
+    if (!ValidateActiveSession(request, validationMessage)) {
+        return Fail(request, validationMessage);
+    }
+    if (!request.playSession->EjectViewport()) {
+        return Fail(
+            request,
+            request.playSession->ViewportEjected()
+                ? std::string("Viewport is already using the ejected Free Camera.")
+                : std::string("Only a possessed Game Camera can be ejected."));
+    }
+    const std::string message =
+        "Ejected from Game Camera; runtime advancement state was preserved.";
+    NotifySuccess(request, message);
+    return MakeResult(*request.playSession, true, message);
+}
+
+EditorPlaySessionRuntimeControlResult EditorPlaySessionRuntimeControlService::Possess(
+    const EditorPlaySessionRuntimeControlRequest& request) const {
+    std::string validationMessage;
+    if (!ValidateActiveSession(request, validationMessage)) {
+        return Fail(request, validationMessage);
+    }
+    if (!request.playSession->PossessViewport()) {
+        return Fail(
+            request,
+            request.playSession->ViewportPossessed()
+                ? std::string("Viewport already possesses the Game Camera.")
+                : std::string("Only an ejected Free Camera can possess gameplay."));
+    }
+    const std::string message =
+        "Possessed Game Camera; runtime advancement state was preserved.";
     NotifySuccess(request, message);
     return MakeResult(*request.playSession, true, message);
 }

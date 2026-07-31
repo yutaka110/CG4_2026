@@ -15,6 +15,8 @@ namespace editor {
 struct EditorGeometryPropertyState {
     std::optional<std::string> geometry;
     std::optional<std::string> collision;
+    std::optional<std::string> sourceAssetGuid;
+    std::optional<std::string> sourceGeometryHash;
 };
 
 class IEditorGeometryExecutionService : public IEditorExecutionService {

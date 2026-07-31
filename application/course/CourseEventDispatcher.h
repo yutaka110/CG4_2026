@@ -17,6 +17,14 @@ public:
         const std::vector<CourseEventMarker>& events,
         CourseSpawnRuntime& spawnRuntime,
         float currentDistance);
+    bool SpawnAuthoredEnemy(
+        const std::string& actorAssetId,
+        std::string waveId,
+        float spawnDistance,
+        float lateralOffset,
+        float verticalOffset,
+        CourseSpawnRuntime& spawnRuntime,
+        std::string* errorMessage = nullptr);
 
 private:
     const EnemyWaveAsset* LoadEnemyWave(const std::string& id);

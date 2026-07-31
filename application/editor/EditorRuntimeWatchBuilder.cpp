@@ -161,7 +161,12 @@ void AppendPlaySession(
     if (playSession->RuntimeStepRequested()) {
         detail += " / step queued";
     }
+    detail += " / viewport " +
+        std::string(ToString(playSession->ViewportMode()));
+    detail += " / ejects " + std::to_string(playSession->EjectCount());
+    detail += " / possesses " + std::to_string(playSession->PossessCount());
     detail += " / runtimeFrames " + std::to_string(playSession->RuntimeFrameCount());
+    detail += " / completedSteps " + std::to_string(playSession->RuntimeStepCount());
     detail += " / resets " + std::to_string(playSession->RuntimeResetCount());
 
     AddRecord(
@@ -172,6 +177,21 @@ void AppendPlaySession(
         detail,
         playSession->RuntimePaused() ? EditorRuntimeWatchSeverity::Warning : severity,
         playSession->FrameCount());
+
+    AddRecord(
+        inspector,
+        "Editor",
+        "Runtime Inspection Camera",
+        ToString(playSession->ViewportMode()),
+        playSession->ViewportEjected()
+            ? "Editor Free Camera is isolated from the Runtime Game Camera; "
+              "RMB+WASD/Q/E inspects the world without changing gameplay."
+            : playSession->ViewportPossessed()
+                ? "Viewport follows the Runtime Game Camera; Eject (F10) "
+                  "switches to an isolated Editor Free Camera."
+                : "Authoring uses the Editor Free Camera.",
+        EditorRuntimeWatchSeverity::Info,
+        playSession->ViewportControlRevision());
 }
 
 void AppendSelection(EditorRuntimeInspector& inspector, const EditorSelection* selection) {

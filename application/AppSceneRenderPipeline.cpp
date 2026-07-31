@@ -678,7 +678,13 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         0,
         D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
-    if (ctx.productionGpuDrivenPipeline != nullptr) {
+    const editor::EditorProductionMeshDrawMode productionDrawMode =
+        ctx.productionScenePipeline != nullptr
+            ? ctx.productionScenePipeline->DrawMode()
+            : editor::EditorProductionMeshDrawMode::Auto;
+    if (ctx.productionGpuDrivenPipeline != nullptr &&
+        productionDrawMode !=
+            editor::EditorProductionMeshDrawMode::ForceDirect) {
         ctx.renderGraph->AddPass({
             "Visibility.ProductionGpuDriven",
             ge3::graphics::RenderPassLayer::Geometry,
@@ -686,9 +692,17 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
             "",
             [ctx](ge3::graphics::RenderPassContext& passContext) {
                 D3D12_GPU_DESCRIPTOR_HANDLE hiZ{};
-                if (ctx.terrainChunkManager != nullptr) hiZ = ctx.terrainChunkManager->GetHiZDebugSrv(2);
+                bool hiZFresh = false;
+                if (ctx.terrainChunkManager != nullptr &&
+                    ctx.frameState != nullptr) {
+                    hiZ =
+                        ctx.terrainChunkManager->GetHiZDebugSrv(2);
+                    hiZFresh =
+                        ctx.terrainChunkManager->IsHiZFresh(
+                            ctx.frameState->viewProjectionMatrix);
+                }
                 ctx.productionGpuDrivenPipeline->DispatchVisibility(
-                    passContext.commandList, hiZ, hiZ.ptr != 0);
+                    passContext.commandList, hiZ, hiZFresh);
             },
             true});
     }
@@ -937,8 +951,21 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
             }
 
             if (ctx.productionScenePipeline != nullptr) {
-                const bool gpuDriven = ctx.productionGpuDrivenPipeline != nullptr &&
+                const editor::EditorProductionMeshDrawMode drawMode =
+                    ctx.productionScenePipeline->DrawMode();
+                const bool gpuPipelineReady =
+                    ctx.productionGpuDrivenPipeline != nullptr &&
                     ctx.productionGpuDrivenPipeline->Ready();
+                const bool gpuDriven =
+                    ctx.productionGpuDrivenPipeline != nullptr &&
+                    editor::EditorProductionGpuDrivenPipeline::
+                        ShouldSubmitIndirect(
+                            drawMode,
+                            gpuPipelineReady,
+                            ctx.productionGpuDrivenPipeline->Stats()
+                                .dispatchSucceeded,
+                            ctx.productionGpuDrivenPipeline
+                                ->AutoValidationReady());
                 if (gpuDriven) {
                     const auto& batches = ctx.productionGpuDrivenPipeline->Batches();
                     for (uint32_t batchIndex = 0; batchIndex < batches.size(); ++batchIndex) {
@@ -968,7 +995,8 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                             ? batch.albedoHandle : ctx.scene->textureSrvHandleGPU2;
                         const D3D12_GPU_DESCRIPTOR_HANDLE normal = batch.normalHandle.ptr != 0
                             ? batch.normalHandle : ctx.scene->textureSrvHandleGPU2;
-                        if (ctx.frameRenderer->PrepareIndirectMainBatch(
+                        const bool batchPrepared =
+                            ctx.frameRenderer->PrepareIndirectMainBatch(
                                 passContext.commandList, batch.representative.vertexBuffer,
                                 batch.representative.indexBuffer, materialAddress, albedo, normal,
                                 ctx.scene->textureSrvHandleGPU2,
@@ -980,16 +1008,28 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                                 ctx.productionLightingPipeline ? ctx.productionLightingPipeline->ClusterRangeBufferAddress() : 0,
                                 ctx.productionLightingPipeline ? ctx.productionLightingPipeline->ClusterIndexBufferAddress() : 0,
                                 ctx.productionLightingPipeline ? ctx.productionLightingPipeline->ConstantsAddress() : 0,
-                                ctx.productionLightingPipeline ? ctx.productionLightingPipeline->ShadowAtlasHandle() : D3D12_GPU_DESCRIPTOR_HANDLE{})) {
+                                ctx.productionLightingPipeline ? ctx.productionLightingPipeline->ShadowAtlasHandle() : D3D12_GPU_DESCRIPTOR_HANDLE{});
+                        ctx.productionGpuDrivenPipeline->RecordBatchPreparation(
+                            batchPrepared);
+                        if (batchPrepared) {
                             ctx.productionGpuDrivenPipeline->ExecuteBatch(passContext.commandList, batchIndex);
                         }
                     }
+                }
+                if (ctx.productionGpuDrivenPipeline != nullptr &&
+                    gpuPipelineReady &&
+                    drawMode !=
+                        editor::EditorProductionMeshDrawMode::ForceDirect &&
+                    ctx.productionGpuDrivenPipeline->Stats()
+                        .dispatchSucceeded) {
                     ctx.productionGpuDrivenPipeline->RecordReadback(passContext.commandList);
                 }
                 std::vector<editor::EditorProductionSceneRenderPacket> directPackets;
                 if (gpuDriven) {
                     directPackets = ctx.productionGpuDrivenPipeline->CpuFallbackPackets();
-                } else {
+                } else if (
+                    drawMode !=
+                    editor::EditorProductionMeshDrawMode::ForceGpuDriven) {
                     directPackets = ctx.productionScenePipeline->RenderPackets();
                     if (ctx.worldPartitionPipeline != nullptr) {
                         const auto& hlodPackets = ctx.worldPartitionPipeline->HlodPackets();
@@ -1193,6 +1233,15 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 ctx.scene->terrainDetailNormalMapTextureSrvHandleGPU.ptr != 0
                     ? ctx.scene->terrainDetailNormalMapTextureSrvHandleGPU
                     : ctx.scene->textureSrvHandleGPU2;
+            if (ctx.scene->terrainPbrNormalTextureSrvHandleGPU.ptr != 0 &&
+                ctx.scene->terrainPbrMaterialResource != nullptr) {
+                passContext.commandList->SetGraphicsRootDescriptorTable(
+                    18,
+                    ctx.scene->terrainPbrNormalTextureSrvHandleGPU);
+                passContext.commandList->SetGraphicsRootConstantBufferView(
+                    19,
+                    ctx.scene->terrainPbrMaterialResource->GetGPUVirtualAddress());
+            }
             if (ctx.scene->cascadeShadowResource != nullptr) {
                 passContext.commandList->SetGraphicsRootConstantBufferView(
                     10,
@@ -1267,6 +1316,15 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     return;
                 }
                 passContext.commandList->SetPipelineState(ctx.appPipelines->GetTerrainDebrisPSO());
+                if (ctx.scene->terrainPbrNormalTextureSrvHandleGPU.ptr != 0 &&
+                    ctx.scene->terrainPbrMaterialResource != nullptr) {
+                    passContext.commandList->SetGraphicsRootDescriptorTable(
+                        18,
+                        ctx.scene->terrainPbrNormalTextureSrvHandleGPU);
+                    passContext.commandList->SetGraphicsRootConstantBufferView(
+                        19,
+                        ctx.scene->terrainPbrMaterialResource->GetGPUVirtualAddress());
+                }
                 passContext.commandList->SetGraphicsRootConstantBufferView(
                     0,
                     ctx.scene->terrainMaterialResource->GetGPUVirtualAddress());

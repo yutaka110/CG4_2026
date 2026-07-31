@@ -18,9 +18,18 @@ EditorWorldObjectCapability CapabilityForEditorWorldMutation(
     case EditorWorldMutationKind::Delete: return EditorWorldObjectCapability::Delete;
     case EditorWorldMutationKind::SetVisibility: return EditorWorldObjectCapability::Visibility;
     case EditorWorldMutationKind::SetLocked: return EditorWorldObjectCapability::Lock;
+    case EditorWorldMutationKind::SetRuntimeEnabled:
+        return EditorWorldObjectCapability::RuntimeActivation;
     case EditorWorldMutationKind::AddComponent:
     case EditorWorldMutationKind::RemoveComponent:
+    case EditorWorldMutationKind::SetComponentEnabled:
     case EditorWorldMutationKind::SetComponentAssetReference:
+    case EditorWorldMutationKind::SetComponentEntityReference:
+    case EditorWorldMutationKind::SetupPatrol:
+    case EditorWorldMutationKind::SetGimmickDefinition:
+    case EditorWorldMutationKind::SetGimmickParameter:
+    case EditorWorldMutationKind::MutateGimmickEventBinding:
+    case EditorWorldMutationKind::MutateGimmickEventSequence:
         return EditorWorldObjectCapability::Components;
     case EditorWorldMutationKind::SetComponentProperty:
         return EditorWorldObjectCapability::Transform;
@@ -37,10 +46,20 @@ const char* ToString(EditorWorldMutationKind kind) noexcept {
     case EditorWorldMutationKind::Delete: return "Delete";
     case EditorWorldMutationKind::SetVisibility: return "Visibility";
     case EditorWorldMutationKind::SetLocked: return "Lock";
+    case EditorWorldMutationKind::SetRuntimeEnabled: return "Runtime Enabled";
     case EditorWorldMutationKind::AddComponent: return "Add Component";
     case EditorWorldMutationKind::RemoveComponent: return "Remove Component";
+    case EditorWorldMutationKind::SetComponentEnabled: return "Set Component Enabled";
     case EditorWorldMutationKind::SetComponentProperty: return "Set Component Property";
     case EditorWorldMutationKind::SetComponentAssetReference: return "Set Component Asset Reference";
+    case EditorWorldMutationKind::SetComponentEntityReference: return "Set Component Entity Reference";
+    case EditorWorldMutationKind::SetupPatrol: return "Set Up Patrol";
+    case EditorWorldMutationKind::SetGimmickDefinition: return "Set Gimmick Definition";
+    case EditorWorldMutationKind::SetGimmickParameter: return "Set Gimmick Parameter";
+    case EditorWorldMutationKind::MutateGimmickEventBinding:
+        return "Edit Gimmick Event Binding";
+    case EditorWorldMutationKind::MutateGimmickEventSequence:
+        return "Edit Gimmick Event Sequence";
     }
     return "World Mutation";
 }

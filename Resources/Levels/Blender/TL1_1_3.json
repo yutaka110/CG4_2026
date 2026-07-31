@@ -1,0 +1,109 @@
+{
+    "schema_version": 1,
+    "scene_guid": "eafc97863bdc49c49b959d72b028c5e2",
+    "name": "Scene",
+    "coordinate_system": {
+        "handedness": "RIGHT_HANDED",
+        "up_axis": "Z",
+        "forward_axis": "-Y",
+        "unit_scale_meters": 1.0,
+        "transform_space": "LOCAL",
+        "rotation_unit": "DEGREES",
+        "rotation_order": "XYZ"
+    },
+    "objects": [
+        {
+            "guid": "fa3d3a5a8b1c46f9b0d6a77f1beca9a8",
+            "type": "LIGHT",
+            "name": "Light",
+            "spawn_kind": "NONE",
+            "transform": {
+                "translation": [
+                    4.076245307922363,
+                    1.0054539442062378,
+                    5.903861999511719
+                ],
+                "rotation": [
+                    37.261048582966964,
+                    3.163709045717233,
+                    106.93632398554938
+                ],
+                "scaling": [
+                    1.0,
+                    0.9999999403953552,
+                    1.0
+                ]
+            }
+        },
+        {
+            "guid": "3414202db0764535ad8eb66e1421eb2a",
+            "type": "CAMERA",
+            "name": "Camera",
+            "spawn_kind": "NONE",
+            "transform": {
+                "translation": [
+                    7.358891487121582,
+                    -6.925790786743164,
+                    4.958309173583984
+                ],
+                "rotation": [
+                    63.5592952084158,
+                    2.298323772810433e-07,
+                    46.691944977583375
+                ],
+                "scaling": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "guid": "7052a87501bf4725a18d3f269e88f3b0",
+            "type": "EMPTY",
+            "name": "PlayerSpawn",
+            "spawn_kind": "PLAYER",
+            "transform": {
+                "translation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotation": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scaling": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "guid": "3fa559b879e3483e8bef8fd164563393",
+            "type": "EMPTY",
+            "name": "エンプティ",
+            "spawn_kind": "ENEMY",
+            "enemy_type": "DRONE",
+            "transform": {
+                "translation": [
+                    10.0,
+                    0.0,
+                    0.0
+                ],
+                "rotation": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scaling": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        }
+    ]
+}

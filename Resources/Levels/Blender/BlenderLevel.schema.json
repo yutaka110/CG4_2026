@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ge3.local/schemas/blender-level-v1.schema.json",
+  "title": "GE3 Blender Level Interchange",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scene_guid",
+    "name",
+    "coordinate_system",
+    "objects"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "scene_guid": {
+      "$ref": "#/$defs/guid"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "coordinate_system": {
+      "$ref": "#/$defs/coordinateSystem"
+    },
+    "objects": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {
+        "$ref": "#/$defs/object"
+      }
+    }
+  },
+  "$defs": {
+    "guid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "vector3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "items": false
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "translation",
+        "rotation",
+        "scaling"
+      ],
+      "properties": {
+        "translation": {
+          "$ref": "#/$defs/vector3"
+        },
+        "rotation": {
+          "$ref": "#/$defs/vector3"
+        },
+        "scaling": {
+          "$ref": "#/$defs/vector3"
+        }
+      }
+    },
+    "coordinateSystem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "handedness",
+        "up_axis",
+        "forward_axis",
+        "unit_scale_meters",
+        "transform_space",
+        "rotation_unit",
+        "rotation_order"
+      ],
+      "properties": {
+        "handedness": {
+          "const": "RIGHT_HANDED"
+        },
+        "up_axis": {
+          "const": "Z"
+        },
+        "forward_axis": {
+          "const": "-Y"
+        },
+        "unit_scale_meters": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "transform_space": {
+          "const": "LOCAL"
+        },
+        "rotation_unit": {
+          "const": "DEGREES"
+        },
+        "rotation_order": {
+          "const": "XYZ"
+        }
+      }
+    },
+    "collider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "center",
+        "size"
+      ],
+      "properties": {
+        "type": {
+          "const": "BOX"
+        },
+        "center": {
+          "$ref": "#/$defs/vector3"
+        },
+        "size": {
+          "$ref": "#/$defs/vector3"
+        }
+      }
+    },
+    "object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "guid",
+        "type",
+        "name",
+        "spawn_kind",
+        "transform"
+      ],
+      "properties": {
+        "guid": {
+          "$ref": "#/$defs/guid"
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "spawn_kind": {
+          "enum": [
+            "NONE",
+            "PLAYER",
+            "ENEMY"
+          ]
+        },
+        "enemy_type": {
+          "enum": [
+            "DRONE",
+            "TURRET",
+            "BOSS"
+          ]
+        },
+        "transform": {
+          "$ref": "#/$defs/transform"
+        },
+        "file_name": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "collider": {
+          "$ref": "#/$defs/collider"
+        },
+        "children": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "$ref": "#/$defs/object"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "spawn_kind": {
+                "const": "ENEMY"
+              }
+            },
+            "required": [
+              "spawn_kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "enemy_type"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

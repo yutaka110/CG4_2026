@@ -182,6 +182,41 @@ void CourseEventDispatcher::Dispatch(
     }
 }
 
+bool CourseEventDispatcher::SpawnAuthoredEnemy(
+    const std::string& actorAssetId,
+    std::string waveId,
+    float spawnDistance,
+    float lateralOffset,
+    float verticalOffset,
+    CourseSpawnRuntime& spawnRuntime,
+    std::string* errorMessage) {
+    const CourseActorAsset* actorAsset = LoadActorAsset(actorAssetId);
+    if (actorAsset == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage =
+                "Course actor asset \"" + actorAssetId + "\" could not be loaded.";
+        }
+        return false;
+    }
+
+    CourseEnemyActorDesc desc{};
+    desc.waveId = std::move(waveId);
+    desc.role = actorAssetId;
+    desc.spawnDistance = spawnDistance;
+    desc.lateralOffset = lateralOffset;
+    desc.verticalOffset = verticalOffset;
+    ApplyActorAsset(desc, *actorAsset);
+    if (const BulletPatternAsset* patternAsset =
+            LoadBulletPatternAsset(desc.bulletPatternId)) {
+        ApplyBulletPatternAsset(desc, *patternAsset);
+    } else {
+        desc.firePattern = FirePatternForRole(desc.role);
+        desc.bulletCount = DefaultBulletCountForPattern(desc.firePattern);
+    }
+    spawnRuntime.SpawnEnemyActor(std::move(desc));
+    return true;
+}
+
 const EnemyWaveAsset* CourseEventDispatcher::LoadEnemyWave(const std::string& id) {
     const auto cached = enemyWaveCache_.find(id);
     if (cached != enemyWaveCache_.end()) {

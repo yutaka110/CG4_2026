@@ -20,6 +20,8 @@ void EditorPlaySessionState::Stop() {
     runtimeIsolationSnapshotActive_ = false;
     runtimePaused_ = false;
     runtimeStepRequested_ = false;
+    viewportMode_ = EditorPlaySessionViewportMode::EditorFree;
+    ++viewportControlRevision_;
     frameCount_ = 0;
     runtimeFrameCount_ = 0;
     Touch();
@@ -71,6 +73,7 @@ void EditorPlaySessionState::CompleteRuntimeFrameAdvance() {
     }
     ++runtimeFrameCount_;
     if (runtimeStepRequested_) {
+        ++runtimeStepCount_;
         runtimeStepRequested_ = false;
         runtimePaused_ = true;
     }
@@ -88,11 +91,42 @@ void EditorPlaySessionState::MarkRuntimeReset() {
     Touch();
 }
 
+bool EditorPlaySessionState::EjectViewport() {
+    if (!IsActive() ||
+        viewportMode_ != EditorPlaySessionViewportMode::GameCamera) {
+        return false;
+    }
+    viewportMode_ = EditorPlaySessionViewportMode::EjectedFree;
+    // Match the Play-in-Editor model: Eject releases gameplay input but does
+    // not alter pause/step state or restart the isolated runtime.
+    mode_ = EditorPlaySessionMode::Simulating;
+    ++viewportControlRevision_;
+    ++ejectCount_;
+    Touch();
+    return true;
+}
+
+bool EditorPlaySessionState::PossessViewport() {
+    if (!IsActive() ||
+        viewportMode_ != EditorPlaySessionViewportMode::EjectedFree) {
+        return false;
+    }
+    viewportMode_ = EditorPlaySessionViewportMode::GameCamera;
+    mode_ = EditorPlaySessionMode::Playing;
+    ++viewportControlRevision_;
+    ++possessCount_;
+    Touch();
+    return true;
+}
+
 void EditorPlaySessionState::Begin(EditorPlaySessionMode mode) {
     if (mode_ != mode) {
         ++sessionSerial_;
         frameCount_ = 0;
         runtimeFrameCount_ = 0;
+        runtimeStepCount_ = 0;
+        ejectCount_ = 0;
+        possessCount_ = 0;
     }
     mode_ = mode;
     runtimeIsolationPending_ = true;
@@ -100,6 +134,10 @@ void EditorPlaySessionState::Begin(EditorPlaySessionMode mode) {
     runtimeIsolationRestored_ = false;
     runtimePaused_ = false;
     runtimeStepRequested_ = false;
+    viewportMode_ = mode == EditorPlaySessionMode::Playing
+        ? EditorPlaySessionViewportMode::GameCamera
+        : EditorPlaySessionViewportMode::EjectedFree;
+    ++viewportControlRevision_;
     Touch();
 }
 
@@ -132,6 +170,18 @@ const char* ToString(EditorPlaySessionMode mode) {
         return "Simulating";
     case EditorPlaySessionMode::Playing:
         return "Playing";
+    }
+    return "Unknown";
+}
+
+const char* ToString(EditorPlaySessionViewportMode mode) {
+    switch (mode) {
+    case EditorPlaySessionViewportMode::EditorFree:
+        return "Editor Free Camera";
+    case EditorPlaySessionViewportMode::GameCamera:
+        return "Game Camera (Possessed)";
+    case EditorPlaySessionViewportMode::EjectedFree:
+        return "Free Camera (Ejected)";
     }
     return "Unknown";
 }

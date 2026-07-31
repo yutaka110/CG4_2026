@@ -10,6 +10,11 @@ namespace editor {
 namespace {
 
 using Microsoft::WRL::ComPtr;
+constexpr uint32_t kGpuDiagnosticCounterCount = 4;
+constexpr uint32_t kFrustumRejectedCounter = 0;
+constexpr uint32_t kHiZRejectedCounter = 1;
+constexpr uint32_t kInvalidBatchCounter = 2;
+constexpr uint32_t kGeneratedCommandCounter = 3;
 
 void SetError(std::string* output, std::string value) {
     if (output != nullptr) *output = std::move(value);
@@ -82,14 +87,18 @@ struct EditorProductionGpuDrivenPipeline::FrameResources {
     ComPtr<ID3D12Resource> constants;
     ComPtr<ID3D12Resource> commands;
     ComPtr<ID3D12Resource> counts;
+    ComPtr<ID3D12Resource> diagnosticCounters;
     ComPtr<ID3D12Resource> readback;
     GpuInstance* mappedInstances = nullptr;
     GpuBatch* mappedBatches = nullptr;
     GpuConstants* mappedConstants = nullptr;
     D3D12_RESOURCE_STATES commandState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES countState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES diagnosticState = D3D12_RESOURCE_STATE_COMMON;
     uint64_t fenceValue = 0;
     bool readbackPending = false;
+    bool usedOcclusion = false;
+    bool usedFrustumOnlyRetry = false;
     std::vector<uint32_t> readbackCapacities;
     uint32_t expectedFirstIndexCount = 0;
 };
@@ -110,6 +119,32 @@ EditorProductionGpuDrivenPipeline::BuildBatchRanges(
         offset += range.commandCapacity;
     }
     return result;
+}
+
+bool EditorProductionGpuDrivenPipeline::ShouldSubmitIndirect(
+    EditorProductionMeshDrawMode drawMode,
+    bool pipelineReady,
+    bool dispatchSucceeded,
+    bool autoValidationReady) noexcept {
+    if (drawMode == EditorProductionMeshDrawMode::ForceDirect) {
+        return false;
+    }
+    if (!pipelineReady || !dispatchSucceeded) {
+        return false;
+    }
+    if (drawMode == EditorProductionMeshDrawMode::ForceGpuDriven) {
+        return true;
+    }
+    return autoValidationReady;
+}
+
+bool EditorProductionGpuDrivenPipeline::ShouldEnableOcclusion(
+    bool policyEnabled,
+    bool hiZFresh,
+    bool frustumOnlyRetry,
+    bool occlusionQuarantined) noexcept {
+    return policyEnabled && hiZFresh && !frustumOnlyRetry &&
+        !occlusionQuarantined;
 }
 
 bool EditorProductionGpuDrivenPipeline::Initialize(
@@ -207,6 +242,15 @@ void EditorProductionGpuDrivenPipeline::Shutdown() {
     cpuFallbackPackets_.clear();
     diagnostics_.clear();
     stats_ = {};
+    lastReadbackAvailable_ = false;
+    lastCommandLayoutValidated_ = false;
+    lastGpuVisibleInstances_ = 0;
+    lastFrustumRejectedInstances_ = 0;
+    lastHiZRejectedInstances_ = 0;
+    lastInvalidBatchInstances_ = 0;
+    zeroCommandReadbacks_ = 0;
+    frustumOnlyRetryPending_ = false;
+    occlusionQuarantined_ = false;
     activeFrame_ = -1;
     scheduledFenceValue_ = 0;
 }
@@ -216,7 +260,7 @@ bool EditorProductionGpuDrivenPipeline::CreatePipeline(std::string* errorMessage
     hiZRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     hiZRange.NumDescriptors = 1;
     hiZRange.BaseShaderRegister = 2;
-    D3D12_ROOT_PARAMETER parameters[6]{};
+    D3D12_ROOT_PARAMETER parameters[7]{};
     parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     parameters[0].Descriptor.ShaderRegister = 0;
     parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
@@ -227,9 +271,11 @@ bool EditorProductionGpuDrivenPipeline::CreatePipeline(std::string* errorMessage
     parameters[3].Descriptor.ShaderRegister = 0;
     parameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
     parameters[4].Descriptor.ShaderRegister = 1;
-    parameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    parameters[5].DescriptorTable.NumDescriptorRanges = 1;
-    parameters[5].DescriptorTable.pDescriptorRanges = &hiZRange;
+    parameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+    parameters[5].Descriptor.ShaderRegister = 2;
+    parameters[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    parameters[6].DescriptorTable.NumDescriptorRanges = 1;
+    parameters[6].DescriptorTable.pDescriptorRanges = &hiZRange;
     for (auto& parameter : parameters) parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     D3D12_ROOT_SIGNATURE_DESC desc{};
     desc.NumParameters = static_cast<UINT>(std::size(parameters));
@@ -288,8 +334,18 @@ bool EditorProductionGpuDrivenPipeline::CreateFrameResources(
     if (!CreateBuffer(device_.Get(), uint64_t(policy_.maximumBatches) * sizeof(uint32_t),
             D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
             D3D12_RESOURCE_STATE_COMMON, frame.counts)) goto fail;
+    if (!CreateBuffer(
+            device_.Get(),
+            uint64_t(kGpuDiagnosticCounterCount) * sizeof(uint32_t),
+            D3D12_HEAP_TYPE_DEFAULT,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_COMMON,
+            frame.diagnosticCounters)) {
+        goto fail;
+    }
     if (!CreateBuffer(device_.Get(), uint64_t(policy_.maximumBatches) * sizeof(uint32_t) +
-            sizeof(EditorProductionIndirectCommandLayout),
+            sizeof(EditorProductionIndirectCommandLayout) +
+            uint64_t(kGpuDiagnosticCounterCount) * sizeof(uint32_t),
             D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
             D3D12_RESOURCE_STATE_COPY_DEST, frame.readback)) goto fail;
     return true;
@@ -304,7 +360,13 @@ void EditorProductionGpuDrivenPipeline::CollectReadbacks(uint64_t completedFence
         if (!frame.readbackPending || frame.fenceValue > completedFenceValue) continue;
         uint32_t* counts = nullptr;
         const SIZE_T countBytes = SIZE_T(policy_.maximumBatches) * sizeof(uint32_t);
-        D3D12_RANGE range{0, countBytes + sizeof(EditorProductionIndirectCommandLayout)};
+        const SIZE_T commandBytes =
+            sizeof(EditorProductionIndirectCommandLayout);
+        const SIZE_T diagnosticBytes =
+            SIZE_T(kGpuDiagnosticCounterCount) * sizeof(uint32_t);
+        D3D12_RANGE range{
+            0,
+            countBytes + commandBytes + diagnosticBytes};
         if (SUCCEEDED(frame.readback->Map(0, &range, reinterpret_cast<void**>(&counts))) && counts) {
             uint64_t total = 0;
             for (uint32_t i = 0; i < frame.readbackCapacities.size(); ++i)
@@ -312,10 +374,56 @@ void EditorProductionGpuDrivenPipeline::CollectReadbacks(uint64_t completedFence
             stats_.gpuVisibleInstances = static_cast<uint32_t>((std::min<uint64_t>)(total, UINT32_MAX));
             const auto* firstCommand = reinterpret_cast<const EditorProductionIndirectCommandLayout*>(
                 reinterpret_cast<const uint8_t*>(counts) + countBytes);
-            stats_.commandLayoutValidated = !frame.readbackCapacities.empty() && counts[0] != 0 &&
+            const auto* diagnosticCounters =
+                reinterpret_cast<const uint32_t*>(
+                    reinterpret_cast<const uint8_t*>(firstCommand) +
+                    commandBytes);
+            lastReadbackAvailable_ = true;
+            lastGpuVisibleInstances_ = diagnosticCounters[
+                kGeneratedCommandCounter];
+            if (lastGpuVisibleInstances_ !=
+                static_cast<uint32_t>(
+                    (std::min<uint64_t>)(total, UINT32_MAX))) {
+                lastGpuVisibleInstances_ =
+                    static_cast<uint32_t>(
+                        (std::min<uint64_t>)(total, UINT32_MAX));
+            }
+            lastFrustumRejectedInstances_ =
+                diagnosticCounters[kFrustumRejectedCounter];
+            lastHiZRejectedInstances_ =
+                diagnosticCounters[kHiZRejectedCounter];
+            lastInvalidBatchInstances_ =
+                diagnosticCounters[kInvalidBatchCounter];
+            lastCommandLayoutValidated_ =
+                !frame.readbackCapacities.empty() && counts[0] != 0 &&
                 firstCommand->draw.IndexCountPerInstance == frame.expectedFirstIndexCount &&
                 firstCommand->draw.InstanceCount == 1 &&
                 firstCommand->stridePadding == 0;
+            if (lastGpuVisibleInstances_ == 0) {
+                ++zeroCommandReadbacks_;
+                if (frame.usedOcclusion) {
+                    frustumOnlyRetryPending_ = true;
+                } else if (frame.usedFrustumOnlyRetry) {
+                    frustumOnlyRetryPending_ = false;
+                }
+            } else {
+                zeroCommandReadbacks_ = 0;
+                if (frame.usedFrustumOnlyRetry) {
+                    occlusionQuarantined_ = true;
+                }
+                frustumOnlyRetryPending_ = false;
+            }
+            stats_.gpuVisibleInstances = lastGpuVisibleInstances_;
+            stats_.frustumRejectedInstances =
+                lastFrustumRejectedInstances_;
+            stats_.hiZRejectedInstances =
+                lastHiZRejectedInstances_;
+            stats_.invalidBatchInstances =
+                lastInvalidBatchInstances_;
+            stats_.commandLayoutValidated =
+                lastCommandLayoutValidated_;
+            stats_.readbackAvailable = lastReadbackAvailable_;
+            stats_.zeroCommandReadbacks = zeroCommandReadbacks_;
             D3D12_RANGE written{0, 0};
             frame.readback->Unmap(0, &written);
             ++stats_.readbacks;
@@ -332,13 +440,37 @@ bool EditorProductionGpuDrivenPipeline::Sync(
     const Matrix4x4& viewProjection, uint64_t completedFenceValue,
     uint64_t scheduledFenceValue, std::string* errorMessage) {
     CollectReadbacks(completedFenceValue);
-    const uint32_t lastVisible = stats_.gpuVisibleInstances;
     const uint32_t readbacks = stats_.readbacks;
-    const bool commandLayoutValidated = stats_.commandLayoutValidated;
+    const uint32_t preparedBatches = stats_.preparedBatches;
+    const uint32_t rejectedBatchPreparations =
+        stats_.rejectedBatchPreparations;
+    const uint32_t executedBatches = stats_.executedBatches;
+    const uint32_t submittedCommandCapacity =
+        stats_.submittedCommandCapacity;
+    const bool dispatchAttempted = stats_.dispatchAttempted;
+    const bool dispatchSucceeded = stats_.dispatchSucceeded;
     stats_ = {};
-    stats_.gpuVisibleInstances = lastVisible;
+    stats_.gpuVisibleInstances = lastGpuVisibleInstances_;
+    stats_.frustumRejectedInstances =
+        lastFrustumRejectedInstances_;
+    stats_.hiZRejectedInstances =
+        lastHiZRejectedInstances_;
+    stats_.invalidBatchInstances =
+        lastInvalidBatchInstances_;
     stats_.readbacks = readbacks;
-    stats_.commandLayoutValidated = commandLayoutValidated;
+    stats_.readbackAvailable = lastReadbackAvailable_;
+    stats_.commandLayoutValidated = lastCommandLayoutValidated_;
+    stats_.zeroCommandReadbacks = zeroCommandReadbacks_;
+    stats_.preparedBatches = preparedBatches;
+    stats_.rejectedBatchPreparations =
+        rejectedBatchPreparations;
+    stats_.executedBatches = executedBatches;
+    stats_.submittedCommandCapacity =
+        submittedCommandCapacity;
+    stats_.dispatchAttempted = dispatchAttempted;
+    stats_.dispatchSucceeded = dispatchSucceeded;
+    stats_.frustumOnlyRetry = frustumOnlyRetryPending_;
+    stats_.occlusionQuarantined = occlusionQuarantined_;
     stats_.submittedInstances = static_cast<uint32_t>(candidates.size());
     batches_.clear();
     cpuFallbackPackets_.clear();
@@ -446,22 +578,41 @@ bool EditorProductionGpuDrivenPipeline::Sync(
     stats_.batches = static_cast<uint32_t>(batches_.size());
     stats_.cpuFallbackPackets = static_cast<uint32_t>(cpuFallbackPackets_.size());
     stats_.ready = !accepted.empty() && !batches_.empty();
+    stats_.autoDirectFallback =
+        !stats_.readbackAvailable ||
+        !stats_.commandLayoutValidated ||
+        stats_.gpuVisibleInstances == 0;
     return true;
 }
 
 bool EditorProductionGpuDrivenPipeline::DispatchVisibility(
     ID3D12GraphicsCommandList* commandList, D3D12_GPU_DESCRIPTOR_HANDLE hiZHandle,
-    bool hiZAvailable) {
+    bool hiZFresh) {
+    stats_.preparedBatches = 0;
+    stats_.rejectedBatchPreparations = 0;
+    stats_.executedBatches = 0;
+    stats_.submittedCommandCapacity = 0;
+    stats_.dispatchAttempted = true;
+    stats_.dispatchSucceeded = false;
+    stats_.hiZFresh = hiZFresh;
+    stats_.frustumOnlyRetry = frustumOnlyRetryPending_;
+    stats_.occlusionQuarantined = occlusionQuarantined_;
     if (!Ready() || commandList == nullptr) return false;
     if (hiZHandle.ptr == 0) hiZHandle = fallbackHiZHandle_;
     if (hiZHandle.ptr == 0) return false;
     FrameResources& frame = *frames_[activeFrame_];
-    D3D12_RESOURCE_BARRIER transitions[2] = {
+    D3D12_RESOURCE_BARRIER transitions[3] = {
         Transition(frame.commands.Get(), frame.commandState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
-        Transition(frame.counts.Get(), frame.countState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS)};
-    commandList->ResourceBarrier(2, transitions);
+        Transition(frame.counts.Get(), frame.countState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        Transition(
+            frame.diagnosticCounters.Get(),
+            frame.diagnosticState,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS)};
+    commandList->ResourceBarrier(3, transitions);
     frame.commandState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     frame.countState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    frame.diagnosticState =
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     ID3D12DescriptorHeap* heaps[] = {srvHeap_.Get()};
     commandList->SetDescriptorHeaps(1, heaps);
     commandList->SetComputeRootSignature(computeRootSignature_.Get());
@@ -470,17 +621,32 @@ bool EditorProductionGpuDrivenPipeline::DispatchVisibility(
     commandList->SetComputeRootShaderResourceView(2, frame.batches->GetGPUVirtualAddress());
     commandList->SetComputeRootUnorderedAccessView(3, frame.commands->GetGPUVirtualAddress());
     commandList->SetComputeRootUnorderedAccessView(4, frame.counts->GetGPUVirtualAddress());
-    commandList->SetComputeRootDescriptorTable(5, hiZHandle);
-    frame.mappedConstants->enableOcclusion = policy_.enableOcclusion && hiZAvailable ? 1u : 0u;
+    commandList->SetComputeRootUnorderedAccessView(
+        5,
+        frame.diagnosticCounters->GetGPUVirtualAddress());
+    commandList->SetComputeRootDescriptorTable(6, hiZHandle);
+    frame.mappedConstants->enableOcclusion =
+        ShouldEnableOcclusion(
+            policy_.enableOcclusion,
+            hiZFresh,
+            frustumOnlyRetryPending_,
+            occlusionQuarantined_)
+            ? 1u
+            : 0u;
     stats_.occlusionEnabled = frame.mappedConstants->enableOcclusion != 0;
+    frame.usedOcclusion = stats_.occlusionEnabled;
+    frame.usedFrustumOnlyRetry =
+        frustumOnlyRetryPending_;
     commandList->SetPipelineState(resetPipelineState_.Get());
     commandList->Dispatch((stats_.batches + 63u) / 64u, 1, 1);
-    D3D12_RESOURCE_BARRIER uav[2]{};
+    D3D12_RESOURCE_BARRIER uav[3]{};
     uav[0].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     uav[0].UAV.pResource = frame.commands.Get();
     uav[1].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     uav[1].UAV.pResource = frame.counts.Get();
-    commandList->ResourceBarrier(2, uav);
+    uav[2].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uav[2].UAV.pResource = frame.diagnosticCounters.Get();
+    commandList->ResourceBarrier(3, uav);
     commandList->SetPipelineState(cullPipelineState_.Get());
     commandList->Dispatch((stats_.residentInstances + 63u) / 64u, 1, 1);
     D3D12_RESOURCE_BARRIER indirect[2] = {
@@ -490,42 +656,104 @@ bool EditorProductionGpuDrivenPipeline::DispatchVisibility(
     frame.commandState = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
     frame.countState = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
     ++stats_.dispatches;
+    stats_.dispatchSucceeded = true;
     return true;
 }
 
-void EditorProductionGpuDrivenPipeline::ExecuteBatch(
-    ID3D12GraphicsCommandList* commandList, uint32_t batchIndex) const {
-    if (!Ready() || commandList == nullptr || batchIndex >= batches_.size()) return;
+void EditorProductionGpuDrivenPipeline::RecordBatchPreparation(bool succeeded) {
+    if (succeeded) {
+        ++stats_.preparedBatches;
+    } else {
+        ++stats_.rejectedBatchPreparations;
+    }
+}
+
+bool EditorProductionGpuDrivenPipeline::ExecuteBatch(
+    ID3D12GraphicsCommandList* commandList, uint32_t batchIndex) {
+    if (!Ready() || !stats_.dispatchSucceeded || commandList == nullptr ||
+        batchIndex >= batches_.size()) {
+        return false;
+    }
     const auto& batch = batches_[batchIndex];
     const FrameResources& frame = *frames_[activeFrame_];
     commandList->ExecuteIndirect(commandSignature_.Get(), batch.range.commandCapacity,
         frame.commands.Get(), uint64_t(batch.range.commandOffset) *
             sizeof(EditorProductionIndirectCommandLayout),
         frame.counts.Get(), uint64_t(batchIndex) * sizeof(uint32_t));
+    ++stats_.executedBatches;
+    stats_.submittedCommandCapacity += batch.range.commandCapacity;
+    return true;
 }
 
 void EditorProductionGpuDrivenPipeline::RecordReadback(ID3D12GraphicsCommandList* commandList) {
-    if (!Ready() || commandList == nullptr) return;
+    if (!Ready() || !stats_.dispatchSucceeded || commandList == nullptr) return;
     FrameResources& frame = *frames_[activeFrame_];
-    D3D12_RESOURCE_BARRIER toCopy[2] = {
+    D3D12_RESOURCE_BARRIER toCopy[3] = {
         Transition(frame.counts.Get(), frame.countState, D3D12_RESOURCE_STATE_COPY_SOURCE),
-        Transition(frame.commands.Get(), frame.commandState, D3D12_RESOURCE_STATE_COPY_SOURCE)};
-    commandList->ResourceBarrier(2, toCopy);
+        Transition(frame.commands.Get(), frame.commandState, D3D12_RESOURCE_STATE_COPY_SOURCE),
+        Transition(
+            frame.diagnosticCounters.Get(),
+            frame.diagnosticState,
+            D3D12_RESOURCE_STATE_COPY_SOURCE)};
+    commandList->ResourceBarrier(3, toCopy);
     const uint64_t countBytes = uint64_t(policy_.maximumBatches) * sizeof(uint32_t);
     commandList->CopyBufferRegion(frame.readback.Get(), 0, frame.counts.Get(), 0,
         countBytes);
     commandList->CopyBufferRegion(frame.readback.Get(), countBytes, frame.commands.Get(), 0,
         sizeof(EditorProductionIndirectCommandLayout));
-    D3D12_RESOURCE_BARRIER fromCopy[2] = {
+    const uint64_t diagnosticOffset =
+        countBytes + sizeof(EditorProductionIndirectCommandLayout);
+    commandList->CopyBufferRegion(
+        frame.readback.Get(),
+        diagnosticOffset,
+        frame.diagnosticCounters.Get(),
+        0,
+        uint64_t(kGpuDiagnosticCounterCount) * sizeof(uint32_t));
+    D3D12_RESOURCE_BARRIER fromCopy[3] = {
         Transition(frame.counts.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
             D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT),
         Transition(frame.commands.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
-            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT)};
-    commandList->ResourceBarrier(2, fromCopy);
+            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT),
+        Transition(
+            frame.diagnosticCounters.Get(),
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_COMMON)};
+    commandList->ResourceBarrier(3, fromCopy);
     frame.countState = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
     frame.commandState = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+    frame.diagnosticState = D3D12_RESOURCE_STATE_COMMON;
     frame.fenceValue = scheduledFenceValue_;
     frame.readbackPending = true;
+}
+
+const char* EditorProductionGpuDrivenPipeline::AutoFallbackReason() const noexcept {
+    if (!Ready()) {
+        return "No accepted GPU-driven instances or batches.";
+    }
+    if (!stats_.dispatchSucceeded) {
+        return "Visibility dispatch has not completed for this frame.";
+    }
+    if (!stats_.readbackAvailable) {
+        return "Waiting for the first indirect-command validation readback.";
+    }
+    if (stats_.gpuVisibleInstances == 0) {
+        if (stats_.hiZRejectedInstances != 0) {
+            return "Hi-Z occlusion rejected every candidate; Auto scheduled a "
+                   "Frustum-only retry.";
+        }
+        if (stats_.frustumRejectedInstances != 0) {
+            return "GPU Frustum culling rejected every candidate.";
+        }
+        if (stats_.invalidBatchInstances != 0) {
+            return "GPU command generation rejected every candidate because "
+                   "its Batch mapping was invalid.";
+        }
+        return "GPU culling generated zero commands for CPU-visible candidates.";
+    }
+    if (!stats_.commandLayoutValidated) {
+        return "Generated indirect-command layout failed validation.";
+    }
+    return "";
 }
 
 } // namespace editor

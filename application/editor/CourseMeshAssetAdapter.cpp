@@ -7,6 +7,12 @@ namespace editor {
 namespace {
 
 void RegisterMesh(EditorAssetRegistry& registry, const char* id, const char* sourcePath) {
+    // Folder indexing owns durable Asset identity. Course defaults are only a
+    // compatibility fallback and must never replace indexed .meta data with an
+    // auto GUID.
+    if (registry.Find(EditorAssetKind::Mesh, id) != nullptr) {
+        return;
+    }
     EditorAssetRecord record{};
     record.kind = EditorAssetKind::Mesh;
     record.id = id;

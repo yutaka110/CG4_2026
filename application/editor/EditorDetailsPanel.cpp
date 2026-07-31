@@ -850,6 +850,19 @@ void DrawCustomDetailsSections(
 
     EditorDetailsSectionContext sectionContext{};
     sectionContext.selectedObjects = &selectedObjects;
+    sectionContext.sceneComponentRegistry = context.sceneComponentRegistry;
+    sectionContext.gimmickDefinitionRegistry =
+        context.gimmickDefinitionRegistry;
+    sectionContext.gimmickRuntimeWorld =
+        context.gimmickRuntimeWorld;
+    sectionContext.gimmickRuntimeAdapter =
+        context.gimmickRuntimeAdapter;
+    sectionContext.gimmickRuntimeEventRouter =
+        context.gimmickRuntimeEventRouter;
+    sectionContext.gimmickRuntimeInteraction =
+        context.gimmickRuntimeInteraction;
+    sectionContext.gimmickRuntimeTriggers =
+        context.gimmickRuntimeTriggers;
     sectionContext.propertyRegistry = context.propertyRegistry;
     sectionContext.propertyAccessor = context.propertyAccessor;
     sectionContext.propertyEditSession = context.propertyEditSession;
@@ -865,6 +878,8 @@ void DrawCustomDetailsSections(
     sectionContext.worldMutations = context.worldMutations;
     sectionContext.sceneWorldProvider = context.sceneWorldProvider;
     sectionContext.onWorldMutated = context.onWorldMutated;
+    sectionContext.productionScenePipeline =
+        context.productionScenePipeline;
 
     ImGui::Separator();
     for (EditorDetailsSectionProvider* provider : providers) {

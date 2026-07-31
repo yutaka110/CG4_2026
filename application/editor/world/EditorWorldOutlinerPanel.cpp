@@ -143,6 +143,37 @@ void DrawRecord(
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
+        const bool canRuntimeActivation = HasEditorWorldCapability(
+            record.capabilities,
+            EditorWorldObjectCapability::RuntimeActivation);
+        ImGui::BeginDisabled(
+            !context.canMutateAuthoring ||
+            !canRuntimeActivation ||
+            record.runtimeOnly);
+        const char* runtimeLabel = !record.runtimeEnabled
+            ? "X"
+            : (record.runtimeActiveInHierarchy ? "R" : "r");
+        if (ImGui::SmallButton(runtimeLabel)) {
+            PublishMutation(
+                Execute(
+                    EditorWorldMutationKind::SetRuntimeEnabled,
+                    MutationTargets(record, *context.selection),
+                    context,
+                    {},
+                    !record.runtimeEnabled),
+                context);
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip(
+                "%s",
+                !record.runtimeEnabled
+                    ? "Runtime Disabled on this Entity"
+                    : (record.runtimeActiveInHierarchy
+                        ? "Runtime Active"
+                        : "Runtime Disabled by an ancestor"));
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
         const bool canLock = HasEditorWorldCapability(
             record.capabilities, EditorWorldObjectCapability::Lock);
         ImGui::BeginDisabled(!context.canMutateAuthoring || !canLock || record.runtimeOnly);

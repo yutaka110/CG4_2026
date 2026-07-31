@@ -1,0 +1,10 @@
+guid=a7853409f86661149beaecb724ea5104
+logicalPath=Resources/Generated/Imported/ball_production.mesh
+tags=generated,imported,obj
+importSourceGuid=a98e450766ace8a5838c89dc33dac255
+importSourcePath=Resources/ball/ball.obj
+importSourceHash=9806792484208019733
+sourceGeometryHash=13349175553422702320
+buildSettingsHash=10696442573538365275
+cookedPath=Resources/Generated/Imported/ball_production.mesh.cooked
+collisionPath=Resources/Generated/Imported/ball_production.mesh.collision

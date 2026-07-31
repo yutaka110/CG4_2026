@@ -122,6 +122,12 @@ EditorStatusBarSnapshot BuildEditorStatusBarSnapshot(const EditorContext& contex
         value.session = ToString(context.playSession->Mode());
         if (context.playSession->Mode() != EditorPlaySessionMode::Stopped) {
             value.session += " f:" + std::to_string(context.playSession->FrameCount());
+            value.session += context.playSession->RuntimePaused()
+                ? " [Frozen]"
+                : " [Live]";
+            value.session += context.playSession->ViewportEjected()
+                ? " [Free Camera]"
+                : " [Game Camera]";
         }
     }
 
