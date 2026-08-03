@@ -256,6 +256,12 @@ void CourseSpawnRuntime::SpawnObstacle(CourseObstacleActorDesc desc) {
 void CourseSpawnRuntime::SpawnVfxCue(CourseVfxCueDesc desc) {
     desc.lifetime = (std::max)(0.1f, desc.lifetime);
     desc.radius = (std::max)(0.05f, desc.radius);
+    if (desc.hasWorldPosition &&
+        (!std::isfinite(desc.worldPosition.x) ||
+         !std::isfinite(desc.worldPosition.y) ||
+         !std::isfinite(desc.worldPosition.z))) {
+        desc.hasWorldPosition = false;
+    }
 
     CourseVfxCue cue{};
     cue.desc = std::move(desc);
@@ -272,12 +278,14 @@ void CourseSpawnRuntime::SubmitPendingVfx(EffectRuntime& effectRuntime, const Ra
             continue;
         }
 
-        const Vector3 center = ResolveRailLocal(
-            railPath,
-            cue.desc.spawnDistance,
-            cue.desc.distanceOffset,
-            cue.desc.lateralOffset,
-            cue.desc.verticalOffset);
+        const Vector3 center = cue.desc.hasWorldPosition
+            ? cue.desc.worldPosition
+            : ResolveRailLocal(
+                railPath,
+                cue.desc.spawnDistance,
+                cue.desc.distanceOffset,
+                cue.desc.lateralOffset,
+                cue.desc.verticalOffset);
         cue.effectInstanceId = effectRuntime.PlayEffectWithParams(
             cue.desc.effectName,
             center,
@@ -363,14 +371,22 @@ void CourseSpawnRuntime::AppendDebugDraw(
 
     for (const CourseVfxCue& cue : vfxCues_) {
         const RailPathSample sample = railPath.Evaluate(cue.desc.spawnDistance + cue.desc.distanceOffset);
-        const Vector3 center = ResolveRailLocal(
-            railPath,
-            cue.desc.spawnDistance,
-            cue.desc.distanceOffset,
-            cue.desc.lateralOffset,
-            cue.desc.verticalOffset);
+        const Vector3 center = cue.desc.hasWorldPosition
+            ? cue.desc.worldPosition
+            : ResolveRailLocal(
+                railPath,
+                cue.desc.spawnDistance,
+                cue.desc.distanceOffset,
+                cue.desc.lateralOffset,
+                cue.desc.verticalOffset);
+        const Vector3 axisU = cue.desc.hasWorldPosition
+            ? Vector3{1.0f, 0.0f, 0.0f}
+            : sample.right;
+        const Vector3 axisV = cue.desc.hasWorldPosition
+            ? Vector3{0.0f, 1.0f, 0.0f}
+            : sample.up;
         const Vector4 color = FadeColor(cue.desc.color, cue.age, cue.desc.lifetime);
-        debugDraw.AddCircle(center, sample.right, sample.up, cue.desc.radius, color, 32);
-        debugDraw.AddLine(center, Add(center, Scale(sample.up, cue.desc.radius * 1.4f)), color);
+        debugDraw.AddCircle(center, axisU, axisV, cue.desc.radius, color, 32);
+        debugDraw.AddLine(center, Add(center, Scale(axisV, cue.desc.radius * 1.4f)), color);
     }
 }

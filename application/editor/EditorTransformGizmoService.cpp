@@ -19,6 +19,7 @@ void EditorTransformGizmoService::Update(const EditorTransformGizmoInput& input)
     state_.space = input.space;
     state_.pivotMode = input.pivotMode;
     state_.snapEnabled = input.snapEnabled;
+    state_.authoringEnabled = input.authoringEnabled;
     state_.undoDepth =
         input.transactions != nullptr ? static_cast<uint32_t>(input.transactions->UndoDepth()) : 0;
     state_.redoDepth =
@@ -46,6 +47,7 @@ void EditorTransformGizmoService::Update(const EditorTransformGizmoInput& input)
         input.selectionBridge == nullptr ||
         input.selectionBridge->State().lastRequestMode == EditorSelectionRequestMode::Replace;
     state_.canManipulate =
+        input.authoringEnabled &&
         state_.targetAvailable &&
         requestReady &&
         input.transactions != nullptr &&

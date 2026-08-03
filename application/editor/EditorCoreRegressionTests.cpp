@@ -169,6 +169,7 @@
 
 #include "../AppEditorToolModules.h"
 #include "../AppRuntimeState.h"
+#include "../RuntimeAuthoringPolicy.h"
 #include "../AppSceneResources.h"
 #include "../BoneSocket.h"
 #include "../AppGamepadInput.h"
@@ -184,9 +185,20 @@
 #include "../PostProcessStack.h"
 #include "../course/CourseAsset.h"
 #include "../course/CourseCollisionSystem.h"
+#include "../course/CourseMeshRenderQueue.h"
 #include "../course/CourseSpawnRuntime.h"
 #include "../course/PlayerCombatFeelSystem.h"
+#include "../course/AimInputDeviceRouter.h"
+#include "../course/RailAimAssistPresetRegistry.h"
+#include "../course/RailAimAssistSystem.h"
+#include "../course/RailAimState.h"
+#include "../course/RailReticleController.h"
+#include "../course/RailWorldRaycast.h"
 #include "../course/SectionCheckpointSystem.h"
+#include "../course/WeaponFeedbackSystem.h"
+#include "../course/WeaponDefinitionAsset.h"
+#include "../course/WeaponDefinitionRegistry.h"
+#include "../course/WeaponFireSystem.h"
 #include "../terrain/TerrainChunkManager.h"
 #include "../terrain/TerrainVolumeField.h"
 
@@ -12931,6 +12943,17 @@ void TestProductionTransformGizmo(RegressionRunner& runner) {
     runner.Expect(
         gizmo.State().canManipulate && gizmo.State().target.SameObject(sceneEntity),
         "Production Gizmo should accept Scene Entity targets exposed by the World Model");
+    gizmo.Update(EditorTransformGizmoInput{
+        &selection, &interaction, &coordinates, nullptr, &transactions,
+        EditorTransformGizmoMode::Translate, EditorTransformGizmoAxis::X,
+        EditorTransformGizmoSpace::World, EditorTransformGizmoPivotMode::Active,
+        false, false});
+    runner.Expect(
+        gizmo.State().targetAvailable && !gizmo.State().canManipulate &&
+            !gizmo.State().authoringEnabled &&
+            !app::ResolveRuntimeAuthoringEnabled(true) &&
+            app::ResolveRuntimeAuthoringEnabled(false),
+        "Release presentation policy should keep targets inspectable while blocking every gizmo mutation");
 
     CourseAsset course{};
     course.terrainPlacements.resize(2);
@@ -17251,6 +17274,1396 @@ void TestGamepadInputDeadZone(RegressionRunner& runner) {
         "humanoid facing should advance from actual yaw along the shortest arc");
 }
 
+void TestRailWorldAimRay(RegressionRunner& runner) {
+    constexpr uint32_t kWidth = 1280;
+    constexpr uint32_t kHeight = 720;
+    constexpr float kAimDistance = 120.0f;
+    constexpr float kPi = 3.14159265358979323846f;
+
+    RailAimRayBuildInput input{};
+    input.pixelPosition = {
+        static_cast<float>(kWidth) * 0.5f,
+        static_cast<float>(kHeight) * 0.5f};
+    input.viewportWidth = kWidth;
+    input.viewportHeight = kHeight;
+    input.gameplayViewProjection = MakePerspectiveFovMatrix(
+        kPi / 3.0f,
+        static_cast<float>(kWidth) / static_cast<float>(kHeight),
+        0.1f,
+        1000.0f);
+    input.gameplayCameraPosition = {0.0f, 0.0f, 0.0f};
+    input.maxDistance = kAimDistance;
+
+    const RailAimState center = BuildRailAimState(input);
+    runner.Expect(
+        center.valid &&
+            std::abs(center.normalizedPosition.x) < 0.0001f &&
+            std::abs(center.normalizedPosition.y) < 0.0001f &&
+            std::abs(center.worldRayDirection.x) < 0.0001f &&
+            std::abs(center.worldRayDirection.y) < 0.0001f &&
+            std::abs(center.worldRayDirection.z - 1.0f) < 0.0001f &&
+            std::abs(center.worldAimPoint.z - kAimDistance) < 0.001f,
+        "center-screen rail aim should produce a normalized forward world ray");
+
+    input.pixelPosition = {static_cast<float>(kWidth), static_cast<float>(kHeight) * 0.5f};
+    const RailAimState right = BuildRailAimState(input);
+    runner.Expect(
+        right.valid &&
+            std::abs(right.normalizedPosition.x - 1.0f) < 0.0001f &&
+            right.worldRayDirection.x > 0.5f &&
+            right.worldRayDirection.z > 0.5f,
+        "right-edge rail aim should point into the right half of the gameplay frustum");
+
+    input.pixelPosition = {static_cast<float>(kWidth) * 0.5f, 0.0f};
+    const RailAimState top = BuildRailAimState(input);
+    runner.Expect(
+        top.valid &&
+            std::abs(top.normalizedPosition.y - 1.0f) < 0.0001f &&
+            top.worldRayDirection.y > 0.4f &&
+            top.worldRayDirection.z > 0.5f,
+        "top-edge rail aim should preserve Direct3D screen-to-NDC Y orientation");
+
+    input.viewportWidth = 0;
+    const RailAimState invalid = BuildRailAimState(input);
+    runner.Expect(
+        !invalid.valid,
+        "rail aim should reject a zero-sized viewport without producing a usable ray");
+}
+
+void TestRailAimAssistSystem(RegressionRunner& runner) {
+    RailAimState rawAim{};
+    rawAim.worldRayOrigin = {0.0f, 0.0f, 0.0f};
+    rawAim.worldRayDirection = {0.0f, 0.0f, 1.0f};
+    rawAim.worldAimPoint = {0.0f, 0.0f, 120.0f};
+    rawAim.maxDistance = 120.0f;
+    rawAim.aimDistance = 120.0f;
+    rawAim.valid = true;
+
+    RailLockAnchor primary{};
+    primary.target.kind = RailLockTargetKind::Enemy;
+    primary.target.actorId = 101;
+    primary.target.generationId = 101;
+    primary.worldPosition = {3.0f, 0.0f, 50.0f};
+    primary.forwardDistance = 50.0f;
+    primary.priority = 1.0f;
+
+    RailLockAnchor challenger = primary;
+    challenger.target.actorId = 202;
+    challenger.target.generationId = 202;
+    challenger.worldPosition = {4.0f, 0.0f, 50.0f};
+    challenger.priority = 0.96f;
+    std::vector<RailLockAnchor> anchors{primary, challenger};
+
+    RailAimAssistFrameInput input{};
+    input.rawAim = &rawAim;
+    input.anchors = &anchors;
+    input.inputDevice = RailAimAssistInputDevice::Gamepad;
+    input.settings.requireWorldVisibility = false;
+    input.deltaTime = 1.0f / 60.0f;
+
+    RailAimAssistSystem assist;
+    assist.Update(input);
+    const RailAimAssistFrame first = assist.Frame();
+    runner.Expect(
+        first.active && first.target.actorId == 101 &&
+            first.assistedAim.worldRayDirection.x > rawAim.worldRayDirection.x &&
+            first.assistedAim.worldRayDirection.z < rawAim.worldRayDirection.z &&
+            std::abs(first.rawAim.worldRayDirection.x - rawAim.worldRayDirection.x) < 0.0001f &&
+            !first.assistedAim.hasWorldHit,
+        "aim assist should preserve the raw aim and bend only the authoritative assisted ray toward the best target");
+
+    RailLockAnchor centered = primary;
+    centered.worldPosition = {0.0f, 0.0f, 50.0f};
+    std::vector<RailLockAnchor> centeredAnchors{centered};
+    RailAimAssistSystem centeredAssist;
+    input.anchors = &centeredAnchors;
+    centeredAssist.Update(input);
+    runner.Expect(
+        !centeredAssist.Frame().active &&
+            centeredAssist.Frame().frictionActive &&
+            centeredAssist.Frame().inputFrictionScale < 1.0f,
+        "aim friction should remain active at target center even when ray magnetism needs zero correction");
+    input.anchors = &anchors;
+
+    anchors[0].worldPosition = {3.9f, 0.0f, 50.0f};
+    anchors[1].worldPosition = {3.7f, 0.0f, 50.0f};
+    assist.Update(input);
+    runner.Expect(
+        assist.Frame().target.actorId == 101 && assist.Frame().retainedTarget,
+        "target hysteresis should retain the current target when a challenger is only marginally better");
+
+    RailAimAssistSystem highIntentAssist;
+    input.reticleSpeedPixelsPerSecond = 5000.0f;
+    highIntentAssist.Update(input);
+    runner.Expect(
+        highIntentAssist.Frame().active &&
+            highIntentAssist.Frame().correctionDegrees < first.correctionDegrees &&
+            highIntentAssist.Frame().inputFrictionScale > first.inputFrictionScale,
+        "strong player input should reduce magnetism and release aim friction instead of fighting intent");
+
+    assist.Reset();
+    input.reticleSpeedPixelsPerSecond = 0.0f;
+    anchors[0].lineOfSightBlocked = true;
+    assist.Update(input);
+    runner.Expect(
+        assist.Frame().active && assist.Frame().target.actorId == 202 &&
+            assist.Frame().candidates[0].rejectReason ==
+                RailAimAssistRejectReason::RegistryOccluded,
+        "occluded targets should be rejected before aim correction and never receive through-wall magnetism");
+
+    RailPath visibilityRail;
+    visibilityRail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 200.0f}, 18.0f, 32.0f}});
+    CourseSpawnRuntime visibilityRuntime;
+    CourseEnemyActorDesc visibleEnemy{};
+    visibleEnemy.spawnDistance = 50.0f;
+    visibleEnemy.lateralOffset = 3.0f;
+    visibleEnemy.radius = 2.0f;
+    visibleEnemy.hitPoints = 20.0f;
+    visibilityRuntime.SpawnEnemyActor(visibleEnemy);
+    CourseObstacleActorDesc worldOccluder{};
+    worldOccluder.spawnDistance = 25.0f;
+    worldOccluder.lateralOffset = 1.5f;
+    worldOccluder.halfExtents = {2.0f, 2.0f, 2.0f};
+    worldOccluder.hitPoints = 20.0f;
+    visibilityRuntime.SpawnObstacle(worldOccluder);
+    RailLockAnchor worldOccludedAnchor = primary;
+    worldOccludedAnchor.target.actorId = visibilityRuntime.Enemies().front().actorId;
+    worldOccludedAnchor.target.generationId = worldOccludedAnchor.target.actorId;
+    const RailPathSample visibilityEnemySample = visibilityRail.Evaluate(50.0f);
+    worldOccludedAnchor.worldPosition = {
+        visibilityEnemySample.position.x + visibilityEnemySample.right.x * 3.0f,
+        visibilityEnemySample.position.y + visibilityEnemySample.right.y * 3.0f,
+        visibilityEnemySample.position.z + visibilityEnemySample.right.z * 3.0f};
+    std::vector<RailLockAnchor> worldAnchors{worldOccludedAnchor};
+    RailWorldRaycastInput visibilityQuery{};
+    visibilityQuery.railPath = &visibilityRail;
+    visibilityQuery.spawnRuntime = &visibilityRuntime;
+    RailAimAssistSystem visibilityAssist;
+    input.anchors = &worldAnchors;
+    input.visibilityQuery = &visibilityQuery;
+    input.settings.requireWorldVisibility = true;
+    visibilityAssist.Update(input);
+    runner.Expect(
+        !visibilityAssist.Frame().active &&
+            visibilityAssist.Frame().visibilityQueries == 1 &&
+            visibilityAssist.Frame().candidates.front().rejectReason ==
+                RailAimAssistRejectReason::WorldOccluded,
+        "world raycast visibility should reject a target hidden behind actual scene collision");
+
+    RailAimAssistSystem mouseAssist;
+    anchors[0].lineOfSightBlocked = false;
+    input.anchors = &anchors;
+    input.visibilityQuery = nullptr;
+    input.settings.requireWorldVisibility = false;
+    input.inputDevice = RailAimAssistInputDevice::MouseKeyboard;
+    mouseAssist.Update(input);
+    runner.Expect(
+        mouseAssist.Frame().active &&
+            mouseAssist.Frame().correctionDegrees < first.correctionDegrees,
+        "mouse aim should receive a deliberately weaker correction than gamepad aim");
+
+    input.lockModeActive = true;
+    mouseAssist.Update(input);
+    runner.Expect(
+        !mouseAssist.Frame().active &&
+            std::abs(mouseAssist.Frame().assistedAim.worldRayDirection.x -
+                     rawAim.worldRayDirection.x) < 0.0001f,
+        "normal-shot aim assist should disengage while the independent lock-on mode is active");
+}
+
+void TestRailAimAssistPresetAndInputRouting(RegressionRunner& runner) {
+    AimInputDeviceRouter router;
+    AimInputDeviceRouterInput routeInput{};
+    routeInput.deltaTime = 1.0f / 60.0f;
+    routeInput.gamepadConnected = true;
+    routeInput.gamepadAim = {0.04f, 0.0f};
+    router.Update(routeInput);
+    runner.Expect(
+        router.State().activeDevice == RailAimAssistInputDevice::MouseKeyboard &&
+            !router.State().gamepadActive,
+        "sub-dead-zone gamepad drift must not steal aim ownership from mouse and keyboard");
+
+    routeInput.gamepadAim = {0.72f, 0.0f};
+    router.Update(routeInput);
+    runner.Expect(
+        router.State().activeDevice == RailAimAssistInputDevice::Gamepad &&
+            router.State().switchedThisFrame &&
+            router.State().switchRevision == 1,
+        "an intentional gamepad aim gesture should immediately select the gamepad profile");
+
+    routeInput.gamepadAim = {0.20f, 0.0f};
+    routeInput.mouseDeltaPixels = {0.45f, 0.0f};
+    router.Update(routeInput);
+    runner.Expect(
+        router.State().activeDevice == RailAimAssistInputDevice::Gamepad,
+        "simultaneous low-level mouse input should not flap an active gamepad route");
+
+    routeInput.mouseDeltaPixels = {4.0f, 0.0f};
+    router.Update(routeInput);
+    runner.Expect(
+        router.State().activeDevice == RailAimAssistInputDevice::MouseKeyboard &&
+            router.State().switchedThisFrame,
+        "a deliberate mouse gesture should take aim ownership back from gamepad");
+
+    RailReticleController unassistedReticle;
+    RailReticleFrameInput reticleInput{};
+    reticleInput.deltaTime = 1.0f / 60.0f;
+    reticleInput.viewportWidth = 1000;
+    reticleInput.viewportHeight = 600;
+    reticleInput.hasCursorPosition = true;
+    reticleInput.cursorPosition = {500.0f, 300.0f};
+    unassistedReticle.Update(reticleInput);
+    reticleInput.cursorPosition = {510.0f, 300.0f};
+    unassistedReticle.Update(reticleInput);
+    const float unassistedTravel =
+        unassistedReticle.State().currentScreenPosition.x - 500.0f;
+
+    RailReticleController frictionReticle;
+    reticleInput.cursorPosition = {500.0f, 300.0f};
+    reticleInput.aimFrictionScale = 1.0f;
+    frictionReticle.Update(reticleInput);
+    reticleInput.cursorPosition = {510.0f, 300.0f};
+    reticleInput.aimFrictionScale = 0.4f;
+    frictionReticle.Update(reticleInput);
+    const float frictionTravel =
+        frictionReticle.State().currentScreenPosition.x - 500.0f;
+    runner.Expect(
+        std::abs(unassistedTravel - 10.0f) < 0.001f &&
+            std::abs(frictionTravel - 4.0f) < 0.001f &&
+            std::abs(frictionReticle.State().appliedAimFrictionScale - 0.4f) < 0.001f,
+        "aim friction must scale raw pointer delta before the authoritative reticle ray is built");
+
+    RailReticleController lockMouseReticle;
+    Matrix4x4 lockViewProjection = MakeIdentity4x4();
+    RailLockAnchor lockAnchor{};
+    lockAnchor.target.kind = RailLockTargetKind::Enemy;
+    lockAnchor.target.actorId = 77;
+    lockAnchor.target.generationId = 77;
+    lockAnchor.worldPosition = {0.12f, 0.0f, 0.5f};
+    lockAnchor.forwardDistance = 30.0f;
+    lockAnchor.screenRadius = 34.0f;
+    lockAnchor.priority = 1.0f;
+    std::vector<RailLockAnchor> lockAnchors{lockAnchor};
+    RailReticleFrameInput lockMouseInput{};
+    lockMouseInput.deltaTime = 1.0f / 60.0f;
+    lockMouseInput.viewportWidth = 1000;
+    lockMouseInput.viewportHeight = 600;
+    lockMouseInput.hasCursorPosition = true;
+    lockMouseInput.cursorPosition = {500.0f, 300.0f};
+    lockMouseInput.hasLockHeldOverride = true;
+    lockMouseInput.lockHeldOverride = true;
+    lockMouseInput.anchors = &lockAnchors;
+    lockMouseInput.gameplayViewProjection = &lockViewProjection;
+    lockMouseReticle.Update(lockMouseInput);
+    lockMouseInput.cursorPosition = {516.0f, 300.0f};
+    lockMouseReticle.Update(lockMouseInput);
+    runner.Expect(
+        std::abs(lockMouseReticle.State().currentScreenPosition.x -
+                 lockMouseInput.cursorPosition.x) < 0.001f &&
+            std::abs(lockMouseReticle.State().currentScreenPosition.y -
+                     lockMouseInput.cursorPosition.y) < 0.001f &&
+            lockMouseReticle.State().lockHeld &&
+            !lockMouseReticle.State().aimFeelActive,
+        "mouse lock-on must keep the authoritative reticle exactly coupled to the visible pointer");
+
+    RailAimAssistPresetRegistry shippedPresets;
+    WeaponDefinitionAsset shippedPulseWeapon{};
+    std::string shippedPresetError;
+    std::string shippedWeaponError;
+    const bool shippedPresetsLoaded = shippedPresets.LoadDirectory(
+        RailAimAssistPresetRegistry::DefaultDirectory(),
+        &shippedPresetError);
+    const bool shippedWeaponLoaded = shippedPulseWeapon.LoadFromFile(
+        (WeaponDefinitionRegistry::DefaultDirectory() /
+         "rail_pulse_cannon.weapon").generic_string(),
+        &shippedWeaponError);
+    const RailAimAssistPreset* shippedResolvedPreset = shippedWeaponLoaded
+        ? shippedPresets.Find(shippedPulseWeapon.aimAssistPresetId)
+        : nullptr;
+    runner.Expect(
+        shippedPresetsLoaded && shippedPresetError.empty() &&
+            shippedWeaponLoaded && shippedWeaponError.empty() &&
+            shippedResolvedPreset != nullptr &&
+            shippedResolvedPreset->presetId == "gamepad_standard",
+        "the shipped pulse-cannon aimAssistPresetId must resolve to a packaged commercial preset");
+
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" /
+        "rail_aim_assist_preset_registry";
+    std::error_code filesystemError;
+    std::filesystem::remove_all(root, filesystemError);
+    filesystemError.clear();
+    std::filesystem::create_directories(root, filesystemError);
+    const std::filesystem::path presetPath = root / "test.aimassist";
+    auto presetText = [](float gamepadStrength) {
+        std::ostringstream output;
+        output << "RAIL_AIM_ASSIST_PRESET|1\n"
+               << "presetId=test_runtime\n"
+               << "displayName=Test Runtime\n"
+               << "gamepadMagnetismStrength=" << gamepadStrength << "\n"
+               << "maximumVisibilityQueries=6\n";
+        return output.str();
+    };
+    WriteTextFile(presetPath, presetText(0.63f));
+
+    RailAimAssistPresetRegistry presets;
+    std::string presetError;
+    const bool loaded = presets.LoadDirectory(root, &presetError);
+    const RailAimAssistPreset* firstPreset = presets.Find("test_runtime");
+    const uint64_t firstRevision = presets.Stats().revision;
+    runner.Expect(
+        loaded && presetError.empty() && firstPreset != nullptr &&
+            std::abs(firstPreset->settings.gamepadMagnetismStrength - 0.63f) < 0.001f &&
+            firstPreset->settings.maximumVisibilityQueries == 6,
+        "aim-assist preset registry should resolve validated data-driven tuning by presetId");
+
+    WriteTextFile(
+        presetPath,
+        "RAIL_AIM_ASSIST_PRESET|1\npresetId=test_runtime\nunknownSetting=1\n");
+    const RailAimAssistPresetReloadReport failedReload =
+        presets.ReloadChangedPresets();
+    const RailAimAssistPreset* retainedPreset = presets.Find("test_runtime");
+    runner.Expect(
+        failedReload.status == RailAimAssistPresetReloadStatus::Failed &&
+            presets.Stats().revision == firstRevision && retainedPreset != nullptr &&
+            std::abs(retainedPreset->settings.gamepadMagnetismStrength - 0.63f) < 0.001f,
+        "a malformed hot reload must preserve the last-known-good aim-assist preset atomically");
+
+    WriteTextFile(presetPath, presetText(0.47f));
+    const RailAimAssistPresetReloadReport successfulReload =
+        presets.ReloadChangedPresets();
+    const RailAimAssistPreset* reloadedPreset = presets.Find("test_runtime");
+    runner.Expect(
+        successfulReload.status == RailAimAssistPresetReloadStatus::Reloaded &&
+            successfulReload.currentRevision > firstRevision &&
+            reloadedPreset != nullptr &&
+            std::abs(reloadedPreset->settings.gamepadMagnetismStrength - 0.47f) < 0.001f,
+        "a valid hot reload should atomically publish the next aim-assist preset revision");
+
+    std::filesystem::remove_all(root, filesystemError);
+}
+
+void TestCourseEnemyPresentationFallback(RegressionRunner& runner) {
+    runner.Expect(
+        IsCourseMeshRenderEligible(CourseMeshRenderKind::Enemy, "ball") &&
+            IsCourseMeshRenderEligible(
+                CourseMeshRenderKind::Enemy,
+                "animated_cube") &&
+            IsCourseMeshRenderEligible(
+                CourseMeshRenderKind::Enemy,
+                "drone_production") &&
+            !IsCourseMeshRenderEligible(
+                CourseMeshRenderKind::Enemy,
+                "") &&
+            !IsCourseMeshRenderEligible(
+                CourseMeshRenderKind::GameplayTerrain,
+                "ball") &&
+            !IsCourseMeshRenderEligible(
+                CourseMeshRenderKind::HeroLandmark,
+                "animated_cube"),
+        "packaged placeholder models must remain visible for enemies without leaking into authored scenery");
+
+    CourseSpawnRuntime runtime;
+    CourseEnemyActorDesc drone{};
+    drone.meshId = "ball";
+    runtime.SpawnEnemyActor(drone);
+    CourseEnemyActorDesc turret{};
+    turret.meshId = "animated_cube";
+    runtime.SpawnEnemyActor(turret);
+    runner.Expect(
+        runtime.Enemies().size() == 2 &&
+            std::all_of(
+                runtime.Enemies().begin(),
+                runtime.Enemies().end(),
+                [](const CourseEnemyActor& enemy) {
+                    return IsCourseMeshRenderEligible(
+                        CourseMeshRenderKind::Enemy,
+                        enemy.desc.meshId);
+                }),
+        "the shipped drone and turret fallback mesh IDs must both enter the normal enemy render path");
+}
+
+void TestRailWorldRaycast(RegressionRunner& runner) {
+    RailPath rail;
+    rail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 200.0f}, 18.0f, 32.0f}});
+
+    RailAimState aim{};
+    aim.worldRayOrigin = {0.0f, 0.0f, 0.0f};
+    aim.worldRayDirection = {0.0f, 0.0f, 1.0f};
+    aim.maxDistance = 120.0f;
+    aim.aimDistance = aim.maxDistance;
+    aim.worldAimPoint = {0.0f, 0.0f, aim.maxDistance};
+    aim.valid = true;
+
+    CourseSpawnRuntime runtime;
+    CourseEnemyActorDesc enemy{};
+    enemy.spawnDistance = 60.0f;
+    enemy.radius = 3.0f;
+    enemy.hitPoints = 30.0f;
+    runtime.SpawnEnemyActor(enemy);
+
+    RailWorldRaycastInput input{};
+    input.aim = &aim;
+    input.railPath = &rail;
+    input.spawnRuntime = &runtime;
+    input.playerDistance = 0.0f;
+
+    const RailAimHit enemyHit = RailWorldRaycast::Query(input);
+    const float enemyCenterZ = rail.Evaluate(enemy.spawnDistance).position.z;
+    runner.Expect(
+        enemyHit.hit && enemyHit.kind == RailAimHitKind::Enemy &&
+            enemyHit.actorId != 0 &&
+            std::abs(enemyHit.distance - (enemyCenterZ - enemy.radius)) < 0.01f &&
+            std::abs(enemyHit.position.z - enemyHit.distance) < 0.001f,
+        "world raycast should resolve the enemy sphere at its actual entry point");
+
+    CourseObstacleActorDesc obstacle{};
+    obstacle.spawnDistance = 40.0f;
+    obstacle.halfExtents = {4.0f, 4.0f, 4.0f};
+    obstacle.breakable = false;
+    obstacle.hitPoints = 80.0f;
+    runtime.SpawnObstacle(obstacle);
+    const RailAimHit obstacleHit = RailWorldRaycast::Query(input);
+    runner.Expect(
+        obstacleHit.hit && obstacleHit.kind == RailAimHitKind::Obstacle &&
+            obstacleHit.actorId != 0 &&
+            obstacleHit.distance < enemyHit.distance &&
+            obstacleHit.normal.z < -0.9f,
+        "world raycast should let a non-breakable obstacle occlude a farther enemy");
+
+    CourseAsset course;
+    CourseTerrainPlacement placement{};
+    placement.distance = 20.0f;
+    placement.id = "raycast_wall";
+    placement.layer = CourseTerrainLayer::GameplayCollision;
+    placement.collisionMode = CourseTerrainCollisionMode::Solid;
+    placement.scale = {5.0f, 5.0f, 2.0f};
+    course.terrainPlacements.push_back(placement);
+    input.course = &course;
+    const RailAimHit placementHit = RailWorldRaycast::Query(input);
+    runner.Expect(
+        placementHit.hit &&
+            placementHit.kind == RailAimHitKind::TerrainPlacement &&
+            placementHit.sourceIndex == 0 &&
+            placementHit.distance < obstacleHit.distance,
+        "world raycast should include gameplay terrain placements in nearest-hit occlusion");
+
+    RailAimState resolvedAim = aim;
+    ApplyRailAimHit(resolvedAim, placementHit);
+    runner.Expect(
+        resolvedAim.hasWorldHit &&
+            resolvedAim.hitKind == RailAimHitKind::TerrainPlacement &&
+            std::abs(resolvedAim.aimDistance - placementHit.distance) < 0.001f &&
+            std::abs(resolvedAim.worldAimPoint.z - placementHit.position.z) < 0.001f,
+        "resolved aim state should replace the range fallback with the actual world hit");
+
+    const RailPathSample terrainOrigin = rail.Evaluate(50.0f);
+    RailAimState terrainAim{};
+    terrainAim.worldRayOrigin = terrainOrigin.position;
+    terrainAim.worldRayDirection = terrainOrigin.right;
+    terrainAim.maxDistance = 100.0f;
+    terrainAim.aimDistance = terrainAim.maxDistance;
+    terrainAim.worldAimPoint = {
+        terrainAim.worldRayOrigin.x + terrainAim.worldRayDirection.x * terrainAim.maxDistance,
+        terrainAim.worldRayOrigin.y + terrainAim.worldRayDirection.y * terrainAim.maxDistance,
+        terrainAim.worldRayOrigin.z + terrainAim.worldRayDirection.z * terrainAim.maxDistance};
+    terrainAim.valid = true;
+    TerrainGenerationSettings terrainSettings{};
+    RailWorldRaycastInput terrainInput{};
+    terrainInput.aim = &terrainAim;
+    terrainInput.railPath = &rail;
+    terrainInput.terrainSettings = &terrainSettings;
+    terrainInput.playerDistance = 50.0f;
+    const RailAimHit terrainHit = RailWorldRaycast::Query(terrainInput);
+    runner.Expect(
+        terrainHit.hit &&
+            terrainHit.kind == RailAimHitKind::ProceduralTerrain &&
+            terrainHit.distance > 20.0f && terrainHit.distance < 90.0f &&
+            terrainHit.normal.x < -0.5f,
+        "world raycast should refine the procedural terrain SDF crossing and return a facing normal");
+}
+
+void TestRailWorldShotRouting(RegressionRunner& runner) {
+    RailPath rail;
+    rail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 200.0f}, 18.0f, 32.0f}});
+
+    auto buildAim = []() {
+        RailAimState aim{};
+        aim.worldRayOrigin = {0.0f, 0.0f, 0.0f};
+        aim.worldRayDirection = {0.0f, 0.0f, 1.0f};
+        aim.maxDistance = 120.0f;
+        aim.aimDistance = aim.maxDistance;
+        aim.worldAimPoint = {0.0f, 0.0f, aim.maxDistance};
+        aim.valid = true;
+        return aim;
+    };
+    auto fireInput = [](const RailAimState& aim, const CourseAsset* course) {
+        CourseCollisionFrameInput input{};
+        input.deltaTime = 0.016f;
+        input.course = course;
+        input.worldAim = &aim;
+        input.player.distance = 0.0f;
+        input.player.verticalOffset = 0.0f;
+        input.weapon.enabled = true;
+        input.weapon.triggerHeld = true;
+        input.weapon.triggerPressed = true;
+        return input;
+    };
+
+    {
+        CourseSpawnRuntime runtime;
+        CourseEnemyActorDesc enemy{};
+        enemy.spawnDistance = 60.0f;
+        enemy.radius = 3.0f;
+        enemy.hitPoints = 30.0f;
+        runtime.SpawnEnemyActor(enemy);
+        const uint32_t actorId = runtime.Enemies().front().actorId;
+
+        RailAimState aim = buildAim();
+        RailWorldRaycastInput query{};
+        query.aim = &aim;
+        query.railPath = &rail;
+        query.spawnRuntime = &runtime;
+        ApplyRailAimHit(aim, RailWorldRaycast::Query(query));
+
+        CourseCollisionSystem collision;
+        const CourseCollisionFrameStats stats = collision.Update(
+            runtime, fireInput(aim, nullptr));
+        runner.Expect(
+            stats.playerShotsFired == 1 &&
+                stats.playerShotWorldHits == 1 &&
+                stats.playerShotEnemyHits == 1 &&
+                runtime.Enemies().size() == 1 &&
+                runtime.Enemies().front().actorId == actorId &&
+                std::abs(runtime.Enemies().front().desc.hitPoints - 18.0f) < 0.001f,
+            "normal fire should damage exactly the enemy identified by the authoritative hitActorId");
+        runner.Expect(
+            collision.LastShotHasWorldHit() &&
+                collision.LastShotHitKind() == RailAimHitKind::Enemy &&
+                collision.LastShotHitActorId() == actorId &&
+                collision.LastWeaponHitRequest().shotId != 0 &&
+                collision.LastWeaponHitRequest().targetActorId == actorId &&
+                collision.LastDamageResult().requestAccepted &&
+                collision.LastDamageResult().damageApplied &&
+                std::abs(collision.LastDamageResult().appliedDamage - 12.0f) < 0.001f &&
+                collision.LastWeaponFeedbackResult().accepted &&
+                collision.LastWeaponFeedbackResult().event.feedbackKind ==
+                    HitFeedbackKind::NormalHit &&
+                std::abs(collision.LastShotWorldPoint().z - aim.worldAimPoint.z) < 0.001f &&
+                !runtime.VfxCues().empty() &&
+                runtime.VfxCues().back().desc.hasWorldPosition &&
+                std::abs(runtime.VfxCues().back().desc.worldPosition.z - aim.worldAimPoint.z) < 0.001f,
+            "enemy shot tracer and impact VFX should terminate at worldAimPoint");
+    }
+
+    {
+        CourseSpawnRuntime runtime;
+        CourseObstacleActorDesc obstacle{};
+        obstacle.spawnDistance = 40.0f;
+        obstacle.halfExtents = {4.0f, 4.0f, 4.0f};
+        obstacle.hitPoints = 80.0f;
+        obstacle.breakable = false;
+        runtime.SpawnObstacle(obstacle);
+
+        RailAimState aim = buildAim();
+        RailWorldRaycastInput query{};
+        query.aim = &aim;
+        query.railPath = &rail;
+        query.spawnRuntime = &runtime;
+        ApplyRailAimHit(aim, RailWorldRaycast::Query(query));
+
+        CourseCollisionSystem collision;
+        const CourseCollisionFrameStats stats = collision.Update(
+            runtime, fireInput(aim, nullptr));
+        runner.Expect(
+            stats.playerShotWorldHits == 1 &&
+                stats.playerShotObstacleHits == 0 &&
+                std::abs(runtime.Obstacles().front().desc.hitPoints - 80.0f) < 0.001f &&
+                collision.LastShotHitKind() == RailAimHitKind::Obstacle,
+            "non-breakable obstacle should stop the shot and produce impact without receiving damage");
+    }
+
+    {
+        CourseSpawnRuntime runtime;
+        CourseEnemyActorDesc enemy{};
+        enemy.spawnDistance = 60.0f;
+        enemy.radius = 3.0f;
+        enemy.hitPoints = 30.0f;
+        runtime.SpawnEnemyActor(enemy);
+        CourseAsset course;
+        CourseTerrainPlacement placement{};
+        placement.distance = 20.0f;
+        placement.layer = CourseTerrainLayer::GameplayCollision;
+        placement.collisionMode = CourseTerrainCollisionMode::Solid;
+        placement.scale = {5.0f, 5.0f, 2.0f};
+        course.terrainPlacements.push_back(placement);
+
+        RailAimState aim = buildAim();
+        RailWorldRaycastInput query{};
+        query.aim = &aim;
+        query.railPath = &rail;
+        query.spawnRuntime = &runtime;
+        query.course = &course;
+        ApplyRailAimHit(aim, RailWorldRaycast::Query(query));
+
+        CourseCollisionSystem collision;
+        const CourseCollisionFrameStats stats = collision.Update(
+            runtime, fireInput(aim, &course));
+        runner.Expect(
+            stats.playerShotWorldHits == 1 &&
+                stats.playerShotTerrainHits == 1 &&
+                stats.playerShotEnemyHits == 0 &&
+                std::abs(runtime.Enemies().front().desc.hitPoints - 30.0f) < 0.001f &&
+                collision.LastShotHitKind() == RailAimHitKind::TerrainPlacement,
+            "terrain hitKind should block damage to an enemy behind the confirmed worldAimPoint");
+    }
+
+    {
+        CourseSpawnRuntime runtime;
+        CourseEnemyActorDesc enemy{};
+        enemy.spawnDistance = 110.0f;
+        enemy.radius = 3.0f;
+        enemy.hitPoints = 30.0f;
+        runtime.SpawnEnemyActor(enemy);
+        RailAimState aim = buildAim();
+        RailWorldRaycastInput query{};
+        query.aim = &aim;
+        query.railPath = &rail;
+        query.spawnRuntime = &runtime;
+        ApplyRailAimHit(aim, RailWorldRaycast::Query(query));
+
+        CourseCollisionSystem collision;
+        const CourseCollisionFrameStats stats = collision.Update(
+            runtime, fireInput(aim, nullptr));
+        runner.Expect(
+            stats.playerShotWorldHits == 0 &&
+                stats.playerShotEnemyHits == 0 &&
+                std::abs(runtime.Enemies().front().desc.hitPoints - 30.0f) < 0.001f &&
+                collision.LastShotHasWorldPoint() &&
+                !collision.LastShotHasWorldHit() &&
+                std::abs(collision.LastShotWorldPoint().z - 92.0f) < 0.001f,
+            "shot routing should reject a confirmed hit beyond the asset-defined weapon range");
+    }
+
+    {
+        CourseSpawnRuntime runtime;
+        CourseEnemyActorDesc enemy{};
+        enemy.spawnDistance = 60.0f;
+        enemy.radius = 3.0f;
+        enemy.hitPoints = 30.0f;
+        runtime.SpawnEnemyActor(enemy);
+        RailAimState aim = buildAim();
+        RailWorldRaycastInput query{};
+        query.aim = &aim;
+        query.railPath = &rail;
+        query.spawnRuntime = &runtime;
+        ApplyRailAimHit(aim, RailWorldRaycast::Query(query));
+        runtime.MutableEnemies().clear();
+
+        CourseCollisionSystem collision;
+        const CourseCollisionFrameStats stats = collision.Update(
+            runtime, fireInput(aim, nullptr));
+        runner.Expect(
+            stats.playerShotWorldHits == 0 &&
+                stats.playerShotEnemyHits == 0 &&
+                stats.playerShotStaleHits == 1 &&
+                !collision.LastShotHasWorldHit(),
+            "stale hitActorId should fail closed instead of damaging a replacement target");
+    }
+}
+
+void TestWeaponDamageReception(RegressionRunner& runner) {
+    CourseSpawnRuntime runtime;
+    CourseEnemyActorDesc enemy{};
+    enemy.hitPoints = 10.0f;
+    runtime.SpawnEnemyActor(enemy);
+    const uint32_t enemyId = runtime.Enemies().front().actorId;
+
+    CourseObstacleActorDesc obstacle{};
+    obstacle.breakable = false;
+    obstacle.hitPoints = 80.0f;
+    runtime.SpawnObstacle(obstacle);
+    const uint32_t obstacleId = runtime.Obstacles().front().actorId;
+
+    auto requestFor = [](uint64_t shotId, uint32_t actorId, RailAimHitKind kind) {
+        WeaponHitRequest request{};
+        request.shotId = shotId;
+        request.targetActorId = actorId;
+        request.hitKind = kind;
+        request.damageType = WeaponDamageType::Energy;
+        request.rayOrigin = {0.0f, 0.0f, 0.0f};
+        request.rayDirection = {0.0f, 0.0f, 1.0f};
+        request.hitPoint = {0.0f, 0.0f, 10.0f};
+        request.hitNormal = {0.0f, 0.0f, -1.0f};
+        request.hitDistance = 10.0f;
+        request.baseDamage = 25.0f;
+        return request;
+    };
+
+    CourseActorDamageReceiver receiver;
+    const WeaponHitRequest lethalRequest = requestFor(1001, enemyId, RailAimHitKind::Enemy);
+    const DamageResult lethal = receiver.Apply(runtime, nullptr, lethalRequest);
+    runner.Expect(
+        lethal.requestAccepted && lethal.targetResolved && lethal.damageApplied &&
+            lethal.destroyed && !lethal.blocked && !lethal.weakPointHit &&
+            std::abs(lethal.requestedDamage - 25.0f) < 0.001f &&
+            std::abs(lethal.appliedDamage - 10.0f) < 0.001f &&
+            std::abs(lethal.hitPointsBefore - 10.0f) < 0.001f &&
+            std::abs(lethal.remainingHitPoints) < 0.001f &&
+            std::abs(runtime.Enemies().front().desc.hitPoints) < 0.001f,
+        "damage receiver should clamp lethal damage and return the complete HP transition");
+
+    const DamageResult duplicate = receiver.Apply(runtime, nullptr, lethalRequest);
+    runner.Expect(
+        !duplicate.requestAccepted && duplicate.duplicate &&
+            duplicate.rejectReason == DamageRejectReason::DuplicateShot &&
+            std::abs(duplicate.appliedDamage) < 0.001f &&
+            receiver.ProcessedRequestCount() == 1 &&
+            receiver.DuplicateRequestCount() == 1,
+        "damage receiver should reject a duplicate shotId without applying damage twice");
+
+    const WeaponHitRequest blockedRequest =
+        requestFor(1002, obstacleId, RailAimHitKind::Obstacle);
+    const DamageResult blocked = receiver.Apply(runtime, nullptr, blockedRequest);
+    runner.Expect(
+        blocked.requestAccepted && blocked.targetResolved && blocked.blocked &&
+            !blocked.damageApplied && !blocked.destroyed &&
+            blocked.rejectReason == DamageRejectReason::Indestructible &&
+            std::abs(blocked.remainingHitPoints - 80.0f) < 0.001f &&
+            std::abs(runtime.Obstacles().front().desc.hitPoints - 80.0f) < 0.001f,
+        "actor-ID damage reception should resolve an indestructible obstacle as a blocked hit");
+
+    const WeaponHitRequest staleRequest =
+        requestFor(1003, 0xFFFFFFFEu, RailAimHitKind::Enemy);
+    const DamageResult stale = receiver.Apply(runtime, nullptr, staleRequest);
+    runner.Expect(
+        stale.requestAccepted && !stale.targetResolved && !stale.damageApplied &&
+            stale.rejectReason == DamageRejectReason::TargetNotFound,
+        "actor-ID damage reception should fail closed when the target no longer exists");
+
+    WeaponHitRequest invalidRequest = requestFor(0, enemyId, RailAimHitKind::Enemy);
+    const DamageResult invalid = receiver.Apply(runtime, nullptr, invalidRequest);
+    runner.Expect(
+        !invalid.requestAccepted && !invalid.targetResolved &&
+            invalid.rejectReason == DamageRejectReason::InvalidRequest &&
+            receiver.ProcessedRequestCount() == 3,
+        "invalid weapon hit requests should be rejected before entering idempotency history");
+}
+
+void TestWeaponDamageFeedback(RegressionRunner& runner) {
+    CourseSpawnRuntime runtime;
+    WeaponFeedbackSystem feedback;
+
+    auto requestFor = [](uint64_t shotId) {
+        WeaponHitRequest request{};
+        request.shotId = shotId;
+        request.targetActorId = 77;
+        request.hitKind = RailAimHitKind::Enemy;
+        request.damageType = WeaponDamageType::Energy;
+        request.rayOrigin = {0.0f, 0.0f, 0.0f};
+        request.rayDirection = {0.0f, 0.0f, 1.0f};
+        request.hitPoint = {1.0f, 2.0f, 10.0f};
+        request.hitNormal = {0.0f, 0.0f, -1.0f};
+        request.hitDistance = 10.0f;
+        request.baseDamage = 25.0f;
+        return request;
+    };
+    auto damageFor = [](const WeaponHitRequest& request) {
+        DamageResult damage{};
+        damage.shotId = request.shotId;
+        damage.targetActorId = request.targetActorId;
+        damage.hitKind = request.hitKind;
+        damage.damageType = request.damageType;
+        damage.requestedDamage = request.baseDamage;
+        damage.appliedDamage = 10.0f;
+        damage.remainingHitPoints = 20.0f;
+        damage.requestAccepted = true;
+        damage.targetResolved = true;
+        damage.damageApplied = true;
+        return damage;
+    };
+
+    const WeaponHitRequest normalRequest = requestFor(2001);
+    const DamageResult normalDamage = damageFor(normalRequest);
+    const WeaponFeedbackDispatchResult normal =
+        feedback.Submit(runtime, normalRequest, normalDamage);
+    runner.Expect(
+        normal.accepted && normal.vfxSpawned && !normal.duplicate &&
+            normal.event.feedbackKind == HitFeedbackKind::NormalHit &&
+            normal.event.shotId == normalDamage.shotId &&
+            normal.event.targetActorId == normalDamage.targetActorId &&
+            normal.event.showHitMarker && normal.event.intensity > 0.0f &&
+            normal.event.cameraShake > 0.0f && normal.event.hitStopSeconds > 0.0f &&
+            normal.event.worldPosition.x == normalRequest.hitPoint.x &&
+            feedback.RecentEvents().size() == 1 &&
+            runtime.VfxCues().size() == 1 &&
+            runtime.VfxCues().back().desc.hasWorldPosition,
+        "accepted applied damage should produce one presentation-ready normal-hit event");
+
+    const WeaponFeedbackDispatchResult duplicate =
+        feedback.Submit(runtime, normalRequest, normalDamage);
+    runner.Expect(
+        !duplicate.accepted && duplicate.duplicate && !duplicate.vfxSpawned &&
+            duplicate.rejectReason == WeaponFeedbackRejectReason::DuplicateShot &&
+            feedback.AcceptedEventCount() == 1 && feedback.DuplicateEventCount() == 1 &&
+            feedback.RecentEvents().size() == 1 &&
+            runtime.VfxCues().size() == 1,
+        "replaying an accepted DamageResult must not duplicate VFX or hit markers");
+
+    feedback.Update(1.0f);
+    runner.Expect(
+        !feedback.HitMarkerActive() && feedback.HitMarkerNormalizedTime() == 0.0f,
+        "hit-marker lifetime should expire from deterministic delta time");
+
+    const WeaponHitRequest weakRequest = requestFor(2002);
+    DamageResult weakDamage = damageFor(weakRequest);
+    weakDamage.appliedDamage = 18.0f;
+    weakDamage.remainingHitPoints = 12.0f;
+    weakDamage.weakPointHit = true;
+    const WeaponFeedbackDispatchResult weak =
+        feedback.Submit(runtime, weakRequest, weakDamage);
+    runner.Expect(
+        weak.accepted && weak.event.feedbackKind == HitFeedbackKind::WeakPointHit &&
+            weak.event.weakPoint && weak.event.intensity > normal.event.intensity &&
+            weak.event.audioCueId == "weapon_impact_weak_point",
+        "weakPointHit from DamageResult should select the stronger weak-point feedback preset");
+
+    const WeaponHitRequest destroyedRequest = requestFor(2003);
+    DamageResult destroyedDamage = damageFor(destroyedRequest);
+    destroyedDamage.appliedDamage = 20.0f;
+    destroyedDamage.remainingHitPoints = 0.0f;
+    destroyedDamage.destroyed = true;
+    const WeaponFeedbackDispatchResult destroyed =
+        feedback.Submit(runtime, destroyedRequest, destroyedDamage);
+    runner.Expect(
+        destroyed.accepted && destroyed.event.feedbackKind == HitFeedbackKind::Destroyed &&
+            destroyed.event.destroyed && destroyed.event.intensity == 1.0f &&
+            destroyed.event.hudDuration > weak.event.hudDuration,
+        "destroyed from DamageResult should take priority over normal-hit presentation");
+
+    WeaponHitRequest blockedRequest = requestFor(2004);
+    blockedRequest.targetActorId = 91;
+    blockedRequest.hitKind = RailAimHitKind::Obstacle;
+    DamageResult blockedDamage{};
+    blockedDamage.shotId = blockedRequest.shotId;
+    blockedDamage.targetActorId = blockedRequest.targetActorId;
+    blockedDamage.hitKind = blockedRequest.hitKind;
+    blockedDamage.damageType = blockedRequest.damageType;
+    blockedDamage.rejectReason = DamageRejectReason::Indestructible;
+    blockedDamage.requestedDamage = blockedRequest.baseDamage;
+    blockedDamage.remainingHitPoints = 80.0f;
+    blockedDamage.requestAccepted = true;
+    blockedDamage.targetResolved = true;
+    blockedDamage.blocked = true;
+    const WeaponFeedbackDispatchResult blocked =
+        feedback.Submit(runtime, blockedRequest, blockedDamage);
+    runner.Expect(
+        blocked.accepted && blocked.event.feedbackKind == HitFeedbackKind::Blocked &&
+            blocked.event.blocked && blocked.event.appliedDamage == 0.0f &&
+            blocked.event.hitStopSeconds == 0.0f,
+        "indestructible contact should produce blocked feedback without damage confirmation");
+
+    const WeaponHitRequest staleRequest = requestFor(2005);
+    DamageResult staleDamage = damageFor(staleRequest);
+    staleDamage.appliedDamage = 0.0f;
+    staleDamage.damageApplied = false;
+    staleDamage.targetResolved = false;
+    staleDamage.rejectReason = DamageRejectReason::TargetNotFound;
+    const size_t vfxCountBeforeStale = runtime.VfxCues().size();
+    const WeaponFeedbackDispatchResult stale =
+        feedback.Submit(runtime, staleRequest, staleDamage);
+    runner.Expect(
+        !stale.accepted && !stale.vfxSpawned &&
+            stale.rejectReason == WeaponFeedbackRejectReason::UnresolvedTarget &&
+            runtime.VfxCues().size() == vfxCountBeforeStale,
+        "stale actor results must fail closed without producing false hit feedback");
+
+    const WeaponHitRequest invalidRequest = requestFor(2006);
+    DamageResult invalidDamage = damageFor(invalidRequest);
+    invalidDamage.appliedDamage = 30.0f;
+    const WeaponFeedbackDispatchResult invalid =
+        feedback.Submit(runtime, invalidRequest, invalidDamage);
+    runner.Expect(
+        !invalid.accepted &&
+            invalid.rejectReason == WeaponFeedbackRejectReason::InvalidPayload,
+        "inconsistent DamageResult payloads should be rejected before presentation dispatch");
+}
+
+void TestWeaponFireLifecycle(RegressionRunner& runner) {
+    WeaponFireSystem weapons;
+
+    WeaponDefinition invalid{};
+    invalid.weaponId = "invalid";
+    invalid.shotInterval = 0.0f;
+    runner.Expect(
+        !weapons.RegisterDefinition(invalid),
+        "invalid weapon definitions should be rejected before runtime state is created");
+
+    WeaponDefinition automatic{};
+    automatic.weaponId = "test.automatic";
+    automatic.fireMode = WeaponFireMode::Automatic;
+    automatic.damageType = WeaponDamageType::Energy;
+    automatic.baseDamage = 10.0f;
+    automatic.range = 80.0f;
+    automatic.shotInterval = 0.10f;
+    runner.Expect(
+        weapons.RegisterDefinition(automatic),
+        "a valid automatic weapon definition should register");
+
+    WeaponFireInput automaticInput{};
+    automaticInput.weaponId = automatic.weaponId;
+    automaticInput.enabled = true;
+    automaticInput.triggerHeld = true;
+    automaticInput.triggerPressed = true;
+    const WeaponFireResult firstAutomatic = weapons.Update(automaticInput);
+    runner.Expect(
+        firstAutomatic.fired && firstAutomatic.shots.size() == 1 &&
+            firstAutomatic.shots.front().shotId != 0 &&
+            std::abs(firstAutomatic.shots.front().damage - 10.0f) < 0.001f &&
+            std::abs(firstAutomatic.shots.front().range - 80.0f) < 0.001f,
+        "automatic fire should issue one fully-authored shot on the initial press");
+
+    automaticInput.triggerPressed = false;
+    automaticInput.deltaTime = 0.04f;
+    const WeaponFireResult cooldownRejected = weapons.Update(automaticInput);
+    runner.Expect(
+        !cooldownRejected.fired &&
+            cooldownRejected.rejectReason == WeaponFireRejectReason::Cooldown,
+        "automatic fire should reject held input while its cadence timer is active");
+
+    automaticInput.deltaTime = 0.06f;
+    const WeaponFireResult secondAutomatic = weapons.Update(automaticInput);
+    runner.Expect(
+        secondAutomatic.fired && secondAutomatic.shots.size() == 1 &&
+            secondAutomatic.shots.front().shotId != firstAutomatic.shots.front().shotId,
+        "automatic fire should resume at the cadence boundary with a unique shotId");
+
+    WeaponDefinition magazine{};
+    magazine.weaponId = "test.magazine";
+    magazine.fireMode = WeaponFireMode::SemiAutomatic;
+    magazine.baseDamage = 4.0f;
+    magazine.range = 40.0f;
+    magazine.shotInterval = 0.05f;
+    magazine.magazineCapacity = 2;
+    magazine.initialReserveAmmo = 2;
+    magazine.reloadDuration = 0.25f;
+    runner.Expect(weapons.RegisterDefinition(magazine), "finite-ammo weapon should register");
+
+    WeaponFireInput magazineInput{};
+    magazineInput.weaponId = magazine.weaponId;
+    magazineInput.triggerHeld = true;
+    magazineInput.triggerPressed = true;
+    runner.Expect(
+        weapons.Update(magazineInput).fired,
+        "first finite-ammo shot should fire");
+    magazineInput.triggerHeld = false;
+    magazineInput.triggerPressed = false;
+    magazineInput.triggerReleased = true;
+    magazineInput.deltaTime = 0.05f;
+    weapons.Update(magazineInput);
+    magazineInput.triggerHeld = true;
+    magazineInput.triggerPressed = true;
+    magazineInput.triggerReleased = false;
+    magazineInput.deltaTime = 0.0f;
+    const WeaponFireResult magazineEmpty = weapons.Update(magazineInput);
+    runner.Expect(
+        magazineEmpty.fired && magazineEmpty.ammoInMagazine == 0 &&
+            weapons.BeginReload(magazine.weaponId),
+        "finite magazine should deplete and enter an explicit reload");
+    magazineInput.triggerHeld = false;
+    magazineInput.triggerPressed = false;
+    magazineInput.triggerReleased = true;
+    magazineInput.deltaTime = 0.25f;
+    weapons.Update(magazineInput);
+    const WeaponRuntimeState* reloaded = weapons.FindRuntimeState(magazine.weaponId);
+    runner.Expect(
+        reloaded != nullptr && !reloaded->reloading &&
+            reloaded->ammoInMagazine == 2 && reloaded->reserveAmmo == 0,
+        "reload completion should transfer only available reserve ammunition");
+
+    WeaponDefinition heated{};
+    heated.weaponId = "test.heat";
+    heated.fireMode = WeaponFireMode::Automatic;
+    heated.baseDamage = 6.0f;
+    heated.range = 50.0f;
+    heated.shotInterval = 0.10f;
+    heated.heatPerProjectile = 1.0f;
+    heated.heatCapacity = 1.9f;
+    heated.coolingPerSecond = 1.0f;
+    heated.overheatRecoveryFraction = 0.5f;
+    runner.Expect(weapons.RegisterDefinition(heated), "heat-limited weapon should register");
+
+    WeaponFireInput heatInput{};
+    heatInput.weaponId = heated.weaponId;
+    heatInput.triggerHeld = true;
+    heatInput.triggerPressed = true;
+    const WeaponFireResult heatFirst = weapons.Update(heatInput);
+    heatInput.triggerPressed = false;
+    heatInput.deltaTime = 0.10f;
+    const WeaponFireResult heatSecond = weapons.Update(heatInput);
+    heatInput.deltaTime = 0.10f;
+    const WeaponFireResult overheated = weapons.Update(heatInput);
+    runner.Expect(
+        heatFirst.fired && heatSecond.fired && heatSecond.overheated &&
+            !overheated.fired &&
+            overheated.rejectReason == WeaponFireRejectReason::Overheated,
+        "heat capacity should latch overheat and reject subsequent fire");
+    heatInput.triggerHeld = false;
+    heatInput.triggerReleased = true;
+    heatInput.deltaTime = 1.0f;
+    weapons.Update(heatInput);
+    const WeaponRuntimeState* cooled = weapons.FindRuntimeState(heated.weaponId);
+    runner.Expect(
+        cooled != nullptr && !cooled->overheated && cooled->heat <= 1.0f + 0.001f,
+        "cooling below the recovery threshold should clear the overheat latch");
+
+    WeaponDefinition charge{};
+    charge.weaponId = "test.charge";
+    charge.fireMode = WeaponFireMode::ChargeRelease;
+    charge.baseDamage = 20.0f;
+    charge.range = 120.0f;
+    charge.shotInterval = 0.20f;
+    charge.minimumChargeSeconds = 0.20f;
+    charge.maximumChargeSeconds = 1.0f;
+    charge.maximumChargeDamageMultiplier = 2.0f;
+    runner.Expect(weapons.RegisterDefinition(charge), "charge weapon should register");
+
+    WeaponFireInput chargeInput{};
+    chargeInput.weaponId = charge.weaponId;
+    chargeInput.triggerHeld = true;
+    chargeInput.triggerPressed = true;
+    chargeInput.deltaTime = 0.10f;
+    runner.Expect(!weapons.Update(chargeInput).fired, "charging should not fire on press");
+    chargeInput.triggerPressed = false;
+    chargeInput.deltaTime = 0.15f;
+    weapons.Update(chargeInput);
+    chargeInput.triggerHeld = false;
+    chargeInput.triggerReleased = true;
+    chargeInput.deltaTime = 0.0f;
+    const WeaponFireResult charged = weapons.Update(chargeInput);
+    runner.Expect(
+        charged.fired && charged.shots.size() == 1 &&
+            std::abs(charged.shots.front().chargeRatio - 0.25f) < 0.001f &&
+            std::abs(charged.shots.front().damage - 25.0f) < 0.001f,
+        "charge release should scale damage from deterministic accumulated charge time");
+
+    WeaponDefinition volley{};
+    volley.weaponId = "test.volley";
+    volley.fireMode = WeaponFireMode::ReleaseVolley;
+    volley.damageType = WeaponDamageType::Ice;
+    volley.baseDamage = 15.0f;
+    volley.range = 140.0f;
+    volley.shotInterval = 0.12f;
+    volley.maxProjectilesPerTrigger = 4;
+    volley.lockOnCompatible = true;
+    runner.Expect(weapons.RegisterDefinition(volley), "lock-on volley should register");
+    WeaponFireInput volleyInput{};
+    volleyInput.weaponId = volley.weaponId;
+    volleyInput.triggerHeld = true;
+    volleyInput.triggerPressed = true;
+    weapons.Update(volleyInput);
+    volleyInput.triggerHeld = false;
+    volleyInput.triggerPressed = false;
+    volleyInput.triggerReleased = true;
+    volleyInput.requestedProjectileCount = 3;
+    volleyInput.damageMultiplier = 1.25f;
+    const WeaponFireResult volleyResult = weapons.Update(volleyInput);
+    runner.Expect(
+        volleyResult.fired && volleyResult.shots.size() == 3 &&
+            volleyResult.shots[0].shotId != volleyResult.shots[1].shotId &&
+            volleyResult.shots[1].shotId != volleyResult.shots[2].shotId &&
+            std::abs(volleyResult.shots[2].damage - 18.75f) < 0.001f &&
+            weapons.TotalProjectilesFired() == 10,
+        "release volley should issue one unique shot authorization per locked target");
+}
+
+void TestWeaponDefinitionAssetsAndHotReload(RegressionRunner& runner) {
+    WeaponDefinitionAsset productPulse{};
+    std::string loadError;
+    runner.Expect(
+        productPulse.LoadFromFile(
+            (WeaponDefinitionRegistry::DefaultDirectory() / "rail_pulse_cannon.weapon").generic_string(),
+            &loadError) &&
+            productPulse.definition.weaponId == RailWeaponIds::PulseCannon &&
+            productPulse.definition.fireMode == WeaponFireMode::Automatic &&
+            productPulse.definition.damageType == WeaponDamageType::Energy &&
+            std::abs(productPulse.definition.baseDamage - 12.0f) < 0.001f,
+        "production pulse-cannon asset should load with its authored schema and values: " + loadError);
+
+    WeaponDefinitionRegistry fallbackRegistry;
+    runner.Expect(
+        fallbackRegistry.Find(RailWeaponIds::PulseCannon) != nullptr &&
+            fallbackRegistry.IsUsingFallback(RailWeaponIds::PulseCannon),
+        "registry should always provide a validated built-in fallback weapon");
+
+    const std::filesystem::path root =
+        std::filesystem::path("generated") / "editor" / "tests" / "weapon_definition_registry";
+    std::error_code filesystemError;
+    std::filesystem::remove_all(root, filesystemError);
+    filesystemError.clear();
+    std::filesystem::create_directories(root, filesystemError);
+    runner.Expect(!filesystemError, "weapon registry test directory should be created");
+
+    auto writeWeapon = [&runner](
+        const std::filesystem::path& path,
+        const std::string& weaponId,
+        const std::string& fireMode,
+        const std::string& damageType,
+        float damage,
+        float range,
+        float interval,
+        uint32_t magazineCapacity,
+        uint32_t reserveAmmo,
+        uint32_t maxProjectiles,
+        bool lockOnCompatible) {
+        std::ofstream output(path, std::ios::trunc);
+        output << "WEAPON_DEFINITION|1\n"
+               << "weaponId=" << weaponId << "\n"
+               << "displayName=Regression Weapon\n"
+               << "fireMode=" << fireMode << "\n"
+               << "damageType=" << damageType << "\n"
+               << "baseDamage=" << damage << "\n"
+               << "range=" << range << "\n"
+               << "shotInterval=" << interval << "\n"
+               << "projectilesPerShot=1\n"
+               << "maxProjectilesPerTrigger=" << maxProjectiles << "\n"
+               << "magazineCapacity=" << magazineCapacity << "\n"
+               << "initialReserveAmmo=" << reserveAmmo << "\n"
+               << "reloadDuration=0.5\n"
+               << "autoReload=true\n"
+               << "lockOnCompatible=" << (lockOnCompatible ? "true" : "false") << "\n"
+               << "muzzleVfxId=test_muzzle\n"
+               << "tracerVfxId=test_tracer\n"
+               << "fireAudioId=test_fire\n"
+               << "feedbackPresetId=test_feedback\n"
+               << "aimAssistPresetId=test_aim\n"
+               << "projectileRadius=1.0\n"
+               << "muzzleForwardOffset=3.0\n"
+               << "tracerForwardDistance=20.0\n"
+               << "muzzleRadius=0.5\n"
+               << "tracerRadius=0.6\n";
+        runner.Expect(output.good(), "weapon registry test asset should be written");
+    };
+
+    const std::filesystem::path pulsePath = root / "pulse.weapon";
+    const std::filesystem::path lockPath = root / "lock.weapon";
+    writeWeapon(
+        pulsePath,
+        RailWeaponIds::PulseCannon,
+        "Automatic",
+        "Energy",
+        10.0f,
+        80.0f,
+        0.20f,
+        5,
+        10,
+        1,
+        false);
+    writeWeapon(
+        lockPath,
+        RailWeaponIds::LockOnIce,
+        "ReleaseVolley",
+        "Ice",
+        30.0f,
+        120.0f,
+        0.15f,
+        0,
+        0,
+        8,
+        true);
+
+    WeaponDefinitionRegistry registry;
+    WeaponFireSystem fireSystem;
+    std::string registryError;
+    runner.Expect(
+        registry.LoadDirectory(root, &fireSystem, &registryError) &&
+            registry.Stats().revision == 1 &&
+            registry.Stats().loadedAssetCount == 2 &&
+            registry.Stats().fallbackAssetCount == 0 &&
+            !registry.IsUsingFallback(RailWeaponIds::PulseCannon),
+        "registry should atomically load all valid weapon assets: " + registryError);
+
+    WeaponFireInput fireInput{};
+    fireInput.weaponId = RailWeaponIds::PulseCannon;
+    fireInput.triggerHeld = true;
+    fireInput.triggerPressed = true;
+    const WeaponFireResult firstShot = fireSystem.Update(fireInput);
+    const WeaponRuntimeState* stateBeforeReload =
+        fireSystem.FindRuntimeState(RailWeaponIds::PulseCannon);
+    runner.Expect(
+        firstShot.fired && firstShot.shots.size() == 1 &&
+            std::abs(firstShot.shots.front().damage - 10.0f) < 0.001f &&
+            stateBeforeReload != nullptr && stateBeforeReload->ammoInMagazine == 4 &&
+            stateBeforeReload->reserveAmmo == 10 &&
+            stateBeforeReload->totalProjectilesFired == 1,
+        "loaded definition should drive firing while runtime state remains separately owned");
+    const float cooldownBeforeReload = stateBeforeReload->cooldownRemaining;
+
+    writeWeapon(
+        pulsePath,
+        RailWeaponIds::PulseCannon,
+        "Automatic",
+        "Energy",
+        20.0f,
+        95.0f,
+        0.20f,
+        8,
+        10,
+        1,
+        false);
+    const WeaponDefinitionReloadReport reloaded =
+        registry.ReloadChangedAssets(&fireSystem);
+    const WeaponRuntimeState* stateAfterReload =
+        fireSystem.FindRuntimeState(RailWeaponIds::PulseCannon);
+    const WeaponDefinitionAsset* reloadedPulse = registry.Find(RailWeaponIds::PulseCannon);
+    runner.Expect(
+        reloaded.status == WeaponDefinitionReloadStatus::Reloaded &&
+            reloaded.currentRevision == 2 &&
+            reloadedPulse != nullptr &&
+            std::abs(reloadedPulse->definition.baseDamage - 20.0f) < 0.001f &&
+            stateAfterReload != nullptr && stateAfterReload->ammoInMagazine == 4 &&
+            stateAfterReload->reserveAmmo == 10 &&
+            stateAfterReload->totalProjectilesFired == 1 &&
+            std::abs(stateAfterReload->cooldownRemaining - cooldownBeforeReload) < 0.001f,
+        "hot reload should replace definition data without resetting ammo, cadence, or shot history");
+
+    fireInput.triggerPressed = false;
+    fireInput.deltaTime = 0.20f;
+    const WeaponFireResult postReloadShot = fireSystem.Update(fireInput);
+    runner.Expect(
+        postReloadShot.fired && postReloadShot.shots.size() == 1 &&
+            std::abs(postReloadShot.shots.front().damage - 20.0f) < 0.001f,
+        "the next authorized shot should use the hot-reloaded definition");
+    runner.Expect(
+        registry.ReloadChangedAssets(&fireSystem).status ==
+            WeaponDefinitionReloadStatus::NoChange,
+        "unchanged weapon assets should not advance registry revision");
+
+    {
+        std::ofstream invalid(pulsePath, std::ios::trunc);
+        invalid << "WEAPON_DEFINITION|1\n"
+                << "weaponId=rail.pulse_cannon\n"
+                << "displayName=Broken\n"
+                << "fireMode=UnknownLaser\n"
+                << "damageType=Energy\n"
+                << "baseDamage=999\n"
+                << "range=80\n"
+                << "shotInterval=0.1\n";
+    }
+    const WeaponDefinitionReloadReport malformed =
+        registry.ReloadChangedAssets(&fireSystem);
+    runner.Expect(
+        malformed.status == WeaponDefinitionReloadStatus::Failed &&
+            registry.Stats().revision == 2 &&
+            std::abs(registry.Find(RailWeaponIds::PulseCannon)->definition.baseDamage - 20.0f) < 0.001f &&
+            std::abs(fireSystem.FindDefinition(RailWeaponIds::PulseCannon)->baseDamage - 20.0f) < 0.001f,
+        "malformed hot reload should retain the complete last-known-good registry and runtime definition");
+
+    writeWeapon(
+        pulsePath,
+        RailWeaponIds::PulseCannon,
+        "Automatic",
+        "Energy",
+        20.0f,
+        95.0f,
+        0.20f,
+        8,
+        10,
+        1,
+        false);
+    writeWeapon(
+        lockPath,
+        RailWeaponIds::PulseCannon,
+        "ReleaseVolley",
+        "Ice",
+        30.0f,
+        120.0f,
+        0.15f,
+        0,
+        0,
+        8,
+        true);
+    const WeaponDefinitionReloadReport duplicateId =
+        registry.ReloadChangedAssets(&fireSystem);
+    runner.Expect(
+        duplicateId.status == WeaponDefinitionReloadStatus::Failed &&
+            registry.Stats().revision == 2,
+        "duplicate weapon IDs should reject the entire staged directory update");
+
+    writeWeapon(
+        lockPath,
+        RailWeaponIds::LockOnIce,
+        "ReleaseVolley",
+        "Ice",
+        30.0f,
+        120.0f,
+        0.15f,
+        0,
+        0,
+        8,
+        true);
+    const std::filesystem::path customPath = root / "custom.weapon";
+    writeWeapon(
+        customPath,
+        "test.custom_weapon",
+        "SemiAutomatic",
+        "Kinetic",
+        7.0f,
+        40.0f,
+        0.3f,
+        3,
+        6,
+        1,
+        false);
+    runner.Expect(
+        registry.ReloadChangedAssets(&fireSystem).status ==
+                WeaponDefinitionReloadStatus::Reloaded &&
+            fireSystem.FindDefinition("test.custom_weapon") != nullptr,
+        "a valid hot reload should atomically add a new weapon to the fire system");
+
+    std::filesystem::remove(customPath, filesystemError);
+    filesystemError.clear();
+    std::filesystem::remove(pulsePath, filesystemError);
+    const WeaponDefinitionReloadReport removedAssets =
+        registry.ReloadChangedAssets(&fireSystem);
+    const WeaponDefinition* fallbackPulse =
+        fireSystem.FindDefinition(RailWeaponIds::PulseCannon);
+    runner.Expect(
+        removedAssets.status == WeaponDefinitionReloadStatus::Reloaded &&
+            registry.IsUsingFallback(RailWeaponIds::PulseCannon) &&
+            fallbackPulse != nullptr &&
+            std::abs(fallbackPulse->baseDamage - 12.0f) < 0.001f &&
+            fireSystem.FindDefinition("test.custom_weapon") == nullptr &&
+            fireSystem.FindRuntimeState("test.custom_weapon") == nullptr,
+        "removed assets should restore built-in fallbacks and remove stale custom runtime entries");
+
+    const std::filesystem::path unknownKeyPath = root / "strict_format.tmp";
+    {
+        std::ofstream invalid(unknownKeyPath, std::ios::trunc);
+        invalid << "WEAPON_DEFINITION|1\n"
+                << "weaponId=test.strict\n"
+                << "displayName=Strict\n"
+                << "fireMode=Automatic\n"
+                << "damageType=Energy\n"
+                << "baseDamage=1\n"
+                << "range=10\n"
+                << "shotInterval=0.1\n"
+                << "typoDamage=1000\n";
+    }
+    WeaponDefinitionAsset strictAsset{};
+    runner.Expect(
+        !strictAsset.LoadFromFile(unknownKeyPath.generic_string(), &loadError),
+        "unknown weapon asset keys should fail instead of silently changing balance");
+
+    std::filesystem::remove_all(root, filesystemError);
+}
+
 void TestHumanoidBindPoseMeshSpaceSkinning(RegressionRunner& runner) {
     const ModelData model = LoadObjFile_Assimp(
         "Resources/human",
@@ -17671,10 +19084,24 @@ int RunEditorCoreRegressionTests() {
         {"multi material showcase presentation defaults", [&]() {
              TestMultiMaterialShowcasePresentationDefaults(runner);
          }},
-        {"runtime skinned animation blend control", [&]() {
-             TestRuntimeSkinnedAnimationBlendControl(runner);
-         }},
-        {"gamepad input dead zone", [&]() { TestGamepadInputDeadZone(runner); }},
+         {"runtime skinned animation blend control", [&]() {
+              TestRuntimeSkinnedAnimationBlendControl(runner);
+          }},
+         {"rail world aim ray", [&]() { TestRailWorldAimRay(runner); }},
+         {"rail aim assist system", [&]() { TestRailAimAssistSystem(runner); }},
+         {"rail aim assist preset and input routing", [&]() {
+              TestRailAimAssistPresetAndInputRouting(runner);
+          }},
+         {"course enemy presentation fallback", [&]() {
+              TestCourseEnemyPresentationFallback(runner);
+          }},
+         {"rail world raycast", [&]() { TestRailWorldRaycast(runner); }},
+         {"rail world shot routing", [&]() { TestRailWorldShotRouting(runner); }},
+         {"weapon damage reception", [&]() { TestWeaponDamageReception(runner); }},
+         {"weapon damage feedback", [&]() { TestWeaponDamageFeedback(runner); }},
+         {"weapon fire lifecycle", [&]() { TestWeaponFireLifecycle(runner); }},
+         {"weapon definition assets and hot reload", [&]() { TestWeaponDefinitionAssetsAndHotReload(runner); }},
+         {"gamepad input dead zone", [&]() { TestGamepadInputDeadZone(runner); }},
         {"humanoid bind pose mesh space skinning", [&]() {
              TestHumanoidBindPoseMeshSpaceSkinning(runner);
          }},

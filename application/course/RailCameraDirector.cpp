@@ -558,6 +558,16 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
     ApplyLineOfSightSafety(frame, input, frame.mode);
     ApplySegmentTransitionPolish(frame, input, frame.mode);
 
+    frame.gameplayPosition = frame.position;
+    frame.gameplayTarget = frame.target;
+    frame.gameplayForward = NormalizeOr(
+        Subtract(frame.gameplayTarget, frame.gameplayPosition),
+        cameraSample.tangent);
+    frame.gameplayUp = RotateAroundAxis(
+        cameraSample.up,
+        frame.gameplayForward,
+        frame.rig.roll);
+
     const float cameraShakeScale = 1.0f - aimFocusBlend_ * aimFocusSettings_.shakeSuppression;
     if (shakeTime_ > 0.0f && shakeAmplitude_ > 0.0f) {
         const float envelope = (std::clamp)(shakeTime_, 0.0f, 1.0f);

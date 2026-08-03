@@ -841,6 +841,18 @@
     <ClCompile Include="application\course\PlayerCombatFeelSystem.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\AimInputDeviceRouter.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailAimState.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailAimAssistSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailAimAssistPresetRegistry.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\RailCameraDirector.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
@@ -853,6 +865,9 @@
     <ClCompile Include="application\course\RailReticleController.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\RailWorldRaycast.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\RailSpeedDirector.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
@@ -862,6 +877,21 @@
     <ClCompile Include="application\course\SectionCheckpointSystem.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+      <ClCompile Include="application\course\WeaponDamageSystem.cpp">
+        <Filter>ソース ファイル\application\course</Filter>
+      </ClCompile>
+      <ClCompile Include="application\course\WeaponDefinitionAsset.cpp">
+        <Filter>ソース ファイル\application\course</Filter>
+      </ClCompile>
+      <ClCompile Include="application\course\WeaponDefinitionRegistry.cpp">
+        <Filter>ソース ファイル\application\course</Filter>
+      </ClCompile>
+      <ClCompile Include="application\course\WeaponFireSystem.cpp">
+        <Filter>ソース ファイル\application\course</Filter>
+      </ClCompile>
+      <ClCompile Include="application\course\WeaponFeedbackSystem.cpp">
+        <Filter>ソース ファイル\application\course</Filter>
+      </ClCompile>
     <ClCompile Include="application\EffectRuntime.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -1314,6 +1344,18 @@
     <ClInclude Include="application\course\PlayerCombatFeelSystem.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\AimInputDeviceRouter.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailAimState.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailAimAssistSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailAimAssistPresetRegistry.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\RailCameraDirector.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
@@ -1329,6 +1371,9 @@
     <ClInclude Include="application\course\RailReticleController.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\RailWorldRaycast.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\RailSpeedDirector.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
@@ -1338,6 +1383,21 @@
     <ClInclude Include="application\course\SectionCheckpointSystem.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+      <ClInclude Include="application\course\WeaponDamageSystem.h">
+        <Filter>ヘッダー ファイル\application\course</Filter>
+      </ClInclude>
+      <ClInclude Include="application\course\WeaponDefinitionAsset.h">
+        <Filter>ヘッダー ファイル\application\course</Filter>
+      </ClInclude>
+      <ClInclude Include="application\course\WeaponDefinitionRegistry.h">
+        <Filter>ヘッダー ファイル\application\course</Filter>
+      </ClInclude>
+      <ClInclude Include="application\course\WeaponFireSystem.h">
+        <Filter>ヘッダー ファイル\application\course</Filter>
+      </ClInclude>
+      <ClInclude Include="application\course\WeaponFeedbackSystem.h">
+        <Filter>ヘッダー ファイル\application\course</Filter>
+      </ClInclude>
     <ClInclude Include="application\EffectComponentViews.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
@@ -1387,6 +1447,9 @@
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\AppRuntimeConfig.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\RuntimeAuthoringPolicy.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\AppSceneState.h">

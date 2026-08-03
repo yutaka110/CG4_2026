@@ -109,6 +109,9 @@ Vector2 PullToward(Vector2 current, Vector2 target, float pullPixels) {
 
 void RailReticleController::Reset() {
     state_ = {};
+    inputDeviceRouter_.Reset();
+    previousRawPointerPosition_ = {};
+    rawPointerInitialized_ = false;
 }
 
 void RailReticleController::Update(const RailReticleFrameInput& input) {
@@ -129,31 +132,93 @@ void RailReticleController::Update(const RailReticleFrameInput& input) {
 
     Vector2 next = state_.currentScreenPosition;
     Vector2 cursor{};
+    bool hasPointerSample = false;
     if (input.hasCursorPosition) {
-        next = input.cursorPosition;
+        cursor = input.cursorPosition;
+        hasPointerSample = true;
     } else if (CursorInClient(input.hwnd, input.viewportWidth, input.viewportHeight, cursor)) {
-        next = cursor;
+        hasPointerSample = true;
     }
 
     const float xAxis = AxisValue(KeyDown('A') || KeyDown(VK_LEFT), KeyDown('D') || KeyDown(VK_RIGHT));
     const float yAxis = AxisValue(KeyDown('W') || KeyDown(VK_UP), KeyDown('S') || KeyDown(VK_DOWN));
     const float axisLength = std::sqrt(xAxis * xAxis + yAxis * yAxis);
-    if (axisLength > 0.0001f) {
+    Vector2 mouseDelta{};
+    bool initialPointerSample = false;
+    if (hasPointerSample) {
+        cursor = ClampToViewport(cursor, input.viewportWidth, input.viewportHeight);
+        if (rawPointerInitialized_) {
+            mouseDelta = {
+                cursor.x - previousRawPointerPosition_.x,
+                cursor.y - previousRawPointerPosition_.y};
+        } else {
+            previousRawPointerPosition_ = cursor;
+            rawPointerInitialized_ = true;
+            initialPointerSample = true;
+        }
+        previousRawPointerPosition_ = cursor;
+    }
+
+    AimInputDeviceRouterInput routerInput{};
+    routerInput.deltaTime = input.deltaTime;
+    routerInput.mouseDeltaPixels = mouseDelta;
+    routerInput.keyboardAimActive = axisLength > 0.0001f;
+    routerInput.gamepadConnected = input.gamepadConnected;
+    routerInput.gamepadAim = input.gamepadAim;
+    inputDeviceRouter_.Update(routerInput);
+
+    const bool currentLockHeld = input.hasLockHeldOverride
+        ? input.lockHeldOverride
+        : (KeyDown(VK_LSHIFT) || KeyDown(VK_RSHIFT) || KeyDown(VK_RBUTTON));
+    const float frictionScale = currentLockHeld
+        ? 1.0f
+        : (std::clamp)(input.aimFrictionScale, 0.15f, 1.0f);
+    state_.appliedAimFrictionScale = frictionScale;
+    const RailAimAssistInputDevice activeDevice =
+        inputDeviceRouter_.State().activeDevice;
+    if (initialPointerSample &&
+        activeDevice == RailAimAssistInputDevice::MouseKeyboard) {
+        next = cursor;
+    } else if (activeDevice == RailAimAssistInputDevice::MouseKeyboard) {
+        next.x += mouseDelta.x * frictionScale;
+        next.y += mouseDelta.y * frictionScale;
+    }
+
+    if (axisLength > 0.0001f &&
+        activeDevice == RailAimAssistInputDevice::MouseKeyboard) {
         const float invLength = 1.0f / axisLength;
-        const float move = input.settings.reticleKeyboardSpeed * (std::max)(0.0f, input.deltaTime);
+        const float move = input.settings.reticleKeyboardSpeed *
+            (std::max)(0.0f, input.deltaTime) * frictionScale;
         next.x += xAxis * invLength * move;
         next.y += yAxis * invLength * move;
     }
+    if (activeDevice == RailAimAssistInputDevice::Gamepad &&
+        input.gamepadConnected) {
+        const float move = input.settings.reticleGamepadSpeed *
+            (std::max)(0.0f, input.deltaTime) * frictionScale;
+        next.x += input.gamepadAim.x * move;
+        next.y -= input.gamepadAim.y * move;
+    }
+
+    // Mouse input is an absolute on-screen authority while locking. Positional
+    // magnetism must not move the gameplay reticle away from the visible OS
+    // cursor; gamepad remains free to use target pull because it has no cursor.
+    if (currentLockHeld &&
+        activeDevice == RailAimAssistInputDevice::MouseKeyboard &&
+        hasPointerSample) {
+        next = cursor;
+    }
 
     next = ClampToViewport(next, input.viewportWidth, input.viewportHeight);
-    state_.lockHeld = KeyDown(VK_LSHIFT) || KeyDown(VK_RSHIFT) || KeyDown(VK_RBUTTON);
+    state_.lockHeld = currentLockHeld;
     state_.lockPressed = state_.lockHeld && !wasHeld;
     state_.lockReleased = !state_.lockHeld && wasHeld;
 
     if (state_.lockHeld &&
+        activeDevice == RailAimAssistInputDevice::Gamepad &&
         input.settings.lockAimFeelEnabled &&
         input.anchors != nullptr &&
-        input.viewProjection != nullptr &&
+        input.gameplayViewProjection != nullptr &&
         input.viewportWidth > 0 &&
         input.viewportHeight > 0) {
         const Vector2 screenCenter{
@@ -182,7 +247,11 @@ void RailReticleController::Update(const RailReticleFrameInput& input) {
             }
 
             const ProjectedPoint projected =
-                ProjectToScreen(anchor.worldPosition, *input.viewProjection, input.viewportWidth, input.viewportHeight);
+                ProjectToScreen(
+                    anchor.worldPosition,
+                    *input.gameplayViewProjection,
+                    input.viewportWidth,
+                    input.viewportHeight);
             if (projected.behind || projected.depth < 0.0f || projected.depth > 1.0f) {
                 continue;
             }
@@ -239,5 +308,17 @@ void RailReticleController::Update(const RailReticleFrameInput& input) {
         (next.y - state_.currentScreenPosition.y) / dt,
     };
     state_.currentScreenPosition = next;
+
+    state_.aim = {};
+    if (input.gameplayViewProjection != nullptr) {
+        RailAimRayBuildInput aimInput{};
+        aimInput.pixelPosition = state_.currentScreenPosition;
+        aimInput.viewportWidth = input.viewportWidth;
+        aimInput.viewportHeight = input.viewportHeight;
+        aimInput.gameplayViewProjection = *input.gameplayViewProjection;
+        aimInput.gameplayCameraPosition = input.gameplayCameraPosition;
+        aimInput.maxDistance = input.aimRayMaxDistance;
+        state_.aim = BuildRailAimState(aimInput);
+    }
 }
 

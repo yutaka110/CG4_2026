@@ -29,6 +29,7 @@
 #include "course/CourseEventDispatcher.h"
 #include "course/EncounterDirector.h"
 #include "course/PlayerCombatFeelSystem.h"
+#include "course/RailAimAssistPresetRegistry.h"
 #include "course/RailCameraDirector.h"
 #include "course/RailLockOnSystem.h"
 #include "course/RailSpeedDirector.h"
@@ -183,7 +184,7 @@ private:
         const RailSpeedDirectorFrame& speedFrame,
         const RailCameraDirectorFrame& cameraFrame,
         const CourseCollisionFrameStats& collisionStats);
-    int ProcessRailLockOnRelease(const Vector3& muzzlePosition);
+    int ProcessRailLockOnRelease(const Vector3& muzzlePosition, float deltaTime);
     void QueueRailLockIceProjectile(const Vector3& start, const Vector3& target, int shotIndex);
     bool IsRailShooterSceneActive() const;
     void LogRailShooterRuntimeDiagnostics(const char* reason);
@@ -243,6 +244,7 @@ private:
     RailSpeedDirector railShooterSpeedDirector_;
     CourseSpawnRuntime railShooterSpawnRuntime_;
     RailLockOnSystem railShooterLockOnSystem_;
+    RailAimAssistPresetRegistry railAimAssistPresetRegistry_{};
     struct RailHudAtlasVertex {
         Vector4 position;
         Vector2 texcoord;
@@ -346,6 +348,9 @@ private:
         editorSceneRuntimeInstantiation_{};
     uint64_t editorSceneRuntimeLastReconcileAttemptRevision_ = 0;
     uint32_t railShooterFrameIndex_ = 0;
+    float railWeaponHotReloadPollTimer_ = 0.0f;
+    uint64_t railAimAssistAppliedPresetRevision_ = 0;
+    std::string railAimAssistAppliedPresetId_;
     bool railShooterInitialized_ = false;
     bool gpuDeviceLost_ = false;
     bool previousLeftMouseDown_ = false;
@@ -520,4 +525,5 @@ private:
     bool releaseShowcaseTitleDirty_ = true;
     std::array<bool, 256> previousKeyDown_{};
     AppGamepadInput submissionGamepad_{};
+    AppGamepadInput railAimGamepad_{};
 };

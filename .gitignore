@@ -374,6 +374,17 @@ cache/
 externals/generated/
 vcpkg_installed/
 
+# Local document/review artifact workspaces
+# Keep authored presentation sources under presentation_build/, but exclude
+# extracted media, rendered previews, QA scratch data, and exported sidecars.
+/tmp/
+/output/
+/outputs/
+/presentation_build/temp_render/
+/presentation_build/temp_test/
+*.pptx
+*.inspect.ndjson
+
 # Machine-local editor crash recovery state
 .editor/autosave/
 .editor/recovery/

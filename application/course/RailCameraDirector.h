@@ -179,6 +179,12 @@ struct RailCameraDirectorFrameInput {
 
 struct RailCameraDirectorFrame {
     CourseCameraKey rig{};
+    // Stable gameplay camera captured before presentation-only shake. Weapon
+    // aim and target projection must use these values.
+    Vector3 gameplayPosition{};
+    Vector3 gameplayTarget{};
+    Vector3 gameplayUp{0.0f, 1.0f, 0.0f};
+    Vector3 gameplayForward{0.0f, 0.0f, 1.0f};
     Vector3 position{};
     Vector3 target{};
     Vector3 baseTarget{};

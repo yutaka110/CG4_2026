@@ -29,6 +29,12 @@ enum class CourseMeshRenderKind {
     VistaBackground,
 };
 
+// ball and animated_cube are intentionally rejected for authored scenery,
+// but remain the packaged fallback presentation for gameplay enemies.
+bool IsCourseMeshRenderEligible(
+    CourseMeshRenderKind kind,
+    const std::string& meshId);
+
 struct CourseMeshRenderItem {
     CourseMeshRenderKind kind = CourseMeshRenderKind::Obstacle;
     std::string name;
@@ -61,6 +67,11 @@ public:
     size_t VisibleCount() const { return visibleCount_; }
 
 private:
+    void AddEnemyInstances(
+        const CourseSpawnRuntime& runtime,
+        const RailPath& railPath,
+        std::span<const CourseMeshModelBinding> models,
+        const Matrix4x4& viewProjection);
     void AddCourseDebrisInstances(
         const CourseAsset& course,
         float currentDistance,

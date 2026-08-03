@@ -50,6 +50,7 @@ struct EditorTransformGizmoInput {
     EditorTransformGizmoSpace space = EditorTransformGizmoSpace::Local;
     EditorTransformGizmoPivotMode pivotMode = EditorTransformGizmoPivotMode::Active;
     bool snapEnabled = false;
+    bool authoringEnabled = true;
 };
 
 struct EditorTransformGizmoState {
@@ -60,6 +61,7 @@ struct EditorTransformGizmoState {
     bool transactionConnected = false;
     bool targetAvailable = false;
     bool canManipulate = false;
+    bool authoringEnabled = true;
     bool snapEnabled = false;
     bool multiSelection = false;
     uint32_t targetCount = 0;

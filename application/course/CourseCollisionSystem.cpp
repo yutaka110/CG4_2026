@@ -11,6 +11,30 @@
 #include <utility>
 
 namespace {
+bool Finite(const Vector3& value) {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+Vector3 Add(const Vector3& a, const Vector3& b) {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
+Vector3 Scale(const Vector3& value, float scale) {
+    return {value.x * scale, value.y * scale, value.z * scale};
+}
+
+float LengthSquared(const Vector3& value) {
+    return value.x * value.x + value.y * value.y + value.z * value.z;
+}
+
+Vector3 NormalizeOr(const Vector3& value, const Vector3& fallback) {
+    const float lengthSquared = LengthSquared(value);
+    if (!std::isfinite(lengthSquared) || lengthSquared <= 0.000001f) {
+        return fallback;
+    }
+    return Scale(value, 1.0f / std::sqrt(lengthSquared));
+}
+
 float Abs(float value) {
     return std::fabs(value);
 }
@@ -91,6 +115,10 @@ void SpawnImpactCue(
 
 } // namespace
 
+CourseCollisionSystem::CourseCollisionSystem() {
+    Reset();
+}
+
 void CourseCollisionSystem::Reset() {
     player_ = {};
     weapon_ = {};
@@ -98,13 +126,57 @@ void CourseCollisionSystem::Reset() {
     lastShotDistance_ = 0.0f;
     lastShotLateralOffset_ = 0.0f;
     lastShotVerticalOffset_ = 0.0f;
+    lastShotWorldPoint_ = {};
+    lastShotWorldNormal_ = {};
+    lastShotHitKind_ = RailAimHitKind::None;
+    lastShotHitActorId_ = 0;
+    lastShotHasWorldPoint_ = false;
+    lastShotHasWorldHit_ = false;
     lastShotVisible_ = false;
+    lastWeaponHitRequest_ = {};
+    lastDamageResult_ = {};
+    lastWeaponFeedbackResult_ = {};
+    lastWeaponFireResult_ = {};
+    weaponFireSystem_.Reset();
+    weaponDefinitionRegistry_.SynchronizeFireSystem(weaponFireSystem_);
+    weaponFeedbackSystem_.Reset();
+    damageReceiver_.Reset();
+}
+
+bool CourseCollisionSystem::LoadWeaponDefinitions(
+    const std::filesystem::path& directory,
+    std::string* errorMessage) {
+    return weaponDefinitionRegistry_.LoadDirectory(
+        directory,
+        &weaponFireSystem_,
+        errorMessage);
+}
+
+WeaponDefinitionReloadReport CourseCollisionSystem::ReloadChangedWeaponDefinitions() {
+    return weaponDefinitionRegistry_.ReloadChangedAssets(&weaponFireSystem_);
+}
+
+DamageResult CourseCollisionSystem::ApplyWeaponHit(
+    CourseSpawnRuntime& runtime,
+    const CourseAsset* course,
+    const WeaponHitRequest& request) {
+    lastWeaponHitRequest_ = request;
+    lastDamageResult_ = damageReceiver_.Apply(runtime, course, request);
+    lastWeaponFeedbackResult_ =
+        weaponFeedbackSystem_.Submit(runtime, request, lastDamageResult_);
+    return lastDamageResult_;
+}
+
+WeaponFireResult CourseCollisionSystem::UpdateWeaponFire(const WeaponFireInput& input) {
+    lastWeaponFireResult_ = weaponFireSystem_.Update(input);
+    return lastWeaponFireResult_;
 }
 
 CourseCollisionFrameStats CourseCollisionSystem::Update(
     CourseSpawnRuntime& runtime,
     const CourseCollisionFrameInput& input) {
     const float dt = (std::max)(0.0f, input.deltaTime);
+    weaponFeedbackSystem_.Update(dt);
     lastFrameStats_ = {};
     lastShotVisible_ = false;
 
@@ -126,6 +198,10 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     weapon_.range = (std::max)(1.0f, input.weapon.range);
     weapon_.radius = (std::max)(0.1f, input.weapon.radius);
     weapon_.damage = (std::max)(0.0f, input.weapon.damage);
+    weapon_.damageMultiplier =
+        std::isfinite(input.weapon.damageMultiplier)
+        ? (std::max)(0.0f, input.weapon.damageMultiplier)
+        : 1.0f;
     weapon_.assistEnabled = input.weapon.assistEnabled;
     weapon_.assistLateralOffset = input.weapon.assistLateralOffset;
     weapon_.assistVerticalOffset = input.weapon.assistVerticalOffset;
@@ -133,12 +209,16 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     weapon_.tracerForwardDistance = (std::max)(4.0f, input.weapon.tracerForwardDistance);
     weapon_.muzzleRadius = (std::max)(0.05f, input.weapon.muzzleRadius);
     weapon_.tracerRadius = (std::max)(0.05f, input.weapon.tracerRadius);
-    weapon_.shotTimer -= dt;
-    if (weapon_.triggerPressed) {
-        weapon_.shotTimer = (std::min)(weapon_.shotTimer, 0.0f);
-    }
-    if (!weapon_.triggerHeld) {
-        weapon_.shotTimer = (std::min)(weapon_.shotTimer, 0.0f);
+    if (const WeaponDefinitionAsset* pulseCannon =
+            weaponDefinitionRegistry_.Find(RailWeaponIds::PulseCannon)) {
+        weapon_.shotInterval = pulseCannon->definition.shotInterval;
+        weapon_.range = pulseCannon->definition.range;
+        weapon_.damage = pulseCannon->definition.baseDamage;
+        weapon_.radius = pulseCannon->projectileRadius;
+        weapon_.muzzleForwardOffset = pulseCannon->muzzleForwardOffset;
+        weapon_.tracerForwardDistance = pulseCannon->tracerForwardDistance;
+        weapon_.muzzleRadius = pulseCannon->muzzleRadius;
+        weapon_.tracerRadius = pulseCannon->tracerRadius;
     }
 
     for (CourseBulletActor& bullet : runtime.MutableBullets()) {
@@ -220,11 +300,20 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         }
     }
 
-    while (weapon_.enabled && weapon_.triggerHeld && weapon_.shotTimer <= 0.0f) {
-        lastFrameStats_.playerShotsFired++;
-        FirePlayerShot(runtime, input);
-        weapon_.shotTimer += weapon_.shotInterval;
-        break;
+    WeaponFireInput fireInput{};
+    fireInput.weaponId = RailWeaponIds::PulseCannon;
+    fireInput.deltaTime = dt;
+    fireInput.enabled = weapon_.enabled;
+    fireInput.triggerHeld = weapon_.triggerHeld;
+    fireInput.triggerPressed = weapon_.triggerPressed;
+    fireInput.triggerReleased = weapon_.triggerReleased;
+    fireInput.damageMultiplier = weapon_.damageMultiplier;
+    lastWeaponFireResult_ = UpdateWeaponFire(fireInput);
+    weapon_.shotTimer = lastWeaponFireResult_.cooldownRemaining;
+    lastFrameStats_.playerShotsFired +=
+        static_cast<uint32_t>(lastWeaponFireResult_.shots.size());
+    for (const WeaponShot& shot : lastWeaponFireResult_.shots) {
+        FirePlayerShot(runtime, input, shot);
     }
 
     runtime.PruneDestroyedActors();
@@ -234,105 +323,81 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
 
 void CourseCollisionSystem::FirePlayerShot(
     CourseSpawnRuntime& runtime,
-    const CourseCollisionFrameInput& input) {
-    const float minDistance = input.player.distance + 4.0f;
-    const float maxDistance = input.player.distance + weapon_.range;
+    const CourseCollisionFrameInput& input,
+    const WeaponShot& shot) {
     const float aimLateral = input.weapon.assistEnabled
         ? input.weapon.assistLateralOffset
         : input.player.lateralOffset;
     const float aimVertical = input.weapon.assistEnabled
         ? input.weapon.assistVerticalOffset
         : input.player.verticalOffset;
-    float bestDistance = (std::numeric_limits<float>::max)();
-    CourseEnemyActor* bestEnemy = nullptr;
-    CourseObstacleActor* bestObstacle = nullptr;
-
-    for (CourseEnemyActor& enemy : runtime.MutableEnemies()) {
-        const float distance = ActorDistance(enemy);
-        if (distance < minDistance || distance > maxDistance) {
-            continue;
-        }
-        const float allowed = weapon_.radius + enemy.desc.radius;
-        if (Abs(enemy.desc.lateralOffset - aimLateral) > allowed ||
-            Abs(enemy.desc.verticalOffset - aimVertical) > allowed) {
-            continue;
-        }
-        if (distance < bestDistance) {
-            bestDistance = distance;
-            bestEnemy = &enemy;
-            bestObstacle = nullptr;
-        }
-    }
-
-    for (CourseObstacleActor& obstacle : runtime.MutableObstacles()) {
-        if (!obstacle.desc.breakable) {
-            continue;
-        }
-        const float distance = ObstacleDistance(obstacle);
-        if (distance < minDistance || distance > maxDistance) {
-            continue;
-        }
-        if (Abs(obstacle.desc.lateralOffset - aimLateral) >
-                obstacle.desc.halfExtents.x + weapon_.radius ||
-            Abs(obstacle.desc.verticalOffset - aimVertical) >
-                obstacle.desc.halfExtents.y + weapon_.radius) {
-            continue;
-        }
-        if (distance < bestDistance) {
-            bestDistance = distance;
-            bestEnemy = nullptr;
-            bestObstacle = &obstacle;
-        }
-    }
-
-    if (bestEnemy != nullptr) {
-        const float hitDistance = ActorDistance(*bestEnemy);
-        bestEnemy->desc.hitPoints -= weapon_.damage;
-        lastFrameStats_.playerShotEnemyHits++;
-        lastShotDistance_ = hitDistance;
-        lastShotLateralOffset_ = bestEnemy->desc.lateralOffset;
-        lastShotVerticalOffset_ = bestEnemy->desc.verticalOffset;
-        lastShotVisible_ = true;
-        SpawnImpactCue(
-            runtime,
-            "player_enemy_shot",
-            "hit_ring",
-            lastShotDistance_,
-            lastShotLateralOffset_,
-            lastShotVerticalOffset_,
-            0.65f,
-            {0.56f, 0.90f, 1.0f, 0.82f},
-            0.42f);
-        return;
-    }
-
-    if (bestObstacle != nullptr) {
-        const float hitDistance = ObstacleDistance(*bestObstacle);
-        bestObstacle->desc.hitPoints -= weapon_.damage;
-        lastFrameStats_.playerShotObstacleHits++;
-        lastShotDistance_ = hitDistance;
-        lastShotLateralOffset_ = bestObstacle->desc.lateralOffset;
-        lastShotVerticalOffset_ = bestObstacle->desc.verticalOffset;
-        lastShotVisible_ = true;
-        SpawnImpactCue(
-            runtime,
-            "player_obstacle_shot",
-            "hit_plane_burst",
-            lastShotDistance_,
-            lastShotLateralOffset_,
-            lastShotVerticalOffset_,
-            0.85f,
-            {1.0f, 0.72f, 0.24f, 0.82f},
-            0.45f);
-        return;
-    }
-
-    const float tracerDistance =
-        (std::min)(input.player.distance + weapon_.range, input.player.distance + weapon_.tracerForwardDistance);
-    lastShotDistance_ = tracerDistance;
+    lastShotDistance_ = input.player.distance + shot.range;
     lastShotLateralOffset_ = aimLateral;
     lastShotVerticalOffset_ = aimVertical;
+    lastShotWorldNormal_ = {};
+    lastShotHitKind_ = RailAimHitKind::None;
+    lastShotHitActorId_ = 0;
+    lastShotHasWorldPoint_ = false;
+    lastShotHasWorldHit_ = false;
     lastShotVisible_ = true;
+    lastWeaponHitRequest_ = {};
+    lastDamageResult_ = {};
+    lastWeaponFeedbackResult_ = {};
+
+    const RailAimState* aim = input.worldAim;
+    if (aim == nullptr || !aim->valid || !Finite(aim->worldRayOrigin) ||
+        !Finite(aim->worldRayDirection)) {
+        return;
+    }
+
+    const Vector3 direction = NormalizeOr(aim->worldRayDirection, {0.0f, 0.0f, 1.0f});
+    lastShotWorldPoint_ = Add(aim->worldRayOrigin, Scale(direction, shot.range));
+    lastShotHasWorldPoint_ = true;
+    if (!aim->hasWorldHit || aim->hitKind == RailAimHitKind::None ||
+        !Finite(aim->worldAimPoint) || !Finite(aim->worldAimNormal) ||
+        !std::isfinite(aim->aimDistance) || aim->aimDistance < 0.0f ||
+        aim->aimDistance > shot.range + 0.001f) {
+        return;
+    }
+
+    WeaponHitRequest request{};
+    request.shotId = shot.shotId;
+    request.targetActorId = aim->hitActorId;
+    request.sourceIndex = aim->hitSourceIndex;
+    request.hitKind = aim->hitKind;
+    request.damageType = shot.damageType;
+    request.rayOrigin = aim->worldRayOrigin;
+    request.rayDirection = direction;
+    request.hitPoint = aim->worldAimPoint;
+    request.hitNormal = aim->worldAimNormal;
+    request.hitDistance = aim->aimDistance;
+    request.baseDamage = shot.damage;
+    ApplyWeaponHit(runtime, input.course, request);
+
+    if (!lastWeaponFeedbackResult_.accepted) {
+        lastFrameStats_.playerShotStaleHits++;
+        return;
+    }
+
+    if (aim->hitKind == RailAimHitKind::Enemy &&
+        lastDamageResult_.damageApplied) {
+        lastFrameStats_.playerShotEnemyHits++;
+    } else if (aim->hitKind == RailAimHitKind::Obstacle &&
+               lastDamageResult_.damageApplied) {
+        lastFrameStats_.playerShotObstacleHits++;
+    } else if (aim->hitKind == RailAimHitKind::TerrainPlacement ||
+               aim->hitKind == RailAimHitKind::ProceduralTerrain) {
+        lastFrameStats_.playerShotTerrainHits++;
+    }
+
+    lastFrameStats_.playerShotWorldHits++;
+    const WeaponFeedbackEvent& feedback = lastWeaponFeedbackResult_.event;
+    lastShotWorldPoint_ = feedback.worldPosition;
+    lastShotWorldNormal_ = feedback.worldNormal;
+    lastShotHitKind_ = feedback.hitKind;
+    lastShotHitActorId_ = feedback.targetActorId;
+    lastShotHasWorldHit_ = true;
+    lastShotDistance_ = input.player.distance + aim->aimDistance;
 }
 
 void CourseCollisionSystem::AppendDebugDraw(
@@ -358,6 +423,8 @@ void CourseCollisionSystem::AppendDebugDraw(
 void CourseCollisionSystem::LogFrameStats(const CourseCollisionFrameStats& stats) const {
     if (stats.enemyBulletHits == 0 &&
         stats.obstacleHits == 0 &&
+        stats.playerShotWorldHits == 0 &&
+        stats.playerShotStaleHits == 0 &&
         stats.playerShotEnemyHits == 0 &&
         stats.playerShotObstacleHits == 0) {
         return;
@@ -369,8 +436,11 @@ void CourseCollisionSystem::LogFrameStats(const CourseCollisionFrameStats& stats
          << " enemyBulletHits=" << stats.enemyBulletHits
          << " obstacleHits=" << stats.obstacleHits
          << " shots=" << stats.playerShotsFired
+         << " worldShotHits=" << stats.playerShotWorldHits
          << " enemyShotHits=" << stats.playerShotEnemyHits
          << " obstacleShotHits=" << stats.playerShotObstacleHits
+         << " terrainShotHits=" << stats.playerShotTerrainHits
+         << " staleShotHits=" << stats.playerShotStaleHits
          << "\n";
     OutputDebugStringA(line.str().c_str());
     std::ofstream log = app::OpenRotatingLog("logs/course_collision.log");
