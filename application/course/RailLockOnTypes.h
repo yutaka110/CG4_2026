@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "RailAimState.h"
 #include "utils/math/MathUtils.h"
 #include "utils/math/Vector.h"
 
@@ -83,6 +84,7 @@ struct RailLockSettings {
     float obstacleScreenRadius = 42.0f;
     float assistRadius = 12.0f;
     float reticleKeyboardSpeed = 820.0f;
+    float reticleGamepadSpeed = 920.0f;
     float releaseDamage = 34.0f;
     float lockVfxTravelDurationMin = 0.22f;
     float lockVfxTravelDurationMax = 0.62f;
@@ -124,6 +126,7 @@ struct RailLockSettings {
 };
 
 struct RailReticleState {
+    RailAimState aim{};
     Vector2 previousScreenPosition{};
     Vector2 currentScreenPosition{};
     Vector2 velocity{};
@@ -131,6 +134,7 @@ struct RailReticleState {
     float aimFeelStrength = 0.0f;
     float aimFeelPullPixels = 0.0f;
     float aimFeelTargetScore = 0.0f;
+    float appliedAimFrictionScale = 1.0f;
     bool lockHeld = false;
     bool lockPressed = false;
     bool lockReleased = false;

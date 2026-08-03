@@ -1,0 +1,27 @@
+RAIL_AIM_ASSIST_PRESET|1
+presetId=gamepad_standard
+displayName=Gamepad Standard
+enabled=true
+mouseKeyboardEnabled=true
+gamepadEnabled=true
+requireWorldVisibility=true
+minimumDistance=4.0
+maximumDistance=120.0
+mouseAcquireAngleDegrees=4.25
+gamepadAcquireAngleDegrees=8.5
+retentionAngleMultiplier=1.45
+mouseMagnetismStrength=0.16
+gamepadMagnetismStrength=0.58
+mouseMaximumCorrectionDegrees=2.0
+gamepadMaximumCorrectionDegrees=7.0
+maximumCorrectionSpeedDegrees=210.0
+highIntentReticleSpeed=1450.0
+minimumHighIntentStrength=0.18
+targetSwitchAdvantage=0.14
+targetRetentionSeconds=0.18
+angleWeight=0.68
+forwardWeight=0.14
+anchorPriorityWeight=0.18
+enemyPriorityBonus=0.08
+retainedTargetBonus=0.10
+maximumVisibilityQueries=8

@@ -2402,12 +2402,14 @@ void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input) {
             collision.Player().hitPoints,
             collision.Player().invulnerabilityTime);
         ImGui::Text(
-            "Collision: damage %.0f  bulletHits %u  obstacleHits %u  shotHits %u/%u",
+            "Collision: damage %.0f  bulletHits %u  obstacleHits %u  world/enemy/obstacle/terrain %u/%u/%u/%u",
             stats.playerDamage,
             stats.enemyBulletHits,
             stats.obstacleHits,
+            stats.playerShotWorldHits,
             stats.playerShotEnemyHits,
-            stats.playerShotObstacleHits);
+            stats.playerShotObstacleHits,
+            stats.playerShotTerrainHits);
     }
 
     if (input.checkpointSystem != nullptr) {

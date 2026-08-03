@@ -86,6 +86,16 @@ bool IsPlaceholderCourseMesh(const std::string& meshId) {
 }
 } // namespace
 
+bool IsCourseMeshRenderEligible(
+    CourseMeshRenderKind kind,
+    const std::string& meshId) {
+    if (meshId.empty()) {
+        return false;
+    }
+    return kind == CourseMeshRenderKind::Enemy ||
+        !IsPlaceholderCourseMesh(meshId);
+}
+
 bool CourseMeshRenderQueue::Initialize(
     Microsoft::WRL::ComPtr<ID3D12Device> device,
     size_t capacity) {
@@ -146,12 +156,18 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
 
     const Matrix4x4 viewProjection = Multiply(viewMatrix, projMatrix);
 
+    // Gameplay targets are submitted before scenery and decorative debris so
+    // a saturated fixed-capacity queue can never make enemies disappear.
+    AddEnemyInstances(runtime, railPath, models, viewProjection);
+
     if (course != nullptr) {
         for (const CourseTerrainPlacement& placement : course->terrainPlacements) {
             if (!ShouldDrawTerrainPlacement(placement, currentDistance)) {
                 continue;
             }
-            if (IsPlaceholderCourseMesh(placement.meshId)) {
+            const CourseMeshRenderKind renderKind =
+                RenderKindForTerrainLayer(placement.layer);
+            if (!IsCourseMeshRenderEligible(renderKind, placement.meshId)) {
                 continue;
             }
 
@@ -160,7 +176,7 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
             const uint32_t modelIndex =
                 ResolveModelIndex(models, placement.meshId, "animated_cube");
             const CourseMeshModelBinding& model = models[modelIndex];
-            if (IsPlaceholderCourseMesh(model.name)) {
+            if (!IsCourseMeshRenderEligible(renderKind, model.name)) {
                 continue;
             }
 
@@ -169,7 +185,7 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
                 break;
             }
 
-            item->kind = RenderKindForTerrainLayer(placement.layer);
+            item->kind = renderKind;
             item->terrainLayer = placement.layer;
             item->collisionMode = placement.collisionMode;
             item->name = placement.id;
@@ -205,7 +221,9 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
     }
 
     for (const CourseObstacleActor& obstacle : runtime.Obstacles()) {
-        if (IsPlaceholderCourseMesh(obstacle.desc.meshId)) {
+        if (!IsCourseMeshRenderEligible(
+                CourseMeshRenderKind::Obstacle,
+                obstacle.desc.meshId)) {
             continue;
         }
 
@@ -214,7 +232,9 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
         const uint32_t modelIndex =
             ResolveModelIndex(models, obstacle.desc.meshId, "animated_cube");
         const CourseMeshModelBinding& model = models[modelIndex];
-        if (IsPlaceholderCourseMesh(model.name)) {
+        if (!IsCourseMeshRenderEligible(
+                CourseMeshRenderKind::Obstacle,
+                model.name)) {
             continue;
         }
 
@@ -249,8 +269,17 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
             viewProjection);
     }
 
+}
+
+void CourseMeshRenderQueue::AddEnemyInstances(
+    const CourseSpawnRuntime& runtime,
+    const RailPath& railPath,
+    std::span<const CourseMeshModelBinding> models,
+    const Matrix4x4& viewProjection) {
     for (const CourseEnemyActor& enemy : runtime.Enemies()) {
-        if (IsPlaceholderCourseMesh(enemy.desc.meshId)) {
+        if (!IsCourseMeshRenderEligible(
+                CourseMeshRenderKind::Enemy,
+                enemy.desc.meshId)) {
             continue;
         }
 
@@ -259,7 +288,9 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
         const uint32_t modelIndex =
             ResolveModelIndex(models, enemy.desc.meshId, "ball");
         const CourseMeshModelBinding& model = models[modelIndex];
-        if (IsPlaceholderCourseMesh(model.name)) {
+        if (!IsCourseMeshRenderEligible(
+                CourseMeshRenderKind::Enemy,
+                model.name)) {
             continue;
         }
 
@@ -310,14 +341,16 @@ void CourseMeshRenderQueue::AddCourseDebrisInstances(
         debrisInstances);
 
     for (const CourseDebrisRenderInstance& debris : debrisInstances) {
-        if (IsPlaceholderCourseMesh(debris.meshId)) {
+        const CourseMeshRenderKind renderKind =
+            RenderKindForTerrainLayer(debris.layer);
+        if (!IsCourseMeshRenderEligible(renderKind, debris.meshId)) {
             continue;
         }
 
         const uint32_t modelIndex =
             ResolveModelIndex(models, debris.meshId, "curved_canyon_wall");
         const CourseMeshModelBinding& model = models[modelIndex];
-        if (IsPlaceholderCourseMesh(model.name)) {
+        if (!IsCourseMeshRenderEligible(renderKind, model.name)) {
             continue;
         }
 
@@ -326,7 +359,7 @@ void CourseMeshRenderQueue::AddCourseDebrisInstances(
             break;
         }
 
-        item->kind = RenderKindForTerrainLayer(debris.layer);
+        item->kind = renderKind;
         item->terrainLayer = debris.layer;
         item->collisionMode = debris.collisionMode;
         item->name = debris.id;

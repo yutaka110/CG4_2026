@@ -1,8 +1,10 @@
 #pragma once
 
+#include "RailAimAssistSystem.h"
 #include "RailLockResolver.h"
 #include "RailReticleController.h"
 #include "RailTargetRegistry.h"
+#include "RailWorldRaycast.h"
 
 namespace ge3::debug {
 class DebugDrawSystem;
@@ -16,10 +18,18 @@ struct RailLockOnFrameInput {
     uint32_t viewportHeight = 0;
     bool hasCursorPosition = false;
     Vector2 cursorPosition{};
-    const Matrix4x4* viewProjection = nullptr;
+    const Matrix4x4* gameplayViewProjection = nullptr;
     const RailPath* railPath = nullptr;
     const CourseSpawnRuntime* spawnRuntime = nullptr;
-    Vector3 cameraPosition{};
+    const CourseAsset* course = nullptr;
+    const TerrainGenerationSettings* terrainSettings = nullptr;
+    const TerrainEditLayer* terrainEdits = nullptr;
+    const TerrainEditLayer* terrainPreview = nullptr;
+    Vector3 gameplayCameraPosition{};
+    float aimRayMaxDistance = 120.0f;
+    bool gamepadConnected = false;
+    Vector2 gamepadAim{};
+    bool aimAssistEnabled = true;
 };
 
 class RailLockOnSystem {
@@ -29,15 +39,25 @@ public:
     void AppendDebugDraw(ge3::debug::DebugDrawSystem& debugDraw) const;
 
     const RailReticleState& Reticle() const { return reticle_.State(); }
+    const RailAimState& Aim() const { return reticle_.State().aim; }
+    const RailAimState& RawAim() const { return aimAssist_.RawAim(); }
+    const RailAimAssistFrame& AimAssist() const { return aimAssist_.Frame(); }
     const std::vector<RailLockToken>& Tokens() const { return resolver_.Tokens(); }
     const RailLockRelease& LastRelease() const { return lastRelease_; }
     const RailLockDebugFrame& DebugFrame() const { return debugFrame_; }
     const RailLockSettings& Settings() const { return settings_; }
     RailLockSettings& MutableSettings() { return settings_; }
+    const RailAimAssistSettings& AimAssistSettings() const { return aimAssistSettings_; }
+    RailAimAssistSettings& MutableAimAssistSettings() { return aimAssistSettings_; }
+    const AimInputDeviceRouterState& AimInputDevice() const {
+        return reticle_.InputDeviceState();
+    }
 
 private:
     RailLockSettings settings_{};
+    RailAimAssistSettings aimAssistSettings_{};
     RailReticleController reticle_;
+    RailAimAssistSystem aimAssist_;
     RailTargetRegistry registry_;
     RailLockResolver resolver_;
     RailLockDebugFrame debugFrame_{};

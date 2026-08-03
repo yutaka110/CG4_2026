@@ -336,15 +336,44 @@ void AppendGameplaySystems(EditorRuntimeInspector& inspector, const EditorRuntim
     if (input.courseCollisionSystem != nullptr) {
         const CourseCollisionFrameStats& stats = input.courseCollisionSystem->LastFrameStats();
         const CourseCollisionPlayerState& player = input.courseCollisionSystem->Player();
+        const WeaponFireResult& fire = input.courseCollisionSystem->LastWeaponFireResult();
+        const DamageResult& damage = input.courseCollisionSystem->LastDamageResult();
+        const WeaponFeedbackDispatchResult& feedback =
+            input.courseCollisionSystem->LastWeaponFeedbackResult();
+        const WeaponDefinitionRegistryStats& weaponRegistry =
+            input.courseCollisionSystem->WeaponDefinitions().Stats();
         std::ostringstream detail;
         detail << "playerDistance=" << player.distance
                << " hp=" << player.hitPoints
                << " shots=" << stats.playerShotsFired
+               << " shotWorldHits=" << stats.playerShotWorldHits
                << " shotEnemyHits=" << stats.playerShotEnemyHits
                << " shotObstacleHits=" << stats.playerShotObstacleHits
+               << " shotTerrainHits=" << stats.playerShotTerrainHits
+               << " shotStaleHits=" << stats.playerShotStaleHits
                << " enemyBulletHits=" << stats.enemyBulletHits
                << " obstacleHits=" << stats.obstacleHits
                << " playerDamage=" << stats.playerDamage
+               << " fireWeapon=" << fire.weaponId
+               << " fireProjectiles=" << fire.shots.size()
+               << " fireCooldown=" << fire.cooldownRemaining
+               << " fireHeat=" << fire.heat
+               << " fireReason=" << ToWeaponFireRejectReasonString(fire.rejectReason)
+               << " damageShotId=" << damage.shotId
+               << " damageApplied=" << damage.appliedDamage
+               << " damageRemainingHp=" << damage.remainingHitPoints
+               << " damageDestroyed=" << BoolLabel(damage.destroyed)
+               << " damageReason=" << ToDamageRejectReasonString(damage.rejectReason)
+               << " feedbackAccepted=" << BoolLabel(feedback.accepted)
+               << " feedbackKind=" << ToHitFeedbackKindString(feedback.event.feedbackKind)
+               << " feedbackIntensity=" << feedback.event.intensity
+               << " feedbackVfx=" << BoolLabel(feedback.vfxSpawned)
+               << " feedbackReason=" << ToWeaponFeedbackRejectReasonString(feedback.rejectReason)
+               << " weaponAssetRevision=" << weaponRegistry.revision
+               << " weaponAssetsLoaded=" << weaponRegistry.loadedAssetCount
+               << " weaponFallbacks=" << weaponRegistry.fallbackAssetCount
+               << " weaponHotReloads=" << weaponRegistry.successfulReloads
+               << " weaponReloadFailures=" << weaponRegistry.failedReloads
                << " lastShotVisible=" << BoolLabel(input.courseCollisionSystem->LastShotVisible());
         AddRecord(
             inspector,

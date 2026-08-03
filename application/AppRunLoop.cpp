@@ -25,6 +25,7 @@
 #include "AppParticleSystem.h"
 #include "AppPipelines.h"
 #include "AppRenderResources.h"
+#include "RuntimeAuthoringPolicy.h"
 #include "AppRuntimeState.h"
 #include "AppSceneResources.h"
 #include "EngineContext.h"
@@ -1572,6 +1573,35 @@ void AppRunLoop::ApplyRailShooterCourse() {
     railShooterCourseRuntime_.Reset(runtimeState_.terrain.previewDistance);
     railShooterSpawnRuntime_.Reset();
     railShooterCollisionSystem_.Reset();
+    if (railShooterCollisionSystem_.WeaponDefinitions().Directory().empty()) {
+        std::string weaponError;
+        if (!railShooterCollisionSystem_.LoadWeaponDefinitions(
+                WeaponDefinitionRegistry::DefaultDirectory(),
+                &weaponError)) {
+            OutputDebugStringA(
+                ("[WeaponDefinitions] Fallback definitions active: " + weaponError + "\n").c_str());
+        } else {
+            OutputDebugStringA(
+                ("[WeaponDefinitions] " +
+                 railShooterCollisionSystem_.WeaponDefinitions().Stats().status + "\n").c_str());
+        }
+    }
+    if (railAimAssistPresetRegistry_.Directory().empty()) {
+        std::string presetError;
+        if (!railAimAssistPresetRegistry_.LoadDirectory(
+                RailAimAssistPresetRegistry::DefaultDirectory(),
+                &presetError)) {
+            OutputDebugStringA(
+                ("[AimAssistPresets] Fallback presets active: " +
+                 presetError + "\n").c_str());
+        } else {
+            OutputDebugStringA(
+                ("[AimAssistPresets] " +
+                 railAimAssistPresetRegistry_.Stats().status + "\n").c_str());
+        }
+        railAimAssistAppliedPresetRevision_ = 0;
+        railAimAssistAppliedPresetId_.clear();
+    }
     railShooterCheckpointSystem_.Reset(&railShooterCourse_, runtimeState_.terrain.previewDistance);
     railShooterCombatFeelSystem_.Reset();
     railShooterEncounterDirector_.Reset();
@@ -2140,7 +2170,7 @@ void AppRunLoop::RecordRailCameraTuningSample(
     sample.lockHeld = railShooterLockOnSystem_.Reticle().lockHeld;
     sample.normalShotHeld = railInputRouteDebug_.normalShotHeld;
     sample.normalShotsFired = collisionStats.playerShotsFired;
-    sample.normalShotHits = collisionStats.playerShotEnemyHits + collisionStats.playerShotObstacleHits;
+    sample.normalShotHits = collisionStats.playerShotWorldHits;
     sample.playerDamage = collisionStats.playerDamage;
     sample.updateMs = gRailPerfFrame.updateMs;
     sample.renderMs = gRailPerfFrame.renderMs;
@@ -2920,6 +2950,41 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     addCircleLine(reticle.currentScreenPosition, reticleRadius, 1.7f * hudScale, reticleLine, 40);
     addCircleLine(reticle.currentScreenPosition, reticleRadius * 0.60f, 1.25f * hudScale, reticleLine, 32);
     addCross(reticle.currentScreenPosition, reticleRadius * 0.86f, 1.35f * hudScale, reticleLine);
+    const WeaponFeedbackSystem& feedbackSystem = railShooterCollisionSystem_.WeaponFeedback();
+    if (feedbackSystem.HitMarkerActive()) {
+        const WeaponFeedbackEvent& feedback = feedbackSystem.LastAcceptedEvent();
+        const float markerTime = feedbackSystem.HitMarkerNormalizedTime();
+        const float markerAlpha = markerTime * markerTime * opacity;
+        const float markerRadius = (18.0f + (1.0f - markerTime) * 9.0f) * hudScale;
+        Vector4 markerColor{0.74f, 0.98f, 1.0f, markerAlpha};
+        if (feedback.feedbackKind == HitFeedbackKind::Blocked ||
+            feedback.feedbackKind == HitFeedbackKind::ArmorHit) {
+            markerColor = {1.0f, 0.58f, 0.20f, markerAlpha};
+        } else if (feedback.feedbackKind == HitFeedbackKind::WeakPointHit ||
+                   feedback.feedbackKind == HitFeedbackKind::Destroyed) {
+            markerColor = {1.0f, 0.88f, 0.28f, markerAlpha};
+        }
+        addBracket(
+            reticle.currentScreenPosition,
+            markerRadius,
+            7.0f * hudScale,
+            (feedback.destroyed ? 2.8f : 2.0f) * hudScale,
+            markerColor);
+        if (feedback.feedbackKind == HitFeedbackKind::Blocked ||
+            feedback.feedbackKind == HitFeedbackKind::ArmorHit) {
+            addCross(
+                reticle.currentScreenPosition,
+                markerRadius * 0.50f,
+                1.8f * hudScale,
+                markerColor);
+        } else {
+            addCentered(
+                reticle.currentScreenPosition,
+                (feedback.destroyed ? 13.0f : 8.0f) * hudScale,
+                uvPip,
+                markerColor);
+        }
+    }
     if (maxLock) {
         addBracket(
             reticle.currentScreenPosition,
@@ -3338,9 +3403,12 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
     };
 
     const RailLockDebugFrame& debug = railShooterLockOnSystem_.DebugFrame();
+    const RailAimAssistFrame& aimAssist = railShooterLockOnSystem_.AimAssist();
     const RailReticleState& reticle = debug.reticle;
     const PlayerCombatFeelStats& combatStats = railShooterCombatFeelSystem_.LastStats();
     RailLockSettings& settings = railShooterLockOnSystem_.MutableSettings();
+    RailAimAssistSettings& aimAssistSettings =
+        railShooterLockOnSystem_.MutableAimAssistSettings();
     RailSpeedDirectorSettings& speedSettings = railShooterSpeedDirector_.MutableSettings();
     const RailSpeedDirectorFrame& speedFrame = railShooterSpeedDirector_.LastFrame();
     RailCameraComfortSettings& cameraComfort = railShooterCameraDirector_.MutableComfortSettings();
@@ -3367,6 +3435,86 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
         reticle.previousScreenPosition.y,
         reticle.currentScreenPosition.x,
         reticle.currentScreenPosition.y);
+    ImGui::Text(
+        "World Aim=%s ndc=(%.3f, %.3f) origin=(%.2f, %.2f, %.2f) dir=(%.3f, %.3f, %.3f) range=%.1f",
+        reticle.aim.valid ? "valid" : "invalid",
+        reticle.aim.normalizedPosition.x,
+        reticle.aim.normalizedPosition.y,
+        reticle.aim.worldRayOrigin.x,
+        reticle.aim.worldRayOrigin.y,
+        reticle.aim.worldRayOrigin.z,
+        reticle.aim.worldRayDirection.x,
+        reticle.aim.worldRayDirection.y,
+        reticle.aim.worldRayDirection.z,
+        reticle.aim.maxDistance);
+    ImGui::Text(
+        "World Hit=%s kind=%s distance=%.2f point=(%.2f, %.2f, %.2f) actor=%u source=%u",
+        reticle.aim.hasWorldHit ? "true" : "false",
+        ToRailAimHitKindString(reticle.aim.hitKind),
+        reticle.aim.aimDistance,
+        reticle.aim.worldAimPoint.x,
+        reticle.aim.worldAimPoint.y,
+        reticle.aim.worldAimPoint.z,
+        reticle.aim.hitActorId,
+        reticle.aim.hitSourceIndex);
+    const WeaponHitRequest& lastHitRequest =
+        railShooterCollisionSystem_.LastWeaponHitRequest();
+    const DamageResult& lastDamage = railShooterCollisionSystem_.LastDamageResult();
+    const WeaponFeedbackDispatchResult& lastFeedback =
+        railShooterCollisionSystem_.LastWeaponFeedbackResult();
+    const WeaponFireResult& lastFire = railShooterCollisionSystem_.LastWeaponFireResult();
+    const WeaponDefinitionRegistryStats& weaponRegistry =
+        railShooterCollisionSystem_.WeaponDefinitions().Stats();
+    const RailAimAssistPresetRegistryStats& aimPresetRegistry =
+        railAimAssistPresetRegistry_.Stats();
+    ImGui::Text(
+        "Damage shot=%llu accepted=%s resolved=%s applied=%.1f/%.1f hp=%.1f destroyed=%s blocked=%s reason=%s",
+        static_cast<unsigned long long>(lastHitRequest.shotId),
+        lastDamage.requestAccepted ? "true" : "false",
+        lastDamage.targetResolved ? "true" : "false",
+        lastDamage.appliedDamage,
+        lastDamage.requestedDamage,
+        lastDamage.remainingHitPoints,
+        lastDamage.destroyed ? "true" : "false",
+        lastDamage.blocked ? "true" : "false",
+        ToDamageRejectReasonString(lastDamage.rejectReason));
+    ImGui::Text(
+        "Feedback accepted=%s kind=%s intensity=%.2f marker=%.2f vfx=%s reason=%s",
+        lastFeedback.accepted ? "true" : "false",
+        ToHitFeedbackKindString(lastFeedback.event.feedbackKind),
+        lastFeedback.event.intensity,
+        railShooterCollisionSystem_.WeaponFeedback().HitMarkerNormalizedTime(),
+        lastFeedback.vfxSpawned ? "true" : "false",
+        ToWeaponFeedbackRejectReasonString(lastFeedback.rejectReason));
+    ImGui::Text(
+        "Fire weapon=%s fired=%s projectiles=%u cooldown=%.3f heat=%.2f ammo=%u reserve=%u reason=%s",
+        lastFire.weaponId.empty() ? "-" : lastFire.weaponId.c_str(),
+        lastFire.fired ? "true" : "false",
+        static_cast<unsigned int>(lastFire.shots.size()),
+        lastFire.cooldownRemaining,
+        lastFire.heat,
+        lastFire.ammoInMagazine,
+        lastFire.reserveAmmo,
+        ToWeaponFireRejectReasonString(lastFire.rejectReason));
+    ImGui::Text(
+        "Weapon assets revision=%llu loaded=%u fallback=%u reloads=%llu failures=%llu",
+        static_cast<unsigned long long>(weaponRegistry.revision),
+        weaponRegistry.loadedAssetCount,
+        weaponRegistry.fallbackAssetCount,
+        static_cast<unsigned long long>(weaponRegistry.successfulReloads),
+        static_cast<unsigned long long>(weaponRegistry.failedReloads));
+    ImGui::TextWrapped("Weapon assets: %s", weaponRegistry.status.c_str());
+    ImGui::Text(
+        "Aim presets active=%s revision=%llu loaded=%u fallback=%u reloads=%llu failures=%llu",
+        railAimAssistAppliedPresetId_.empty()
+            ? "-"
+            : railAimAssistAppliedPresetId_.c_str(),
+        static_cast<unsigned long long>(aimPresetRegistry.revision),
+        aimPresetRegistry.loadedPresetCount,
+        aimPresetRegistry.fallbackPresetCount,
+        static_cast<unsigned long long>(aimPresetRegistry.successfulReloads),
+        static_cast<unsigned long long>(aimPresetRegistry.failedReloads));
+    ImGui::TextWrapped("Aim presets: %s", aimPresetRegistry.status.c_str());
     ImGui::Text(
         "Lock held=%s pressed=%s released=%s accepted=%d fired=%d",
         reticle.lockHeld ? "true" : "false",
@@ -3402,6 +3550,76 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
         reticle.aimFeelStrength,
         reticle.aimFeelPullPixels,
         reticle.aimFeelTargetScore);
+    ImGui::Text(
+        "Aim assist=%s device=%s target=%u score=%.3f correction=%.3fdeg strength=%.3f friction=%s next/applied=%.3f/%.3f visibility=%u",
+        aimAssist.active ? "active" : "idle",
+        ToRailAimAssistInputDeviceString(aimAssist.inputDevice),
+        aimAssist.target.actorId,
+        aimAssist.targetScore,
+        aimAssist.correctionDegrees,
+        aimAssist.appliedStrength,
+        aimAssist.frictionActive ? "active" : "idle",
+        aimAssist.inputFrictionScale,
+        reticle.appliedAimFrictionScale,
+        aimAssist.visibilityQueries);
+
+    if (ImGui::CollapsingHeader("Rail Aim Assist", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Aim Assist Enabled", &aimAssistSettings.enabled);
+        ImGui::Checkbox("Mouse/Keyboard Assist", &aimAssistSettings.mouseKeyboardEnabled);
+        ImGui::Checkbox("Gamepad Assist", &aimAssistSettings.gamepadEnabled);
+        ImGui::Checkbox("Require World Visibility", &aimAssistSettings.requireWorldVisibility);
+        ImGui::DragFloat(
+            "Mouse Acquire Angle",
+            &aimAssistSettings.mouseAcquireAngleDegrees,
+            0.05f,
+            0.1f,
+            20.0f,
+            "%.2f deg");
+        ImGui::DragFloat(
+            "Gamepad Acquire Angle",
+            &aimAssistSettings.gamepadAcquireAngleDegrees,
+            0.05f,
+            0.1f,
+            30.0f,
+            "%.2f deg");
+        ImGui::DragFloat(
+            "Mouse Magnetism",
+            &aimAssistSettings.mouseMagnetismStrength,
+            0.01f,
+            0.0f,
+            1.0f,
+            "%.2f");
+        ImGui::DragFloat(
+            "Gamepad Magnetism",
+            &aimAssistSettings.gamepadMagnetismStrength,
+            0.01f,
+            0.0f,
+            1.0f,
+            "%.2f");
+        ImGui::DragFloat(
+            "Switch Advantage",
+            &aimAssistSettings.targetSwitchAdvantage,
+            0.01f,
+            0.0f,
+            1.0f,
+            "%.2f");
+        ImGui::DragFloat(
+            "Retention Seconds",
+            &aimAssistSettings.targetRetentionSeconds,
+            0.01f,
+            0.0f,
+            1.0f,
+            "%.2f s");
+        ImGui::Text(
+            "Raw dir=(%.4f, %.4f, %.4f) assisted dir=(%.4f, %.4f, %.4f) candidates=%zu",
+            aimAssist.rawAim.worldRayDirection.x,
+            aimAssist.rawAim.worldRayDirection.y,
+            aimAssist.rawAim.worldRayDirection.z,
+            aimAssist.assistedAim.worldRayDirection.x,
+            aimAssist.assistedAim.worldRayDirection.y,
+            aimAssist.assistedAim.worldRayDirection.z,
+            aimAssist.candidates.size());
+    }
 
     if (ImGui::CollapsingHeader("Camera/Rail Tuning Recorder P1-B-12", ImGuiTreeNodeFlags_DefaultOpen)) {
         bool recording = railCameraTuningRecorder_.recording;
@@ -4307,22 +4525,46 @@ bool AppRunLoop::IsRailShooterSceneActive() const {
     return sceneName != nullptr && std::strcmp(sceneName, "RailShooter") == 0;
 }
 
-int AppRunLoop::ProcessRailLockOnRelease(const Vector3& muzzlePosition) {
+int AppRunLoop::ProcessRailLockOnRelease(const Vector3& muzzlePosition, float deltaTime) {
     const RailLockRelease& release = railShooterLockOnSystem_.LastRelease();
-    if (release.tokens.empty() || railPath_.Length() <= 0.0f) {
+    if (railPath_.Length() <= 0.0f) {
+        return 0;
+    }
+
+    const RailLockSettings& settings = railShooterLockOnSystem_.Settings();
+    const bool maxLockRelease =
+        static_cast<int>(release.tokens.size()) >= settings.maxLocks;
+
+    const WeaponDefinitionAsset* lockWeapon =
+        railShooterCollisionSystem_.FindWeaponDefinition(RailWeaponIds::LockOnIce);
+    if (lockWeapon == nullptr || !lockWeapon->definition.lockOnCompatible) {
+        return 0;
+    }
+
+    WeaponFireInput fireInput{};
+    fireInput.weaponId = RailWeaponIds::LockOnIce;
+    fireInput.deltaTime = deltaTime;
+    fireInput.enabled = true;
+    fireInput.triggerHeld = railShooterLockOnSystem_.Reticle().lockHeld;
+    fireInput.triggerPressed = railShooterLockOnSystem_.Reticle().lockPressed;
+    fireInput.triggerReleased = railShooterLockOnSystem_.Reticle().lockReleased;
+    fireInput.requestedProjectileCount = static_cast<uint32_t>(release.tokens.size());
+    fireInput.damageMultiplier = maxLockRelease ? 1.25f : 1.0f;
+    const WeaponFireResult fireResult =
+        railShooterCollisionSystem_.UpdateWeaponFire(fireInput);
+    if (!fireResult.fired) {
         return 0;
     }
 
     int hitCount = 0;
-    const bool maxLockRelease =
-        static_cast<int>(release.tokens.size()) >= railShooterLockOnSystem_.Settings().maxLocks;
-    const float damage = railShooterLockOnSystem_.Settings().releaseDamage *
-        (maxLockRelease ? 1.25f : 1.0f);
-    for (const RailLockToken& token : release.tokens) {
-        bool resolved = false;
+    const size_t projectileCount = (std::min)(fireResult.shots.size(), release.tokens.size());
+    for (size_t index = 0; index < projectileCount; ++index) {
+        const RailLockToken& token = release.tokens[index];
+        const WeaponShot& shot = fireResult.shots[index];
+        bool targetLocated = false;
         Vector3 targetPosition{};
         if (token.target.kind == RailLockTargetKind::Enemy) {
-            for (CourseEnemyActor& enemy : railShooterSpawnRuntime_.MutableEnemies()) {
+            for (const CourseEnemyActor& enemy : railShooterSpawnRuntime_.Enemies()) {
                 if (enemy.actorId != token.target.actorId) {
                     continue;
                 }
@@ -4332,12 +4574,11 @@ int AppRunLoop::ProcessRailLockOnRelease(const Vector3& muzzlePosition) {
                     enemy.desc.lateralOffset,
                     enemy.desc.verticalOffset,
                     0.0f);
-                enemy.desc.hitPoints -= damage;
-                resolved = true;
+                targetLocated = true;
                 break;
             }
         } else {
-            for (CourseObstacleActor& obstacle : railShooterSpawnRuntime_.MutableObstacles()) {
+            for (const CourseObstacleActor& obstacle : railShooterSpawnRuntime_.Obstacles()) {
                 if (obstacle.actorId != token.target.actorId || !obstacle.desc.breakable) {
                     continue;
                 }
@@ -4347,13 +4588,39 @@ int AppRunLoop::ProcessRailLockOnRelease(const Vector3& muzzlePosition) {
                     obstacle.desc.lateralOffset,
                     obstacle.desc.verticalOffset,
                     0.0f);
-                obstacle.desc.hitPoints -= damage;
-                resolved = true;
+                targetLocated = true;
                 break;
             }
         }
 
-        if (!resolved) {
+        if (!targetLocated) {
+            continue;
+        }
+
+        const Vector3 shotDelta = Subtract(targetPosition, muzzlePosition);
+        const float shotDistance = std::sqrt(LengthSquared(shotDelta));
+        if (!std::isfinite(shotDistance) || shotDistance > shot.range + 0.001f) {
+            continue;
+        }
+        const Vector3 shotDirection = NormalizeOr(shotDelta, {0.0f, 0.0f, 1.0f});
+        WeaponHitRequest request{};
+        request.shotId = shot.shotId;
+        request.targetActorId = token.target.actorId;
+        request.hitKind = token.target.kind == RailLockTargetKind::Enemy
+            ? RailAimHitKind::Enemy
+            : RailAimHitKind::Obstacle;
+        request.damageType = shot.damageType;
+        request.rayOrigin = muzzlePosition;
+        request.rayDirection = shotDirection;
+        request.hitPoint = targetPosition;
+        request.hitNormal = Scale(shotDirection, -1.0f);
+        request.hitDistance = shotDistance;
+        request.baseDamage = shot.damage;
+        const DamageResult damageResult = railShooterCollisionSystem_.ApplyWeaponHit(
+            railShooterSpawnRuntime_,
+            &railShooterCourse_,
+            request);
+        if (!damageResult.damageApplied) {
             continue;
         }
         QueueRailLockIceProjectile(muzzlePosition, targetPosition, hitCount);
@@ -4719,6 +4986,28 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const bool coursePreviewFrozen =
         runtimeState_.terrain.freezeCourseRuntime || !editorRuntimeAdvance;
     const float gameplayDeltaTime = coursePreviewFrozen ? 0.0f : kFixedGameplayDeltaTime;
+    railWeaponHotReloadPollTimer_ += kFixedGameplayDeltaTime;
+    if (railWeaponHotReloadPollTimer_ >= 0.25f &&
+        (!railShooterCollisionSystem_.WeaponDefinitions().Directory().empty() ||
+         !railAimAssistPresetRegistry_.Directory().empty())) {
+        railWeaponHotReloadPollTimer_ = 0.0f;
+        if (!railShooterCollisionSystem_.WeaponDefinitions().Directory().empty()) {
+            const WeaponDefinitionReloadReport weaponReload =
+                railShooterCollisionSystem_.ReloadChangedWeaponDefinitions();
+            if (weaponReload.status == WeaponDefinitionReloadStatus::Reloaded) {
+                OutputDebugStringA(
+                    ("[WeaponDefinitions] " + weaponReload.message + "\n").c_str());
+            }
+        }
+        if (!railAimAssistPresetRegistry_.Directory().empty()) {
+            const RailAimAssistPresetReloadReport presetReload =
+                railAimAssistPresetRegistry_.ReloadChangedPresets();
+            if (presetReload.status == RailAimAssistPresetReloadStatus::Reloaded) {
+                OutputDebugStringA(
+                    ("[AimAssistPresets] " + presetReload.message + "\n").c_str());
+            }
+        }
+    }
     for (RailNormalShotLine& line : railNormalShotLines_) {
         line.age += gameplayDeltaTime;
     }
@@ -4787,14 +5076,50 @@ void AppRunLoop::UpdateRailShooterFrame() {
     collisionInput.player.hitPoints = 100.0f;
     CourseCollisionWeaponState baseWeapon{};
     baseWeapon.enabled = true;
-    baseWeapon.shotInterval = 0.085f;
-    baseWeapon.range = 92.0f;
-    baseWeapon.radius = 1.65f;
-    baseWeapon.damage = 12.0f;
-    baseWeapon.muzzleForwardOffset = 3.4f;
-    baseWeapon.tracerForwardDistance = 30.0f;
-    baseWeapon.muzzleRadius = 0.72f;
-    baseWeapon.tracerRadius = 0.82f;
+    if (const WeaponDefinitionAsset* pulseCannon =
+            railShooterCollisionSystem_.FindWeaponDefinition(RailWeaponIds::PulseCannon)) {
+        baseWeapon.shotInterval = pulseCannon->definition.shotInterval;
+        baseWeapon.range = pulseCannon->definition.range;
+        baseWeapon.radius = pulseCannon->projectileRadius;
+        baseWeapon.damage = pulseCannon->definition.baseDamage;
+        baseWeapon.muzzleForwardOffset = pulseCannon->muzzleForwardOffset;
+        baseWeapon.tracerForwardDistance = pulseCannon->tracerForwardDistance;
+        baseWeapon.muzzleRadius = pulseCannon->muzzleRadius;
+        baseWeapon.tracerRadius = pulseCannon->tracerRadius;
+        const std::string presetId = pulseCannon->aimAssistPresetId.empty()
+            ? std::string{"gamepad_standard"}
+            : pulseCannon->aimAssistPresetId;
+        const uint64_t presetRevision = railAimAssistPresetRegistry_.Stats().revision;
+        if (presetId != railAimAssistAppliedPresetId_ ||
+            presetRevision != railAimAssistAppliedPresetRevision_) {
+            if (const RailAimAssistPreset* preset =
+                    railAimAssistPresetRegistry_.Find(presetId)) {
+                railShooterLockOnSystem_.MutableAimAssistSettings() = preset->settings;
+                railAimAssistAppliedPresetId_ = presetId;
+                railAimAssistAppliedPresetRevision_ = presetRevision;
+            } else {
+                OutputDebugStringA(
+                    ("[AimAssistPresets] Unknown preset '" + presetId +
+                     "'; retaining last-known-good runtime settings.\n").c_str());
+                // Record the unresolved revision to avoid logging every frame.
+                railAimAssistAppliedPresetId_ = presetId;
+                railAimAssistAppliedPresetRevision_ = presetRevision;
+            }
+        }
+        railShooterLockOnSystem_.MutableAimAssistSettings().maximumDistance =
+            pulseCannon->definition.range;
+    }
+    if (const WeaponDefinitionAsset* lockOn =
+            railShooterCollisionSystem_.FindWeaponDefinition(RailWeaponIds::LockOnIce)) {
+        RailLockSettings& lockSettings = railShooterLockOnSystem_.MutableSettings();
+        lockSettings.maxLocks = static_cast<int>((std::clamp)(
+            lockOn->definition.maxProjectilesPerTrigger,
+            1u,
+            64u));
+        lockSettings.maxForwardDistance = lockOn->definition.range;
+        lockSettings.releaseDamage = lockOn->definition.baseDamage;
+        lockSettings.lockVfxMuzzleForwardOffset = lockOn->muzzleForwardOffset;
+    }
     runtimeState_.terrain.previewDistance = railShooterDistance_;
     const auto visualPresetStart = RailPerfClock::now();
     ApplyRailShooterVisualPresets(railShooterDistance_);
@@ -4836,6 +5161,12 @@ void AppRunLoop::UpdateRailShooterFrame() {
         runtimeState_.camera.nearZ,
         runtimeState_.camera.farZ);
     frameState_.viewProjectionMatrix = Multiply(frameState_.viewMatrix, frameState_.projMatrix);
+    const Matrix4x4 gameplayViewMatrix = MakeLookAtMatrix(
+        directedCamera.gameplayPosition,
+        directedCamera.gameplayTarget,
+        directedCamera.gameplayUp);
+    const Matrix4x4 gameplayViewProjectionMatrix =
+        Multiply(gameplayViewMatrix, frameState_.projMatrix);
     frameState_.cameraWorldPosition = cameraPosition;
     frameState_.deltaTime = gameplayDeltaTime;
 
@@ -4951,10 +5282,22 @@ void AppRunLoop::UpdateRailShooterFrame() {
                 static_cast<float>(viewportCursor.y)};
         }
     }
-    lockOnInput.viewProjection = &frameState_.viewProjectionMatrix;
+    lockOnInput.gameplayViewProjection = &gameplayViewProjectionMatrix;
     lockOnInput.railPath = &railPath_;
     lockOnInput.spawnRuntime = &railShooterSpawnRuntime_;
-    lockOnInput.cameraPosition = cameraPosition;
+    lockOnInput.course = &railShooterCourse_;
+    lockOnInput.terrainSettings = &runtimeState_.terrain.settings;
+    lockOnInput.terrainEdits = &railShooterCourse_.terrainEditLayer;
+    lockOnInput.terrainPreview = &runtimeState_.terrain.previewEditLayer;
+    lockOnInput.gameplayCameraPosition = directedCamera.gameplayPosition;
+    lockOnInput.aimRayMaxDistance = (std::max)(
+        baseWeapon.range,
+        railShooterLockOnSystem_.Settings().maxForwardDistance);
+    const AppGamepadFrame railAimGamepad = railAimGamepad_.Poll();
+    lockOnInput.gamepadConnected = railAimGamepad.connected;
+    lockOnInput.gamepadAim = {
+        railAimGamepad.rightStick.x,
+        railAimGamepad.rightStick.y};
     railShooterLockOnSystem_.Update(lockOnInput);
     if (railShooterLockOnSystem_.DebugFrame().acceptedThisFrame > 0) {
         railShooterCameraDirector_.AddFeedbackImpulse(0.075f, -0.0012f, 0.0007f);
@@ -4965,7 +5308,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         collisionInput.player.lateralOffset,
         collisionInput.player.verticalOffset,
         railShooterLockOnSystem_.Settings().lockVfxMuzzleForwardOffset);
-    const int lockReleaseHits = ProcessRailLockOnRelease(railLockMuzzle);
+    const int lockReleaseHits = ProcessRailLockOnRelease(railLockMuzzle, gameplayDeltaTime);
     const uint32_t lockReleaseTokenCount =
         static_cast<uint32_t>(railShooterLockOnSystem_.LastRelease().tokens.size());
     railInputRouteDebug_.releaseFireTriggered = lockReleaseTokenCount > 0;
@@ -4978,7 +5321,12 @@ void AppRunLoop::UpdateRailShooterFrame() {
             static_cast<uint32_t>((std::max)(railShooterLockOnSystem_.Settings().maxLocks, 0)));
     }
     if (lockReleaseHits > 0) {
-        railShooterCameraDirector_.AddFeedbackImpulse(0.20f, -0.003f, 0.0015f);
+        const WeaponFeedbackEvent& feedback =
+            railShooterCollisionSystem_.WeaponFeedback().LastAcceptedEvent();
+        railShooterCameraDirector_.AddFeedbackImpulse(
+            feedback.cameraShake,
+            -0.003f * feedback.intensity,
+            0.0015f * feedback.intensity);
     }
 
     const bool lockModeActive = railShooterLockOnSystem_.Reticle().lockHeld;
@@ -5009,14 +5357,13 @@ void AppRunLoop::UpdateRailShooterFrame() {
     railInputRouteDebug_.leftMouseDown = leftMouseDown;
 
     const RailReticleState& normalReticle = railShooterLockOnSystem_.Reticle();
-    const float viewportWidth = (std::max)(1.0f, static_cast<float>(metrics.width));
-    const float viewportHeight = (std::max)(1.0f, static_cast<float>(metrics.height));
+    const RailAimState& worldAim = railShooterLockOnSystem_.Aim();
     const float reticleNormX = (std::clamp)(
-        (normalReticle.currentScreenPosition.x / viewportWidth - 0.5f) * 2.0f,
+        worldAim.valid ? worldAim.normalizedPosition.x : 0.0f,
         -1.15f,
         1.15f);
     const float reticleNormY = (std::clamp)(
-        (0.5f - normalReticle.currentScreenPosition.y / viewportHeight) * 2.0f,
+        worldAim.valid ? worldAim.normalizedPosition.y : 0.0f,
         -1.15f,
         1.15f);
     const float aimForwardDistance = 38.0f;
@@ -5046,12 +5393,12 @@ void AppRunLoop::UpdateRailShooterFrame() {
     combatFeelInput.reticleAimVerticalOffset = normalAimVertical;
     railInputRouteDebug_.aimAssistEnabled = combatFeelInput.allowAimAssist;
     collisionInput.weapon = railShooterCombatFeelSystem_.BuildWeaponState(combatFeelInput);
+    collisionInput.worldAim = &worldAim;
     const auto collisionStart = RailPerfClock::now();
     const CourseCollisionFrameStats collisionStats =
         railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput);
     railInputRouteDebug_.normalShotsFired = collisionStats.playerShotsFired;
-    railInputRouteDebug_.normalShotHits =
-        collisionStats.playerShotEnemyHits + collisionStats.playerShotObstacleHits;
+    railInputRouteDebug_.normalShotHits = collisionStats.playerShotWorldHits;
     if (collisionStats.playerShotsFired > 0 &&
         railShooterCollisionSystem_.LastShotVisible() &&
         railPath_.Length() > 0.0f) {
@@ -5062,12 +5409,14 @@ void AppRunLoop::UpdateRailShooterFrame() {
             collisionInput.player.lateralOffset,
             collisionInput.player.verticalOffset,
             visualWeapon.muzzleForwardOffset);
-        const Vector3 hitWorld = RailLocalPoint(
-            railPath_,
-            railShooterCollisionSystem_.LastShotDistance(),
-            railShooterCollisionSystem_.LastShotLateralOffset(),
-            railShooterCollisionSystem_.LastShotVerticalOffset(),
-            0.0f);
+        const Vector3 hitWorld = railShooterCollisionSystem_.LastShotHasWorldPoint()
+            ? railShooterCollisionSystem_.LastShotWorldPoint()
+            : RailLocalPoint(
+                railPath_,
+                railShooterCollisionSystem_.LastShotDistance(),
+                railShooterCollisionSystem_.LastShotLateralOffset(),
+                railShooterCollisionSystem_.LastShotVerticalOffset(),
+                0.0f);
         RailOverlayProjectedPoint muzzleScreen =
             ProjectRailOverlayPoint(muzzleWorld, frameState_.viewProjectionMatrix, metrics.width, metrics.height);
         RailOverlayProjectedPoint hitScreen =
@@ -5099,8 +5448,13 @@ void AppRunLoop::UpdateRailShooterFrame() {
     railShooterCombatFeelSystem_.Update(gameplayDeltaTime);
     gRailPerfFrame.collisionMs = ElapsedMs(collisionStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterCollision");
-    if (collisionStats.playerShotEnemyHits > 0 || collisionStats.playerShotObstacleHits > 0) {
-        railShooterCameraDirector_.AddFeedbackImpulse(0.28f, -0.004f, 0.002f);
+    if (collisionStats.playerShotWorldHits > 0) {
+        const WeaponFeedbackEvent& feedback =
+            railShooterCollisionSystem_.WeaponFeedback().LastAcceptedEvent();
+        railShooterCameraDirector_.AddFeedbackImpulse(
+            feedback.cameraShake,
+            -0.004f * feedback.intensity,
+            0.002f * feedback.intensity);
     }
     if (collisionStats.playerDamage > 0.0f) {
         railShooterCameraDirector_.AddFeedbackImpulse(0.95f, 0.010f, -0.006f);
@@ -5867,11 +6221,13 @@ void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
         frameState_.viewProjectionMatrix);
 
     scene_.debugDraw.BeginFrame();
-    AppendCourseObjectSelectionDebugDraw(
-        scene_.debugDraw,
-        railShooterCourse_,
-        railPath_,
-        terrain);
+    if constexpr (app::kRuntimeAuthoringEnabled) {
+        AppendCourseObjectSelectionDebugDraw(
+            scene_.debugDraw,
+            railShooterCourse_,
+            railPath_,
+            terrain);
+    }
     railShooterSpawnRuntime_.AppendDebugDraw(scene_.debugDraw, railPath_);
     railShooterCollisionSystem_.AppendDebugDraw(scene_.debugDraw, railPath_);
     railShooterLockOnSystem_.AppendDebugDraw(scene_.debugDraw);
@@ -6275,7 +6631,8 @@ void AppRunLoop::RestoreCourseObjectSnapshot(const CourseObjectEditSnapshot& sna
 }
 
 bool AppRunLoop::BeginCourseObjectGizmoEditSession() {
-    if (!courseObjectDrag_.active || courseObjectDrag_.index < 0) {
+    if (!app::kRuntimeAuthoringEnabled ||
+        !courseObjectDrag_.active || courseObjectDrag_.index < 0) {
         return false;
     }
 
@@ -6327,7 +6684,8 @@ bool AppRunLoop::BeginCourseObjectGizmoEditSession() {
 
 bool AppRunLoop::PreviewCourseObjectGizmoEditSession(
     std::vector<editor::EditorPropertyEditSessionValue> values) {
-    if (!courseObjectGizmoEditSession_.IsActive()) {
+    if (!app::kRuntimeAuthoringEnabled ||
+        !courseObjectGizmoEditSession_.IsActive()) {
         return false;
     }
     values.reserve(values.size() * (std::max)(std::size_t{1}, courseObjectDrag_.items.size()));
@@ -6461,7 +6819,8 @@ bool AppRunLoop::CancelCourseObjectDragIfNeeded() {
 }
 
 bool AppRunLoop::ApplyCourseObjectGizmoEditThroughServiceIfPossible() {
-    if (!courseObjectDrag_.changed || courseObjectDrag_.index < 0) {
+    if (!app::kRuntimeAuthoringEnabled ||
+        !courseObjectDrag_.changed || courseObjectDrag_.index < 0) {
         return false;
     }
 
@@ -6676,7 +7035,8 @@ bool AppRunLoop::ApplyCourseObjectGizmoEditThroughServiceIfPossible() {
 }
 
 void AppRunLoop::StageCourseObjectGizmoTransactionIfNeeded() {
-    if (!courseObjectDrag_.changed || courseObjectDrag_.index < 0) {
+    if (!app::kRuntimeAuthoringEnabled ||
+        !courseObjectDrag_.changed || courseObjectDrag_.index < 0) {
         return;
     }
 
@@ -6750,6 +7110,10 @@ void AppRunLoop::StageCourseObjectGizmoTransactionIfNeeded() {
 }
 
 bool AppRunLoop::CommitCourseObjectDragIfNeeded() {
+    if (!app::kRuntimeAuthoringEnabled) {
+        CancelCourseObjectDragIfNeeded();
+        return false;
+    }
     if (!courseObjectDrag_.active) {
         return false;
     }
@@ -7051,6 +7415,22 @@ void AppRunLoop::ProcessCourseObjectUndoRedo() {
 void AppRunLoop::ProcessCourseObjectViewportEditing() {
     TerrainAuthoringState& editor = runtimeState_.terrain;
     const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    if (!app::kRuntimeAuthoringEnabled) {
+        CancelCourseObjectDragIfNeeded();
+        editor.enableCourseObjectViewportEditing = false;
+        editor.showCourseObjectFrame = false;
+        editor.courseObjectAuthoringInputLocked = true;
+        editor.courseObjectActiveAxis = -1;
+        editor.selectedCourseTerrainPlacement = -1;
+        editor.selectedCourseRockCluster = -1;
+        editor.selectedCourseTerrainPlacements.clear();
+        editor.selectedCourseRockClusters.clear();
+        editor.courseObjectUndoRequested = false;
+        editor.courseObjectRedoRequested = false;
+        courseObjectDrag_.changed = false;
+        previousCourseEditorLeftMouseDown_ = leftMouseDown;
+        return;
+    }
     const editor::EditorViewportAuthoringInputGuard inputGuard =
         editor::MakeEditorViewportAuthoringInputGuard(!editor.courseObjectAuthoringInputLocked);
     if (!inputGuard.CanMutate()) {

@@ -56,7 +56,7 @@ CourseCollisionWeaponState PlayerCombatFeelSystem::BuildWeaponState(
     }
 
     if (stats_.combo >= 8) {
-        weapon.damage *= 1.12f;
+        weapon.damageMultiplier *= 1.12f;
     }
     return weapon;
 }

@@ -11,6 +11,7 @@
 #include "AppEffectInstancePanel.h"
 #include "AppPostProcessPanel.h"
 #include "AppRenderGraphDebugPanel.h"
+#include "RuntimeAuthoringPolicy.h"
 #include "AppRuntimeState.h"
 #include "AppSceneResources.h"
 #include "AppSceneControlsPanel.h"
@@ -2920,9 +2921,11 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorViewportInteraction_.MouseInsideViewport() &&
         !imguiIO.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F);
     runtimeState.terrain.courseObjectAuthoringInputLocked =
+        !app::kRuntimeAuthoringEnabled ||
         editorViewportInteraction_.AuthoringInputLocked();
     std::vector<editor::EditorViewportPickResult> viewportPickResults;
-    const bool scenePickRequested = editorViewportInteraction_.CanUseSceneInput() &&
+    const bool scenePickRequested = app::kRuntimeAuthoringEnabled &&
+        editorViewportInteraction_.CanUseSceneInput() &&
         editorViewportInteraction_.State().viewportPrimaryPressed;
     if (scenePickRequested) {
         const editor::EditorViewportWorldRay ray = editorViewportCoordinates_.DisplayToWorldRay(
@@ -2963,7 +2966,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         pick.canonicalHandle = *primary;
         viewportPickResults.push_back(std::move(pick));
     }
-    if (runtimeState.terrain.selectedCourseTerrainPlacement >= 0) {
+    if (app::kRuntimeAuthoringEnabled &&
+        runtimeState.terrain.selectedCourseTerrainPlacement >= 0) {
         const uint64_t index =
             static_cast<uint64_t>(runtimeState.terrain.selectedCourseTerrainPlacement);
         editor::EditorViewportPickResult pick = editor::MakeEditorViewportPickResult(
@@ -2980,7 +2984,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         }
         viewportPickResults.push_back(std::move(pick));
     }
-    if (runtimeState.terrain.selectedCourseRockCluster >= 0) {
+    if (app::kRuntimeAuthoringEnabled &&
+        runtimeState.terrain.selectedCourseRockCluster >= 0) {
         const uint64_t index =
             static_cast<uint64_t>(runtimeState.terrain.selectedCourseRockCluster);
         editor::EditorViewportPickResult pick = editor::MakeEditorViewportPickResult(
@@ -3029,7 +3034,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 static_cast<int>(handle.localIndex));
         }
     }
-    if (editorViewportInteraction_.MouseInsideViewport() &&
+    if (app::kRuntimeAuthoringEnabled &&
+        editorViewportInteraction_.MouseInsideViewport() &&
         editorViewportInteraction_.CanMutateAuthoring() &&
         !ImGui::GetIO().WantTextInput && !ImGui::GetIO().KeyCtrl) {
         if (ImGui::IsKeyPressed(ImGuiKey_W)) runtimeState.terrain.courseObjectGizmoMode = 0;
@@ -3047,7 +3053,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             editor::EditorTransformGizmoAxisFromIndex(runtimeState.terrain.courseObjectActiveAxis),
             editor::EditorTransformGizmoSpaceFromIndex(runtimeState.terrain.courseObjectGizmoSpace),
             editor::EditorTransformGizmoPivotModeFromIndex(runtimeState.terrain.courseObjectPivotMode),
-            runtimeState.terrain.courseObjectSnapEnabled});
+            runtimeState.terrain.courseObjectSnapEnabled,
+            app::kRuntimeAuthoringEnabled});
     runtimeState.terrain.courseObjectGizmoMode =
         editor::ToCourseGizmoMode(editorTransformGizmo_.State().mode);
     editorToolRegistry_.BuildRuntimeWatch(

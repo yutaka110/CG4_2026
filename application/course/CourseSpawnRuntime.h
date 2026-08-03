@@ -102,6 +102,8 @@ struct CourseVfxCueDesc {
     float radius = 2.5f;
     float lifetime = 4.0f;
     Vector4 color{0.30f, 0.82f, 1.0f, 1.0f};
+    Vector3 worldPosition{};
+    bool hasWorldPosition = false;
 };
 
 struct CourseEnemyActor {
@@ -166,6 +168,7 @@ public:
     std::vector<CourseBulletActor>& MutableBullets() { return bullets_; }
     const std::vector<CourseObstacleActor>& Obstacles() const { return obstacles_; }
     std::vector<CourseObstacleActor>& MutableObstacles() { return obstacles_; }
+    const std::vector<CourseVfxCue>& VfxCues() const { return vfxCues_; }
     void PruneDestroyedActors();
     const CourseEnemyFireSafetySettings& FireSafetySettings() const { return fireSafetySettings_; }
     CourseEnemyFireSafetySettings& MutableFireSafetySettings() { return fireSafetySettings_; }

@@ -1,0 +1,27 @@
+RAIL_AIM_ASSIST_PRESET|1
+presetId=lock_on_standard
+displayName=Lock-On Standard
+enabled=true
+mouseKeyboardEnabled=true
+gamepadEnabled=true
+requireWorldVisibility=true
+minimumDistance=4.0
+maximumDistance=120.0
+mouseAcquireAngleDegrees=3.5
+gamepadAcquireAngleDegrees=7.0
+retentionAngleMultiplier=1.45
+mouseMagnetismStrength=0.10
+gamepadMagnetismStrength=0.42
+mouseMaximumCorrectionDegrees=1.5
+gamepadMaximumCorrectionDegrees=5.0
+maximumCorrectionSpeedDegrees=190.0
+highIntentReticleSpeed=1450.0
+minimumHighIntentStrength=0.20
+targetSwitchAdvantage=0.16
+targetRetentionSeconds=0.20
+angleWeight=0.68
+forwardWeight=0.14
+anchorPriorityWeight=0.18
+enemyPriorityBonus=0.08
+retainedTargetBonus=0.12
+maximumVisibilityQueries=8
