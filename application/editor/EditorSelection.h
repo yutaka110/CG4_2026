@@ -32,6 +32,10 @@ enum class EditorDomainId : uint32_t {
     GameplayVisualScriptNode,
     AiAuthoringNode,
     NavigationAuthoring,
+    CourseEnemyPlacement,
+    CourseRailControlPoint,
+    CourseRailSegment,
+    CourseWaveDefinition,
 };
 
 struct EditorObjectHandle {

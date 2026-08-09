@@ -59,6 +59,21 @@ AppGamepadStick AppGamepadInput::ClampUnitCircle(
     return {x / rawMagnitude, y / rawMagnitude, 1.0f};
 }
 
+bool AppGamepadInput::SetVibration(
+    uint32_t controllerIndex,
+    float lowFrequencyMotor,
+    float highFrequencyMotor) noexcept {
+    if (controllerIndex >= kMaxXInputControllers) {
+        return false;
+    }
+    XINPUT_VIBRATION vibration{};
+    vibration.wLeftMotorSpeed = static_cast<WORD>(std::lround(
+        (std::clamp)(lowFrequencyMotor, 0.0f, 1.0f) * 65535.0f));
+    vibration.wRightMotorSpeed = static_cast<WORD>(std::lround(
+        (std::clamp)(highFrequencyMotor, 0.0f, 1.0f) * 65535.0f));
+    return XInputSetState(controllerIndex, &vibration) == ERROR_SUCCESS;
+}
+
 AppGamepadFrame AppGamepadInput::Poll() noexcept {
     AppGamepadFrame frame{};
     XINPUT_STATE state{};

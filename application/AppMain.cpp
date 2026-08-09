@@ -310,6 +310,7 @@ AppFrameRenderer frameRenderer;
 		frameRenderer,
 		appPipelines,
 		renderResources,
+		audio,
 		swapChain,
 		clPool,
 		engineContext,

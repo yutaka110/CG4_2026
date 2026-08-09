@@ -2,6 +2,9 @@
 
 #include "../../course/CourseAsset.h"
 #include "../world/CourseWorldIdentity.h"
+#include "../course/CourseRailAuthoringModel.h"
+#include "../course/CourseEnemyAuthoringModel.h"
+#include "../course/CourseWaveAuthoringModel.h"
 
 #include <fstream>
 #include <iterator>
@@ -75,7 +78,14 @@ bool EditorCourseDocumentProvider::Serialize(
         if (errorMessage != nullptr) *errorMessage = "Live Course authoring model is unavailable.";
         return false;
     }
+    // LoadFromString supplies a default camera when a legacy/minimal Course has
+    // none. Persist that default here so schema-v7 validation never observes a
+    // synthesized camera without a stable editor identity after round-trip.
+    if (course_->cameraKeys.empty()) course_->cameraKeys.push_back({});
     EnsureCourseWorldObjectGuids(*course_, id.assetGuid);
+    CourseRailAuthoringModel::EnsureStableIdentity(*course_, id.assetGuid);
+    CourseEnemyAuthoringModel::EnsureStableIdentity(*course_, id.assetGuid);
+    CourseWaveAuthoringModel::UpgradeLegacyWaveGroups(*course_, id.assetGuid);
     std::string text;
     if (!course_->SaveToString(&text, errorMessage)) return false;
     content->schemaVersion = CurrentSchemaVersion();
@@ -94,6 +104,13 @@ bool EditorCourseDocumentProvider::Deserialize(
     CourseAsset loaded{};
     if (!loaded.LoadFromString(ToText(content), errorMessage)) return false;
     EnsureCourseWorldObjectGuids(loaded, id.assetGuid);
+    CourseRailAuthoringModel::EnsureStableIdentity(loaded, id.assetGuid);
+    CourseEnemyAuthoringModel::EnsureStableIdentity(loaded, id.assetGuid);
+    if (content.schemaVersion < CurrentSchemaVersion()) {
+        CourseWaveAuthoringModel::UpgradeLegacyWaveGroups(loaded, id.assetGuid);
+    } else {
+        CourseWaveAuthoringModel::EnsureStableIdentity(loaded, id.assetGuid);
+    }
     std::vector<std::string> identityDiagnostics;
     if (!ValidateCourseWorldObjectGuids(loaded, &identityDiagnostics)) {
         if (errorMessage != nullptr) {
@@ -101,6 +118,16 @@ bool EditorCourseDocumentProvider::Deserialize(
                 ? "Course world object identity validation failed."
                 : identityDiagnostics.front();
         }
+        return false;
+    }
+    const CourseEnemyAuthoringModel enemies(loaded);
+    if (!enemies.IsValid()) {
+        if (errorMessage != nullptr) *errorMessage = enemies.ValidationError();
+        return false;
+    }
+    const CourseWaveAuthoringModel waves(loaded);
+    if (!waves.IsValid()) {
+        if (errorMessage != nullptr) *errorMessage = waves.ValidationError();
         return false;
     }
     *course_ = std::move(loaded);
@@ -135,6 +162,20 @@ EditorDocumentValidationReport EditorCourseDocumentProvider::Validate(
                 diagnostic});
         }
     }
+    const CourseEnemyAuthoringModel enemies(parsed);
+    if (!enemies.IsValid()) {
+        report.issues.push_back({
+            EditorDocumentIssueSeverity::Error,
+            "course.enemy_placement",
+            enemies.ValidationError()});
+    }
+    const CourseWaveAuthoringModel waves(parsed);
+    if (!waves.IsValid()) {
+        report.issues.push_back({
+            EditorDocumentIssueSeverity::Error,
+            "course.wave_definition",
+            waves.ValidationError()});
+    }
     return report;
 }
 
@@ -155,7 +196,9 @@ bool EditorCourseDocumentProvider::Migrate(
         }
         return true;
     }
-    if (source.schemaVersion != 1 && source.schemaVersion != 2) {
+    if (source.schemaVersion != 1 && source.schemaVersion != 2 &&
+        source.schemaVersion != 3 && source.schemaVersion != 4 &&
+        source.schemaVersion != 5 && source.schemaVersion != 6) {
         if (errorMessage != nullptr) *errorMessage = "No Course schema migration path is registered.";
         return false;
     }
@@ -164,6 +207,21 @@ bool EditorCourseDocumentProvider::Migrate(
     const std::size_t assigned = EnsureCourseWorldObjectGuids(
         parsed,
         std::string("course-migration:") + parsed.name);
+    const std::size_t railAssigned = CourseRailAuthoringModel::EnsureStableIdentity(
+        parsed,
+        std::string("course-migration:") + parsed.name);
+    const std::size_t enemyAssigned = CourseEnemyAuthoringModel::EnsureStableIdentity(
+        parsed,
+        std::string("course-migration:") + parsed.name);
+    const CourseWaveLegacyUpgradeResult waveUpgrade =
+        CourseWaveAuthoringModel::UpgradeLegacyWaveGroups(
+            parsed,
+            std::string("course-migration:") + parsed.name);
+    const CourseWaveAuthoringModel waves(parsed);
+    if (!waves.IsValid()) {
+        if (errorMessage != nullptr) *errorMessage = waves.ValidationError();
+        return false;
+    }
     std::string text;
     if (!parsed.SaveToString(&text, errorMessage)) return false;
     migrated->schemaVersion = CurrentSchemaVersion();
@@ -174,7 +232,13 @@ bool EditorCourseDocumentProvider::Migrate(
         report->targetSchemaVersion = CurrentSchemaVersion();
         report->notes.push_back(
             "Assigned persistent editor GUIDs to " + std::to_string(assigned) +
-            " Course world objects.");
+            " Course world objects and " + std::to_string(railAssigned) +
+            " rail control points, and " + std::to_string(enemyAssigned) +
+            " enemy placements; created " +
+            std::to_string(waveUpgrade.createdWaveDefinitions) +
+            " schema-v7 wave definitions and remapped " +
+            std::to_string(waveUpgrade.remappedEnemyReferences) +
+            " enemy wave references.");
     }
     return true;
 }

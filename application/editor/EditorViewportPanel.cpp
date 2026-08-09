@@ -20,10 +20,16 @@
 #include "world/SceneWorldObjectProvider.h"
 #include "tools/EditorToolManager.h"
 #include "documents/EditorDocumentManager.h"
+#include "course/CourseRailViewportEditTool.h"
+#include "course/CourseRailTransformGizmo.h"
+#include "course/CourseEnemyViewportEditTool.h"
+#include "course/CourseEnemyTransformGizmo.h"
+#include "../course/CourseActorAsset.h"
 
 #include "../../externals/imgui/imgui.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <sstream>
 
 namespace editor {
@@ -62,16 +68,27 @@ bool EditorViewportOverlayUiContains(
     const EditorPanelRect& panelRect,
     float displayX,
     float displayY,
-    float controlHeight) {
+    float controlHeight,
+    bool courseRailToolVisible,
+    bool courseRailToolActive) {
     if (!panelRect.Valid()) return false;
     const EditorPanelRect controls{
         panelRect.x + panelRect.width - 198.0f,
         panelRect.y + 8.0f,
         188.0f,
         (std::max)(controlHeight, 20.0f)};
-    return displayX >= controls.x && displayY >= controls.y &&
+    const bool insideRight = displayX >= controls.x && displayY >= controls.y &&
         displayX < controls.x + controls.width &&
         displayY < controls.y + controls.height;
+    if (insideRight || !courseRailToolVisible) return insideRight;
+    const EditorPanelRect railControls{
+        panelRect.x + 8.0f,
+        panelRect.y + 8.0f,
+        courseRailToolActive ? 650.0f : 124.0f,
+        (std::max)(controlHeight, 20.0f)};
+    return displayX >= railControls.x && displayY >= railControls.y &&
+        displayX < railControls.x + railControls.width &&
+        displayY < railControls.y + railControls.height;
 }
 
 namespace {
@@ -282,13 +299,159 @@ void DrawViewportRealtimeControl(
     }
 }
 
+void DrawCourseRailToolControls(
+    EditorContext& context,
+    const EditorPanelRect& rect) {
+    CourseRailViewportEditTool& tool = *context.courseRailEditTool;
+    CourseEnemyViewportEditTool* enemyTool = context.courseEnemyEditTool;
+    ImGui::SetCursorScreenPos(ImVec2(rect.x + 8.0f, rect.y + 8.0f));
+    const bool active = tool.Active();
+    if (active) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.10f, 0.43f, 0.55f, 1.0f));
+    }
+    if (ImGui::Button("Rail", ImVec2(50.0f, 0.0f))) {
+        tool.SetActive(!active);
+        if (!active && enemyTool != nullptr) enemyTool->SetActive(false);
+        if (!active && context.interactiveTools != nullptr) {
+            context.interactiveTools->RequestCancel();
+        }
+    }
+    if (active) ImGui::PopStyleColor();
+    if (!tool.Active() && ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Enable Course Rail viewport authoring.");
+    }
+
+    if (!tool.Active() && enemyTool != nullptr) {
+        ImGui::SameLine();
+        const bool enemyActive = enemyTool->Active();
+        if (enemyActive) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.18f, 0.23f, 1.0f));
+        }
+        if (ImGui::Button("Enemy", ImVec2(58.0f, 0.0f))) {
+            enemyTool->SetActive(!enemyActive);
+            if (!enemyActive) {
+                tool.SetActive(false);
+                if (context.interactiveTools != nullptr) {
+                    context.interactiveTools->RequestCancel();
+                }
+            }
+        }
+        if (enemyActive) ImGui::PopStyleColor();
+        if (!enemyTool->Active()) {
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Enable Course Enemy viewport authoring.");
+            }
+            return;
+        }
+
+        const auto enemyModeButton = [enemyTool](const char* label, CourseEnemyEditMode mode) {
+            ImGui::SameLine();
+            const bool selected = enemyTool->State().mode == mode;
+            if (selected) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.30f, 0.18f, 1.0f));
+            }
+            if (ImGui::Button(label)) enemyTool->SetMode(mode);
+            if (selected) ImGui::PopStyleColor();
+        };
+        enemyModeButton("Move", CourseEnemyEditMode::SelectMove);
+        enemyModeButton("Add", CourseEnemyEditMode::Add);
+        enemyModeButton("Duplicate", CourseEnemyEditMode::Duplicate);
+        enemyModeButton("Delete", CourseEnemyEditMode::Delete);
+
+        CourseEnemyViewportEditSettings settings = enemyTool->Settings();
+        ImGui::SameLine();
+        if (ImGui::Checkbox("Snap##Enemy", &settings.offsetSnap)) {
+            enemyTool->SetSettings(settings);
+            if (context.courseEnemyTransformGizmo != nullptr) {
+                CourseEnemyTransformGizmoSettings gizmo =
+                    context.courseEnemyTransformGizmo->Settings();
+                gizmo.snapEnabled = settings.offsetSnap;
+                gizmo.translationSnap = settings.offsetSnapSize;
+                context.courseEnemyTransformGizmo->SetSettings(gizmo);
+            }
+        }
+        return;
+    }
+    if (!tool.Active()) return;
+
+    const auto modeButton = [&tool](const char* label, CourseRailEditMode mode) {
+        ImGui::SameLine();
+        const bool selected = tool.State().mode == mode;
+        if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.48f, 0.26f, 1.0f));
+        if (ImGui::Button(label)) tool.SetMode(mode);
+        if (selected) ImGui::PopStyleColor();
+    };
+    modeButton("Move", CourseRailEditMode::SelectMove);
+    modeButton("Add", CourseRailEditMode::Add);
+    modeButton("Tangent", CourseRailEditMode::Tangent);
+    modeButton("Delete", CourseRailEditMode::Delete);
+
+    CourseRailViewportEditSettings settings = tool.Settings();
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Snap", &settings.gridSnap)) {
+        tool.SetSettings(settings);
+        if (context.courseRailTransformGizmo != nullptr) {
+            CourseRailTransformGizmoSettings gizmoSettings =
+                context.courseRailTransformGizmo->Settings();
+            gizmoSettings.snapEnabled = settings.gridSnap;
+            gizmoSettings.gridSize = settings.gridSize;
+            context.courseRailTransformGizmo->SetSettings(gizmoSettings);
+        }
+    }
+    if (tool.State().mode == CourseRailEditMode::Tangent) {
+        ImGui::SameLine();
+        if (ImGui::Checkbox("Mirror", &settings.mirrorTangents)) tool.SetSettings(settings);
+    }
+}
+
 void AcceptSceneAssetDrop(EditorContext& context) {
     if (!ImGui::BeginDragDropTarget()) return;
     if (const ImGuiPayload* raw = ImGui::AcceptDragDropPayload(kEditorAssetDragDropPayloadId)) {
-        if (raw->DataSize == sizeof(EditorAssetDragDropPayload) &&
-            context.transactions != nullptr &&
-            context.sceneWorldProvider != nullptr) {
+        if (raw->DataSize == sizeof(EditorAssetDragDropPayload)) {
             const auto& payload = *static_cast<const EditorAssetDragDropPayload*>(raw->Data);
+            const EditorAssetRecord* droppedAsset = context.assets != nullptr
+                ? context.assets->FindByGuid(payload.guid.data()) : nullptr;
+            const std::filesystem::path droppedPath = droppedAsset != nullptr
+                ? std::filesystem::path(
+                    droppedAsset->sourcePath.empty()
+                        ? droppedAsset->logicalPath : droppedAsset->sourcePath)
+                : std::filesystem::path{};
+            if (droppedAsset != nullptr &&
+                droppedPath.extension() == ".actor") {
+                CourseActorAsset actorAsset{};
+                std::string actorError;
+                const bool loaded = actorAsset.LoadFromFile(
+                    droppedPath.string(), &actorError);
+                CourseEnemyMutationResult placement{};
+                if (loaded && context.courseEnemyEditTool != nullptr &&
+                    context.viewportCoordinates != nullptr) {
+                    const ImVec2 mouse = ImGui::GetIO().MousePos;
+                    placement = context.courseEnemyEditTool->PlaceActorAssetAtDisplay(
+                        actorAsset.id, *context.viewportCoordinates, mouse.x, mouse.y);
+                    if (context.assetSelection != nullptr) {
+                        context.assetSelection->SetPrimary(
+                            MakeEditorAssetHandle(*droppedAsset, context.assets->Revision()));
+                    }
+                } else {
+                    placement.message = loaded
+                        ? "Enable Course Enemy viewport editing before dropping an ActorAsset."
+                        : actorError;
+                }
+                if (context.notifications != nullptr) {
+                    context.notifications->Push(
+                        placement.succeeded
+                            ? EditorNotificationSeverity::Info
+                            : EditorNotificationSeverity::Warning,
+                        "ActorAsset Viewport Drop", placement.message);
+                }
+                ImGui::EndDragDropTarget();
+                return;
+            }
+            if (context.transactions == nullptr ||
+                context.sceneWorldProvider == nullptr) {
+                ImGui::EndDragDropTarget();
+                return;
+            }
             if (payload.kind == EditorAssetKind::Prefab && context.prefabs != nullptr) {
                 const EditorPrefabOperationResult prefab = context.prefabs->Instantiate(payload.guid.data());
                 if (prefab.succeeded && context.worldModel != nullptr) {
@@ -466,7 +629,30 @@ void DrawEditorViewportPanelContent(
                         options);
             }
         }
+        if (context.courseRailTransformGizmo != nullptr) {
+            context.courseRailTransformGizmo->BuildViewportOverlay(*context.viewportOverlay);
+        }
+        if (context.courseEnemyTransformGizmo != nullptr) {
+            context.courseEnemyTransformGizmo->BuildViewportOverlay(*context.viewportOverlay);
+        }
+        if (context.courseEnemyEditTool != nullptr) {
+            context.courseEnemyEditTool->BuildViewportOverlay(*context.viewportOverlay);
+        }
         context.viewportOverlay->Render(drawList);
+        if (context.courseRailEditTool != nullptr) {
+            std::string hint = context.courseRailEditTool->ViewportHint();
+            uint32_t hintColor = IM_COL32(232, 244, 255, 245);
+            if (hint.empty() && context.courseEnemyEditTool != nullptr) {
+                hint = context.courseEnemyEditTool->ViewportHint();
+                hintColor = IM_COL32(255, 235, 238, 245);
+            }
+            if (!hint.empty()) {
+                drawList->AddText(
+                    ImVec2(rect.x + 12.0f, rect.y + rect.height - 26.0f),
+                    hintColor, hint.c_str());
+            }
+            DrawCourseRailToolControls(context, rect);
+        }
         DrawViewportOverlayControls(*context.viewportOverlay, context.layoutPersistence, rect);
     }
 }

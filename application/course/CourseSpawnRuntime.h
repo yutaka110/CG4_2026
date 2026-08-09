@@ -48,6 +48,8 @@ struct CourseEnemyFireSafetyStats {
 
 struct CourseEnemyActorDesc {
     std::string waveId;
+    // Stable schema-v7 placement identity. Empty for legacy/event-spawned actors.
+    std::string sourcePlacementGuid;
     std::string actorAssetId;
     std::string meshId = "ball";
     std::string bulletPatternId = "single_red";
@@ -72,6 +74,10 @@ struct CourseEnemyActorDesc {
     Vector4 bulletColor{1.0f, 0.18f, 0.08f, 1.0f};
     CourseEnemyFirePattern firePattern = CourseEnemyFirePattern::Single;
     Vector4 color{1.0f, 0.25f, 0.18f, 1.0f};
+    Vector3 localRotation{};
+    Vector3 localScale{1.0f, 1.0f, 1.0f};
+    bool previewOnly = false;
+    bool suppressFire = false;
 };
 
 struct CourseObstacleActorDesc {
@@ -111,6 +117,8 @@ struct CourseEnemyActor {
     float age = 0.0f;
     float fireTimer = 0.0f;
     float fireVisibleTime = 0.0f;
+    uint64_t fireSequence = 0;
+    uint32_t bulletsEmittedThisFrame = 0;
     bool fireSafetyAllowed = false;
     std::string fireSafetyReason = "not evaluated";
     uint32_t actorId = 0;

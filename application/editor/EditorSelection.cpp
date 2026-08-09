@@ -151,6 +151,14 @@ const char* ToString(EditorDomainId domain) {
         return "AI Authoring Node";
     case EditorDomainId::NavigationAuthoring:
         return "Navigation Authoring";
+    case EditorDomainId::CourseEnemyPlacement:
+        return "Course Enemy Placement";
+    case EditorDomainId::CourseRailControlPoint:
+        return "Course Rail Control Point";
+    case EditorDomainId::CourseRailSegment:
+        return "Course Rail Segment";
+    case EditorDomainId::CourseWaveDefinition:
+        return "Course Wave";
     }
     return "Unknown";
 }

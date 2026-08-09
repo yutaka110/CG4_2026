@@ -1,4 +1,19 @@
 #include "AppImGuiLayer.h"
+#include "editor/course/CourseEnemyEditorController.h"
+#include "editor/course/CourseEnemyDetailsPanel.h"
+#include "editor/course/CourseEnemyPickingService.h"
+#include "editor/course/CourseEnemyTransformGizmo.h"
+#include "editor/course/CourseEnemyViewportEditTool.h"
+#include "editor/course/CourseEnemyViewportRenderer.h"
+#include "editor/course/CourseWaveEditorController.h"
+#include "editor/course/CourseWaveDetailsPanel.h"
+#include "editor/course/CourseWavePickingService.h"
+#include "editor/course/CourseWaveViewportRenderer.h"
+#include "editor/course/CoursePreviewSimulationSystem.h"
+#include "editor/course/CoursePreviewActorRuntimeBridge.h"
+#include "editor/course/CourseRailEditorController.h"
+#include "editor/course/CourseRailPickingService.h"
+#include "editor/course/CourseRailViewportRenderer.h"
 
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
 
@@ -2026,8 +2041,10 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         }
     }
     editorCourseSequencerProvider_.Bind(editableCourse);
+    editorCourseWaveSequencerBridge_.Bind(context.courseWaveEditorController);
     editorSequencer_.BeginFrame();
     editorSequencer_.RegisterProvider(editorCourseSequencerProvider_);
+    editorSequencer_.RegisterProvider(editorCourseWaveSequencerBridge_);
     editorSequencer_.SetTransactionStack(&editorTransactions);
     editorSequencer_.SetSequenceRange(0.0, context.courseRailLength);
     editorSequencer_.SetPreviewPositionCallback(
@@ -2805,6 +2822,15 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 selected ? 0xffb8efffu : 0xff9fc9ffu, options);
         }
     }
+    courseRailViewportEditTool_.Bind(
+        context.courseRailEditorController,
+        context.courseRailPickingService);
+    courseRailTransformGizmo_.Bind(context.courseRailEditorController);
+    courseEnemyViewportEditTool_.Bind(
+        context.courseEnemyEditorController,
+        context.courseEnemyPickingService,
+        context.courseRailPickingService);
+    courseEnemyTransformGizmo_.Bind(context.courseEnemyEditorController);
     const editor::EditorInteractiveToolDescriptor* activeInteractiveDescriptor =
         editorInteractiveTools_.ActiveToolDescriptor();
     const bool interactiveToolConsumesViewport =
@@ -2815,7 +2841,15 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             editorPanelLayout_.ViewportRect(),
             imguiIO.MousePos.x,
             imguiIO.MousePos.y,
-            ImGui::GetFrameHeight()) ||
+            ImGui::GetFrameHeight(),
+            (context.courseRailEditorController != nullptr &&
+                context.courseRailEditorController->State().bound) ||
+                (context.courseEnemyEditorController != nullptr &&
+                    context.courseEnemyEditorController->State().bound) ||
+                (context.courseWaveEditorController != nullptr &&
+                    context.courseWaveEditorController->State().bound),
+            courseRailViewportEditTool_.Active() ||
+                courseEnemyViewportEditTool_.Active()) ||
         (ImGui::IsAnyItemActive() && !editorViewportInteraction_.HasAnyCapture());
     const bool popupOrModalActive = ImGui::IsPopupOpen(
         nullptr,
@@ -2871,7 +2905,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         contentDrawerBlocksViewport ||
         viewportOverlayUiBlocked;
     viewportInteractionInput.popupOrModalActive = popupOrModalActive;
-    viewportInteractionInput.interactiveToolActive = interactiveToolConsumesViewport;
+    viewportInteractionInput.interactiveToolActive =
+        interactiveToolConsumesViewport || courseRailViewportEditTool_.Active() ||
+        courseEnemyViewportEditTool_.Active();
     viewportInteractionInput.primaryPressed = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
     viewportInteractionInput.primaryDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
     viewportInteractionInput.primaryReleased = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
@@ -2920,20 +2956,319 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     editorViewportCameraInput_.focusSelectionPressed =
         editorViewportInteraction_.MouseInsideViewport() &&
         !imguiIO.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F);
+    const bool coursePreviewSimulationActive =
+        context.coursePreviewSimulationSystem != nullptr &&
+        context.coursePreviewSimulationSystem->IsActive();
     runtimeState.terrain.courseObjectAuthoringInputLocked =
         !app::kRuntimeAuthoringEnabled ||
-        editorViewportInteraction_.AuthoringInputLocked();
+        editorViewportInteraction_.AuthoringInputLocked() ||
+        coursePreviewSimulationActive;
+    if (context.courseRailEditorController != nullptr) {
+        context.courseRailEditorController->SetAuthoringAllowed(
+            app::kRuntimeAuthoringEnabled &&
+            editorViewportInteraction_.CanMutateAuthoring() &&
+            !coursePreviewSimulationActive);
+    }
+    if (context.courseEnemyEditorController != nullptr) {
+        context.courseEnemyEditorController->SynchronizeExternalChanges(nullptr);
+        context.courseEnemyEditorController->SetAuthoringAllowed(
+            app::kRuntimeAuthoringEnabled &&
+            editorViewportInteraction_.CanMutateAuthoring() &&
+            !coursePreviewSimulationActive);
+    }
+    if (context.courseWaveEditorController != nullptr) {
+        context.courseWaveEditorController->SynchronizeExternalChanges(nullptr);
+        context.courseWaveEditorController->SetAuthoringAllowed(
+            app::kRuntimeAuthoringEnabled &&
+            editorViewportInteraction_.CanMutateAuthoring() &&
+            !coursePreviewSimulationActive);
+    }
     std::vector<editor::EditorViewportPickResult> viewportPickResults;
+    editor::CourseRailPickResult courseRailPick{};
+    editor::CourseEnemyPickResult courseEnemyPick{};
+    editor::CourseWavePickResult courseWavePick{};
+    std::string selectedRailPointGuid;
+    if (const editor::EditorObjectHandle* primary = editorSelection_.Primary()) {
+        constexpr std::string_view pointPrefix = "course-rail-point:";
+        if (primary->domain == editor::EditorDomainId::CourseRailControlPoint &&
+            primary->stableId.starts_with(pointPrefix)) {
+            selectedRailPointGuid = primary->stableId.substr(pointPrefix.size());
+        }
+    }
+    std::vector<std::string> enemyToolSelectionGuids;
+    constexpr std::string_view enemySelectionPrefix = "course-enemy-placement:";
+    for (const editor::EditorObjectHandle& handle : editorSelection_.Handles()) {
+        if (handle.domain == editor::EditorDomainId::CourseEnemyPlacement &&
+            handle.stableId.starts_with(enemySelectionPrefix)) {
+            enemyToolSelectionGuids.push_back(
+                handle.stableId.substr(enemySelectionPrefix.size()));
+        }
+    }
+    courseRailViewportEditTool_.SetSelectedPoint(selectedRailPointGuid);
+    courseEnemyViewportEditTool_.SetSelectedPlacements(
+        std::move(enemyToolSelectionGuids));
+    if (!courseRailViewportEditTool_.Active() &&
+        !courseEnemyViewportEditTool_.Active() &&
+        context.courseRailEditorController != nullptr &&
+        context.courseRailPickingService != nullptr &&
+        editorViewportInteraction_.MouseInsideViewport()) {
+        const editor::CourseRailAuthoringModel* railModel =
+            context.courseRailEditorController->Model();
+        if (railModel != nullptr) {
+            courseRailPick = context.courseRailPickingService->PickDisplay(
+                *railModel,
+                editorViewportCoordinates_,
+                imguiIO.MousePos.x,
+                imguiIO.MousePos.y);
+        }
+    }
+    if (!courseRailViewportEditTool_.Active() &&
+        !courseEnemyViewportEditTool_.Active() &&
+        context.courseEnemyEditorController != nullptr &&
+        context.courseEnemyPickingService != nullptr &&
+        editorViewportInteraction_.MouseInsideViewport()) {
+        const editor::CourseEnemyAuthoringModel* enemyModel =
+            context.courseEnemyEditorController->Model();
+        if (enemyModel != nullptr) {
+            courseEnemyPick = context.courseEnemyPickingService->PickDisplay(
+                *enemyModel,
+                editorViewportCoordinates_,
+                imguiIO.MousePos.x,
+                imguiIO.MousePos.y);
+        }
+    }
+    if (!courseRailViewportEditTool_.Active() &&
+        !courseEnemyViewportEditTool_.Active() &&
+        context.courseWaveEditorController != nullptr &&
+        context.courseWavePickingService != nullptr &&
+        context.courseWaveEditorController->Course() != nullptr &&
+        editorViewportInteraction_.MouseInsideViewport()) {
+        const editor::CourseWaveAuthoringModel* waveModel =
+            context.courseWaveEditorController->Model();
+        const editor::CourseRailAuthoringModel railModel(
+            *context.courseWaveEditorController->Course());
+        if (waveModel != nullptr && railModel.IsValid()) {
+            courseWavePick = context.courseWavePickingService->PickDisplay(
+                *waveModel,
+                railModel,
+                editorViewportCoordinates_,
+                imguiIO.MousePos.x,
+                imguiIO.MousePos.y);
+        }
+    }
+    if (courseRailViewportEditTool_.Active()) {
+        courseEnemyTransformGizmo_.Tick(editor::CourseEnemyTransformGizmoInput{});
+        const bool railToolOwnsInput =
+            editorViewportInteraction_.CanUseInteractiveToolInput();
+        const bool keyInputAvailable = !imguiIO.WantTextInput &&
+            !popupOrModalActive && !editorConfirmService_.HasPending();
+        const bool cancelRailInteraction = keyInputAvailable && !cameraCancelRequested &&
+            !contentDrawerEscapeRequested && ImGui::IsKeyPressed(ImGuiKey_Escape);
+        courseRailTransformGizmo_.Tick(
+            editor::CourseRailTransformGizmoInput{
+                &editorSelection_,
+                &editorViewportCoordinates_,
+                courseRailViewportEditTool_.State().mode ==
+                    editor::CourseRailEditMode::SelectMove,
+                app::kRuntimeAuthoringEnabled &&
+                    editorViewportInteraction_.CanMutateAuthoring(),
+                imguiIO.MousePos.x,
+                imguiIO.MousePos.y,
+                railToolOwnsInput && viewportInteractionState.viewportPrimaryPressed,
+                railToolOwnsInput && viewportInteractionState.viewportPrimaryDown,
+                railToolOwnsInput && viewportInteractionState.viewportPrimaryReleased,
+                viewportInteractionState.primaryCaptureCancelled,
+                cancelRailInteraction});
+        const bool gizmoOwnsPointer = courseRailTransformGizmo_.WantsPointer();
+        editor::CourseRailViewportEditInput railInput{};
+        railInput.coordinates = &editorViewportCoordinates_;
+        railInput.displayX = imguiIO.MousePos.x;
+        railInput.displayY = imguiIO.MousePos.y;
+        railInput.primaryPressed = railToolOwnsInput && !gizmoOwnsPointer &&
+            viewportInteractionState.viewportPrimaryPressed;
+        railInput.primaryDown = railToolOwnsInput && !gizmoOwnsPointer &&
+            viewportInteractionState.viewportPrimaryDown;
+        railInput.primaryReleased = railToolOwnsInput && !gizmoOwnsPointer &&
+            viewportInteractionState.viewportPrimaryReleased;
+        railInput.primaryCancelled = viewportInteractionState.primaryCaptureCancelled;
+        railInput.cancelPressed = cancelRailInteraction;
+        railInput.deletePressed = keyInputAvailable && ImGui::IsKeyPressed(ImGuiKey_Delete);
+        railInput.undoPressed = keyInputAvailable && imguiIO.KeyCtrl && !imguiIO.KeyShift &&
+            ImGui::IsKeyPressed(ImGuiKey_Z);
+        railInput.redoPressed = keyInputAvailable && imguiIO.KeyCtrl &&
+            (ImGui::IsKeyPressed(ImGuiKey_Y) ||
+                (imguiIO.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z)));
+        railInput.toggleSelection = imguiIO.KeyShift;
+        courseRailViewportEditTool_.Tick(railInput);
+        courseRailPick = courseRailViewportEditTool_.State().hovered;
+        if (courseRailViewportEditTool_.ConsumeClearSelectionRequest()) {
+            editorSelection_.Clear();
+        }
+        if (const std::optional<editor::CourseRailPickResult> selection =
+                courseRailViewportEditTool_.ConsumeSelectionRequest()) {
+            const editor::EditorViewportPickResult viewportPick =
+                context.courseRailPickingService->ToViewportPick(
+                    *selection,
+                    static_cast<uint32_t>(
+                        context.courseRailEditorController->State().mutationRevision));
+            if (viewportPick.hit) {
+                if (imguiIO.KeyShift &&
+                    viewportPick.canonicalHandle.domain ==
+                        editor::EditorDomainId::CourseRailControlPoint) {
+                    editorSelection_.Toggle(viewportPick.canonicalHandle);
+                } else {
+                    editorSelection_.SetPrimary(viewportPick.canonicalHandle);
+                }
+            }
+        }
+    } else if (courseEnemyViewportEditTool_.Active()) {
+        courseRailTransformGizmo_.Tick(editor::CourseRailTransformGizmoInput{});
+        const bool enemyToolOwnsInput =
+            editorViewportInteraction_.CanUseInteractiveToolInput();
+        const bool keyInputAvailable = !imguiIO.WantTextInput &&
+            !popupOrModalActive && !editorConfirmService_.HasPending();
+        const bool cancelEnemyInteraction = keyInputAvailable && !cameraCancelRequested &&
+            !contentDrawerEscapeRequested && ImGui::IsKeyPressed(ImGuiKey_Escape);
+        if (keyInputAvailable && !imguiIO.KeyCtrl && !imguiIO.KeyAlt) {
+            editor::CourseEnemyTransformGizmoSettings gizmoSettings =
+                courseEnemyTransformGizmo_.Settings();
+            if (ImGui::IsKeyPressed(ImGuiKey_W)) {
+                gizmoSettings.mode = editor::EditorTransformGizmoMode::Translate;
+            } else if (ImGui::IsKeyPressed(ImGuiKey_E)) {
+                gizmoSettings.mode = editor::EditorTransformGizmoMode::Rotate;
+            } else if (ImGui::IsKeyPressed(ImGuiKey_R)) {
+                gizmoSettings.mode = editor::EditorTransformGizmoMode::Scale;
+            }
+            courseEnemyTransformGizmo_.SetSettings(gizmoSettings);
+        }
+        courseEnemyTransformGizmo_.Tick(
+            editor::CourseEnemyTransformGizmoInput{
+                &editorSelection_,
+                &editorViewportCoordinates_,
+                courseEnemyViewportEditTool_.State().mode ==
+                    editor::CourseEnemyEditMode::SelectMove,
+                app::kRuntimeAuthoringEnabled &&
+                    editorViewportInteraction_.CanMutateAuthoring(),
+                imguiIO.MousePos.x,
+                imguiIO.MousePos.y,
+                enemyToolOwnsInput && viewportInteractionState.viewportPrimaryPressed,
+                enemyToolOwnsInput && viewportInteractionState.viewportPrimaryDown,
+                enemyToolOwnsInput && viewportInteractionState.viewportPrimaryReleased,
+                viewportInteractionState.primaryCaptureCancelled,
+                cancelEnemyInteraction});
+        const bool enemyGizmoOwnsPointer = courseEnemyTransformGizmo_.WantsPointer();
+        editor::CourseEnemyViewportEditInput enemyInput{};
+        enemyInput.coordinates = &editorViewportCoordinates_;
+        enemyInput.displayX = imguiIO.MousePos.x;
+        enemyInput.displayY = imguiIO.MousePos.y;
+        enemyInput.primaryPressed = enemyToolOwnsInput && !enemyGizmoOwnsPointer &&
+            viewportInteractionState.viewportPrimaryPressed;
+        enemyInput.primaryDown = enemyToolOwnsInput && !enemyGizmoOwnsPointer &&
+            viewportInteractionState.viewportPrimaryDown;
+        enemyInput.primaryReleased = enemyToolOwnsInput && !enemyGizmoOwnsPointer &&
+            viewportInteractionState.viewportPrimaryReleased;
+        enemyInput.primaryCancelled = viewportInteractionState.primaryCaptureCancelled;
+        enemyInput.cancelPressed = cancelEnemyInteraction;
+        enemyInput.deletePressed = keyInputAvailable &&
+            ImGui::IsKeyPressed(ImGuiKey_Delete);
+        enemyInput.duplicatePressed = keyInputAvailable && imguiIO.KeyCtrl &&
+            ImGui::IsKeyPressed(ImGuiKey_D);
+        enemyInput.undoPressed = keyInputAvailable && imguiIO.KeyCtrl &&
+            !imguiIO.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z);
+        enemyInput.redoPressed = keyInputAvailable && imguiIO.KeyCtrl &&
+            (ImGui::IsKeyPressed(ImGuiKey_Y) ||
+                (imguiIO.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z)));
+        enemyInput.toggleSelection = imguiIO.KeyShift;
+        courseEnemyViewportEditTool_.Tick(enemyInput);
+        courseEnemyPick = courseEnemyViewportEditTool_.State().hovered;
+        if (courseEnemyViewportEditTool_.ConsumeClearSelectionRequest()) {
+            editorSelection_.Clear();
+        }
+        if (const std::optional<editor::CourseEnemyPickResult> selection =
+                courseEnemyViewportEditTool_.ConsumeSelectionRequest()) {
+            const editor::EditorViewportPickResult viewportPick =
+                context.courseEnemyPickingService->ToViewportPick(
+                    *selection,
+                    static_cast<uint32_t>(
+                        context.courseEnemyEditorController->State().mutationRevision));
+            if (viewportPick.hit) {
+                if (imguiIO.KeyShift) {
+                    editorSelection_.Toggle(viewportPick.canonicalHandle);
+                } else {
+                    editorSelection_.SetPrimary(viewportPick.canonicalHandle);
+                }
+            }
+        }
+        if (std::optional<editor::CourseEnemyRangeSelectionRequest> range =
+                courseEnemyViewportEditTool_.ConsumeRangeSelectionRequest()) {
+            if (!range->additive) editorSelection_.Clear();
+            for (const editor::CourseEnemyPickResult& placement :
+                 range->placements) {
+                const editor::EditorViewportPickResult viewportPick =
+                    context.courseEnemyPickingService->ToViewportPick(
+                        placement,
+                        static_cast<uint32_t>(
+                            context.courseEnemyEditorController->State().mutationRevision));
+                if (viewportPick.hit) {
+                    editorSelection_.Add(std::move(viewportPick.canonicalHandle));
+                }
+            }
+        }
+    } else {
+        courseRailTransformGizmo_.Tick(editor::CourseRailTransformGizmoInput{});
+        courseEnemyTransformGizmo_.Tick(editor::CourseEnemyTransformGizmoInput{});
+    }
+    if (context.courseRailViewportRenderer != nullptr) {
+        context.courseRailViewportRenderer->SetHoveredPoint(
+            courseRailPick.kind == editor::CourseRailPickKind::ControlPoint ||
+                    courseRailPick.IsTangentHandle()
+                ? courseRailPick.guid : std::string{});
+        context.courseRailViewportRenderer->SetHoveredSegment(
+            courseRailPick.kind == editor::CourseRailPickKind::Segment
+                ? courseRailPick.guid : std::string{});
+    }
+    if (context.courseEnemyViewportRenderer != nullptr) {
+        context.courseEnemyViewportRenderer->SetHoveredPlacement(
+            courseEnemyPick.hit ? courseEnemyPick.placementGuid : std::string{});
+    }
+    if (context.courseWaveViewportRenderer != nullptr) {
+        context.courseWaveViewportRenderer->SetHoveredWave(
+            courseWavePick.hit ? courseWavePick.waveGuid : std::string{});
+    }
     const bool scenePickRequested = app::kRuntimeAuthoringEnabled &&
+        !courseRailViewportEditTool_.Active() &&
+        !courseEnemyViewportEditTool_.Active() &&
         editorViewportInteraction_.CanUseSceneInput() &&
         editorViewportInteraction_.State().viewportPrimaryPressed;
     if (scenePickRequested) {
-        const editor::EditorViewportWorldRay ray = editorViewportCoordinates_.DisplayToWorldRay(
-            imguiIO.MousePos.x, imguiIO.MousePos.y);
-        const editor::EditorProductionSceneRayHit hit = ray.valid
-            ? editorProductionScenePipeline_.Raycast(ray.origin, ray.direction)
-            : editor::EditorProductionSceneRayHit{};
-        if (hit.valid) {
+        if (courseEnemyPick.hit && context.courseEnemyPickingService != nullptr &&
+            context.courseEnemyEditorController != nullptr) {
+            viewportPickResults.push_back(
+                context.courseEnemyPickingService->ToViewportPick(
+                    courseEnemyPick,
+                    static_cast<uint32_t>(
+                        context.courseEnemyEditorController->State().mutationRevision)));
+        } else if (courseWavePick.hit && context.courseWavePickingService != nullptr &&
+            context.courseWaveEditorController != nullptr) {
+            viewportPickResults.push_back(
+                context.courseWavePickingService->ToViewportPick(
+                    courseWavePick,
+                    static_cast<uint32_t>(
+                        context.courseWaveEditorController->State().mutationRevision)));
+        } else if (courseRailPick.hit && context.courseRailPickingService != nullptr &&
+            context.courseRailEditorController != nullptr) {
+            viewportPickResults.push_back(
+                context.courseRailPickingService->ToViewportPick(
+                    courseRailPick,
+                    static_cast<uint32_t>(
+                        context.courseRailEditorController->State().mutationRevision)));
+        } else {
+            const editor::EditorViewportWorldRay ray = editorViewportCoordinates_.DisplayToWorldRay(
+                imguiIO.MousePos.x, imguiIO.MousePos.y);
+            const editor::EditorProductionSceneRayHit hit = ray.valid
+                ? editorProductionScenePipeline_.Raycast(ray.origin, ray.direction)
+                : editor::EditorProductionSceneRayHit{};
+            if (hit.valid) {
             const editor::EditorScene* scene =
                 editorSceneDocumentProvider_.Scene(editorSceneDocumentId_);
             const editor::EditorSceneEntity* entity = scene != nullptr
@@ -2953,6 +3288,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 static_cast<uint32_t>(scene != nullptr ? scene->revision : 0),
                 entity != nullptr ? entity->name : "Scene Entity"};
             viewportPickResults.push_back(std::move(pick));
+            }
         }
     } else if (const editor::EditorObjectHandle* primary = editorSelection_.Primary();
                primary != nullptr && primary->domain == editor::EditorDomainId::SceneEntity) {
@@ -2966,7 +3302,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         pick.canonicalHandle = *primary;
         viewportPickResults.push_back(std::move(pick));
     }
-    if (app::kRuntimeAuthoringEnabled &&
+    const bool courseAuthoringConsumedPrimary = scenePickRequested &&
+        (courseEnemyPick.hit || courseWavePick.hit || courseRailPick.hit);
+    if (app::kRuntimeAuthoringEnabled && !courseAuthoringConsumedPrimary &&
         runtimeState.terrain.selectedCourseTerrainPlacement >= 0) {
         const uint64_t index =
             static_cast<uint64_t>(runtimeState.terrain.selectedCourseTerrainPlacement);
@@ -2984,7 +3322,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         }
         viewportPickResults.push_back(std::move(pick));
     }
-    if (app::kRuntimeAuthoringEnabled &&
+    if (app::kRuntimeAuthoringEnabled && !courseAuthoringConsumedPrimary &&
         runtimeState.terrain.selectedCourseRockCluster >= 0) {
         const uint64_t index =
             static_cast<uint64_t>(runtimeState.terrain.selectedCourseRockCluster);
@@ -3023,6 +3361,66 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             &editorSelection_,
             &editorViewportInteraction_,
             &viewportPickResults});
+    if (context.courseRailViewportRenderer != nullptr) {
+        const editor::CourseRailAuthoringModel* previewModel =
+            courseRailDetailsPanel_.PreviewModel();
+        if (previewModel == nullptr) previewModel = courseRailTransformGizmo_.PreviewModel();
+        if (previewModel == nullptr && courseRailViewportEditTool_.Active()) {
+            previewModel = courseRailViewportEditTool_.PreviewModel();
+        }
+        context.courseRailViewportRenderer->SetPreviewModel(previewModel);
+        context.courseRailViewportRenderer->SetSelectedPoint({});
+        context.courseRailViewportRenderer->SetSelectedSegment({});
+        if (const editor::EditorObjectHandle* primary = editorSelection_.Primary()) {
+            constexpr std::string_view pointPrefix = "course-rail-point:";
+            constexpr std::string_view segmentPrefix = "course-rail-segment:";
+            if (primary->domain == editor::EditorDomainId::CourseRailControlPoint &&
+                primary->stableId.starts_with(pointPrefix)) {
+                context.courseRailViewportRenderer->SetSelectedPoint(
+                    primary->stableId.substr(pointPrefix.size()));
+            } else if (primary->domain == editor::EditorDomainId::CourseRailSegment &&
+                primary->stableId.starts_with(segmentPrefix)) {
+                context.courseRailViewportRenderer->SetSelectedSegment(
+                    primary->stableId.substr(segmentPrefix.size()));
+            }
+        }
+    }
+    if (context.courseEnemyViewportRenderer != nullptr) {
+        const editor::CourseEnemyAuthoringModel* previewModel =
+            courseEnemyDetailsPanel_.PreviewModel();
+        if (previewModel == nullptr) {
+            previewModel = courseEnemyTransformGizmo_.PreviewModel();
+        }
+        if (previewModel == nullptr && courseEnemyViewportEditTool_.Active()) {
+            previewModel = courseEnemyViewportEditTool_.PreviewModel();
+        }
+        context.courseEnemyViewportRenderer->SetPreviewModel(previewModel);
+        std::vector<std::string> selectedEnemyGuids;
+        constexpr std::string_view enemyPrefix = "course-enemy-placement:";
+        for (const editor::EditorObjectHandle& handle : editorSelection_.Handles()) {
+            if (handle.domain == editor::EditorDomainId::CourseEnemyPlacement &&
+                handle.stableId.starts_with(enemyPrefix)) {
+                selectedEnemyGuids.push_back(
+                    handle.stableId.substr(enemyPrefix.size()));
+            }
+        }
+        context.courseEnemyViewportRenderer->SetSelectedPlacements(
+            selectedEnemyGuids);
+    }
+    if (context.courseWaveViewportRenderer != nullptr) {
+        context.courseWaveViewportRenderer->SetPreviewModel(
+            courseWaveDetailsPanel_.PreviewModel());
+        std::vector<std::string> selectedWaveGuids;
+        constexpr std::string_view wavePrefix = "course-wave:";
+        for (const editor::EditorObjectHandle& handle : editorSelection_.Handles()) {
+            if (handle.domain == editor::EditorDomainId::CourseWaveDefinition &&
+                handle.stableId.starts_with(wavePrefix)) {
+                selectedWaveGuids.push_back(
+                    handle.stableId.substr(wavePrefix.size()));
+            }
+        }
+        context.courseWaveViewportRenderer->SetSelectedWaves(selectedWaveGuids);
+    }
     runtimeState.terrain.selectedCourseTerrainPlacements.clear();
     runtimeState.terrain.selectedCourseRockClusters.clear();
     for (const editor::EditorObjectHandle& handle : editorSelection_.Handles()) {
@@ -3632,6 +4030,20 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     editorContext.navigationAuthoring = &editorProductionNavigationAuthoringPipeline_;
     editorContext.interactiveTools = &editorInteractiveTools_;
     editorContext.interactiveExecution = &editorInteractiveExecution_;
+    editorContext.courseRailEditTool = &courseRailViewportEditTool_;
+    editorContext.courseRailTransformGizmo = &courseRailTransformGizmo_;
+    editorContext.courseEnemyEditorController = context.courseEnemyEditorController;
+    editorContext.courseEnemyEditTool = &courseEnemyViewportEditTool_;
+    editorContext.courseEnemyTransformGizmo = &courseEnemyTransformGizmo_;
+    editorContext.courseEnemyPickingService = context.courseEnemyPickingService;
+    editorContext.courseEnemyViewportRenderer = context.courseEnemyViewportRenderer;
+    editorContext.courseWaveEditorController = context.courseWaveEditorController;
+    editorContext.courseWavePickingService = context.courseWavePickingService;
+    editorContext.courseWaveViewportRenderer = context.courseWaveViewportRenderer;
+    editorContext.coursePreviewSimulationSystem =
+        context.coursePreviewSimulationSystem;
+    editorContext.coursePreviewActorRuntimeBridge =
+        context.coursePreviewActorRuntimeBridge;
     auto onBlenderSceneChanged =
         [this](const editor::EditorDocumentId& document, std::string_view) {
             if (document.type == editor::EditorDocumentTypes::Scene) {
@@ -3701,12 +4113,15 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     interactiveInput.mouseX = ImGui::GetIO().MousePos.x;
     interactiveInput.mouseY = ImGui::GetIO().MousePos.y;
     interactiveInput.viewportPrimaryPressed =
+        !courseRailViewportEditTool_.Active() && !courseEnemyViewportEditTool_.Active() &&
         editorViewportInteraction_.CanUseInteractiveToolInput() &&
         editorViewportInteraction_.State().viewportPrimaryPressed;
     interactiveInput.viewportPrimaryDown =
+        !courseRailViewportEditTool_.Active() && !courseEnemyViewportEditTool_.Active() &&
         editorViewportInteraction_.CanUseInteractiveToolInput() &&
         editorViewportInteraction_.State().viewportPrimaryDown;
     interactiveInput.viewportPrimaryReleased =
+        !courseRailViewportEditTool_.Active() && !courseEnemyViewportEditTool_.Active() &&
         editorViewportInteraction_.CanUseInteractiveToolInput() &&
         editorViewportInteraction_.State().viewportPrimaryReleased;
     interactiveInput.viewportPrimaryCancelled =
@@ -3848,6 +4263,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 descriptor.id == "editor.performance") {
                 descriptor.bottomDockGroup = editor::EditorBottomDockGroup::Profiling;
             } else if (descriptor.id == "course.timeline" ||
+                       descriptor.id == "course.overviewMap" ||
                        descriptor.id == "editor.transactions" ||
                        descriptor.id == "material.graph") {
                 descriptor.bottomDockGroup = editor::EditorBottomDockGroup::Authoring;
@@ -4011,6 +4427,48 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             editor::EditorPanelHostArea::RightInspector,
             panelVisible("editor.details"),
             [&]() {
+                if (editorSelection_.Empty() &&
+                    context.courseWaveEditorController != nullptr &&
+                    context.courseWaveEditorController->State().bound) {
+                    courseWaveDetailsPanel_.Draw(
+                        editor::CourseWaveDetailsPanelContext{
+                            context.courseWaveEditorController,
+                            &editorSelection_,
+                            editorCommandContext.canMutateAuthoring &&
+                                app::kRuntimeAuthoringEnabled});
+                    return;
+                }
+                if (courseWaveDetailsPanel_.HandlesSelection(&editorSelection_)) {
+                    courseWaveDetailsPanel_.Draw(
+                        editor::CourseWaveDetailsPanelContext{
+                            context.courseWaveEditorController,
+                            &editorSelection_,
+                            editorCommandContext.canMutateAuthoring &&
+                                app::kRuntimeAuthoringEnabled});
+                    return;
+                }
+                if (courseEnemyDetailsPanel_.HandlesSelection(&editorSelection_)) {
+                    courseEnemyDetailsPanel_.Draw(
+                        editor::CourseEnemyDetailsPanelContext{
+                            context.courseEnemyEditorController,
+                            &editorSelection_,
+                            &courseEnemyTransformGizmo_,
+                            &courseEnemyViewportEditTool_,
+                            editorCommandContext.canMutateAuthoring &&
+                                app::kRuntimeAuthoringEnabled});
+                    return;
+                }
+                if (courseRailDetailsPanel_.HandlesSelection(&editorSelection_)) {
+                    courseRailDetailsPanel_.Draw(
+                        editor::CourseRailDetailsPanelContext{
+                            context.courseRailEditorController,
+                            &editorSelection_,
+                            &courseRailTransformGizmo_,
+                            &courseRailViewportEditTool_,
+                            editorCommandContext.canMutateAuthoring &&
+                                app::kRuntimeAuthoringEnabled});
+                    return;
+                }
                 editor::DrawEditorDetailsPanel(
                     editor::EditorDetailsPanelContext{
                         &editorSelection_,
@@ -4564,6 +5022,35 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             }});
     registerPanel(
         editor::EditorPanelDescriptor{
+            "course.overviewMap",
+            "Course Overview Map",
+            "Course",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("course.overviewMap"),
+            [&]() {
+                editor::DrawCourseOverviewMapPanel(
+                    courseOverviewMapController_,
+                    editor::CourseOverviewMapPanelContext{
+                        context.courseRailEditorController,
+                        context.courseEnemyEditorController,
+                        context.courseWaveEditorController,
+                        &editorSelection_,
+                        context.coursePreviewSimulationSystem,
+                        &courseOverviewMapEditTool_,
+                        &courseOverviewMapDragDropBridge_,
+                        &courseOverviewMapSnapService_,
+                        &courseRailCurveFitService_,
+                        &courseRailSketchTool_,
+                        &courseRailStrokePreviewRenderer_,
+                        &courseOverviewMapMultiViewCoordinator_,
+                        &courseRailElevationProfileEditor_,
+                        &courseRailConstraintValidationSystem_,
+                        &editorAssetRegistry_,
+                        &editorAssetSelection_,
+                        context.courseDistance});
+            }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
             "course.timeline",
             "Course Timeline",
             "Course",
@@ -4590,8 +5077,12 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         &editorDirtyState_,
                         &editorDocumentLifecycle_,
                         &editorConfirmService_,
-                        editorCommandContext.canMutateAuthoring,
-                        &editorSequencer_});
+                        editorCommandContext.canMutateAuthoring &&
+                            !coursePreviewSimulationActive,
+                        &editorSequencer_,
+                        context.coursePreviewSimulationSystem,
+                        context.coursePreviewActorRuntimeBridge,
+                        context.courseGameplayWaveRuntimeBridge});
             }});
 
     imguiTiming.panelRegistryMs =

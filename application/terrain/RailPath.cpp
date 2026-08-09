@@ -89,6 +89,66 @@ void RailPath::SetControlPoints(std::vector<RailPathControlPoint> points) {
     RebuildArcTable();
 }
 
+Vector3 CubicBezier(
+    const Vector3& p0,
+    const Vector3& p1,
+    const Vector3& p2,
+    const Vector3& p3,
+    float t) {
+    const float oneMinusT = 1.0f - t;
+    const float a = oneMinusT * oneMinusT * oneMinusT;
+    const float b = 3.0f * oneMinusT * oneMinusT * t;
+    const float c = 3.0f * oneMinusT * t * t;
+    const float d = t * t * t;
+    return {
+        a * p0.x + b * p1.x + c * p2.x + d * p3.x,
+        a * p0.y + b * p1.y + c * p2.y + d * p3.y,
+        a * p0.z + b * p1.z + c * p2.z + d * p3.z};
+}
+
+float RailPath::SegmentStartDistance(uint32_t segmentIndex) const {
+    if (segmentIndex >= SegmentCount() || segmentIndex >= cumulativeLengths_.size()) {
+        return 0.0f;
+    }
+    return cumulativeLengths_[segmentIndex];
+}
+
+float RailPath::SegmentLength(uint32_t segmentIndex) const {
+    if (segmentIndex >= SegmentCount() || segmentIndex + 1 >= cumulativeLengths_.size()) {
+        return 0.0f;
+    }
+    return (std::max)(0.0f, cumulativeLengths_[segmentIndex + 1] - cumulativeLengths_[segmentIndex]);
+}
+
+RailPathSample RailPath::EvaluateSegmentAt(uint32_t segmentIndex, float normalizedT) const {
+    RailPathSample sample{};
+    if (segmentIndex >= SegmentCount()) {
+        return sample;
+    }
+    const float t = (std::clamp)(normalizedT, 0.0f, 1.0f);
+    sample.position = EvaluateSegment(segmentIndex, t);
+    const float beforeT = (std::max)(0.0f, t - 0.01f);
+    const float afterT = (std::min)(1.0f, t + 0.01f);
+    sample.tangent = NormalizeOr(
+        Subtract(EvaluateSegment(segmentIndex, afterT), EvaluateSegment(segmentIndex, beforeT)),
+        {0.0f, 0.0f, 1.0f});
+    sample.right = NormalizeOr(Cross({0.0f, 1.0f, 0.0f}, sample.tangent), {1.0f, 0.0f, 0.0f});
+    sample.up = NormalizeOr(Cross(sample.tangent, sample.right), {0.0f, 1.0f, 0.0f});
+    sample.corridorRadius = EvaluateRadius(segmentIndex, t);
+    sample.speed = EvaluateSpeed(segmentIndex, t);
+    sample.distance = SegmentStartDistance(segmentIndex) + SegmentLength(segmentIndex) * t;
+    return sample;
+}
+
+Vector3 RailPath::TangentHandlePosition(uint32_t pointIndex, bool incoming) const {
+    if (pointIndex >= controlPoints_.size()) return {};
+    const RailPathControlPoint& point = controlPoints_[pointIndex];
+    if (point.tangentMode == RailPathTangentMode::Auto) {
+        return AutoTangentHandlePosition(pointIndex, incoming);
+    }
+    return Add(point.position, incoming ? point.incomingTangent : point.outgoingTangent);
+}
+
 RailPathSample RailPath::Evaluate(float distance) const {
     RailPathSample sample{};
     if (controlPoints_.empty()) {
@@ -171,12 +231,33 @@ Vector3 RailPath::EvaluateSegment(uint32_t segmentIndex, float t) const {
     const uint32_t i2 = (std::min)(segmentIndex + 1, count - 1);
     const uint32_t i0 = i1 > 0 ? i1 - 1 : i1;
     const uint32_t i3 = (std::min)(i2 + 1, count - 1);
-    return CatmullRom(
-        controlPoints_[i0].position,
+    const float clampedT = (std::clamp)(t, 0.0f, 1.0f);
+    if (controlPoints_[i1].tangentMode == RailPathTangentMode::Auto &&
+        controlPoints_[i2].tangentMode == RailPathTangentMode::Auto) {
+        return CatmullRom(
+            controlPoints_[i0].position,
+            controlPoints_[i1].position,
+            controlPoints_[i2].position,
+            controlPoints_[i3].position,
+            clampedT);
+    }
+    return CubicBezier(
         controlPoints_[i1].position,
+        TangentHandlePosition(i1, false),
+        TangentHandlePosition(i2, true),
         controlPoints_[i2].position,
-        controlPoints_[i3].position,
-        (std::clamp)(t, 0.0f, 1.0f));
+        clampedT);
+}
+
+Vector3 RailPath::AutoTangentHandlePosition(uint32_t pointIndex, bool incoming) const {
+    if (pointIndex >= controlPoints_.size()) return {};
+    const uint32_t last = static_cast<uint32_t>(controlPoints_.size() - 1);
+    const uint32_t previous = pointIndex > 0 ? pointIndex - 1 : pointIndex;
+    const uint32_t next = (std::min)(pointIndex + 1, last);
+    const Vector3 derivative = Scale(
+        Subtract(controlPoints_[next].position, controlPoints_[previous].position),
+        1.0f / 6.0f);
+    return Add(controlPoints_[pointIndex].position, incoming ? Scale(derivative, -1.0f) : derivative);
 }
 
 float RailPath::EvaluateRadius(uint32_t segmentIndex, float t) const {

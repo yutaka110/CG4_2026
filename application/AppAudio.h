@@ -11,7 +11,18 @@ public:
 
     audio::SoundHandle LoadSound(const std::string& path);
     audio::SoundHandle LoadWave(const std::string& path);
+    audio::SoundHandle CreateTone(
+        const std::string& id,
+        float frequencyHz,
+        float durationSeconds,
+        float amplitude = 0.5f);
     bool Play(audio::SoundHandle handle, float volume = 1.0f, bool loop = false);
+    bool PlaySpatial(
+        audio::SoundHandle handle,
+        float volume,
+        float pan,
+        float pitch = 1.0f,
+        bool loop = false);
     void Unload(audio::SoundHandle handle);
 
 private:

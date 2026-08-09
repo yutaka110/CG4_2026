@@ -5,6 +5,7 @@
 
 class CourseCollisionSystem;
 class CourseSpawnRuntime;
+class CourseGameplayWaveRuntimeBridge;
 class PlayerCombatFeelSystem;
 class SectionCheckpointSystem;
 struct AppRuntimeState;
@@ -16,6 +17,8 @@ class EditorDocumentLifecycleService;
 class EditorModalConfirmService;
 class EditorSequencerService;
 class EditorTransactionStack;
+class CoursePreviewSimulationSystem;
+class CoursePreviewActorRuntimeBridge;
 }
 
 struct CourseTimelineDebugPanelInput {
@@ -39,6 +42,9 @@ struct CourseTimelineDebugPanelInput {
     editor::EditorModalConfirmService* confirmService = nullptr;
     bool canMutateAuthoring = true;
     editor::EditorSequencerService* sequencer = nullptr;
+    editor::CoursePreviewSimulationSystem* previewSimulation = nullptr;
+    editor::CoursePreviewActorRuntimeBridge* previewActors = nullptr;
+    const CourseGameplayWaveRuntimeBridge* gameplayWaves = nullptr;
 };
 
 void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input);

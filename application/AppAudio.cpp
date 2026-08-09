@@ -20,8 +20,26 @@ audio::SoundHandle AppAudio::LoadWave(const std::string& path) {
     return audioSystem_.LoadWave(path);
 }
 
+audio::SoundHandle AppAudio::CreateTone(
+    const std::string& id,
+    float frequencyHz,
+    float durationSeconds,
+    float amplitude) {
+    return audioSystem_.CreateTone(
+        id, frequencyHz, durationSeconds, amplitude);
+}
+
 bool AppAudio::Play(audio::SoundHandle handle, float volume, bool loop) {
     return audioSystem_.Play(handle, volume, loop);
+}
+
+bool AppAudio::PlaySpatial(
+    audio::SoundHandle handle,
+    float volume,
+    float pan,
+    float pitch,
+    bool loop) {
+    return audioSystem_.PlaySpatial(handle, volume, pan, pitch, loop);
 }
 
 void AppAudio::Unload(audio::SoundHandle handle) {

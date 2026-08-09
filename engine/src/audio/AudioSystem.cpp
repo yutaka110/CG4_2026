@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <mfapi.h>
@@ -383,6 +384,74 @@ SoundHandle AudioSystem::LoadWave(const std::string& path) {
     return SoundHandle{slotIndex, slot.generation};
 }
 
+SoundHandle AudioSystem::CreateTone(
+    const std::string& id,
+    float frequencyHz,
+    float durationSeconds,
+    float amplitude) {
+    const std::string resourceId = "procedural-tone://" + id;
+    for (uint32_t i = 0; i < sounds_.size(); ++i) {
+        const SoundSlot& slot = sounds_[i];
+        if (slot.occupied && slot.resource.path == resourceId) {
+            return SoundHandle{i, slot.generation};
+        }
+    }
+
+    constexpr uint32_t kSampleRate = 48000;
+    constexpr float kTau = 6.28318530717958647692f;
+    const float safeFrequency = (std::clamp)(frequencyHz, 40.0f, 12000.0f);
+    const float safeDuration = (std::clamp)(durationSeconds, 0.015f, 1.0f);
+    const float safeAmplitude = (std::clamp)(amplitude, 0.0f, 0.95f);
+    const uint32_t sampleCount = (std::max)(
+        1u,
+        static_cast<uint32_t>(std::ceil(safeDuration * kSampleRate)));
+
+    WAVEFORMATEX format{};
+    format.wFormatTag = WAVE_FORMAT_PCM;
+    format.nChannels = 1;
+    format.nSamplesPerSec = kSampleRate;
+    format.wBitsPerSample = 16;
+    format.nBlockAlign = static_cast<WORD>(
+        format.nChannels * format.wBitsPerSample / 8);
+    format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
+    format.cbSize = 0;
+
+    SoundResource resource{};
+    resource.path = resourceId;
+    resource.formatBytes.resize(sizeof(WAVEFORMATEX));
+    std::memcpy(resource.formatBytes.data(), &format, sizeof(format));
+    resource.pcmData.resize(
+        static_cast<size_t>(sampleCount) * sizeof(int16_t));
+    for (uint32_t sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
+        const float time = static_cast<float>(sampleIndex) /
+            static_cast<float>(kSampleRate);
+        const float normalizedTime = static_cast<float>(sampleIndex) /
+            static_cast<float>((std::max)(1u, sampleCount - 1u));
+        const float attack = (std::min)(1.0f, normalizedTime / 0.08f);
+        const float release = (std::min)(1.0f, (1.0f - normalizedTime) / 0.32f);
+        const float envelope = attack * release;
+        const float fundamental = std::sin(kTau * safeFrequency * time);
+        const float harmonic = std::sin(kTau * safeFrequency * 2.0f * time) * 0.16f;
+        const float value = (std::clamp)(
+            (fundamental + harmonic) * safeAmplitude * envelope,
+            -1.0f,
+            1.0f);
+        const int16_t pcm = static_cast<int16_t>(
+            std::lround(value * 32767.0f));
+        std::memcpy(
+            resource.pcmData.data() +
+                static_cast<size_t>(sampleIndex) * sizeof(int16_t),
+            &pcm,
+            sizeof(pcm));
+    }
+
+    const uint32_t slotIndex = AllocateSlot();
+    SoundSlot& slot = sounds_[slotIndex];
+    slot.resource = std::move(resource);
+    slot.occupied = true;
+    return SoundHandle{slotIndex, slot.generation};
+}
+
 bool AudioSystem::UnloadSound(SoundHandle handle) {
     if (!IsHandleAlive(handle)) {
         return false;
@@ -401,6 +470,15 @@ bool AudioSystem::UnloadSound(SoundHandle handle) {
 }
 
 bool AudioSystem::Play(SoundHandle handle, float volume, bool loop) {
+    return PlaySpatial(handle, volume, 0.0f, 1.0f, loop);
+}
+
+bool AudioSystem::PlaySpatial(
+    SoundHandle handle,
+    float volume,
+    float pan,
+    float pitch,
+    bool loop) {
     if (!xAudio2_ || !IsHandleAlive(handle)) {
         return false;
     }
@@ -425,9 +503,24 @@ bool AudioSystem::Play(SoundHandle handle, float volume, bool loop) {
         return false;
     }
 
-    if (volume != 1.0f) {
-        const float safeVolume = volume < 0.0f ? 0.0f : volume;
-        voice->SetVolume(safeVolume);
+    const float safeVolume = (std::max)(0.0f, volume);
+    voice->SetVolume(safeVolume);
+    voice->SetFrequencyRatio((std::clamp)(pitch, 0.5f, 2.0f));
+
+    if (format->nChannels == 1 && masterVoice_ != nullptr) {
+        XAUDIO2_VOICE_DETAILS masterDetails{};
+        masterVoice_->GetVoiceDetails(&masterDetails);
+        if (masterDetails.InputChannels >= 2) {
+            std::vector<float> matrix(masterDetails.InputChannels, 0.0f);
+            const float safePan = (std::clamp)(pan, -1.0f, 1.0f);
+            matrix[0] = std::sqrt(0.5f * (1.0f - safePan));
+            matrix[1] = std::sqrt(0.5f * (1.0f + safePan));
+            voice->SetOutputMatrix(
+                masterVoice_,
+                1,
+                masterDetails.InputChannels,
+                matrix.data());
+        }
     }
 
     XAUDIO2_BUFFER buffer{};

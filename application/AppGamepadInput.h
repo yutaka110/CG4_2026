@@ -34,6 +34,11 @@ public:
         float x,
         float y) noexcept;
 
+    [[nodiscard]] static bool SetVibration(
+        uint32_t controllerIndex,
+        float lowFrequencyMotor,
+        float highFrequencyMotor) noexcept;
+
 private:
     uint32_t activeControllerIndex_ = UINT32_MAX;
     uint16_t previousButtons_ = 0;

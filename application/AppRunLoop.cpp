@@ -1447,6 +1447,7 @@ AppRunLoop::AppRunLoop(
     AppFrameRenderer& frameRenderer,
     AppPipelines& appPipelines,
     AppRenderResources& renderResources,
+    AppAudio& audio,
     graphics::SwapChain& swapChain,
     core::CommandListPool& clPool,
     EngineContext& engineContext,
@@ -1470,6 +1471,7 @@ AppRunLoop::AppRunLoop(
       frameRenderer_(frameRenderer),
       appPipelines_(appPipelines),
       renderResources_(renderResources),
+      audio_(audio),
       swapChain_(swapChain),
       clPool_(clPool),
       engineContext_(engineContext),
@@ -1483,6 +1485,12 @@ AppRunLoop::AppRunLoop(
       frameState_(frameState),
       commandQueue_(commandQueue),
       frameCoordinator_(swapChain, engineContext, dev, commandQueue, fence, fenceEvent) {
+    railTelegraphAcquiredSound_ = audio_.CreateTone(
+        "rail-telegraph-acquired", 720.0f, 0.055f, 0.42f);
+    railTelegraphImminentSound_ = audio_.CreateTone(
+        "rail-telegraph-imminent", 1040.0f, 0.080f, 0.50f);
+    railTelegraphFiredSound_ = audio_.CreateTone(
+        "rail-telegraph-fired", 440.0f, 0.100f, 0.58f);
     editor::EditorFramePacingSettings framePacingSettings{};
     framePacingSettings.enabled =
         ReadEnvironmentUInt("GE3_EDITOR_FRAME_PACING", 1) != 0;
@@ -1565,6 +1573,11 @@ void AppRunLoop::LoadRailShooterCourse() {
 }
 
 void AppRunLoop::ApplyRailShooterCourse() {
+    // Applying/reloading authoring data invalidates the immutable preview
+    // snapshot. Stop first so the next preview starts from the new source.
+    coursePreviewSimulationSystem_.Stop();
+    coursePreviewActorRuntimeBridge_.Reset();
+    railShooterGameplayWaveBridge_.Unbind();
     if (!railShooterCourse_.IsValid()) {
         railShooterCourse_.BuildFallbackCanyon(runtimeState_.terrain.settings.corridorRadius);
     }
@@ -1572,6 +1585,57 @@ void AppRunLoop::ApplyRailShooterCourse() {
     railShooterCourseRuntime_.Bind(&railShooterCourse_);
     railShooterCourseRuntime_.Reset(runtimeState_.terrain.previewDistance);
     railShooterSpawnRuntime_.Reset();
+
+    const uint64_t sourceHash = ComputeCourseAssetSourceHash(railShooterCourse_);
+    const std::string runtimeProgramPath =
+        editor::CourseRuntimeCookPipeline::DefaultOutputPath(railShooterCoursePath_);
+    CourseRuntimeProgramAsset loadedProgram{};
+#if defined(NDEBUG)
+    constexpr CourseRuntimeBuildConfiguration runtimeConfiguration =
+        CourseRuntimeBuildConfiguration::Release;
+#else
+    constexpr CourseRuntimeBuildConfiguration runtimeConfiguration =
+        CourseRuntimeBuildConfiguration::Debug;
+#endif
+    const bool loadedCurrentProgram =
+        loadedProgram.LoadFromFile(runtimeProgramPath, nullptr) &&
+        loadedProgram.IsSourceCurrent(sourceHash) &&
+        loadedProgram.buildConfiguration == runtimeConfiguration;
+    if (loadedCurrentProgram) {
+        railShooterRuntimeProgram_ = std::move(loadedProgram);
+        OutputDebugStringA(
+            ("[CourseRuntime] Loaded current cooked ProgramAsset: " +
+             runtimeProgramPath + "\n").c_str());
+    } else {
+        editor::CourseRuntimeCookOptions cookOptions{};
+        cookOptions.configuration = runtimeConfiguration;
+        cookOptions.allowDebugFallbackAssets = true;
+        const editor::CourseRuntimeCookResult cook =
+            railShooterRuntimeCookPipeline_.Cook(railShooterCourse_, cookOptions);
+        if (cook.succeeded) {
+            railShooterRuntimeProgram_ = cook.program;
+            OutputDebugStringA(
+                ("[CourseRuntime] In-memory cook: " + cook.message + "\n").c_str());
+        } else {
+            railShooterRuntimeProgram_ = {};
+            OutputDebugStringA(
+                ("[CourseRuntime] Cook failed; authored Wave runtime disabled: " +
+                 cook.message + "\n").c_str());
+        }
+    }
+    if (railShooterRuntimeProgram_.sourceFingerprint != 0) {
+        std::string gameplayWaveError;
+        if (!railShooterGameplayWaveBridge_.Bind(
+                &railShooterRuntimeProgram_,
+                &railShooterSpawnRuntime_,
+                railShooterCourseRuntime_.Distance(),
+                &gameplayWaveError)) {
+            OutputDebugStringA(
+                ("[CourseGameplayWaves] " + gameplayWaveError + "\n").c_str());
+        }
+    }
+    railEnemyAttackTelegraphSystem_.Reset();
+    StopRailEnemyAttackFeedback();
     railShooterCollisionSystem_.Reset();
     if (railShooterCollisionSystem_.WeaponDefinitions().Directory().empty()) {
         std::string weaponError;
@@ -1616,6 +1680,43 @@ void AppRunLoop::ApplyRailShooterCourse() {
     courseObjectHistoryInitialized_ = false;
     runtimeState_.terrain.courseObjectUndoDepth = 0;
     runtimeState_.terrain.courseObjectRedoDepth = 0;
+    std::string railEditorError;
+    if (!courseRailEditorController_.Bind(
+            editor::CourseRailEditorControllerBinding{
+                &railShooterCourse_,
+                &railPath_,
+                nullptr,
+                nullptr,
+                railShooterCoursePath_,
+                true},
+            &railEditorError)) {
+        OutputDebugStringA(
+            ("[CourseRailEditor] " + railEditorError + "\n").c_str());
+    }
+    std::string enemyEditorError;
+    if (!courseEnemyEditorController_.Bind(
+            editor::CourseEnemyEditorControllerBinding{
+                &railShooterCourse_,
+                nullptr,
+                nullptr,
+                railShooterCoursePath_,
+                true},
+            &enemyEditorError)) {
+        OutputDebugStringA(
+            ("[CourseEnemyEditor] " + enemyEditorError + "\n").c_str());
+    }
+    std::string waveEditorError;
+    if (!courseWaveEditorController_.Bind(
+            editor::CourseWaveEditorControllerBinding{
+                &railShooterCourse_,
+                nullptr,
+                nullptr,
+                railShooterCoursePath_,
+                true},
+            &waveEditorError)) {
+        OutputDebugStringA(
+            ("[CourseWaveEditor] " + waveEditorError + "\n").c_str());
+    }
 }
 
 bool AppRunLoop::SaveRailShooterCourse(std::string* errorMessage) {
@@ -1649,6 +1750,32 @@ bool AppRunLoop::SaveRailShooterCourse(std::string* errorMessage) {
     serializedFile.close();
     std::filesystem::remove(serializationPath, filesystemError);
 
+#if defined(NDEBUG)
+    constexpr CourseRuntimeBuildConfiguration saveRuntimeConfiguration =
+        CourseRuntimeBuildConfiguration::Release;
+#else
+    constexpr CourseRuntimeBuildConfiguration saveRuntimeConfiguration =
+        CourseRuntimeBuildConfiguration::Debug;
+#endif
+    editor::CourseRuntimeCookOptions cookOptions{};
+    cookOptions.configuration = saveRuntimeConfiguration;
+    cookOptions.allowDebugFallbackAssets = true;
+    const editor::CourseRuntimeCookResult cooked =
+        railShooterRuntimeCookPipeline_.Cook(railShooterCourse_, cookOptions);
+    std::string runtimeBytesString;
+    if (!serializedRead || !cooked.succeeded ||
+        !cooked.program.SaveToString(&runtimeBytesString, &error)) {
+        if (error.empty()) error = cooked.message;
+        railShooterCourseLoadStatus_ = "Save/cook failed. " + error;
+        OutputDebugStringA(("[Course] " + railShooterCourseLoadStatus_ + "\n").c_str());
+        if (errorMessage != nullptr) *errorMessage = error;
+        return false;
+    }
+    std::vector<uint8_t> runtimeBytes(
+        runtimeBytesString.begin(), runtimeBytesString.end());
+    const std::string runtimeProgramPath =
+        editor::CourseRuntimeCookPipeline::DefaultOutputPath(railShooterCoursePath_);
+
     editor::EditorFileTransaction transaction(std::filesystem::current_path(), transactionId);
     if (!serializedRead ||
         !transaction.StageWrite(
@@ -1656,6 +1783,14 @@ bool AppRunLoop::SaveRailShooterCourse(std::string* errorMessage) {
             std::move(serializedBytes),
             [](const std::filesystem::path& stagedPath, std::string* validationError) {
                 CourseAsset candidate{};
+                return candidate.LoadFromFile(stagedPath.generic_string(), validationError);
+            },
+            &error) ||
+        !transaction.StageWrite(
+            runtimeProgramPath,
+            std::move(runtimeBytes),
+            [](const std::filesystem::path& stagedPath, std::string* validationError) {
+                CourseRuntimeProgramAsset candidate{};
                 return candidate.LoadFromFile(stagedPath.generic_string(), validationError);
             },
             &error) ||
@@ -1669,7 +1804,8 @@ bool AppRunLoop::SaveRailShooterCourse(std::string* errorMessage) {
     }
 
     railShooterCourseLoadStatus_ =
-        "Saved course \"" + railShooterCourse_.name + "\" to " + railShooterCoursePath_;
+        "Saved and cooked course \"" + railShooterCourse_.name + "\" to " +
+        railShooterCoursePath_;
     OutputDebugStringA(("[Course] " + railShooterCourseLoadStatus_ + "\n").c_str());
     ApplyRailShooterCourse();
     return true;
@@ -1684,6 +1820,9 @@ void AppRunLoop::TeleportRailShooterCourse(float distance) {
     railShooterCourseRuntime_.Reset(clampedDistance);
     railShooterDistance_ = railShooterCourseRuntime_.Distance();
     railShooterSpawnRuntime_.Reset();
+    railShooterGameplayWaveBridge_.Reset(clampedDistance);
+    railEnemyAttackTelegraphSystem_.Reset();
+    StopRailEnemyAttackFeedback();
     railShooterCollisionSystem_.Reset();
     railShooterCheckpointSystem_.NotifyTeleport(&railShooterCourse_, railShooterDistance_);
     railShooterCombatFeelSystem_.Reset();
@@ -2832,6 +2971,104 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         addQuad(0.0f, 0.0f, static_cast<float>(hudWidth), static_cast<float>(hudHeight), uvWhite, Vector4{0.72f, 0.95f, 1.0f, releaseFlash});
     }
 
+    // Enemy attack warnings are rendered below lock markers and the reticle so
+    // combat targeting always remains readable when several threats overlap.
+    const EnemyAttackTelegraphFrame& telegraphFrame =
+        railEnemyAttackTelegraphSystem_.Frame();
+    for (const EnemyAttackTelegraphCue& cue : telegraphFrame.cues) {
+        if (!validPoint(cue.screenPosition)) {
+            continue;
+        }
+        const float cuePulse = (std::clamp)(cue.pulse, 0.0f, 1.0f);
+        const float urgency = (std::clamp)(cue.urgency, 0.0f, 1.0f);
+        const float severity = (std::clamp)(cue.severity, 0.0f, 1.0f);
+        const bool fired = cue.phase == EnemyAttackTelegraphPhase::Fired;
+        const bool imminent = cue.phase == EnemyAttackTelegraphPhase::Imminent;
+        const bool warming = cue.phase == EnemyAttackTelegraphPhase::Warming;
+        const Vector4 warningColor = fired
+            ? Vector4{1.0f, 0.94f, 0.76f, opacity}
+            : (imminent
+                ? Vector4{1.0f, 0.22f, 0.10f, opacity * (0.78f + cuePulse * 0.22f)}
+                : (warming
+                    ? Vector4{1.0f, 0.78f, 0.22f, opacity * 0.72f}
+                    : Vector4{1.0f, 0.47f, 0.14f, opacity * 0.82f}));
+        const Vector4 warningGlow{
+            warningColor.x,
+            warningColor.y,
+            warningColor.z,
+            warningColor.w * (0.16f + urgency * 0.18f)};
+        const float radius =
+            (18.0f + severity * 10.0f + urgency * 5.0f + cuePulse * 2.0f) *
+            hudScale;
+
+        addCentered(
+            cue.screenPosition,
+            radius * (fired ? 3.6f : 2.8f),
+            uvGlow,
+            warningGlow);
+        if (cue.onScreen) {
+            addTickedRing(
+                cue.screenPosition,
+                radius,
+                (std::clamp)(cue.projectileCount, 1, 8),
+                (imminent || fired ? 2.2f : 1.5f) * hudScale,
+                warningColor);
+            addBracket(
+                cue.screenPosition,
+                radius + 5.0f * hudScale,
+                (5.0f + severity * 5.0f) * hudScale,
+                1.7f * hudScale,
+                Vector4{
+                    warningColor.x,
+                    warningColor.y,
+                    warningColor.z,
+                    warningColor.w * 0.78f});
+            if (imminent || fired) {
+                addCross(
+                    cue.screenPosition,
+                    radius * (0.28f + cuePulse * 0.08f),
+                    1.6f * hudScale,
+                    warningColor);
+            }
+        } else {
+            const Vector2 direction = cue.directionFromCenter;
+            const Vector2 tangent{-direction.y, direction.x};
+            const Vector2 tip{
+                cue.screenPosition.x + direction.x * 13.0f * hudScale,
+                cue.screenPosition.y + direction.y * 13.0f * hudScale};
+            const Vector2 base{
+                cue.screenPosition.x - direction.x * 9.0f * hudScale,
+                cue.screenPosition.y - direction.y * 9.0f * hudScale};
+            const Vector2 left{
+                base.x + tangent.x * 10.0f * hudScale,
+                base.y + tangent.y * 10.0f * hudScale};
+            const Vector2 right{
+                base.x - tangent.x * 10.0f * hudScale,
+                base.y - tangent.y * 10.0f * hudScale};
+            addLine(tip, left, 2.5f * hudScale, warningColor);
+            addLine(tip, right, 2.5f * hudScale, warningColor);
+            addLine(left, right, 1.3f * hudScale, warningColor);
+            addCircleLine(
+                cue.screenPosition,
+                (10.0f + cuePulse * 3.0f) * hudScale,
+                1.3f * hudScale,
+                warningColor,
+                20);
+        }
+        if (!fired) {
+            const int tenths = static_cast<int>(std::ceil(
+                (std::max)(0.0f, cue.timeToFire) * 10.0f));
+            const Vector2 numberPosition{
+                cue.screenPosition.x,
+                cue.screenPosition.y + radius + 12.0f * hudScale};
+            addNumber(
+                (std::min)(99, tenths),
+                numberPosition,
+                0.72f * hudScale,
+                warningColor);
+        }
+    }
+
     for (const RailNormalShotLine& shot : railNormalShotLines_) {
         const float t = shot.lifetime > 0.0f
             ? (std::clamp)(shot.age / shot.lifetime, 0.0f, 1.0f)
@@ -3427,6 +3664,14 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
     const RailCameraDirectorFrame& cameraFrame = railShooterCameraDirector_.LastFrame();
     CourseEnemyFireSafetySettings& fireSafetySettings = railShooterSpawnRuntime_.MutableFireSafetySettings();
     const CourseEnemyFireSafetyStats& fireSafetyStats = railShooterSpawnRuntime_.LastFireSafetyStats();
+    EnemyAttackTelegraphSettings& telegraphSettings =
+        railEnemyAttackTelegraphSettings_;
+    const EnemyAttackTelegraphFrame& telegraphFrame =
+        railEnemyAttackTelegraphSystem_.Frame();
+    EnemyAttackTelegraphFeedbackSettings& telegraphFeedbackSettings =
+        railEnemyAttackTelegraphFeedbackSettings_;
+    const EnemyAttackTelegraphFeedbackFrame& telegraphFeedbackFrame =
+        railEnemyAttackTelegraphFeedbackBridge_.Frame();
     const IAppSceneState* currentScene = sceneStateManager_.CurrentState();
     const char* currentSceneName = currentScene != nullptr ? currentScene->Name() : "-";
     ImGui::Text(
@@ -3899,6 +4144,81 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
                 enemy.fireTimer);
         }
         ImGui::TextUnformatted("This uses the previous camera frame so enemy shots never occur during hard camera transitions.");
+    }
+
+    if (ImGui::CollapsingHeader("Enemy Attack Telegraph", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Telegraph Enabled", &telegraphSettings.enabled);
+        ImGui::Checkbox("Telegraph World Visibility", &telegraphSettings.requireWorldVisibility);
+        ImGui::Checkbox("Suppress Occluded Telegraphs", &telegraphSettings.suppressOccluded);
+        ImGui::DragFloat("Telegraph Lead Seconds", &telegraphSettings.leadSeconds, 0.01f, 0.10f, 3.0f, "%.2f");
+        ImGui::DragFloat("Telegraph Imminent Seconds", &telegraphSettings.imminentSeconds, 0.01f, 0.03f, 1.0f, "%.2f");
+        ImGui::DragFloat("Telegraph Fired Flash", &telegraphSettings.firedFlashSeconds, 0.01f, 0.03f, 0.8f, "%.2f");
+        ImGui::DragFloat("Telegraph Safe Area", &telegraphSettings.safeAreaPixels, 1.0f, 12.0f, 240.0f, "%.0f px");
+        int maximumVisibleCues = static_cast<int>(telegraphSettings.maximumVisibleCues);
+        if (ImGui::DragInt("Telegraph Visible Cue Limit", &maximumVisibleCues, 1.0f, 1, 24)) {
+            telegraphSettings.maximumVisibleCues = static_cast<uint32_t>(
+                (std::clamp)(maximumVisibleCues, 1, 24));
+        }
+        telegraphSettings.leadSeconds = (std::max)(0.10f, telegraphSettings.leadSeconds);
+        telegraphSettings.imminentSeconds = (std::clamp)(
+            telegraphSettings.imminentSeconds, 0.03f, telegraphSettings.leadSeconds);
+        telegraphSettings.firedFlashSeconds = (std::max)(0.03f, telegraphSettings.firedFlashSeconds);
+        ImGui::Text(
+            "Cues=%u on=%u off=%u occluded=%u suppressed=%u LOS=%u budgetMiss=%u priority=%.2f revision=%llu",
+            telegraphFrame.stats.visibleCues,
+            telegraphFrame.stats.onScreenCues,
+            telegraphFrame.stats.offscreenCues,
+            telegraphFrame.stats.occludedCues,
+            telegraphFrame.stats.prioritySuppressed,
+            telegraphFrame.stats.visibilityQueries,
+            telegraphFrame.stats.visibilityBudgetExhausted,
+            telegraphFrame.highestPriority,
+            static_cast<unsigned long long>(telegraphFrame.revision));
+        for (const EnemyAttackTelegraphEvent& event : telegraphFrame.events) {
+            ImGui::BulletText(
+                "event=%s actor=%u sequence=%llu severity=%.2f offscreen=%s",
+                ToEnemyAttackTelegraphEventKindString(event.kind),
+                event.actorId,
+                static_cast<unsigned long long>(event.fireSequence),
+                event.severity,
+                event.offscreen ? "true" : "false");
+        }
+        ImGui::SeparatorText("Feedback Bridge");
+        ImGui::Checkbox("Telegraph Feedback Enabled", &telegraphFeedbackSettings.enabled);
+        ImGui::Checkbox("Telegraph Warning Audio", &telegraphFeedbackSettings.audioEnabled);
+        ImGui::Checkbox("Telegraph Warning Haptics", &telegraphFeedbackSettings.hapticsEnabled);
+        ImGui::DragFloat("Telegraph Master Volume", &telegraphFeedbackSettings.masterVolume, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Telegraph Stereo Pan", &telegraphFeedbackSettings.stereoPanStrength, 0.01f, 0.0f, 1.0f, "%.2f");
+        ImGui::DragFloat("Offscreen Warning Boost", &telegraphFeedbackSettings.offscreenVolumeBoost, 0.01f, 0.0f, 0.5f, "%.2f");
+        telegraphFeedbackSettings.masterVolume = (std::clamp)(
+            telegraphFeedbackSettings.masterVolume, 0.0f, 1.0f);
+        telegraphFeedbackSettings.stereoPanStrength = (std::clamp)(
+            telegraphFeedbackSettings.stereoPanStrength, 0.0f, 1.0f);
+        telegraphFeedbackSettings.offscreenVolumeBoost = (std::clamp)(
+            telegraphFeedbackSettings.offscreenVolumeBoost, 0.0f, 0.5f);
+        ImGui::Text(
+            "Feedback events=%u audio=%u haptic=%u cooldown=%u budget=%u inactive=%u motors=%.2f/%.2f revision=%llu",
+            telegraphFeedbackFrame.stats.inputEvents,
+            telegraphFeedbackFrame.stats.audioCommands,
+            telegraphFeedbackFrame.stats.hapticEvents,
+            telegraphFeedbackFrame.stats.suppressedCooldown,
+            telegraphFeedbackFrame.stats.suppressedBudget,
+            telegraphFeedbackFrame.stats.suppressedInactive,
+            telegraphFeedbackFrame.haptics.lowFrequencyMotor,
+            telegraphFeedbackFrame.haptics.highFrequencyMotor,
+            static_cast<unsigned long long>(telegraphFeedbackFrame.revision));
+        for (const EnemyAttackTelegraphAudioCommand& command :
+             telegraphFeedbackFrame.audioCommands) {
+            ImGui::BulletText(
+                "audio=%s actor=%u volume=%.2f pan=%.2f pitch=%.2f priority=%.2f",
+                ToEnemyAttackTelegraphEventKindString(command.kind),
+                command.actorId,
+                command.volume,
+                command.pan,
+                command.pitch,
+                command.priority);
+        }
+        ImGui::TextUnformatted("HUD, positional warning audio, and XInput haptics consume the same ordered event frame.");
     }
 
     if (ImGui::CollapsingHeader("Aimable Zone / Visibility Overlay P1-B-6", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -4760,6 +5080,7 @@ void AppRunLoop::LogRailShooterPerfSpike() {
 }
 
 void AppRunLoop::Shutdown() {
+    StopRailEnemyAttackFeedback();
     frameCoordinator_.FlushGpu();
     sceneStateManager_.Shutdown(*this);
     handParticleAttachment_.Stop(vfxEngine_.Runtime());
@@ -4826,6 +5147,7 @@ void AppRunLoop::UpdateWeaponAttachment() {
 }
 
 void AppRunLoop::EnterVfxPreviewScene() {
+    StopRailEnemyAttackFeedback();
     railShooterInitialized_ = false;
     runtimeState_.terrain.enabled = false;
     runtimeState_.terrain.autoAdvancePreview = false;
@@ -4836,6 +5158,7 @@ void AppRunLoop::EnterVfxPreviewScene() {
 }
 
 void AppRunLoop::EnterMultiMaterialShowcaseScene() {
+    StopRailEnemyAttackFeedback();
     railShooterInitialized_ = false;
     runtimeState_.terrain.enabled = false;
     runtimeState_.terrain.autoAdvancePreview = false;
@@ -4907,6 +5230,8 @@ void AppRunLoop::EnterRailShooterScene() {
     railShooterDistance_ = railShooterCourseRuntime_.Distance();
     railShooterFrameIndex_ = 0;
     railShooterInitialized_ = true;
+    railEnemyAttackTelegraphSystem_.Reset();
+    StopRailEnemyAttackFeedback();
     railShooterLockOnSystem_.Reset();
     railShooterSpeedDirector_.Reset(
         railPath_.Length() > 0.0f ? railPath_.Evaluate(railShooterDistance_).speed : 0.0f);
@@ -4983,8 +5308,16 @@ void AppRunLoop::UpdateRailShooterFrame() {
 
     constexpr float kFixedGameplayDeltaTime = 0.016f;
     const bool editorRuntimeAdvance = imguiLayer_.ShouldAdvanceEditorRuntimeFrame();
+    const bool coursePreviewOwnsRail = coursePreviewSimulationSystem_.IsActive();
+    const bool coursePreviewAdvancing =
+        coursePreviewOwnsRail && coursePreviewSimulationSystem_.IsPlaying() &&
+        editorRuntimeAdvance && !runtimeState_.terrain.freezeCourseRuntime;
+    if (coursePreviewAdvancing) {
+        coursePreviewSimulationSystem_.Tick(kFixedGameplayDeltaTime);
+    }
     const bool coursePreviewFrozen =
-        runtimeState_.terrain.freezeCourseRuntime || !editorRuntimeAdvance;
+        runtimeState_.terrain.freezeCourseRuntime || !editorRuntimeAdvance ||
+        coursePreviewOwnsRail;
     const float gameplayDeltaTime = coursePreviewFrozen ? 0.0f : kFixedGameplayDeltaTime;
     railWeaponHotReloadPollTimer_ += kFixedGameplayDeltaTime;
     if (railWeaponHotReloadPollTimer_ >= 0.25f &&
@@ -5027,6 +5360,21 @@ void AppRunLoop::UpdateRailShooterFrame() {
     if (railPath_.Length() <= 0.0f) {
         ApplyRailShooterCourse();
     }
+    if (coursePreviewSimulationSystem_.IsActive()) {
+        railShooterCourseRuntime_.Reset(
+            coursePreviewSimulationSystem_.Frame().distance);
+        railShooterDistance_ = railShooterCourseRuntime_.Distance();
+    }
+    std::string previewActorError;
+    if (!coursePreviewActorRuntimeBridge_.Synchronize(
+            coursePreviewSimulationSystem_,
+            coursePreviewAdvancing ? kFixedGameplayDeltaTime : 0.0f,
+            railShooterDistance_,
+            &previewActorError) &&
+        !previewActorError.empty()) {
+        OutputDebugStringA(
+            ("[CoursePreviewActors] " + previewActorError + "\n").c_str());
+    }
 
     RailSpeedDirectorFrameInput speedInput{};
     speedInput.course = &railShooterCourse_;
@@ -5041,10 +5389,40 @@ void AppRunLoop::UpdateRailShooterFrame() {
             railShooterCourseRuntime_.Advance(kFixedGameplayDeltaTime, railPath_, speedFrame.smoothedSpeed);
     }
     railShooterDistance_ = railShooterCourseRuntime_.Distance();
+    if (!coursePreviewOwnsRail && railShooterGameplayWaveBridge_.IsBound()) {
+        CourseGameplayWaveFrameInput waveInput{};
+        waveInput.deltaTime = gameplayDeltaTime;
+        waveInput.playerDistance = railShooterDistance_;
+        waveInput.signaledEventIds.reserve(triggeredEvents.size());
+        for (const CourseEventMarker& event : triggeredEvents) {
+            if (!event.id.empty()) waveInput.signaledEventIds.push_back(event.id);
+        }
+        railShooterGameplayWaveBridge_.Update(waveInput);
+        for (const CourseGameplayWaveEvent& event :
+             railShooterGameplayWaveBridge_.Events()) {
+            OutputDebugStringA(
+                ("[CourseGameplayWaves] " + std::string(ToString(event.type)) +
+                 " " + event.subjectGuid + ": " + event.message + "\n").c_str());
+        }
+    }
     EncounterDirectorFrameInput encounterInput{};
     encounterInput.deltaTime = gameplayDeltaTime;
     encounterInput.currentDistance = railShooterDistance_;
     encounterInput.triggeredEvents = triggeredEvents;
+    if (railShooterGameplayWaveBridge_.IsBound() &&
+        !railShooterRuntimeProgram_.waves.empty()) {
+        // Schema-v7 WaveDefinitions are authoritative. Keep non-Wave legacy
+        // events, but never dispatch an EnemyWaveAsset on top of the cooked
+        // ProgramActor set for the same course frame.
+        encounterInput.triggeredEvents.erase(
+            std::remove_if(
+                encounterInput.triggeredEvents.begin(),
+                encounterInput.triggeredEvents.end(),
+                [](const CourseEventMarker& event) {
+                    return event.type == "enemy_wave";
+                }),
+            encounterInput.triggeredEvents.end());
+    }
     encounterInput.spawnRuntime = &railShooterSpawnRuntime_;
     const EncounterDirectorFrameOutput encounterOutput =
         railShooterEncounterDirector_.Update(std::move(encounterInput));
@@ -5131,8 +5509,13 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraInput.railPath = &railPath_;
     cameraInput.section = railShooterCourseRuntime_.CurrentSection();
     cameraInput.distance = railShooterDistance_;
-    cameraInput.deltaTime = gameplayDeltaTime;
-    cameraInput.railSpeed = coursePreviewFrozen ? 0.0f : speedFrame.smoothedSpeed;
+    cameraInput.deltaTime = coursePreviewAdvancing
+        ? kFixedGameplayDeltaTime : gameplayDeltaTime;
+    cameraInput.railSpeed = coursePreviewSimulationSystem_.IsActive()
+        ? coursePreviewAdvancing
+            ? coursePreviewSimulationSystem_.Frame().currentSpeed
+            : 0.0f
+        : coursePreviewFrozen ? 0.0f : speedFrame.smoothedSpeed;
     cameraInput.lockHeld = railShooterLockOnSystem_.Reticle().lockHeld;
     cameraInput.lockPressed = railShooterLockOnSystem_.Reticle().lockPressed;
     cameraInput.lockReleased = railShooterLockOnSystem_.Reticle().lockReleased;
@@ -5140,7 +5523,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraInput.lockTokenCount = static_cast<int>(railShooterLockOnSystem_.Tokens().size());
     cameraInput.maxLockCount = railShooterLockOnSystem_.Settings().maxLocks;
     cameraInput.reticleVelocity = railShooterLockOnSystem_.Reticle().velocity;
-    cameraInput.spawnRuntime = &railShooterSpawnRuntime_;
+    cameraInput.spawnRuntime = coursePreviewActorRuntimeBridge_.Active()
+        ? &coursePreviewActorRuntimeBridge_.Runtime()
+        : &railShooterSpawnRuntime_;
     cameraInput.lockTokens = &railShooterLockOnSystem_.Tokens();
     cameraInput.viewportWidth = metrics.width;
     cameraInput.viewportHeight = metrics.height;
@@ -5169,6 +5554,22 @@ void AppRunLoop::UpdateRailShooterFrame() {
         Multiply(gameplayViewMatrix, frameState_.projMatrix);
     frameState_.cameraWorldPosition = cameraPosition;
     frameState_.deltaTime = gameplayDeltaTime;
+
+    EnemyAttackTelegraphFrameInput telegraphInput{};
+    telegraphInput.spawnRuntime = &railShooterSpawnRuntime_;
+    telegraphInput.railPath = &railPath_;
+    telegraphInput.viewProjection = &frameState_.viewProjectionMatrix;
+    telegraphInput.course = &railShooterCourse_;
+    telegraphInput.terrainSettings = &runtimeState_.terrain.settings;
+    telegraphInput.terrainEdits = &railShooterCourse_.terrainEditLayer;
+    telegraphInput.terrainPreview = &runtimeState_.terrain.previewEditLayer;
+    telegraphInput.cameraPosition = cameraPosition;
+    telegraphInput.playerDistance = railShooterDistance_;
+    telegraphInput.deltaTime = gameplayDeltaTime;
+    telegraphInput.viewportWidth = metrics.width;
+    telegraphInput.viewportHeight = metrics.height;
+    telegraphInput.settings = railEnemyAttackTelegraphSettings_;
+    railEnemyAttackTelegraphSystem_.Update(telegraphInput);
 
     bool gimmickInteractionAllowed =
         gameplayDeltaTime > 0.0f &&
@@ -5294,6 +5695,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
         baseWeapon.range,
         railShooterLockOnSystem_.Settings().maxForwardDistance);
     const AppGamepadFrame railAimGamepad = railAimGamepad_.Poll();
+    DispatchRailEnemyAttackFeedback(
+        railAimGamepad,
+        gameplayDeltaTime,
+        gameplayDeltaTime > 0.0f &&
+            (hwnd_ == nullptr || GetForegroundWindow() == hwnd_));
     lockOnInput.gamepadConnected = railAimGamepad.connected;
     lockOnInput.gamepadAim = {
         railAimGamepad.rightStick.x,
@@ -6228,7 +6634,11 @@ void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
             railPath_,
             terrain);
     }
-    railShooterSpawnRuntime_.AppendDebugDraw(scene_.debugDraw, railPath_);
+    const CourseSpawnRuntime& previewPresentationRuntime =
+        coursePreviewActorRuntimeBridge_.Active()
+        ? coursePreviewActorRuntimeBridge_.Runtime()
+        : railShooterSpawnRuntime_;
+    previewPresentationRuntime.AppendDebugDraw(scene_.debugDraw, railPath_);
     railShooterCollisionSystem_.AppendDebugDraw(scene_.debugDraw, railPath_);
     railShooterLockOnSystem_.AppendDebugDraw(scene_.debugDraw);
     const bool debugDrawEnabled =
@@ -6512,6 +6922,71 @@ bool AppRunLoop::WasKeyPressed(int virtualKey) {
     const bool pressed = down && !previousKeyDown_[static_cast<size_t>(virtualKey)];
     previousKeyDown_[static_cast<size_t>(virtualKey)] = down;
     return pressed;
+}
+
+void AppRunLoop::DispatchRailEnemyAttackFeedback(
+    const AppGamepadFrame& gamepad,
+    float deltaTime,
+    bool gameplayActive) {
+    EnemyAttackTelegraphFeedbackInput input{};
+    input.telegraphFrame = &railEnemyAttackTelegraphSystem_.Frame();
+    input.deltaTime = deltaTime;
+    input.gameplayActive = gameplayActive;
+    input.settings = railEnemyAttackTelegraphFeedbackSettings_;
+    railEnemyAttackTelegraphFeedbackBridge_.Update(input);
+
+    const EnemyAttackTelegraphFeedbackFrame& feedback =
+        railEnemyAttackTelegraphFeedbackBridge_.Frame();
+    for (const EnemyAttackTelegraphAudioCommand& command :
+         feedback.audioCommands) {
+        audio::SoundHandle sound{};
+        switch (command.kind) {
+        case EnemyAttackTelegraphEventKind::Acquired:
+            sound = railTelegraphAcquiredSound_;
+            break;
+        case EnemyAttackTelegraphEventKind::Imminent:
+            sound = railTelegraphImminentSound_;
+            break;
+        case EnemyAttackTelegraphEventKind::Fired:
+            sound = railTelegraphFiredSound_;
+            break;
+        }
+        if (sound.IsValid()) {
+            audio_.PlaySpatial(
+                sound,
+                command.volume,
+                command.pan,
+                command.pitch);
+        }
+    }
+
+    if (!gamepad.connected || gamepad.controllerIndex == UINT32_MAX) {
+        if (railTelegraphVibrationController_ != UINT32_MAX) {
+            (void)AppGamepadInput::SetVibration(
+                railTelegraphVibrationController_, 0.0f, 0.0f);
+            railTelegraphVibrationController_ = UINT32_MAX;
+        }
+        return;
+    }
+    if (railTelegraphVibrationController_ != UINT32_MAX &&
+        railTelegraphVibrationController_ != gamepad.controllerIndex) {
+        (void)AppGamepadInput::SetVibration(
+            railTelegraphVibrationController_, 0.0f, 0.0f);
+    }
+    railTelegraphVibrationController_ = gamepad.controllerIndex;
+    (void)AppGamepadInput::SetVibration(
+        railTelegraphVibrationController_,
+        feedback.haptics.lowFrequencyMotor,
+        feedback.haptics.highFrequencyMotor);
+}
+
+void AppRunLoop::StopRailEnemyAttackFeedback() {
+    if (railTelegraphVibrationController_ != UINT32_MAX) {
+        (void)AppGamepadInput::SetVibration(
+            railTelegraphVibrationController_, 0.0f, 0.0f);
+        railTelegraphVibrationController_ = UINT32_MAX;
+    }
+    railEnemyAttackTelegraphFeedbackBridge_.Reset();
 }
 
 void AppRunLoop::ProcessPostProcessShowcaseShortcuts() {
@@ -8615,8 +9090,12 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         windowHeight_);
     gRailPerfFrame.sceneTransformsMs = ElapsedMs(sceneTransformsStart, RailPerfClock::now());
     const auto syncCourseMeshStart = RailPerfClock::now();
+    const CourseSpawnRuntime& coursePresentationRuntime =
+        coursePreviewActorRuntimeBridge_.Active()
+        ? coursePreviewActorRuntimeBridge_.Runtime()
+        : railShooterSpawnRuntime_;
     scene_.SyncCourseMeshRenderQueue(
-        railShooterSpawnRuntime_,
+        coursePresentationRuntime,
         &railShooterCourse_,
         railShooterCourseRuntime_.Distance(),
         railPath_,
@@ -8665,7 +9144,9 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             spriteTextureHandle,
             engineContext_.GetDepthSrvGpuHandle(),
             &railShooterCourse_,
-            &railShooterSpawnRuntime_,
+            coursePreviewActorRuntimeBridge_.Active()
+                ? &coursePreviewActorRuntimeBridge_.Runtime()
+                : &railShooterSpawnRuntime_,
             &railShooterCollisionSystem_,
             &railShooterCheckpointSystem_,
             &railShooterCombatFeelSystem_,
@@ -8703,7 +9184,27 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             },
             [&](editor::EditorViewportOverlayService& overlay) {
                 BuildRailVisibilityDebugOverlay(overlay);
+                auto sink = overlay.Sink(courseRailViewportRenderer_.Layer());
+                courseRailViewportRenderer_.Build(overlay.FrameContext(), sink);
+                auto enemySink = overlay.Sink(courseEnemyViewportRenderer_.Layer());
+                courseEnemyViewportRenderer_.Build(overlay.FrameContext(), enemySink);
+                auto waveSink = overlay.Sink(courseWaveViewportRenderer_.Layer());
+                courseWaveViewportRenderer_.Build(overlay.FrameContext(), waveSink);
+                auto previewSink = overlay.Sink(coursePreviewSimulationSystem_.Layer());
+                coursePreviewSimulationSystem_.Build(overlay.FrameContext(), previewSink);
             },
+            &courseRailEditorController_,
+            &courseRailPickingService_,
+            &courseRailViewportRenderer_,
+            &courseEnemyEditorController_,
+            &courseEnemyPickingService_,
+            &courseEnemyViewportRenderer_,
+            &courseWaveEditorController_,
+            &courseWavePickingService_,
+            &courseWaveViewportRenderer_,
+            &coursePreviewSimulationSystem_,
+            &coursePreviewActorRuntimeBridge_,
+            &railShooterGameplayWaveBridge_,
             &courseObjectTransactions_,
             [&](std::string* errorMessage) {
                 return BeginEditorGameplaySpawns(errorMessage);
@@ -8735,7 +9236,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         static_cast<uint32_t>(runtimeState_.viewport.Width),
         static_cast<uint32_t>(runtimeState_.viewport.Height));
     scene_.SyncCourseMeshRenderQueue(
-        railShooterSpawnRuntime_,
+        coursePresentationRuntime,
         &railShooterCourse_,
         railShooterCourseRuntime_.Distance(),
         railPath_,

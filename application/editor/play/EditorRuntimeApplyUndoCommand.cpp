@@ -21,6 +21,7 @@ std::size_t CourseBytes(const CourseAsset& course) noexcept {
     std::size_t bytes = sizeof(course) + StringBytes(course.name) +
         VectorBytes(course.railPoints) + VectorBytes(course.cameraKeys) +
         VectorBytes(course.sections) + VectorBytes(course.events) +
+        VectorBytes(course.enemyPlacements) +
         VectorBytes(course.terrainPlacements) + VectorBytes(course.rockClusters) +
         VectorBytes(course.lightingPresets) + VectorBytes(course.cameraShotPresets) +
         VectorBytes(course.cameraBlendAssets) + VectorBytes(course.cinematicCameraShots) +
@@ -30,6 +31,11 @@ std::size_t CourseBytes(const CourseAsset& course) noexcept {
     }
     for (const CourseEventMarker& value : course.events) {
         bytes += StringBytes(value.type) + StringBytes(value.id) + StringBytes(value.payload);
+    }
+    for (const CourseEnemyPlacement& value : course.enemyPlacements) {
+        bytes += StringBytes(value.editorGuid) + StringBytes(value.actorAssetId) +
+            StringBytes(value.bulletPatternOverrideId) + StringBytes(value.waveGroupGuid) +
+            StringBytes(value.railAnchor.segmentGuid);
     }
     for (const CourseTerrainPlacement& value : course.terrainPlacements) {
         bytes += StringBytes(value.id) + StringBytes(value.meshId);

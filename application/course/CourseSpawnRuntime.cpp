@@ -72,6 +72,7 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
 
     for (CourseEnemyActor& enemy : enemies_) {
         ++fireSafetyStats_.activeEnemies;
+        enemy.bulletsEmittedThisFrame = 0;
         enemy.age += dt;
         enemy.desc.distanceOffset += enemy.desc.forwardSpeed * dt;
         enemy.fireTimer -= dt;
@@ -81,7 +82,12 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
                 enemy.fireTimer = (std::max)(enemy.fireTimer, fireSafetySettings_.blockedRetryDelay);
                 break;
             }
-            fireSafetyStats_.bulletsEmitted += EmitEnemyBullets(enemy);
+            const uint32_t emitted = EmitEnemyBullets(enemy);
+            fireSafetyStats_.bulletsEmitted += emitted;
+            enemy.bulletsEmittedThisFrame += emitted;
+            if (emitted > 0) {
+                ++enemy.fireSequence;
+            }
             enemy.fireTimer += (std::max)(0.08f, enemy.desc.fireInterval);
         }
     }
@@ -109,6 +115,12 @@ bool CourseSpawnRuntime::CanEnemyFire(
     CourseEnemyActor& enemy,
     const CourseEnemyFireSafetyFrameInput& safetyInput,
     float dt) {
+    if (enemy.desc.suppressFire) {
+        enemy.fireSafetyAllowed = false;
+        enemy.fireSafetyReason = "actor fire suppressed";
+        fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;
+        return false;
+    }
     if (!fireSafetySettings_.enabled) {
         enemy.fireSafetyAllowed = true;
         enemy.fireSafetyReason = "safety disabled";

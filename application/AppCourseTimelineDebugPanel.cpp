@@ -5,6 +5,7 @@
 #include "course/CourseAsset.h"
 #include "course/CourseCollisionSystem.h"
 #include "course/CourseSpawnRuntime.h"
+#include "course/CourseGameplayWaveRuntimeBridge.h"
 #include "course/CourseValidation.h"
 #include "course/PlayerCombatFeelSystem.h"
 #include "course/SectionCheckpointSystem.h"
@@ -14,6 +15,8 @@
 #include "editor/EditorModalConfirmService.h"
 #include "editor/EditorTransactionStack.h"
 #include "editor/EditorViewportAuthoringInputGuard.h"
+#include "editor/course/CoursePreviewSimulationSystem.h"
+#include "editor/course/CoursePreviewActorRuntimeBridge.h"
 #include "editor/sequencer/EditorSequencer.h"
 
 #include "../../externals/imgui/imgui.h"
@@ -534,6 +537,227 @@ bool DrawProviderSequencer(
     }
     ImGui::SetCursorScreenPos(ImVec2(canvasPos.x, canvasPos.y + canvasHeight + 6.0f));
     return changed;
+}
+
+void DrawCoursePreviewSimulation(const CourseTimelineDebugPanelInput& input) {
+    editor::CoursePreviewSimulationSystem* simulation = input.previewSimulation;
+    if (simulation == nullptr) {
+        ImGui::TextUnformatted("Course preview simulation service is unavailable.");
+        return;
+    }
+
+    const auto syncViewportDistance = [&]() {
+        if (input.onTeleportToDistance) {
+            input.onTeleportToDistance(simulation->Frame().distance);
+        }
+    };
+    std::string error;
+    if (!simulation->IsActive()) {
+        if (ImGui::Button("Play Preview From Current Distance")) {
+            if (simulation->BeginPreview(*input.course, input.currentDistance, &error)) {
+                syncViewportDistance();
+            }
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled(
+            "Creates an immutable snapshot; Course authoring remains untouched.");
+        if (!error.empty()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.30f, 0.25f, 1.0f), "%s", error.c_str());
+        }
+        if (simulation->Frame().playback == editor::CoursePreviewPlaybackState::Error) {
+            ImGui::TextColored(
+                ImVec4(1.0f, 0.30f, 0.25f, 1.0f),
+                "%s",
+                simulation->Frame().message.c_str());
+        }
+        return;
+    }
+
+    if (simulation->IsPlaying()) {
+        if (ImGui::Button("Pause")) simulation->Pause();
+    } else {
+        if (ImGui::Button("Play")) simulation->Play();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Stop")) simulation->Stop();
+    ImGui::SameLine();
+    if (ImGui::Button("Restart")) {
+        if (simulation->Restart(true, &error)) syncViewportDistance();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Step 1 Frame")) {
+        if (simulation->Step(&error)) syncViewportDistance();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Defeat Active Enemies")) {
+        simulation->DefeatActiveEnemies();
+    }
+
+    const editor::CoursePreviewSimulationFrame& frame = simulation->Frame();
+    ImGui::Text(
+        "%s | %.2fm / %.2fm | %.2fs | %.2fm/s | revision %llu",
+        editor::ToString(frame.playback),
+        frame.distance,
+        frame.railLength,
+        frame.elapsedSeconds,
+        frame.currentSpeed,
+        static_cast<unsigned long long>(frame.simulationRevision));
+    ImGui::Text(
+        "Waves: active %u  prewarm/blocked %u  complete %u | Enemies active %u",
+        frame.activeWaves,
+        frame.prewarmingWaves,
+        frame.completedWaves,
+        frame.activeEnemies);
+    if (!frame.message.empty()) ImGui::TextDisabled("%s", frame.message.c_str());
+    if (!error.empty()) {
+        ImGui::TextColored(ImVec4(1.0f, 0.30f, 0.25f, 1.0f), "%s", error.c_str());
+    }
+
+    float previewDistance = frame.distance;
+    ImGui::SetNextItemWidth(-1.0f);
+    if (ImGui::SliderFloat(
+            "##CoursePreviewDistance",
+            &previewDistance,
+            0.0f,
+            (std::max)(1.0f, frame.railLength),
+            "Preview %.1fm")) {
+        if (simulation->Seek(previewDistance, &error)) syncViewportDistance();
+    }
+
+    editor::CoursePreviewSimulationSettings& settings = simulation->MutableSettings();
+    ImGui::SetNextItemWidth(120.0f);
+    ImGui::DragFloat(
+        "Travel Speed (0 = Rail)", &settings.travelSpeed, 0.5f, 0.0f, 500.0f, "%.1fm/s");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(90.0f);
+    ImGui::DragFloat("Playback", &settings.playbackRate, 0.05f, 0.05f, 8.0f, "%.2fx");
+    ImGui::SameLine();
+    ImGui::Checkbox("Loop", &settings.loop);
+    ImGui::SameLine();
+    ImGui::Checkbox("Viewport Overlay", &settings.showViewportOverlay);
+    ImGui::Checkbox("Automatically Resolve Enemies", &settings.automaticallyDefeatEnemies);
+    if (settings.automaticallyDefeatEnemies) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(110.0f);
+        ImGui::DragFloat(
+            "Resolve Delay",
+            &settings.automaticEnemyDefeatSeconds,
+            0.1f,
+            0.0f,
+            60.0f,
+            "%.1fs");
+    }
+
+    if (input.previewActors != nullptr) {
+        editor::CoursePreviewActorRuntimeBridge& actors = *input.previewActors;
+        editor::CoursePreviewActorRuntimeSettings& actorSettings =
+            actors.MutableSettings();
+        const editor::CoursePreviewActorRuntimeStats& actorStats = actors.Stats();
+        ImGui::SeparatorText("Compiled Actor Runtime");
+        ImGui::Text(
+            "Program: %s | Waves %u | Actors %u | Materialized %u "
+            "(prewarm %u / active %u) | fallback %u",
+            actorStats.programValid ? "Valid" : "Waiting",
+            actorStats.compiledWaves,
+            actorStats.compiledActors,
+            actorStats.runtimeActors,
+            actorStats.prewarmedActors,
+            actorStats.activeActors,
+            actorStats.fallbackActors);
+        ImGui::Checkbox("Show Prewarmed Actor Models", &actorSettings.showPrewarmedActors);
+        ImGui::SameLine();
+        ImGui::Checkbox("Simulate Movement", &actorSettings.simulateMovement);
+        ImGui::SameLine();
+        ImGui::Checkbox("Simulate Enemy Fire", &actorSettings.simulateEnemyFire);
+        if (actorSettings.simulateMovement) {
+            ImGui::SameLine();
+            ImGui::Checkbox(
+                "Keep Authored Transform",
+                &actorSettings.preserveActorsAtAuthoredTransform);
+        }
+        ImGui::SetNextItemWidth(100.0f);
+        ImGui::DragFloat(
+            "Prewarm Opacity",
+            &actorSettings.prewarmOpacity,
+            0.02f,
+            0.05f,
+            1.0f,
+            "%.2f");
+        if (!actorStats.message.empty()) {
+            ImGui::TextDisabled("%s", actorStats.message.c_str());
+        }
+        const editor::CourseWaveRuntimeCompileResult& compile = actors.CompileResult();
+        if (!compile.diagnostics.empty() && ImGui::TreeNode("Compiler Diagnostics")) {
+            for (const editor::CourseWaveRuntimeDiagnostic& diagnostic :
+                    compile.diagnostics) {
+                const ImVec4 color =
+                    diagnostic.severity ==
+                        editor::CourseWaveRuntimeDiagnosticSeverity::Error
+                    ? ImVec4(1.0f, 0.30f, 0.25f, 1.0f)
+                    : diagnostic.severity ==
+                        editor::CourseWaveRuntimeDiagnosticSeverity::Warning
+                    ? ImVec4(1.0f, 0.72f, 0.22f, 1.0f)
+                    : ImVec4(0.48f, 0.78f, 1.0f, 1.0f);
+                ImGui::TextColored(
+                    color,
+                    "[%s] %s: %s",
+                    editor::ToString(diagnostic.severity),
+                    diagnostic.code.c_str(),
+                    diagnostic.message.c_str());
+            }
+            ImGui::TreePop();
+        }
+    }
+
+    static std::array<char, 128> scriptedEvent{};
+    ImGui::SetNextItemWidth(240.0f);
+    ImGui::InputText("Scripted Event", scriptedEvent.data(), scriptedEvent.size());
+    ImGui::SameLine();
+    ImGui::BeginDisabled(scriptedEvent[0] == '\0');
+    if (ImGui::Button("Signal Event")) {
+        simulation->SignalEvent(scriptedEvent.data());
+    }
+    ImGui::EndDisabled();
+
+    if (ImGui::BeginTable(
+            "CoursePreviewWaves",
+            6,
+            ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY,
+            ImVec2(0.0f, 150.0f))) {
+        ImGui::TableSetupColumn("Wave");
+        ImGui::TableSetupColumn("Phase");
+        ImGui::TableSetupColumn("Trigger");
+        ImGui::TableSetupColumn("Active Time");
+        ImGui::TableSetupColumn("Members");
+        ImGui::TableSetupColumn("Defeated");
+        ImGui::TableHeadersRow();
+        for (const editor::CoursePreviewWaveState& wave : simulation->Waves()) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(wave.displayName.c_str());
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(editor::ToString(wave.phase));
+            ImGui::TableNextColumn(); ImGui::Text("%.1f", wave.triggerDistance);
+            ImGui::TableNextColumn(); ImGui::Text("%.2f", wave.activeSeconds);
+            ImGui::TableNextColumn(); ImGui::Text("%u", wave.memberCount);
+            ImGui::TableNextColumn(); ImGui::Text("%u", wave.defeatedMemberCount);
+        }
+        ImGui::EndTable();
+    }
+
+    if (ImGui::TreeNode("Preview Event Log")) {
+        if (ImGui::BeginChild("CoursePreviewEvents", ImVec2(0.0f, 120.0f), true)) {
+            const auto& events = simulation->Events();
+            for (auto event = events.rbegin(); event != events.rend(); ++event) {
+                ImGui::Text(
+                    "[%6.1fm %5.2fs] %s: %s",
+                    event->distance,
+                    event->elapsedSeconds,
+                    editor::ToString(event->type),
+                    event->message.c_str());
+            }
+        }
+        ImGui::EndChild();
+        ImGui::TreePop();
+    }
 }
 
 ImVec4 SeverityColor(CourseValidationSeverity severity) {
@@ -2394,6 +2618,21 @@ void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input) {
             runtime.ActiveVfxCueCount());
     }
 
+    if (input.gameplayWaves != nullptr && input.gameplayWaves->IsBound()) {
+        const CourseGameplayWaveRuntimeStats& stats = input.gameplayWaves->Stats();
+        ImGui::Text(
+            "Cooked Waves: pending %u  prewarm %u  active %u  completed %u",
+            stats.pendingWaves,
+            stats.prewarmingWaves,
+            stats.activeWaves,
+            stats.completedWaves);
+        ImGui::Text(
+            "Cooked Actors: active %u  defeated %u  fingerprint %016llx",
+            stats.activeActors,
+            stats.defeatedActors,
+            static_cast<unsigned long long>(stats.programFingerprint));
+    }
+
     if (input.collisionSystem != nullptr) {
         const CourseCollisionSystem& collision = *input.collisionSystem;
         const CourseCollisionFrameStats& stats = collision.LastFrameStats();
@@ -2438,6 +2677,10 @@ void DrawCourseTimelineDebugPanel(const CourseTimelineDebugPanelInput& input) {
     }
 
     if (ImGui::BeginTabBar("CourseTimelineTabs")) {
+        if (ImGui::BeginTabItem("Preview")) {
+            DrawCoursePreviewSimulation(input);
+            ImGui::EndTabItem();
+        }
         if (ImGui::BeginTabItem("Authoring")) {
             DrawCourseAuthoring(
                 input,

@@ -320,8 +320,14 @@ void CourseMeshRenderQueue::AddEnemyInstances(
         WriteItemTransform(
             *item,
             model.rootLocal,
-            {scale, scale, scale},
-            RotationFromRailTangent(sample.tangent),
+            {
+                scale * (std::max)(0.01f, enemy.desc.localScale.x),
+                scale * (std::max)(0.01f, enemy.desc.localScale.y),
+                scale * (std::max)(0.01f, enemy.desc.localScale.z),
+            },
+            Add(
+                RotationFromRailTangent(sample.tangent),
+                enemy.desc.localRotation),
             center,
             viewProjection);
     }

@@ -9,6 +9,19 @@
 
 struct ImDrawList;
 class AppPipelines;
+namespace editor {
+class CourseEnemyEditorController;
+class CourseEnemyPickingService;
+class CourseEnemyViewportRenderer;
+class CourseWaveEditorController;
+class CourseWavePickingService;
+class CourseWaveViewportRenderer;
+class CoursePreviewSimulationSystem;
+class CoursePreviewActorRuntimeBridge;
+class CourseRailEditorController;
+class CourseRailPickingService;
+class CourseRailViewportRenderer;
+}
 
 #include "AppTerrainPbrMaterialsPanel.h"
 #include "graphics/RenderGraph.h"
@@ -52,6 +65,25 @@ class AppPipelines;
 #include "editor/EditorFontSettingsPanel.h"
 #include "editor/sequencer/EditorSequencer.h"
 #include "editor/course/CourseSequencerTrackProvider.h"
+#include "editor/course/CourseEnemyDetailsPanel.h"
+#include "editor/course/CourseWaveDetailsPanel.h"
+#include "editor/course/CourseOverviewMapController.h"
+#include "editor/course/CourseOverviewMapPanel.h"
+#include "editor/course/CourseOverviewMapDragDropBridge.h"
+#include "editor/course/CourseOverviewMapEditTool.h"
+#include "editor/course/CourseOverviewMapMultiViewCoordinator.h"
+#include "editor/course/CourseOverviewMapSnapService.h"
+#include "editor/course/CourseRailConstraintValidationSystem.h"
+#include "editor/course/CourseRailCurveFitService.h"
+#include "editor/course/CourseRailElevationProfileEditor.h"
+#include "editor/course/CourseRailSketchTool.h"
+#include "editor/course/CourseRailStrokePreviewRenderer.h"
+#include "editor/course/CourseSequencerWaveTrackBridge.h"
+#include "editor/course/CourseEnemyTransformGizmo.h"
+#include "editor/course/CourseEnemyViewportEditTool.h"
+#include "editor/course/CourseRailViewportEditTool.h"
+#include "editor/course/CourseRailTransformGizmo.h"
+#include "editor/course/CourseRailDetailsPanel.h"
 #include "editor/prefab/EditorPrefabService.h"
 #include "editor/material/EditorMaterialGraph.h"
 #include "editor/material/EditorMaterialGraphPanel.h"
@@ -143,6 +175,7 @@ struct LoadedEffectAsset;
 class PostProcessStack;
 class CourseCollisionSystem;
 class CourseSpawnRuntime;
+class CourseGameplayWaveRuntimeBridge;
 class PlayerCombatFeelSystem;
 class SectionCheckpointSystem;
 struct CourseAsset;
@@ -194,6 +227,18 @@ struct AppImGuiFrameContext {
     std::function<void()> onAddParticle;
     std::function<void()> onDrawRailLockOnDebugPanel;
     std::function<void(editor::EditorViewportOverlayService&)> onBuildEditorViewportOverlay;
+    editor::CourseRailEditorController* courseRailEditorController = nullptr;
+    const editor::CourseRailPickingService* courseRailPickingService = nullptr;
+    editor::CourseRailViewportRenderer* courseRailViewportRenderer = nullptr;
+    editor::CourseEnemyEditorController* courseEnemyEditorController = nullptr;
+    const editor::CourseEnemyPickingService* courseEnemyPickingService = nullptr;
+    editor::CourseEnemyViewportRenderer* courseEnemyViewportRenderer = nullptr;
+    editor::CourseWaveEditorController* courseWaveEditorController = nullptr;
+    const editor::CourseWavePickingService* courseWavePickingService = nullptr;
+    editor::CourseWaveViewportRenderer* courseWaveViewportRenderer = nullptr;
+    editor::CoursePreviewSimulationSystem* coursePreviewSimulationSystem = nullptr;
+    editor::CoursePreviewActorRuntimeBridge* coursePreviewActorRuntimeBridge = nullptr;
+    const CourseGameplayWaveRuntimeBridge* courseGameplayWaveRuntimeBridge = nullptr;
     editor::EditorTransactionStack* editorTransactions = nullptr;
     std::function<bool(std::string*)> onBeginGameplaySpawns;
     std::function<void()> onStopGameplaySpawns;
@@ -473,7 +518,25 @@ private:
     editor::EditorRuntimeInspector editorRuntimeInspector_{};
     editor::EditorRuntimeAuthoringApplyService editorRuntimeAuthoringApply_{};
     editor::EditorSelection editorSelection_{};
+    editor::CourseEnemyViewportEditTool courseEnemyViewportEditTool_{};
+    editor::CourseEnemyTransformGizmo courseEnemyTransformGizmo_{};
+    editor::CourseEnemyDetailsPanel courseEnemyDetailsPanel_{};
+    editor::CourseWaveDetailsPanel courseWaveDetailsPanel_{};
+    editor::CourseOverviewMapController courseOverviewMapController_{};
+    editor::CourseOverviewMapSnapService courseOverviewMapSnapService_{};
+    editor::CourseOverviewMapDragDropBridge courseOverviewMapDragDropBridge_{};
+    editor::CourseOverviewMapEditTool courseOverviewMapEditTool_{};
+    editor::CourseOverviewMapMultiViewCoordinator courseOverviewMapMultiViewCoordinator_{};
+    editor::CourseRailElevationProfileEditor courseRailElevationProfileEditor_{};
+    editor::CourseRailConstraintValidationSystem courseRailConstraintValidationSystem_{};
+    editor::CourseRailCurveFitService courseRailCurveFitService_{};
+    editor::CourseRailSketchTool courseRailSketchTool_{};
+    editor::CourseRailStrokePreviewRenderer courseRailStrokePreviewRenderer_{};
+    editor::CourseRailViewportEditTool courseRailViewportEditTool_{};
+    editor::CourseRailTransformGizmo courseRailTransformGizmo_{};
+    editor::CourseRailDetailsPanel courseRailDetailsPanel_{};
     editor::CourseSequencerTrackProvider editorCourseSequencerProvider_{};
+    editor::CourseSequencerWaveTrackBridge editorCourseWaveSequencerBridge_{};
     editor::EditorSequencerService editorSequencer_{};
     editor::EditorToolRegistry editorToolRegistry_{};
     editor::EditorTransactionStack editorTransactions_{};

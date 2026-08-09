@@ -360,6 +360,15 @@ void SortCourseData(CourseAsset& asset) {
             return a.distance < b.distance;
         });
     std::sort(
+        asset.waveDefinitions.begin(),
+        asset.waveDefinitions.end(),
+        [](const CourseWaveDefinition& a, const CourseWaveDefinition& b) {
+            if (a.triggerRailDistance != b.triggerRailDistance) {
+                return a.triggerRailDistance < b.triggerRailDistance;
+            }
+            return a.editorGuid < b.editorGuid;
+        });
+    std::sort(
         asset.terrainPlacements.begin(),
         asset.terrainPlacements.end(),
         [](const CourseTerrainPlacement& a, const CourseTerrainPlacement& b) {
@@ -525,6 +534,53 @@ CourseRockClusterAnchor ParseCourseRockClusterAnchor(const std::string& text) {
     return CourseRockClusterAnchor::LeftWall;
 }
 
+const char* ToCourseWaveCompletionConditionString(
+    CourseWaveCompletionCondition condition) {
+    switch (condition) {
+    case CourseWaveCompletionCondition::AllEnemiesDefeated:
+        return "all_enemies_defeated";
+    case CourseWaveCompletionCondition::Timeout:
+        return "timeout";
+    case CourseWaveCompletionCondition::ReachRailDistance:
+        return "reach_rail_distance";
+    case CourseWaveCompletionCondition::ScriptedEvent:
+        return "scripted_event";
+    }
+    return "all_enemies_defeated";
+}
+
+const char* ToCourseWaveExecutionPolicyString(CourseWaveExecutionPolicy policy) {
+    switch (policy) {
+    case CourseWaveExecutionPolicy::Parallel: return "parallel";
+    case CourseWaveExecutionPolicy::Sequential: return "sequential";
+    case CourseWaveExecutionPolicy::Exclusive: return "exclusive";
+    }
+    return "parallel";
+}
+
+CourseWaveCompletionCondition ParseCourseWaveCompletionCondition(
+    const std::string& text) {
+    if (text == "timeout" || text == "timed") {
+        return CourseWaveCompletionCondition::Timeout;
+    }
+    if (text == "reach_rail_distance" || text == "reach_distance") {
+        return CourseWaveCompletionCondition::ReachRailDistance;
+    }
+    if (text == "scripted_event" || text == "event") {
+        return CourseWaveCompletionCondition::ScriptedEvent;
+    }
+    return CourseWaveCompletionCondition::AllEnemiesDefeated;
+}
+
+CourseWaveExecutionPolicy ParseCourseWaveExecutionPolicy(
+    const std::string& text) {
+    if (text == "sequential" || text == "sequence") {
+        return CourseWaveExecutionPolicy::Sequential;
+    }
+    if (text == "exclusive") return CourseWaveExecutionPolicy::Exclusive;
+    return CourseWaveExecutionPolicy::Parallel;
+}
+
 bool CourseAsset::LoadFromFile(const std::string& path, std::string* errorMessage) {
     std::ifstream file(path);
     if (!file.is_open()) {
@@ -582,7 +638,35 @@ bool CourseAsset::LoadFromString(const std::string& text, std::string* errorMess
             point.position.z = ParseFloatOr(parts, 3, 0.0f);
             point.corridorRadius = ParseFloatOr(parts, 4, 18.0f);
             point.speed = ParseFloatOr(parts, 5, 32.0f);
+            point.editorGuid = parts.size() >= 7 ? parts[6] : std::string{};
+            if (parts.size() >= 14) {
+                const int mode = static_cast<int>(ParseFloatOr(parts, 7, 0.0f));
+                point.tangentMode = mode == 1 ? RailPathTangentMode::Mirrored
+                    : mode == 2 ? RailPathTangentMode::Broken
+                    : RailPathTangentMode::Auto;
+                point.incomingTangent = {
+                    ParseFloatOr(parts, 8, 0.0f), ParseFloatOr(parts, 9, 0.0f),
+                    ParseFloatOr(parts, 10, 0.0f)};
+                point.outgoingTangent = {
+                    ParseFloatOr(parts, 11, 0.0f), ParseFloatOr(parts, 12, 0.0f),
+                    ParseFloatOr(parts, 13, 0.0f)};
+            }
             loaded.railPoints.push_back(point);
+        } else if (kind == "rail_anchor") {
+            if (parts.size() < 7) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid rail_anchor row at line " + std::to_string(lineNumber);
+                }
+                return false;
+            }
+            CourseRailAnchorBinding binding{};
+            binding.ownerGuid = parts[1];
+            binding.anchor.segmentGuid = parts[2];
+            binding.anchor.normalizedT = ParseFloatOr(parts, 3, 0.0f);
+            binding.anchor.lateralOffset = ParseFloatOr(parts, 4, 0.0f);
+            binding.anchor.verticalOffset = ParseFloatOr(parts, 5, 0.0f);
+            binding.anchor.forwardOffset = ParseFloatOr(parts, 6, 0.0f);
+            loaded.railAnchors.push_back(std::move(binding));
         } else if (kind == "camera") {
             if (parts.size() < 10) {
                 if (errorMessage != nullptr) {
@@ -633,6 +717,57 @@ bool CourseAsset::LoadFromString(const std::string& text, std::string* errorMess
             event.editorVisible = parts.size() < 7 || parts[6] != "0";
             event.editorLocked = parts.size() >= 8 && parts[7] == "1";
             loaded.events.push_back(event);
+        } else if (kind == "wave") {
+            if (parts.size() < 13) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid wave row at line " +
+                        std::to_string(lineNumber);
+                }
+                return false;
+            }
+            CourseWaveDefinition wave{};
+            wave.editorGuid = parts[1];
+            wave.displayName = parts[2];
+            wave.triggerRailDistance = ParseFloatOr(parts, 3, 0.0f);
+            wave.prewarmDistance = ParseFloatOr(parts, 4, 80.0f);
+            wave.timeoutSeconds = ParseFloatOr(parts, 5, 30.0f);
+            wave.completionCondition = ParseCourseWaveCompletionCondition(parts[6]);
+            wave.executionPolicy = ParseCourseWaveExecutionPolicy(parts[7]);
+            wave.nextWaveGuid = parts[8] == "-" ? std::string{} : parts[8];
+            wave.triggerEventId = parts[9] == "-" ? std::string{} : parts[9];
+            wave.enabled = parts[10] != "0";
+            wave.editorVisible = parts[11] != "0";
+            wave.editorLocked = parts[12] == "1";
+            loaded.waveDefinitions.push_back(std::move(wave));
+        } else if (kind == "enemy_placement") {
+            if (parts.size() < 20) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid enemy_placement row at line " +
+                        std::to_string(lineNumber);
+                }
+                return false;
+            }
+            CourseEnemyPlacement placement{};
+            placement.editorGuid = parts[1];
+            placement.actorAssetId = parts[2];
+            placement.bulletPatternOverrideId = parts[3] == "-" ? std::string{} : parts[3];
+            placement.waveGroupGuid = parts[4] == "-" ? std::string{} : parts[4];
+            placement.railAnchor.segmentGuid = parts[5];
+            placement.railAnchor.normalizedT = ParseFloatOr(parts, 6, 0.0f);
+            placement.railAnchor.lateralOffset = ParseFloatOr(parts, 7, 0.0f);
+            placement.railAnchor.verticalOffset = ParseFloatOr(parts, 8, 0.0f);
+            placement.railAnchor.forwardOffset = ParseFloatOr(parts, 9, 0.0f);
+            placement.localRotation.x = DegreesToRadians(ParseFloatOr(parts, 10, 0.0f));
+            placement.localRotation.y = DegreesToRadians(ParseFloatOr(parts, 11, 0.0f));
+            placement.localRotation.z = DegreesToRadians(ParseFloatOr(parts, 12, 0.0f));
+            placement.localScale.x = ParseFloatOr(parts, 13, 1.0f);
+            placement.localScale.y = ParseFloatOr(parts, 14, 1.0f);
+            placement.localScale.z = ParseFloatOr(parts, 15, 1.0f);
+            placement.activationLeadDistance = ParseFloatOr(parts, 16, 80.0f);
+            placement.enabled = parts[17] != "0";
+            placement.editorVisible = parts[18] != "0";
+            placement.editorLocked = parts[19] == "1";
+            loaded.enemyPlacements.push_back(std::move(placement));
         } else if (kind == "terrain") {
             if (parts.size() < 15) {
                 if (errorMessage != nullptr) {
@@ -929,18 +1064,32 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
             [](const CourseCameraKey& value) { return !value.editorGuid.empty(); }) &&
         std::all_of(saved.events.begin(), saved.events.end(),
             [](const CourseEventMarker& value) { return !value.editorGuid.empty(); }) &&
+        std::all_of(saved.enemyPlacements.begin(), saved.enemyPlacements.end(),
+            [](const CourseEnemyPlacement& value) { return !value.editorGuid.empty(); }) &&
         std::all_of(saved.terrainPlacements.begin(), saved.terrainPlacements.end(),
             [](const CourseTerrainPlacement& value) { return !value.editorGuid.empty(); }) &&
         std::all_of(saved.rockClusters.begin(), saved.rockClusters.end(),
             [](const CourseRockCluster& value) { return !value.editorGuid.empty(); });
+    const bool hasPersistentRailIdentity =
+        std::all_of(saved.railPoints.begin(), saved.railPoints.end(),
+            [](const RailPathControlPoint& value) { return !value.editorGuid.empty(); });
+    const bool hasPersistentWaveIdentity =
+        std::all_of(saved.waveDefinitions.begin(), saved.waveDefinitions.end(),
+            [](const CourseWaveDefinition& value) {
+                return !value.editorGuid.empty();
+            });
 
     std::ostringstream file;
 
     file << "# Rail shooter course DSL\n";
-    file << "# editor-schema:" << (hasPersistentEditorWorldIdentity ? 3 : 1) << "\n";
+    file << "# editor-schema:"
+         << (hasPersistentEditorWorldIdentity && hasPersistentRailIdentity &&
+                hasPersistentWaveIdentity ? 7
+             : (hasPersistentEditorWorldIdentity ? 3 : 1)) << "\n";
     file << "# row format:\n";
     file << "# course|name\n";
-    file << "# rail|x|y|z|corridorRadius|speed\n";
+    file << "# rail|x|y|z|corridorRadius|speed|editorGuid|tangentMode|inX|inY|inZ|outX|outY|outZ\n";
+    file << "# rail_anchor|ownerGuid|segmentGuid|normalizedT|lateralOffset|verticalOffset|forwardOffset\n";
     file << "# camera|distance|backDistance|verticalOffset|lateralOffset|lookAheadDistance|lookUpOffset|lookForwardOffset|fovDeg|rollDeg|editorGuid|editorVisible|editorLocked\n";
     file << "# section|start|end|name|category\n";
     file << "# terrain|distance|layer|id|meshId|lateralOffset|verticalOffset|forwardOffset|scaleX|scaleY|scaleZ|pitchDeg|yawDeg|rollDeg|collisionMode|renderPriority|cullBehind|cullAhead|editorGuid|editorVisible|editorLocked\n";
@@ -952,6 +1101,8 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
     file << "# camera_shot|start|end|id|mode|blendIn|blendOut|backOffset|upOffset|sideOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake|presetId|blendAssetId|weightScale\n";
     file << "# terrain_material|distance|id|blendDistance|baseR|baseG|baseB|brightness|noise|strata|breakup|specular|rim|backlight|floorShadow|detailNormal|microDetail|cavityAo|skyFill\n";
     file << "# cinematic_shot_set|start|end|id|label|heroLandmarksCsv|vistaLandmarksCsv|lightingId|cameraShotId|terrainMaterialId|fogMood|compositionNotes\n";
+    file << "# wave|editorGuid|displayName|triggerRailDistance|prewarmDistance|timeoutSeconds|completionCondition|executionPolicy|nextWaveGuid|triggerEventId|enabled|editorVisible|editorLocked\n";
+    file << "# enemy_placement|editorGuid|actorAssetId|bulletPatternOverrideId|waveGroupGuid|segmentGuid|normalizedT|lateralOffset|verticalOffset|forwardOffset|pitchDeg|yawDeg|rollDeg|scaleX|scaleY|scaleZ|activationLeadDistance|enabled|editorVisible|editorLocked\n";
     file << "# event|distance|type|id|payload|editorGuid|editorVisible|editorLocked\n\n";
 
     file << std::fixed << std::setprecision(3);
@@ -964,8 +1115,28 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
              << point.position.y << '|'
              << point.position.z << '|'
              << point.corridorRadius << '|'
-             << point.speed << "\n";
+             << point.speed << '|'
+             << point.editorGuid << '|'
+             << static_cast<int>(point.tangentMode) << '|'
+             << point.incomingTangent.x << '|'
+             << point.incomingTangent.y << '|'
+             << point.incomingTangent.z << '|'
+             << point.outgoingTangent.x << '|'
+             << point.outgoingTangent.y << '|'
+             << point.outgoingTangent.z << "\n";
     }
+
+    file << std::setprecision(6);
+    for (const CourseRailAnchorBinding& binding : saved.railAnchors) {
+        file << "rail_anchor|"
+             << binding.ownerGuid << '|'
+             << binding.anchor.segmentGuid << '|'
+             << binding.anchor.normalizedT << '|'
+             << binding.anchor.lateralOffset << '|'
+             << binding.anchor.verticalOffset << '|'
+             << binding.anchor.forwardOffset << "\n";
+    }
+    file << std::setprecision(3);
 
     file << "\n# Camera keys define the cinematic rail rig.\n";
     for (const CourseCameraKey& key : saved.cameraKeys) {
@@ -1174,6 +1345,51 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
              << (event.editorLocked ? 1 : 0) << "\n";
     }
 
+    file << "\n# First-class encounter waves referenced by persistent enemy placements.\n";
+    file << std::setprecision(6);
+    for (const CourseWaveDefinition& wave : saved.waveDefinitions) {
+        file << "wave|"
+             << wave.editorGuid << '|'
+             << wave.displayName << '|'
+             << wave.triggerRailDistance << '|'
+             << wave.prewarmDistance << '|'
+             << wave.timeoutSeconds << '|'
+             << ToCourseWaveCompletionConditionString(wave.completionCondition) << '|'
+             << ToCourseWaveExecutionPolicyString(wave.executionPolicy) << '|'
+             << (wave.nextWaveGuid.empty() ? std::string("-") : wave.nextWaveGuid) << '|'
+             << (wave.triggerEventId.empty() ? std::string("-") : wave.triggerEventId) << '|'
+             << (wave.enabled ? 1 : 0) << '|'
+             << (wave.editorVisible ? 1 : 0) << '|'
+             << (wave.editorLocked ? 1 : 0) << "\n";
+    }
+
+    file << "\n# Persistent enemy instances anchored to rail topology.\n";
+    file << std::setprecision(6);
+    for (const CourseEnemyPlacement& placement : saved.enemyPlacements) {
+        file << "enemy_placement|"
+             << placement.editorGuid << '|'
+             << placement.actorAssetId << '|'
+             << (placement.bulletPatternOverrideId.empty()
+                    ? std::string("-") : placement.bulletPatternOverrideId) << '|'
+             << (placement.waveGroupGuid.empty()
+                    ? std::string("-") : placement.waveGroupGuid) << '|'
+             << placement.railAnchor.segmentGuid << '|'
+             << placement.railAnchor.normalizedT << '|'
+             << placement.railAnchor.lateralOffset << '|'
+             << placement.railAnchor.verticalOffset << '|'
+             << placement.railAnchor.forwardOffset << '|'
+             << RadiansToDegrees(placement.localRotation.x) << '|'
+             << RadiansToDegrees(placement.localRotation.y) << '|'
+             << RadiansToDegrees(placement.localRotation.z) << '|'
+             << placement.localScale.x << '|'
+             << placement.localScale.y << '|'
+             << placement.localScale.z << '|'
+             << placement.activationLeadDistance << '|'
+             << (placement.enabled ? 1 : 0) << '|'
+             << (placement.editorVisible ? 1 : 0) << '|'
+             << (placement.editorLocked ? 1 : 0) << "\n";
+    }
+
     file << "\n# Non-destructive procedural Terrain sculpt and paint strokes.\n";
     file << std::setprecision(6);
     for (const TerrainBrushStamp& stamp : saved.terrainEditLayer.Stamps()) {
@@ -1202,9 +1418,12 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
 void CourseAsset::BuildFallbackCanyon(float corridorRadius) {
     name = "Fallback Canyon Course";
     railPoints.clear();
+    railAnchors.clear();
     cameraKeys.clear();
     sections.clear();
     events.clear();
+    waveDefinitions.clear();
+    enemyPlacements.clear();
     terrainPlacements.clear();
     rockClusters.clear();
     lightingPresets.clear();

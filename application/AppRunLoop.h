@@ -16,6 +16,7 @@
 #include "diagnostics/DebugDrawSystem.h"
 #include "AppFrameState.h"
 #include "AppFrameGraphBuilder.h"
+#include "AppAudio.h"
 #include "AppGamepadInput.h"
 #include "AppRuntimeConfig.h"
 #include "AppVfxRuntimeState.h"
@@ -27,6 +28,10 @@
 #include "course/CourseAsset.h"
 #include "course/CourseCollisionSystem.h"
 #include "course/CourseEventDispatcher.h"
+#include "course/CourseGameplayWaveRuntimeBridge.h"
+#include "course/CourseRuntimeProgramAsset.h"
+#include "course/EnemyAttackTelegraphSystem.h"
+#include "course/EnemyAttackTelegraphFeedbackBridge.h"
 #include "course/EncounterDirector.h"
 #include "course/PlayerCombatFeelSystem.h"
 #include "course/RailAimAssistPresetRegistry.h"
@@ -47,6 +52,18 @@
 #include "editor/EditorViewportCameraController.h"
 #include "editor/EditorPlaySessionState.h"
 #include "editor/EditorViewportAuthoringInputGuard.h"
+#include "editor/course/CourseEnemyEditorController.h"
+#include "editor/course/CourseEnemyPickingService.h"
+#include "editor/course/CourseEnemyViewportRenderer.h"
+#include "editor/course/CoursePreviewSimulationSystem.h"
+#include "editor/course/CoursePreviewActorRuntimeBridge.h"
+#include "editor/course/CourseRuntimeCookPipeline.h"
+#include "editor/course/CourseWaveEditorController.h"
+#include "editor/course/CourseWavePickingService.h"
+#include "editor/course/CourseWaveViewportRenderer.h"
+#include "editor/course/CourseRailEditorController.h"
+#include "editor/course/CourseRailPickingService.h"
+#include "editor/course/CourseRailViewportRenderer.h"
 #include "editor/scene/EditorGameplaySpawnRuntimeFactory.h"
 #include "editor/scene/EditorBuiltInRuntimeFactoryRegistration.h"
 #include "editor/scene/EditorGimmickRuntimeFactory.h"
@@ -83,6 +100,7 @@ public:
         AppFrameRenderer& frameRenderer,
         AppPipelines& appPipelines,
         AppRenderResources& renderResources,
+        AppAudio& audio,
         graphics::SwapChain& swapChain,
         core::CommandListPool& clPool,
         EngineContext& engineContext,
@@ -195,6 +213,11 @@ private:
     void EndRailGpuTiming(ID3D12GraphicsCommandList* commandList, uint32_t backBufferIndex);
     void CaptureRailGpuTimingCpuMetadata(uint32_t backBufferIndex);
     void ProcessPostProcessShowcaseShortcuts();
+    void DispatchRailEnemyAttackFeedback(
+        const AppGamepadFrame& gamepad,
+        float deltaTime,
+        bool gameplayActive);
+    void StopRailEnemyAttackFeedback();
     bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
@@ -213,6 +236,7 @@ private:
     AppFrameRenderer& frameRenderer_;
     AppPipelines& appPipelines_;
     AppRenderResources& renderResources_;
+    AppAudio& audio_;
     graphics::SwapChain& swapChain_;
     core::CommandListPool& clPool_;
     EngineContext& engineContext_;
@@ -243,6 +267,17 @@ private:
     RailCameraDirector railShooterCameraDirector_;
     RailSpeedDirector railShooterSpeedDirector_;
     CourseSpawnRuntime railShooterSpawnRuntime_;
+    CourseRuntimeProgramAsset railShooterRuntimeProgram_{};
+    editor::CourseRuntimeCookPipeline railShooterRuntimeCookPipeline_{};
+    CourseGameplayWaveRuntimeBridge railShooterGameplayWaveBridge_{};
+    EnemyAttackTelegraphSystem railEnemyAttackTelegraphSystem_;
+    EnemyAttackTelegraphSettings railEnemyAttackTelegraphSettings_{};
+    EnemyAttackTelegraphFeedbackBridge railEnemyAttackTelegraphFeedbackBridge_{};
+    EnemyAttackTelegraphFeedbackSettings railEnemyAttackTelegraphFeedbackSettings_{};
+    audio::SoundHandle railTelegraphAcquiredSound_{};
+    audio::SoundHandle railTelegraphImminentSound_{};
+    audio::SoundHandle railTelegraphFiredSound_{};
+    uint32_t railTelegraphVibrationController_ = UINT32_MAX;
     RailLockOnSystem railShooterLockOnSystem_;
     RailAimAssistPresetRegistry railAimAssistPresetRegistry_{};
     struct RailHudAtlasVertex {
@@ -284,6 +319,19 @@ private:
     std::string railShooterCoursePath_ = "Resources/courses/CanyonAssaultRoute01.course";
     std::string railShooterCourseLoadStatus_;
     RailPath railPath_;
+    editor::CourseEnemyEditorController courseEnemyEditorController_{};
+    editor::CourseEnemyPickingService courseEnemyPickingService_{};
+    editor::CourseEnemyViewportRenderer courseEnemyViewportRenderer_{
+        &courseEnemyEditorController_};
+    editor::CourseWaveEditorController courseWaveEditorController_{};
+    editor::CourseWavePickingService courseWavePickingService_{};
+    editor::CourseWaveViewportRenderer courseWaveViewportRenderer_{
+        &courseWaveEditorController_};
+    editor::CoursePreviewSimulationSystem coursePreviewSimulationSystem_{};
+    editor::CoursePreviewActorRuntimeBridge coursePreviewActorRuntimeBridge_{};
+    editor::CourseRailEditorController courseRailEditorController_{};
+    editor::CourseRailPickingService courseRailPickingService_{};
+    editor::CourseRailViewportRenderer courseRailViewportRenderer_{&courseRailEditorController_};
     TerrainChunkManager terrainChunkManager_;
     TerrainPresetStore terrainPresetStore_;
     ge3::graphics::RenderGraph renderGraph_;

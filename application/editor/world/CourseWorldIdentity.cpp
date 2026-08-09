@@ -2,6 +2,7 @@
 
 #include "EditorWorldObjectRecord.h"
 #include "../../course/CourseAsset.h"
+#include "../course/CourseEnemyAuthoringModel.h"
 
 #include <unordered_set>
 
@@ -69,6 +70,7 @@ std::size_t EnsureCourseWorldObjectGuids(
             nameSpace, "event", value.id + "|" + value.type + "|" + LegacyFloat(value.distance), index);
         ++assigned;
     }
+    assigned += CourseEnemyAuthoringModel::EnsureStableIdentity(course, nameSpace);
     return assigned;
 }
 
@@ -88,6 +90,10 @@ bool ValidateCourseWorldObjectGuids(
     }
     for (const CourseEventMarker& value : course.events) {
         valid = AcceptGuid(value.editorGuid, "Course Event", seen, diagnostics) && valid;
+    }
+    for (const CourseEnemyPlacement& value : course.enemyPlacements) {
+        valid = AcceptGuid(
+            value.editorGuid, "Course Enemy Placement", seen, diagnostics) && valid;
     }
     return valid;
 }

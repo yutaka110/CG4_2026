@@ -49,9 +49,20 @@ public:
 
     SoundHandle LoadSound(const std::string& path);
     SoundHandle LoadWave(const std::string& path);
+    SoundHandle CreateTone(
+        const std::string& id,
+        float frequencyHz,
+        float durationSeconds,
+        float amplitude = 0.5f);
     bool UnloadSound(SoundHandle handle);
 
     bool Play(SoundHandle handle, float volume = 1.0f, bool loop = false);
+    bool PlaySpatial(
+        SoundHandle handle,
+        float volume,
+        float pan,
+        float pitch = 1.0f,
+        bool loop = false);
     void Stop(SoundHandle handle);
     void StopAll();
 

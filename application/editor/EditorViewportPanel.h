@@ -27,7 +27,9 @@ bool EditorViewportOverlayUiContains(
     const EditorPanelRect& panelRect,
     float displayX,
     float displayY,
-    float controlHeight);
+    float controlHeight,
+    bool courseRailToolVisible = false,
+    bool courseRailToolActive = false);
 
 void DrawEditorViewportPanel(
     EditorContext& context,

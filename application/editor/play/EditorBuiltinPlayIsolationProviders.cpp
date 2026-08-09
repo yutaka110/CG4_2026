@@ -129,6 +129,19 @@ uint64_t EditorCourseAuthoringFingerprint(const CourseAsset& course) {
         EDITOR_HASH_FIELD(value, distance); EDITOR_HASH_FIELD(value, type);
         EDITOR_HASH_FIELD(value, id); EDITOR_HASH_FIELD(value, payload); return hash;
     });
+    hash = HashVector(hash, course.enemyPlacements, [](uint64_t hash, const CourseEnemyPlacement& value) {
+        EDITOR_HASH_FIELD(value, editorGuid); EDITOR_HASH_FIELD(value, actorAssetId);
+        EDITOR_HASH_FIELD(value, bulletPatternOverrideId); EDITOR_HASH_FIELD(value, waveGroupGuid);
+        hash = HashValue(hash, value.railAnchor.segmentGuid);
+        hash = HashValue(hash, value.railAnchor.normalizedT);
+        hash = HashValue(hash, value.railAnchor.lateralOffset);
+        hash = HashValue(hash, value.railAnchor.verticalOffset);
+        hash = HashValue(hash, value.railAnchor.forwardOffset);
+        EDITOR_HASH_FIELD(value, localRotation); EDITOR_HASH_FIELD(value, localScale);
+        EDITOR_HASH_FIELD(value, activationLeadDistance); EDITOR_HASH_FIELD(value, enabled);
+        EDITOR_HASH_FIELD(value, editorVisible); EDITOR_HASH_FIELD(value, editorLocked);
+        return hash;
+    });
     hash = HashVector(hash, course.terrainPlacements, [](uint64_t hash, const CourseTerrainPlacement& value) {
         EDITOR_HASH_FIELD(value, distance); EDITOR_HASH_FIELD(value, layer); EDITOR_HASH_FIELD(value, id);
         EDITOR_HASH_FIELD(value, meshId); EDITOR_HASH_FIELD(value, lateralOffset);

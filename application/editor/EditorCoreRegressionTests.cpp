@@ -66,6 +66,47 @@
 #include "ExistingFeatureProtection.h"
 #include "core/EditorExecutionContext.h"
 #include "course/CourseEditorExecutionService.h"
+#include "course/CourseEnemyAuthoringModel.h"
+#include "course/CourseEnemyDetailsPanel.h"
+#include "course/CourseEnemyEditorController.h"
+#include "course/CourseEnemyMutationService.h"
+#include "course/CourseEnemyPickingService.h"
+#include "course/CourseEnemyTransformGizmo.h"
+#include "course/CourseEnemyViewportEditTool.h"
+#include "course/CourseEnemyViewportRenderer.h"
+#include "course/CourseWaveAuthoringModel.h"
+#include "course/CourseWaveDetailsPanel.h"
+#include "course/CourseWaveEditorController.h"
+#include "course/CourseWaveMutationService.h"
+#include "course/CourseWavePickingService.h"
+#include "course/CourseWaveViewportRenderer.h"
+#include "course/CourseSequencerWaveTrackBridge.h"
+#include "course/CoursePreviewSimulationSystem.h"
+#include "course/CourseOverviewMapController.h"
+#include "course/CourseOverviewMapProjection.h"
+#include "course/CourseOverviewMapRenderer.h"
+#include "course/CourseOverviewMapVisibilityService.h"
+#include "course/CourseOverviewMapPickingService.h"
+#include "course/CourseOverviewMapSnapService.h"
+#include "course/CourseOverviewMapDragDropBridge.h"
+#include "course/CourseOverviewMapEditTool.h"
+#include "course/CourseOverviewMapMultiViewCoordinator.h"
+#include "course/CourseRailConstraintValidationSystem.h"
+#include "course/CourseRailCurveFitService.h"
+#include "course/CourseRailElevationProfileEditor.h"
+#include "course/CourseRailSketchTool.h"
+#include "course/CourseRailStrokePreviewRenderer.h"
+#include "course/CourseWaveRuntimeCompiler.h"
+#include "course/CoursePreviewActorRuntimeBridge.h"
+#include "course/CourseRuntimeCookPipeline.h"
+#include "course/CourseRailAuthoringModel.h"
+#include "course/CourseRailEditorController.h"
+#include "course/CourseRailMutationService.h"
+#include "course/CourseRailPickingService.h"
+#include "course/CourseRailViewportRenderer.h"
+#include "course/CourseRailViewportEditTool.h"
+#include "course/CourseRailTransformGizmo.h"
+#include "course/CourseRailDetailsPanel.h"
 #include "course/CoursePropertyUndoCommand.h"
 #include "course/CourseSequencerTrackProvider.h"
 #include "sequencer/EditorSequencer.h"
@@ -187,6 +228,10 @@
 #include "../course/CourseCollisionSystem.h"
 #include "../course/CourseMeshRenderQueue.h"
 #include "../course/CourseSpawnRuntime.h"
+#include "../course/CourseRuntimeProgramAsset.h"
+#include "../course/CourseGameplayWaveRuntimeBridge.h"
+#include "../course/EnemyAttackTelegraphFeedbackBridge.h"
+#include "../course/EnemyAttackTelegraphSystem.h"
 #include "../course/PlayerCombatFeelSystem.h"
 #include "../course/AimInputDeviceRouter.h"
 #include "../course/RailAimAssistPresetRegistry.h"
@@ -201,6 +246,7 @@
 #include "../course/WeaponFireSystem.h"
 #include "../terrain/TerrainChunkManager.h"
 #include "../terrain/TerrainVolumeField.h"
+#include "audio/AudioSystem.h"
 
 #include <array>
 #include <chrono>
@@ -7514,8 +7560,8 @@ void TestEditorWorldModel(RegressionRunner& runner) {
     EditorDocumentContent serialized{};
     runner.Expect(
         documentProvider.Serialize(courseDocument, &serialized, &error) &&
-            serialized.schemaVersion == 3,
-        "Course schema v3 should serialize persistent world GUIDs and Outliner state");
+            serialized.schemaVersion == 7,
+        "Course schema v7 should serialize persistent world, rail, enemy, and wave GUIDs");
     CourseAsset reloaded{};
     documentProvider.Bind(&reloaded);
     const bool reloadedSuccessfully =
@@ -7558,7 +7604,7 @@ void TestEditorWorldModel(RegressionRunner& runner) {
     runner.Expect(
         documentProvider.Migrate(
             legacyContent, &migrated, &migration, &error) &&
-            migration.migrated && migrated.schemaVersion == 3 &&
+            migration.migrated && migrated.schemaVersion == 7 &&
             documentProvider.Validate(migrated).Succeeded(),
         "Course schema v1 migration should assign GUIDs and Outliner state defaults");
 
@@ -7839,8 +7885,8 @@ void TestWorldOutlinerMutations(RegressionRunner& runner) {
     documentProvider.Bind(&course);
     EditorDocumentContent content{};
     runner.Expect(documentProvider.Serialize(document, &content, &error) &&
-            content.schemaVersion == 3,
-        "Outliner visibility and lock state should serialize as Course schema v3");
+            content.schemaVersion == 7,
+        "Outliner visibility and lock state should serialize as Course schema v7");
     CourseAsset loaded{};
     documentProvider.Bind(&loaded);
     runner.Expect(documentProvider.Deserialize(document, content, &error) &&
@@ -17645,6 +17691,207 @@ void TestRailAimAssistPresetAndInputRouting(RegressionRunner& runner) {
     std::filesystem::remove_all(root, filesystemError);
 }
 
+void TestEnemyAttackTelegraphSystem(RegressionRunner& runner) {
+    constexpr uint32_t kWidth = 1000;
+    constexpr uint32_t kHeight = 600;
+    constexpr float kPi = 3.14159265358979323846f;
+    RailPath rail;
+    rail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 200.0f}, 18.0f, 32.0f}});
+    const Matrix4x4 viewProjection = MakePerspectiveFovMatrix(
+        kPi / 3.0f,
+        static_cast<float>(kWidth) / static_cast<float>(kHeight),
+        0.1f,
+        1000.0f);
+
+    CourseSpawnRuntime runtime;
+    runtime.MutableFireSafetySettings().enabled = false;
+    CourseEnemyActorDesc attack{};
+    attack.spawnDistance = 50.0f;
+    attack.radius = 2.0f;
+    attack.lifetime = 8.0f;
+    attack.hitPoints = 80.0f;
+    attack.firstShotDelay = 0.80f;
+    attack.fireInterval = 1.0f;
+    attack.firePattern = CourseEnemyFirePattern::Spread;
+    attack.bulletCount = 3;
+    attack.bulletDamage = 16.0f;
+    runtime.SpawnEnemyActor(attack);
+
+    EnemyAttackTelegraphFrameInput input{};
+    input.spawnRuntime = &runtime;
+    input.railPath = &rail;
+    input.viewProjection = &viewProjection;
+    input.cameraPosition = {0.0f, 0.0f, 0.0f};
+    input.playerDistance = 0.0f;
+    input.deltaTime = 0.10f;
+    input.viewportWidth = kWidth;
+    input.viewportHeight = kHeight;
+    input.settings.requireWorldVisibility = false;
+
+    auto hasEvent = [](const EnemyAttackTelegraphFrame& frame,
+                       EnemyAttackTelegraphEventKind kind) {
+        return std::any_of(
+            frame.events.begin(),
+            frame.events.end(),
+            [kind](const EnemyAttackTelegraphEvent& event) {
+                return event.kind == kind;
+            });
+    };
+
+    EnemyAttackTelegraphSystem telegraph;
+    runtime.Update(0.10f);
+    telegraph.Update(input);
+    runner.Expect(
+        telegraph.Frame().cues.size() == 1 &&
+            telegraph.Frame().cues.front().phase ==
+                EnemyAttackTelegraphPhase::Tracking &&
+            telegraph.Frame().cues.front().onScreen &&
+            telegraph.Frame().cues.front().actorId ==
+                runtime.Enemies().front().actorId &&
+            hasEvent(telegraph.Frame(), EnemyAttackTelegraphEventKind::Acquired),
+        "an eligible enemy should publish one centered tracking cue and a one-shot acquisition event");
+
+    runtime.Update(0.50f);
+    telegraph.Update(input);
+    runner.Expect(
+        telegraph.Frame().cues.size() == 1 &&
+            telegraph.Frame().cues.front().phase ==
+                EnemyAttackTelegraphPhase::Imminent &&
+            telegraph.Frame().cues.front().urgency > 0.7f &&
+            hasEvent(telegraph.Frame(), EnemyAttackTelegraphEventKind::Imminent),
+        "the authoritative fire timer should promote a warning to imminent exactly once");
+
+    runtime.Update(0.21f);
+    telegraph.Update(input);
+    runner.Expect(
+        runtime.Enemies().front().bulletsEmittedThisFrame == 3 &&
+            runtime.Enemies().front().fireSequence == 1 &&
+            telegraph.Frame().cues.size() == 1 &&
+            telegraph.Frame().cues.front().phase ==
+                EnemyAttackTelegraphPhase::Fired &&
+            hasEvent(telegraph.Frame(), EnemyAttackTelegraphEventKind::Fired),
+        "actual bullet emission should drive the fired flash and its sequenced feedback event");
+
+    runtime.MutableEnemies().front().bulletsEmittedThisFrame = 0;
+    runtime.MutableEnemies().front().fireTimer = 0.50f;
+    runtime.MutableEnemies().front().desc.lateralOffset = 80.0f;
+    telegraph.Reset();
+    telegraph.Update(input);
+    const EnemyAttackTelegraphFrame& offscreenFrame = telegraph.Frame();
+    runner.Expect(
+        offscreenFrame.cues.size() == 1 &&
+            !offscreenFrame.cues.front().onScreen &&
+            offscreenFrame.cues.front().phase ==
+                EnemyAttackTelegraphPhase::Tracking &&
+            offscreenFrame.cues.front().screenPosition.x >=
+                input.settings.safeAreaPixels &&
+            offscreenFrame.cues.front().screenPosition.x <=
+                static_cast<float>(kWidth) - input.settings.safeAreaPixels &&
+            !hasEvent(offscreenFrame, EnemyAttackTelegraphEventKind::Fired),
+        "offscreen threats should clamp to the HUD safe area without replaying an old fire sequence after reset");
+
+    runtime.MutableEnemies().front().desc.lateralOffset = 0.0f;
+    CourseObstacleActorDesc occluder{};
+    occluder.spawnDistance = 25.0f;
+    occluder.halfExtents = {4.0f, 4.0f, 4.0f};
+    occluder.hitPoints = 100.0f;
+    runtime.SpawnObstacle(occluder);
+    telegraph.Reset();
+    input.settings.requireWorldVisibility = true;
+    input.settings.suppressOccluded = true;
+    telegraph.Update(input);
+    runner.Expect(
+        telegraph.Frame().cues.empty() &&
+            telegraph.Frame().stats.occludedCues == 1 &&
+            telegraph.Frame().stats.visibilityQueries == 1,
+        "world occlusion should suppress through-structure attack warnings while recording the LOS query");
+}
+
+void TestEnemyAttackTelegraphFeedbackBridge(RegressionRunner& runner) {
+    EnemyAttackTelegraphFrame telegraph{};
+    EnemyAttackTelegraphCue leftCue{};
+    leftCue.actorId = 11;
+    leftCue.directionFromCenter = {-0.80f, 0.0f};
+    EnemyAttackTelegraphCue rightCue{};
+    rightCue.actorId = 22;
+    rightCue.directionFromCenter = {0.60f, 0.0f};
+    EnemyAttackTelegraphCue centerCue{};
+    centerCue.actorId = 33;
+    centerCue.directionFromCenter = {0.0f, -1.0f};
+    telegraph.cues = {leftCue, rightCue, centerCue};
+    telegraph.events = {
+        {33, 0, EnemyAttackTelegraphEventKind::Acquired, 0.35f, false},
+        {22, 0, EnemyAttackTelegraphEventKind::Imminent, 0.70f, false},
+        {11, 1, EnemyAttackTelegraphEventKind::Fired, 1.00f, true}};
+
+    EnemyAttackTelegraphFeedbackInput input{};
+    input.telegraphFrame = &telegraph;
+    input.deltaTime = 1.0f / 60.0f;
+    input.gameplayActive = true;
+    input.settings.maximumAudioCommandsPerFrame = 2;
+    EnemyAttackTelegraphFeedbackBridge bridge;
+    bridge.Update(input);
+    const EnemyAttackTelegraphFeedbackFrame first = bridge.Frame();
+    runner.Expect(
+        first.audioCommands.size() == 2 &&
+            first.audioCommands[0].kind ==
+                EnemyAttackTelegraphEventKind::Fired &&
+            first.audioCommands[0].actorId == 11 &&
+            first.audioCommands[0].pan < -0.60f &&
+            first.audioCommands[1].kind ==
+                EnemyAttackTelegraphEventKind::Imminent &&
+            first.audioCommands[1].pan > 0.40f &&
+            first.stats.suppressedBudget == 1,
+        "feedback bridge should prioritize fired and imminent warnings, preserve direction, and enforce the audio voice budget");
+    runner.Expect(
+        first.haptics.active &&
+            first.haptics.lowFrequencyMotor > 0.35f &&
+            first.haptics.highFrequencyMotor > 0.50f &&
+            first.stats.hapticEvents == 3,
+        "all threat events should merge into one bounded strongest-wins haptic envelope");
+
+    telegraph.events = {
+        {11, 1, EnemyAttackTelegraphEventKind::Fired, 1.00f, true}};
+    input.deltaTime = 0.01f;
+    bridge.Update(input);
+    runner.Expect(
+        bridge.Frame().audioCommands.empty() &&
+            bridge.Frame().stats.suppressedCooldown == 1 &&
+            bridge.Frame().haptics.active,
+        "repeated event frames should not create an audio burst while the haptic envelope decays continuously");
+
+    input.gameplayActive = false;
+    bridge.Update(input);
+    runner.Expect(
+        bridge.Frame().audioCommands.empty() &&
+            !bridge.Frame().haptics.active &&
+            bridge.Frame().stats.suppressedInactive == 1,
+        "pause or focus loss should synchronously silence warning audio commands and motors");
+
+    bridge.Reset();
+    input.gameplayActive = true;
+    input.settings.audioEnabled = false;
+    input.settings.hapticsEnabled = true;
+    bridge.Update(input);
+    runner.Expect(
+        bridge.Frame().audioCommands.empty() &&
+            bridge.Frame().haptics.active,
+        "audio and haptics accessibility toggles should remain independently controllable");
+
+    audio::AudioSystem audioSystem;
+    const audio::SoundHandle tone = audioSystem.CreateTone(
+        "telegraph-regression", 760.0f, 0.05f, 0.4f);
+    const audio::SoundResource* toneResource = audioSystem.GetSound(tone);
+    runner.Expect(
+        tone.IsValid() && toneResource != nullptr && toneResource->IsValid() &&
+            toneResource->Format()->nChannels == 1 &&
+            toneResource->Format()->nSamplesPerSec == 48000 &&
+            toneResource->pcmData.size() >= 4000,
+        "procedural warning tones should provide a packaged mono PCM resource suitable for stereo panning");
+}
+
 void TestCourseEnemyPresentationFallback(RegressionRunner& runner) {
     runner.Expect(
         IsCourseMeshRenderEligible(CourseMeshRenderKind::Enemy, "ball") &&
@@ -18961,6 +19208,2624 @@ void TestHumanoidAnimationPoseBounds(RegressionRunner& runner) {
     }
 }
 
+void TestCourseRailAuthoringAndMutation(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Rail Authoring Regression";
+    course.railPoints = {
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 30.0f},
+        {{0.0f, 4.0f, 100.0f}, 20.0f, 35.0f},
+        {{25.0f, 8.0f, 210.0f}, 22.0f, 40.0f},
+    };
+    CourseEventMarker event{};
+    event.id = "wave-a";
+    event.type = "enemy_wave";
+    event.editorGuid = "event-wave-a";
+    course.events.push_back(event);
+
+    RailPath runtimePath;
+    bool markedDirty = false;
+    CourseRailMutationService service(
+        course,
+        &runtimePath,
+        "rail-authoring-regression",
+        [&]() { markedDirty = true; });
+    CourseRailAuthoringModel initial(course);
+    runner.Expect(
+        initial.IsValid() && initial.Segments().size() == 2 &&
+            !course.railPoints[0].editorGuid.empty() &&
+            course.railPoints[0].editorGuid != course.railPoints[1].editorGuid,
+        "course rail authoring should migrate stable point and segment identities");
+    runner.Expect(
+        markedDirty && runtimePath.SegmentCount() == 2,
+        "rail identity migration should dirty authoring and refresh runtime rail");
+
+    const CourseRailSegment firstSegment = initial.Segments().front();
+    CourseRailMutationRequest bind{};
+    bind.kind = CourseRailMutationKind::SetAnchor;
+    bind.ownerGuid = event.editorGuid;
+    bind.anchor.segmentGuid = firstSegment.guid;
+    bind.anchor.normalizedT = 0.75f;
+    bind.anchor.lateralOffset = 3.0f;
+    bind.expectedRevision = service.Revision();
+    const CourseRailMutationResult bindResult = service.Mutate(bind);
+    runner.Expect(
+        bindResult.succeeded && course.railAnchors.size() == 1 &&
+            course.events.front().distance > 0.0f,
+        "rail anchor mutation should update its legacy runtime distance atomically");
+
+    EditorTransactionStack transactions;
+    EditorExecutionContext execution;
+    EditorError registrationError{};
+    runner.Expect(
+        execution.Register(service, &registrationError),
+        "course rail mutation service should register for undo and redo");
+
+    CourseRailAuthoringModel beforeInsert(course);
+    const CourseRailSegment splitSegment = beforeInsert.Segments().front();
+    const RailPathSample midpoint = beforeInsert.RuntimePath().EvaluateSegmentAt(
+        splitSegment.pointIndex, 0.5f);
+    const Vector3 quarterBefore = beforeInsert.RuntimePath().EvaluateSegmentAt(
+        splitSegment.pointIndex, 0.25f).position;
+    const Vector3 threeQuarterBefore = beforeInsert.RuntimePath().EvaluateSegmentAt(
+        splitSegment.pointIndex, 0.75f).position;
+    CourseRailMutationRequest insert{};
+    insert.kind = CourseRailMutationKind::InsertPoint;
+    insert.segmentGuid = splitSegment.guid;
+    insert.normalizedT = 0.5f;
+    insert.point.position = midpoint.position;
+    insert.point.corridorRadius = midpoint.corridorRadius;
+    insert.point.speed = midpoint.speed;
+    insert.expectedRevision = service.Revision();
+    const CourseRailMutationResult insertResult = service.Mutate(insert, &transactions);
+    runner.Expect(
+        insertResult.succeeded && course.railPoints.size() == 4 &&
+            transactions.UndoDepth() == 1,
+        "rail insertion should commit one transaction and create one stable point");
+    const CourseRailAuthoringModel afterInsert(course);
+    const Vector3 quarterAfter = afterInsert.RuntimePath().EvaluateSegmentAt(0, 0.5f).position;
+    const Vector3 threeQuarterAfter = afterInsert.RuntimePath().EvaluateSegmentAt(1, 0.5f).position;
+    runner.Expect(
+        std::fabs(quarterBefore.x - quarterAfter.x) < 0.001f &&
+            std::fabs(quarterBefore.y - quarterAfter.y) < 0.001f &&
+            std::fabs(quarterBefore.z - quarterAfter.z) < 0.001f &&
+            std::fabs(threeQuarterBefore.x - threeQuarterAfter.x) < 0.001f &&
+            std::fabs(threeQuarterBefore.y - threeQuarterAfter.y) < 0.001f &&
+            std::fabs(threeQuarterBefore.z - threeQuarterAfter.z) < 0.001f,
+        "rail insertion should use Bezier subdivision and preserve the authored curve shape");
+    runner.Expect(
+        course.railAnchors.front().anchor.segmentGuid != splitSegment.guid &&
+            std::fabs(course.railAnchors.front().anchor.normalizedT - 0.5f) < 0.001f,
+        "rail insertion should remap anchors onto the correct split segment");
+
+    EditorError undoError{};
+    runner.Expect(
+        transactions.Undo(execution, &undoError) && course.railPoints.size() == 3 &&
+            course.railAnchors.front().anchor.segmentGuid == splitSegment.guid,
+        "course rail insertion should undo through the shared transaction stack");
+    runner.Expect(
+        transactions.Redo(execution, &undoError) && course.railPoints.size() == 4,
+        "course rail insertion should redo through the shared transaction stack");
+
+    CourseRailMutationRequest staleMove{};
+    staleMove.kind = CourseRailMutationKind::MovePoint;
+    staleMove.pointGuid = course.railPoints.front().editorGuid;
+    staleMove.point.position = {10.0f, 0.0f, 0.0f};
+    staleMove.expectedRevision = service.Revision() - 1;
+    const Vector3 positionBeforeStale = course.railPoints.front().position;
+    const CourseRailMutationResult staleResult = service.Mutate(staleMove);
+    runner.Expect(
+        !staleResult.succeeded &&
+            course.railPoints.front().position.x == positionBeforeStale.x,
+        "stale rail mutations should be rejected without partially changing CourseAsset");
+
+    std::string serialized;
+    std::string serializationError;
+    const bool saved = course.SaveToString(&serialized, &serializationError);
+    CourseAsset reloaded{};
+    const bool loaded = saved && reloaded.LoadFromString(serialized, &serializationError);
+    CourseRailAuthoringModel reloadedModel(reloaded);
+    runner.Expect(
+        loaded && reloadedModel.IsValid() &&
+            reloaded.railPoints.size() == course.railPoints.size() &&
+            reloaded.railPoints.front().editorGuid == course.railPoints.front().editorGuid &&
+            reloaded.railAnchors.size() == 1 &&
+            reloaded.railAnchors.front().anchor.segmentGuid ==
+                course.railAnchors.front().anchor.segmentGuid,
+        "course serialization should round-trip stable rail identities and anchors");
+    runner.Expect(
+        loaded && reloaded.railPoints[0].tangentMode ==
+                course.railPoints[0].tangentMode &&
+            std::fabs(reloaded.railPoints[0].outgoingTangent.z -
+                course.railPoints[0].outgoingTangent.z) < 0.001f,
+        "course schema should round-trip persistent rail tangent handles");
+}
+
+void TestCourseEnemyAuthoringAndMutation(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Enemy Authoring Regression";
+    course.railPoints = {
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 30.0f},
+        {{0.0f, 3.0f, 100.0f}, 20.0f, 34.0f},
+        {{20.0f, 7.0f, 220.0f}, 22.0f, 38.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "enemy-authoring-regression");
+    const CourseRailAuthoringModel rail(course);
+
+    CourseEnemyPlacement placement{};
+    placement.actorAssetId = "drone_scout";
+    placement.bulletPatternOverrideId = "single_red";
+    placement.waveGroupGuid = "wave-alpha";
+    placement.railAnchor.segmentGuid = rail.Segments().front().guid;
+    placement.railAnchor.normalizedT = 0.35f;
+    placement.railAnchor.lateralOffset = 4.0f;
+    placement.railAnchor.verticalOffset = 2.0f;
+    course.enemyPlacements.push_back(placement);
+
+    bool markedDirty = false;
+    CourseEnemyMutationService service(
+        course,
+        "enemy-authoring-regression",
+        [&]() { markedDirty = true; });
+    const std::string placementGuid = course.enemyPlacements.front().editorGuid;
+    const CourseEnemyAuthoringModel initial(course);
+    const CourseEnemyPlacementResolution initialResolution =
+        initial.Resolve(placementGuid);
+    runner.Expect(
+        markedDirty && initial.IsValid() && initialResolution.valid &&
+            !placementGuid.empty() && initial.FindWaveGroup("wave-alpha").size() == 1,
+        "enemy authoring should assign stable identity and resolve RailAnchor to world space");
+
+    EditorTransactionStack transactions;
+    EditorExecutionContext execution;
+    EditorError registrationError{};
+    runner.Expect(
+        execution.Register(service, &registrationError),
+        "course enemy mutation service should register for undo and redo");
+
+    CourseEnemyPlacement moved = course.enemyPlacements.front();
+    moved.railAnchor.lateralOffset += 6.0f;
+    moved.railAnchor.normalizedT = 0.6f;
+    CourseEnemyMutationRequest move{};
+    move.kind = CourseEnemyMutationKind::SetAnchors;
+    move.placements.push_back(moved);
+    move.expectedRevision = service.Revision();
+    const CourseEnemyMutationResult moveResult = service.Mutate(move, &transactions);
+    runner.Expect(
+        moveResult.succeeded && moveResult.changed &&
+            transactions.UndoDepth() == 1 &&
+            std::fabs(course.enemyPlacements.front().railAnchor.lateralOffset - 10.0f) < 0.001f,
+        "bulk enemy anchor edit should commit exactly one validated transaction");
+
+    EditorError undoError{};
+    runner.Expect(
+        transactions.Undo(execution, &undoError) &&
+            std::fabs(course.enemyPlacements.front().railAnchor.lateralOffset - 4.0f) < 0.001f,
+        "enemy placement edit should undo through the shared transaction stack");
+    runner.Expect(
+        transactions.Redo(execution, &undoError) &&
+            std::fabs(course.enemyPlacements.front().railAnchor.lateralOffset - 10.0f) < 0.001f,
+        "enemy placement edit should redo through the shared transaction stack");
+
+    CourseEnemyMutationRequest lock{};
+    lock.kind = CourseEnemyMutationKind::SetLocked;
+    lock.placementGuids.push_back(placementGuid);
+    lock.stateValue = true;
+    lock.expectedRevision = service.Revision();
+    const CourseEnemyMutationResult lockResult = service.Mutate(lock);
+    CourseEnemyMutationRequest removeLocked{};
+    removeLocked.kind = CourseEnemyMutationKind::RemovePlacements;
+    removeLocked.placementGuids.push_back(placementGuid);
+    removeLocked.expectedRevision = service.Revision();
+    const CourseEnemyMutationResult removeLockedResult = service.Mutate(removeLocked);
+    runner.Expect(
+        lockResult.succeeded && !removeLockedResult.succeeded &&
+            course.enemyPlacements.size() == 1,
+        "locked enemy placements should reject destructive mutation atomically");
+
+    CourseEnemyMutationRequest unlock = lock;
+    unlock.stateValue = false;
+    unlock.expectedRevision = service.Revision();
+    runner.Expect(service.Mutate(unlock).succeeded,
+        "enemy lock mutation should allow an authored placement to be unlocked");
+
+    CourseEnemyMutationRequest duplicate{};
+    duplicate.kind = CourseEnemyMutationKind::DuplicatePlacements;
+    duplicate.placementGuids.push_back(placementGuid);
+    duplicate.duplicateOffset = {3.0f, 1.0f, 5.0f};
+    duplicate.expectedRevision = service.Revision();
+    const CourseEnemyMutationResult duplicateResult = service.Mutate(duplicate, &transactions);
+    runner.Expect(
+        duplicateResult.succeeded && course.enemyPlacements.size() == 2 &&
+            course.enemyPlacements[0].editorGuid != course.enemyPlacements[1].editorGuid &&
+            transactions.UndoDepth() == 2,
+        "enemy duplication should generate a new stable identity in one transaction");
+
+    CourseEnemyMutationRequest stale{};
+    stale.kind = CourseEnemyMutationKind::SetEnabled;
+    stale.placementGuids.push_back(placementGuid);
+    stale.stateValue = false;
+    stale.expectedRevision = service.Revision() - 1;
+    const CourseEnemyMutationResult staleResult = service.Mutate(stale);
+    runner.Expect(
+        !staleResult.succeeded && course.enemyPlacements.front().enabled,
+        "stale enemy mutations should not partially change CourseAsset");
+
+    EditorCourseDocumentProvider provider;
+    provider.Bind(&course);
+    const EditorDocumentId document{
+        "enemy-course-document", std::string(EditorDocumentTypes::Course)};
+    EditorDocumentContent serialized{};
+    std::string error;
+    runner.Expect(
+        provider.Serialize(document, &serialized, &error) &&
+            serialized.schemaVersion == 7,
+        "Course schema v7 should serialize persistent enemy placements and waves");
+    CourseAsset loaded{};
+    provider.Bind(&loaded);
+    const bool loadedSuccessfully = provider.Deserialize(
+        document, serialized, &error);
+    const CourseEnemyAuthoringModel loadedModel(loaded);
+    runner.Expect(
+        loadedSuccessfully && loadedModel.IsValid() &&
+            loaded.enemyPlacements.size() == course.enemyPlacements.size() &&
+            loaded.enemyPlacements.front().editorGuid == placementGuid &&
+            loaded.enemyPlacements.front().railAnchor.segmentGuid ==
+                course.enemyPlacements.front().railAnchor.segmentGuid &&
+            loaded.enemyPlacements.front().bulletPatternOverrideId == "single_red",
+        "Course schema v7 should round-trip enemy identity, assets, and RailAnchor data");
+
+    EditorDocumentContent legacyV5 = serialized;
+    legacyV5.schemaVersion = 5;
+    EditorDocumentContent migrated{};
+    EditorDocumentMigrationReport migration{};
+    runner.Expect(
+        provider.Migrate(legacyV5, &migrated, &migration, &error) &&
+            migration.migrated && migrated.schemaVersion == 7 &&
+            provider.Validate(migrated).Succeeded(),
+        "Course schema v5 should migrate to the v7 enemy and wave persistence unit");
+
+    CourseAsset topologyCourse{};
+    topologyCourse.name = "Enemy Rail Topology";
+    topologyCourse.railPoints = {
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 30.0f},
+        {{0.0f, 0.0f, 100.0f}, 18.0f, 30.0f},
+        {{20.0f, 0.0f, 200.0f}, 18.0f, 30.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(topologyCourse, "enemy-topology");
+    const CourseRailAuthoringModel topologyBefore(topologyCourse);
+    CourseEnemyPlacement topologyEnemy{};
+    topologyEnemy.editorGuid = "enemy-topology-instance";
+    topologyEnemy.actorAssetId = "drone";
+    topologyEnemy.railAnchor.segmentGuid = topologyBefore.Segments().front().guid;
+    topologyEnemy.railAnchor.normalizedT = 0.75f;
+    topologyEnemy.railAnchor.lateralOffset = 3.0f;
+    topologyCourse.enemyPlacements.push_back(topologyEnemy);
+    const CourseEnemyAuthoringModel enemyBefore(topologyCourse);
+    const Vector3 worldBefore = enemyBefore.Resolve(topologyEnemy.editorGuid).worldPosition;
+    CourseRailMutationService railMutations(
+        topologyCourse, nullptr, "enemy-topology");
+    CourseRailMutationRequest split{};
+    split.kind = CourseRailMutationKind::InsertPoint;
+    split.segmentGuid = topologyBefore.Segments().front().guid;
+    split.normalizedT = 0.5f;
+    split.point.corridorRadius = 18.0f;
+    split.point.speed = 30.0f;
+    split.expectedRevision = railMutations.Revision();
+    const CourseRailMutationResult splitResult = railMutations.Mutate(split);
+    const CourseEnemyAuthoringModel enemyAfter(topologyCourse);
+    const CourseEnemyPlacementResolution resolutionAfter =
+        enemyAfter.Resolve(topologyEnemy.editorGuid);
+    const Vector3 worldAfter = resolutionAfter.worldPosition;
+    runner.Expect(
+        splitResult.succeeded && enemyAfter.IsValid() && resolutionAfter.valid &&
+            topologyCourse.enemyPlacements.front().railAnchor.segmentGuid !=
+                topologyBefore.Segments().front().guid &&
+            std::fabs(worldBefore.x - worldAfter.x) < 0.001f &&
+            std::fabs(worldBefore.y - worldAfter.y) < 0.001f &&
+            std::fabs(worldBefore.z - worldAfter.z) < 0.001f,
+        "rail topology edits should remap enemy anchors without moving them in world space");
+}
+
+void TestCourseWaveAuthoringAndMutation(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Wave Authoring Regression";
+    course.railPoints = {
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 30.0f},
+        {{0.0f, 2.0f, 120.0f}, 20.0f, 34.0f},
+        {{18.0f, 5.0f, 280.0f}, 22.0f, 38.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "wave-authoring-regression");
+    const CourseRailAuthoringModel rail(course);
+
+    CourseEnemyPlacement alphaEnemy{};
+    alphaEnemy.editorGuid = "enemy-wave-alpha";
+    alphaEnemy.actorAssetId = "drone_scout";
+    alphaEnemy.waveGroupGuid = "Wave Alpha";
+    alphaEnemy.railAnchor.segmentGuid = rail.Segments().front().guid;
+    alphaEnemy.railAnchor.normalizedT = 0.55f;
+    alphaEnemy.activationLeadDistance = 30.0f;
+    course.enemyPlacements.push_back(alphaEnemy);
+
+    CourseEnemyPlacement bravoEnemy = alphaEnemy;
+    bravoEnemy.editorGuid = "enemy-wave-bravo";
+    bravoEnemy.actorAssetId = "drone_heavy";
+    bravoEnemy.waveGroupGuid = "Wave Bravo";
+    bravoEnemy.railAnchor.segmentGuid = rail.Segments().back().guid;
+    bravoEnemy.railAnchor.normalizedT = 0.8f;
+    bravoEnemy.activationLeadDistance = 45.0f;
+    course.enemyPlacements.push_back(bravoEnemy);
+
+    bool markedDirty = false;
+    CourseWaveMutationService service(
+        course,
+        "wave-authoring-regression",
+        [&]() { markedDirty = true; });
+    CourseWaveAuthoringModel model(course);
+    const CourseWaveDefinition* alpha = model.FindByDisplayName("Wave Alpha");
+    const CourseWaveDefinition* bravo = model.FindByDisplayName("Wave Bravo");
+    const std::string alphaGuid = alpha != nullptr ? alpha->editorGuid : std::string{};
+    const std::string bravoGuid = bravo != nullptr ? bravo->editorGuid : std::string{};
+    runner.Expect(
+        markedDirty && model.IsValid() && course.waveDefinitions.size() == 2 &&
+            alpha != nullptr && bravo != nullptr && !alphaGuid.empty() &&
+            !bravoGuid.empty() && model.Members(alphaGuid).size() == 1 &&
+            model.Members(bravoGuid).size() == 1,
+        "schema-v7 upgrade should create stable waves and remap legacy enemy groups");
+
+    EditorTransactionStack transactions;
+    EditorExecutionContext execution;
+    EditorError registrationError{};
+    runner.Expect(
+        execution.Register(service, &registrationError),
+        "course wave mutation service should register for undo and redo");
+
+    CourseWaveDefinition editedAlpha = *model.Find(alphaGuid);
+    editedAlpha.completionCondition = CourseWaveCompletionCondition::Timeout;
+    editedAlpha.executionPolicy = CourseWaveExecutionPolicy::Sequential;
+    editedAlpha.timeoutSeconds = 12.5f;
+    editedAlpha.nextWaveGuid = bravoGuid;
+    CourseWaveMutationRequest edit{};
+    edit.kind = CourseWaveMutationKind::SetWaves;
+    edit.waves.push_back(editedAlpha);
+    edit.expectedRevision = service.Revision();
+    const CourseWaveMutationResult editResult = service.Mutate(edit, &transactions);
+    runner.Expect(
+        editResult.succeeded && editResult.changed && transactions.UndoDepth() == 1 &&
+            CourseWaveAuthoringModel(course).Resolve(bravoGuid).incomingTransitions.size() == 1,
+        "wave properties and transition should commit as one validated transaction");
+
+    CourseWaveDefinition cyclicBravo = *CourseWaveAuthoringModel(course).Find(bravoGuid);
+    cyclicBravo.nextWaveGuid = alphaGuid;
+    CourseWaveMutationRequest cycle{};
+    cycle.kind = CourseWaveMutationKind::SetWaves;
+    cycle.waves.push_back(cyclicBravo);
+    cycle.expectedRevision = service.Revision();
+    const CourseWaveMutationResult cycleResult = service.Mutate(cycle, &transactions);
+    runner.Expect(
+        !cycleResult.succeeded && transactions.UndoDepth() == 1 &&
+            CourseWaveAuthoringModel(course).Find(bravoGuid)->nextWaveGuid.empty(),
+        "wave transition cycles should be rejected without partial mutation or history");
+
+    CourseWaveMutationRequest remove{};
+    remove.kind = CourseWaveMutationKind::RemoveWaves;
+    remove.waveGuids.push_back(bravoGuid);
+    remove.expectedRevision = service.Revision();
+    const CourseWaveMutationResult rejectedRemove = service.Mutate(remove, &transactions);
+    runner.Expect(
+        !rejectedRemove.succeeded && course.waveDefinitions.size() == 2 &&
+            transactions.UndoDepth() == 1,
+        "referenced wave deletion should require an explicit reference policy");
+
+    remove.referencePolicy = CourseWaveReferencePolicy::ClearReferences;
+    const CourseWaveMutationResult removed = service.Mutate(remove, &transactions);
+    const CourseWaveAuthoringModel afterRemove(course);
+    runner.Expect(
+        removed.succeeded && removed.changed && transactions.UndoDepth() == 2 &&
+            afterRemove.IsValid() && afterRemove.Find(bravoGuid) == nullptr &&
+            afterRemove.Find(alphaGuid)->nextWaveGuid.empty() &&
+            course.enemyPlacements[1].waveGroupGuid.empty(),
+        "wave deletion should clear graph and enemy references atomically");
+
+    EditorError undoError{};
+    runner.Expect(
+        transactions.Undo(execution, &undoError) &&
+            CourseWaveAuthoringModel(course).Find(bravoGuid) != nullptr &&
+            CourseWaveAuthoringModel(course).Find(alphaGuid)->nextWaveGuid == bravoGuid &&
+            course.enemyPlacements[1].waveGroupGuid == bravoGuid,
+        "wave deletion undo should restore definition, transition, and membership together");
+    runner.Expect(
+        transactions.Redo(execution, &undoError) &&
+            CourseWaveAuthoringModel(course).Find(bravoGuid) == nullptr &&
+            course.enemyPlacements[1].waveGroupGuid.empty(),
+        "wave deletion redo should reapply referential cleanup atomically");
+    runner.Expect(
+        transactions.Undo(execution, &undoError),
+        "wave deletion should remain reversible for subsequent authoring");
+
+    CourseWaveMutationRequest lock{};
+    lock.kind = CourseWaveMutationKind::SetLocked;
+    lock.waveGuids.push_back(bravoGuid);
+    lock.stateValue = true;
+    lock.expectedRevision = service.Revision();
+    const CourseWaveMutationResult locked = service.Mutate(lock);
+    remove.referencePolicy = CourseWaveReferencePolicy::ClearReferences;
+    remove.expectedRevision = service.Revision();
+    const CourseWaveMutationResult lockedRemove = service.Mutate(remove);
+    runner.Expect(
+        locked.succeeded && !lockedRemove.succeeded &&
+            CourseWaveAuthoringModel(course).Find(bravoGuid) != nullptr,
+        "locked waves should reject destructive mutation atomically");
+
+    CourseWaveMutationRequest stale{};
+    stale.kind = CourseWaveMutationKind::SetEnabled;
+    stale.waveGuids.push_back(alphaGuid);
+    stale.stateValue = false;
+    stale.expectedRevision = service.Revision() - 1;
+    const CourseWaveMutationResult staleResult = service.Mutate(stale);
+    runner.Expect(
+        !staleResult.succeeded && CourseWaveAuthoringModel(course).Find(alphaGuid)->enabled,
+        "stale wave mutations should not partially change CourseAsset");
+
+    EditorCourseDocumentProvider provider;
+    provider.Bind(&course);
+    const EditorDocumentId document{
+        "wave-course-document", std::string(EditorDocumentTypes::Course)};
+    EditorDocumentContent serialized{};
+    std::string error;
+    const bool waveSerialized = provider.Serialize(document, &serialized, &error);
+    const EditorDocumentValidationReport waveValidation =
+        waveSerialized ? provider.Validate(serialized) : EditorDocumentValidationReport{};
+    std::string wavePersistenceDiagnostic =
+        "Course schema v7 should serialize a validated wave graph and memberships";
+    if (!error.empty()) wavePersistenceDiagnostic += " error=" + error;
+    for (const EditorDocumentValidationIssue& issue : waveValidation.issues) {
+        wavePersistenceDiagnostic += " [" + issue.code + ": " + issue.message + "]";
+    }
+    runner.Expect(
+        waveSerialized && serialized.schemaVersion == 7 && waveValidation.Succeeded(),
+        wavePersistenceDiagnostic);
+    CourseAsset loaded{};
+    provider.Bind(&loaded);
+    const bool loadedSuccessfully = provider.Deserialize(document, serialized, &error);
+    const CourseWaveAuthoringModel loadedWaves(loaded);
+    const CourseWaveDefinition* loadedAlpha = loadedWaves.Find(alphaGuid);
+    runner.Expect(
+        loadedSuccessfully && loadedWaves.IsValid() && loadedAlpha != nullptr &&
+            loadedAlpha->completionCondition == CourseWaveCompletionCondition::Timeout &&
+            loadedAlpha->executionPolicy == CourseWaveExecutionPolicy::Sequential &&
+            std::fabs(loadedAlpha->timeoutSeconds - 12.5f) < 0.001f &&
+            loadedAlpha->nextWaveGuid == bravoGuid &&
+            loadedWaves.Members(bravoGuid).size() == 1,
+        "Course schema v7 should round-trip wave behavior, transitions, and enemy membership");
+
+    CourseAsset legacy{};
+    legacy.name = "Legacy Wave Migration";
+    legacy.railPoints = course.railPoints;
+    legacy.enemyPlacements.push_back(alphaEnemy);
+    CourseEnemyAuthoringModel::EnsureStableIdentity(legacy, "legacy-wave-migration");
+    std::string legacyText;
+    legacy.SaveToString(&legacyText, &error);
+    const std::string schema7 = "# editor-schema:7";
+    const std::size_t schemaOffset = legacyText.find(schema7);
+    if (schemaOffset != std::string::npos) {
+        legacyText.replace(schemaOffset, schema7.size(), "# editor-schema:6");
+    }
+    EditorDocumentContent legacyV6{};
+    legacyV6.schemaVersion = 6;
+    legacyV6.bytes.assign(legacyText.begin(), legacyText.end());
+    EditorDocumentContent migrated{};
+    EditorDocumentMigrationReport migration{};
+    runner.Expect(
+        provider.Migrate(legacyV6, &migrated, &migration, &error) &&
+            migration.migrated && migrated.schemaVersion == 7 &&
+            provider.Validate(migrated).Succeeded(),
+        "Course schema v6 should migrate legacy group names into the v7 wave unit");
+    CourseAsset migratedCourse{};
+    provider.Bind(&migratedCourse);
+    const bool migratedLoaded = provider.Deserialize(document, migrated, &error);
+    const CourseWaveAuthoringModel migratedWaves(migratedCourse);
+    runner.Expect(
+        migratedLoaded && migratedWaves.IsValid() &&
+            migratedCourse.waveDefinitions.size() == 1 &&
+            migratedWaves.FindByDisplayName("Wave Alpha") != nullptr &&
+            migratedCourse.enemyPlacements.front().waveGroupGuid ==
+                migratedCourse.waveDefinitions.front().editorGuid,
+        "v6 migration should preserve enemy membership through deterministic Wave GUIDs");
+}
+
+void TestCourseWaveEditorSuite(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Wave Editor Suite";
+    course.railPoints = {
+        {{-0.8f, 0.0f, 0.5f}, 1.0f, 30.0f},
+        {{0.0f, 0.0f, 0.5f}, 1.0f, 32.0f},
+        {{0.8f, 0.0f, 0.5f}, 1.0f, 34.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "wave-editor-suite");
+    const CourseRailAuthoringModel rail(course);
+
+    CourseWaveDefinition alpha{};
+    alpha.editorGuid = "wave-editor-alpha";
+    alpha.displayName = "Alpha";
+    alpha.triggerRailDistance = rail.Length() * 0.3f;
+    alpha.prewarmDistance = 0.15f;
+    alpha.nextWaveGuid = "wave-editor-bravo";
+    CourseWaveDefinition bravo{};
+    bravo.editorGuid = "wave-editor-bravo";
+    bravo.displayName = "Bravo";
+    bravo.triggerRailDistance = rail.Length() * 0.72f;
+    bravo.prewarmDistance = 0.2f;
+    course.waveDefinitions = {alpha, bravo};
+
+    CourseEnemyPlacement member{};
+    member.editorGuid = "wave-editor-enemy";
+    member.actorAssetId = "drone_wave_editor";
+    member.waveGroupGuid = alpha.editorGuid;
+    member.railAnchor.segmentGuid = rail.Segments().front().guid;
+    member.railAnchor.normalizedT = 0.6f;
+    course.enemyPlacements.push_back(member);
+
+    EditorDirtyStateService dirtyState;
+    CourseWaveEditorController controller;
+    std::string error;
+    runner.Expect(
+        controller.Bind(
+            CourseWaveEditorControllerBinding{
+                &course, nullptr, &dirtyState, "wave-editor-suite", true},
+            &error) &&
+            controller.State().status == CourseWaveEditorControllerStatus::Ready &&
+            controller.Model() != nullptr && controller.Model()->IsValid(),
+        "course wave controller should bind a validated schema-v7 authoring graph");
+
+    CourseWaveDefinition movedAlpha = *controller.Model()->Find(alpha.editorGuid);
+    const float originalDistance = movedAlpha.triggerRailDistance;
+    movedAlpha.triggerRailDistance += 0.08f;
+    CourseWaveMutationRequest move{};
+    move.kind = CourseWaveMutationKind::SetWaves;
+    move.expectedRevision = controller.State().mutationRevision;
+    move.waves.push_back(movedAlpha);
+    move.label = "Move Wave Trigger";
+    const CourseWaveMutationResult moved = controller.Mutate(move);
+    runner.Expect(
+        moved.succeeded && moved.changed && controller.Transactions()->UndoDepth() == 1 &&
+            std::fabs(controller.Model()->Find(alpha.editorGuid)->triggerRailDistance -
+                movedAlpha.triggerRailDistance) < 0.0001f &&
+            dirtyState.HasDirtyDomain(EditorDirtyDomain::CourseAuthoring),
+        "wave controller should transact a Details-style edit and publish dirty state");
+    runner.Expect(
+        controller.Undo(&error) &&
+            std::fabs(controller.Model()->Find(alpha.editorGuid)->triggerRailDistance -
+                originalDistance) < 0.0001f &&
+            controller.Redo(&error) &&
+            std::fabs(controller.Model()->Find(alpha.editorGuid)->triggerRailDistance -
+                movedAlpha.triggerRailDistance) < 0.0001f,
+        "wave controller should own executable Undo and Redo lifecycle");
+
+    controller.SetAuthoringAllowed(false);
+    CourseWaveMutationRequest disable{};
+    disable.kind = CourseWaveMutationKind::SetEnabled;
+    disable.waveGuids.push_back(alpha.editorGuid);
+    disable.stateValue = false;
+    disable.expectedRevision = controller.State().mutationRevision;
+    runner.Expect(
+        !controller.Mutate(disable).succeeded &&
+            controller.State().status == CourseWaveEditorControllerStatus::ReadOnly &&
+            controller.Model()->Find(alpha.editorGuid)->enabled,
+        "wave controller should reject UI mutations while authoring is read-only");
+    controller.SetAuthoringAllowed(true);
+
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        {0.0f, 0.0f, 800.0f, 600.0f}, 800, 600, MakeIdentity4x4()});
+    const CourseRailAuthoringModel currentRail(*controller.Course());
+    const Vector3 markerWorld = currentRail.RuntimePath().Evaluate(
+        controller.Model()->Find(alpha.editorGuid)->triggerRailDistance).position;
+    const EditorViewportProjectedPoint marker = coordinates.ProjectWorld(markerWorld);
+    CourseWavePickingService picking;
+    const CourseWavePickResult pick = picking.PickDisplay(
+        *controller.Model(), currentRail, coordinates,
+        marker.display.x, marker.display.y);
+    const EditorViewportPickResult bridged = picking.ToViewportPick(
+        pick, static_cast<uint32_t>(controller.State().mutationRevision));
+    runner.Expect(
+        pick.hit && pick.waveGuid == alpha.editorGuid &&
+            bridged.canonicalHandle.domain == EditorDomainId::CourseWaveDefinition &&
+            bridged.canonicalHandle.stableId == "course-wave:" + alpha.editorGuid,
+        "wave picking should resolve the rendered trigger marker to a stable handle");
+
+    CourseWaveViewportRenderer renderer(&controller);
+    renderer.SetSelectedWaves({alpha.editorGuid});
+    renderer.SetHoveredWave(alpha.editorGuid);
+    EditorViewportOverlayService overlay;
+    EditorViewportRenderTargetState viewport{};
+    viewport.enabled = true;
+    viewport.displayRect = {0.0f, 0.0f, 800.0f, 600.0f};
+    viewport.renderWidth = 800;
+    viewport.renderHeight = 600;
+    viewport.aspectRatio = 4.0f / 3.0f;
+    overlay.BeginFrame(EditorViewportOverlayFrameContext{
+        viewport, 800, 600, &coordinates, {0.0f, 0.0f, -1.0f}, 1.0f});
+    auto sink = overlay.Sink(renderer.Layer());
+    renderer.Build(overlay.FrameContext(), sink);
+    overlay.Resolve();
+    const bool hasTriggerMarker = std::any_of(
+        overlay.ResolvedCommands().begin(), overlay.ResolvedCommands().end(),
+        [](const EditorViewportOverlayCommand& command) {
+            return command.type == EditorViewportOverlayCommandType::RectFilled;
+        });
+    const bool hasWaveLabel = std::any_of(
+        overlay.ResolvedCommands().begin(), overlay.ResolvedCommands().end(),
+        [](const EditorViewportOverlayCommand& command) {
+            return command.type == EditorViewportOverlayCommandType::Label;
+        });
+    runner.Expect(
+        renderer.Stats().modelValid && renderer.Stats().authoredWaves == 2 &&
+            renderer.Stats().visibleWaves == 2 &&
+            renderer.Stats().selectedWaves == 1 &&
+            renderer.Stats().transitionLines == 1 &&
+            renderer.Stats().memberLinks == 1 && hasTriggerMarker && hasWaveLabel,
+        "wave viewport renderer should draw trigger, prewarm, transition and membership overlays");
+
+    EditorSelection selection;
+    selection.SetPrimary(bridged.canonicalHandle);
+    CourseWaveDetailsPanel details;
+    runner.Expect(
+        details.HandlesSelection(&selection) &&
+            !details.HandlesSelection(nullptr),
+        "wave Details panel should claim only stable CourseWaveDefinition selections");
+
+    CourseSequencerWaveTrackBridge waveBridge;
+    waveBridge.Bind(&controller);
+    EditorSequencerService sequencer;
+    EditorTransactionStack sequencerTransactions;
+    sequencer.BeginFrame();
+    sequencer.RegisterProvider(waveBridge);
+    sequencer.SetTransactionStack(&sequencerTransactions);
+    sequencer.SetSequenceRange(0.0, currentRail.Length());
+    const std::vector<EditorSequencerTrack> tracks = sequencer.BuildTracks();
+    const EditorSequencerTrack* waveTrack = tracks.empty() ? nullptr : &tracks.front();
+    runner.Expect(
+        waveTrack != nullptr && waveTrack->id == "course.encounter-waves" &&
+            waveTrack->keys.size() == 2 &&
+            waveTrack->keys.front().handle.providerId == "course-waves",
+        "wave Sequencer bridge should expose persistent waves as encounter keys");
+
+    const auto alphaKey = std::find_if(
+        waveTrack->keys.begin(), waveTrack->keys.end(),
+        [&](const EditorSequencerKeyState& state) {
+            return state.handle.keyId == "wave:" + alpha.editorGuid;
+        });
+    sequencer.Select(alphaKey->handle, false, false);
+    const float beforeSequencerMove =
+        controller.Model()->Find(alpha.editorGuid)->triggerRailDistance;
+    runner.Expect(
+        sequencer.BeginInteractiveEdit(error) &&
+            sequencer.PreviewInteractiveMove(0.05, error) &&
+            sequencer.CommitInteractiveEdit("Move Encounter Wave", error) &&
+            sequencerTransactions.UndoDepth() == 1 &&
+            std::fabs(controller.Model()->Find(alpha.editorGuid)->triggerRailDistance -
+                beforeSequencerMove) > 0.001f,
+        "wave Sequencer preview and commit should route through the Wave controller once");
+
+    EditorExecutionContext execution;
+    EditorError registrationError{};
+    runner.Expect(
+        execution.Register(sequencer, &registrationError) &&
+            sequencerTransactions.Undo(execution, &registrationError) &&
+            std::fabs(controller.Model()->Find(alpha.editorGuid)->triggerRailDistance -
+                beforeSequencerMove) < 0.0001f &&
+            sequencerTransactions.Redo(execution, &registrationError),
+        "wave Sequencer key movement should support generic Sequencer Undo and Redo");
+
+    runner.Expect(
+        sequencer.CopySelection(error) &&
+            sequencer.PasteAt(currentRail.Length() * 0.9, error) &&
+            controller.Model()->Waves().size() == 3 &&
+            sequencerTransactions.UndoDepth() == 2,
+        "wave Sequencer copy/paste should duplicate through an atomic Wave mutation");
+
+    const uint32_t generationBefore = controller.State().bindingGeneration;
+    course.waveDefinitions.front().displayName = "Externally Renamed";
+    runner.Expect(
+        controller.SynchronizeExternalChanges(&error) &&
+            controller.State().bindingGeneration == generationBefore + 1 &&
+            controller.Transactions()->UndoDepth() == 0 &&
+            controller.Model()->Find(course.waveDefinitions.front().editorGuid)->displayName ==
+                "Externally Renamed",
+        "wave controller should invalidate stale local history after external graph edits");
+}
+
+void TestCoursePreviewSimulationSystem(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Course Preview Simulation";
+    course.railPoints = {
+        {{-0.8f, 0.0f, 0.5f}, 18.0f, 4.0f},
+        {{0.0f, 0.0f, 0.5f}, 18.0f, 4.0f},
+        {{0.8f, 0.0f, 0.5f}, 18.0f, 4.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "course-preview-simulation");
+    const CourseRailAuthoringModel rail(course);
+
+    CourseWaveDefinition alpha{};
+    alpha.editorGuid = "preview-wave-alpha";
+    alpha.displayName = "Alpha";
+    alpha.triggerRailDistance = rail.Length() * 0.20f;
+    alpha.prewarmDistance = rail.Length() * 0.08f;
+    alpha.nextWaveGuid = "preview-wave-bravo";
+    alpha.completionCondition = CourseWaveCompletionCondition::AllEnemiesDefeated;
+    alpha.executionPolicy = CourseWaveExecutionPolicy::Parallel;
+    CourseWaveDefinition bravo{};
+    bravo.editorGuid = "preview-wave-bravo";
+    bravo.displayName = "Bravo";
+    bravo.triggerRailDistance = rail.Length() * 0.72f;
+    bravo.timeoutSeconds = 0.05f;
+    bravo.completionCondition = CourseWaveCompletionCondition::Timeout;
+    bravo.executionPolicy = CourseWaveExecutionPolicy::Sequential;
+    course.waveDefinitions = {alpha, bravo};
+
+    CourseEnemyPlacement enemy{};
+    enemy.editorGuid = "preview-enemy-alpha";
+    enemy.actorAssetId = "preview_drone";
+    enemy.waveGroupGuid = alpha.editorGuid;
+    enemy.railAnchor.segmentGuid = rail.Segments().front().guid;
+    enemy.railAnchor.normalizedT = 0.55f;
+    course.enemyPlacements.push_back(enemy);
+
+    std::string sourceBefore;
+    std::string sourceAfter;
+    std::string error;
+    course.SaveToString(&sourceBefore, &error);
+
+    CoursePreviewSimulationSystem simulation;
+    simulation.MutableSettings().fixedStepSeconds = 0.01f;
+    simulation.MutableSettings().travelSpeed = 4.0f;
+    simulation.MutableSettings().maximumSubsteps = 64;
+    simulation.MutableSettings().automaticEnemyDefeatSeconds = 0.03f;
+    runner.Expect(
+        simulation.BeginPreview(course, 0.0f, &error) && simulation.IsPlaying() &&
+            simulation.HasSnapshot() && simulation.Waves().size() == 2 &&
+            simulation.Enemies().size() == 1,
+        "course preview should start from an immutable validated CourseAsset snapshot");
+
+    simulation.Tick(0.20f);
+    const auto alphaState = std::find_if(
+        simulation.Waves().begin(), simulation.Waves().end(),
+        [](const CoursePreviewWaveState& wave) {
+            return wave.waveGuid == "preview-wave-alpha";
+        });
+    const auto bravoState = std::find_if(
+        simulation.Waves().begin(), simulation.Waves().end(),
+        [](const CoursePreviewWaveState& wave) {
+            return wave.waveGuid == "preview-wave-bravo";
+        });
+    runner.Expect(
+        alphaState != simulation.Waves().end() &&
+            alphaState->phase == CoursePreviewWavePhase::Completed &&
+            bravoState != simulation.Waves().end() &&
+            bravoState->phase == CoursePreviewWavePhase::Completed &&
+            simulation.Frame().completedWaves == 2,
+        "preview fixed-step evaluation should prewarm, activate, resolve and transition waves");
+    runner.Expect(
+        std::any_of(
+            simulation.Events().begin(), simulation.Events().end(),
+            [](const CoursePreviewSimulationEvent& event) {
+                return event.type == CoursePreviewEventType::WaveActivated;
+            }) &&
+            std::any_of(
+                simulation.Events().begin(), simulation.Events().end(),
+                [](const CoursePreviewSimulationEvent& event) {
+                    return event.type == CoursePreviewEventType::EnemyDefeated;
+                }),
+        "preview should publish bounded encounter diagnostics for editor inspection");
+
+    simulation.Pause();
+    const float pausedDistance = simulation.Frame().distance;
+    simulation.Tick(0.2f);
+    runner.Expect(
+        std::fabs(simulation.Frame().distance - pausedDistance) < 0.0001f &&
+            simulation.Step(&error) && simulation.Frame().distance > pausedDistance &&
+            simulation.Frame().playback == CoursePreviewPlaybackState::Paused,
+        "preview pause and fixed single-step should be deterministic");
+    runner.Expect(
+        simulation.Seek(rail.Length() * 0.10f, &error) &&
+            std::fabs(simulation.Frame().distance - rail.Length() * 0.10f) < 0.001f &&
+            simulation.Frame().playback == CoursePreviewPlaybackState::Paused,
+        "preview scrub should reconstruct state without mutating authored data");
+
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        {0.0f, 0.0f, 800.0f, 600.0f}, 800, 600, MakeIdentity4x4()});
+    EditorViewportOverlayService overlay;
+    EditorViewportRenderTargetState viewport{};
+    viewport.enabled = true;
+    viewport.displayRect = {0.0f, 0.0f, 800.0f, 600.0f};
+    viewport.renderWidth = 800;
+    viewport.renderHeight = 600;
+    viewport.aspectRatio = 4.0f / 3.0f;
+    overlay.BeginFrame(EditorViewportOverlayFrameContext{
+        viewport, 800, 600, &coordinates, {0.0f, 0.0f, -1.0f}, 1.0f});
+    auto sink = overlay.Sink(simulation.Layer());
+    simulation.Build(overlay.FrameContext(), sink);
+    overlay.Resolve();
+    runner.Expect(
+        !overlay.ResolvedCommands().empty() &&
+            simulation.ViewportStats().labels > 0,
+        "preview should render the playhead and simulated encounter state in the viewport");
+
+    course.SaveToString(&sourceAfter, &error);
+    simulation.Stop();
+    runner.Expect(
+        sourceBefore == sourceAfter && !simulation.IsActive() &&
+            simulation.Frame().playback == CoursePreviewPlaybackState::Stopped,
+        "preview stop should unlock authoring without changing CourseAsset or Undo state");
+}
+
+void TestCourseWaveRuntimeCompilerAndPreviewActorBridge(
+    RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Compiled Preview Actors";
+    course.railPoints = {
+        {{-0.8f, 0.0f, 0.5f}, 18.0f, 4.0f},
+        {{0.0f, 0.0f, 0.5f}, 18.0f, 4.0f},
+        {{0.8f, 0.0f, 0.5f}, 18.0f, 4.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "compiled-preview-actors");
+    const CourseRailAuthoringModel rail(course);
+
+    CourseWaveDefinition wave{};
+    wave.editorGuid = "compiled-preview-wave";
+    wave.displayName = "Compiled Wave";
+    wave.triggerRailDistance = rail.Length() * 0.25f;
+    wave.prewarmDistance = rail.Length() * 0.10f;
+    wave.completionCondition = CourseWaveCompletionCondition::AllEnemiesDefeated;
+    course.waveDefinitions.push_back(wave);
+
+    CourseEnemyPlacement placement{};
+    placement.editorGuid = "compiled-preview-enemy";
+    placement.actorAssetId = "test_actor";
+    placement.bulletPatternOverrideId = "test_pattern";
+    placement.waveGroupGuid = wave.editorGuid;
+    placement.railAnchor.segmentGuid = rail.Segments().front().guid;
+    placement.railAnchor.normalizedT = 0.6f;
+    placement.railAnchor.lateralOffset = 2.5f;
+    placement.railAnchor.verticalOffset = 1.25f;
+    placement.localRotation = {0.1f, 0.2f, 0.3f};
+    placement.localScale = {1.2f, 0.8f, 1.5f};
+    course.enemyPlacements.push_back(placement);
+
+    CourseWaveRuntimeCompileOptions options{};
+    options.actorAssetResolver = [](
+        std::string_view id, CourseActorAsset& asset, std::string& error) {
+        if (id != "test_actor") {
+            error = "unknown test actor";
+            return false;
+        }
+        asset.id = std::string(id);
+        asset.displayName = "Test Actor";
+        asset.meshId = "animated_cube";
+        asset.bulletPatternId = "test_pattern";
+        asset.radius = 1.75f;
+        asset.hitPoints = 55.0f;
+        asset.forwardSpeed = 2.0f;
+        return true;
+    };
+    options.bulletPatternResolver = [](
+        std::string_view id, BulletPatternAsset& asset, std::string& error) {
+        if (id != "test_pattern") {
+            error = "unknown test pattern";
+            return false;
+        }
+        asset.id = std::string(id);
+        asset.firePattern = CourseEnemyFirePattern::Twin;
+        asset.bulletCount = 2;
+        asset.damage = 9.0f;
+        return true;
+    };
+
+    CourseWaveRuntimeCompiler compiler;
+    const CourseWaveRuntimeCompileResult compiled = compiler.Compile(course, options);
+    const CompiledCourseWaveActor* compiledActor =
+        compiled.program.FindActor(placement.editorGuid);
+    runner.Expect(
+        compiled.succeeded && compiled.errors == 0 &&
+            compiled.program.waves.size() == 1 &&
+            compiled.program.actors.size() == 1 &&
+            compiled.program.sourceFingerprint != 0 &&
+            compiled.program.waves.front().actorIndices.size() == 1,
+        "wave runtime compiler should produce a deterministic index-linked program");
+    runner.Expect(
+        compiledActor != nullptr && compiledActor->actorAssetResolved &&
+            compiledActor->actor.sourcePlacementGuid == placement.editorGuid &&
+            compiledActor->actor.meshId == "animated_cube" &&
+            compiledActor->actor.bulletPatternId == "test_pattern" &&
+            compiledActor->actor.bulletCount == 2 &&
+            std::fabs(compiledActor->actor.hitPoints - 55.0f) < 0.001f &&
+            std::fabs(compiledActor->authoredScale.z - 1.5f) < 0.001f,
+        "compiler should resolve ActorAsset, bullet pattern and authored transform once");
+
+    CourseWaveRuntimeCompileOptions missingOptions{};
+    missingOptions.actorAssetResolver = [](
+        std::string_view, CourseActorAsset&, std::string& error) {
+        error = "asset intentionally missing";
+        return false;
+    };
+    const CourseWaveRuntimeCompileResult missing =
+        compiler.Compile(course, missingOptions);
+    runner.Expect(
+        !missing.succeeded && missing.errors == 1 &&
+            std::any_of(
+                missing.diagnostics.begin(), missing.diagnostics.end(),
+                [](const CourseWaveRuntimeDiagnostic& diagnostic) {
+                    return diagnostic.code == "actor.asset_missing";
+                }),
+        "strict runtime compilation should reject unresolved ActorAssets with diagnostics");
+
+    CoursePreviewSimulationSystem simulation;
+    simulation.MutableSettings().fixedStepSeconds = 0.01f;
+    simulation.MutableSettings().travelSpeed = 4.0f;
+    simulation.MutableSettings().maximumSubsteps = 64;
+    simulation.MutableSettings().automaticallyDefeatEnemies = false;
+    std::string error;
+    runner.Expect(
+        simulation.BeginPreview(course, 0.0f, &error),
+        "preview actor bridge fixture should start simulation");
+    simulation.Tick(0.11f);
+
+    CoursePreviewActorRuntimeBridge bridge;
+    bridge.SetCompileOptions(options);
+    runner.Expect(
+        bridge.Synchronize(simulation, 0.01f, simulation.Frame().distance, &error) &&
+            bridge.Active() && bridge.Stats().programValid &&
+            bridge.Stats().compiledActors == 1 &&
+            bridge.Runtime().ActiveEnemyCount() == 1,
+        "preview actor bridge should materialize active compiled placements in an isolated runtime");
+    const CourseEnemyActor* runtimeActor = bridge.Runtime().Enemies().empty()
+        ? nullptr : &bridge.Runtime().Enemies().front();
+    runner.Expect(
+        runtimeActor != nullptr && runtimeActor->desc.previewOnly &&
+            runtimeActor->desc.suppressFire &&
+            runtimeActor->desc.sourcePlacementGuid == placement.editorGuid &&
+            runtimeActor->desc.localScale.z == placement.localScale.z,
+        "preview runtime actors should preserve placement identity and authored presentation data");
+
+    bridge.MutableSettings().simulateMovement = true;
+    bridge.MutableSettings().preserveActorsAtAuthoredTransform = false;
+    bridge.Synchronize(simulation, 0.10f, simulation.Frame().distance, &error);
+    const float firstMovedOffset = bridge.Runtime().Enemies().front().desc.distanceOffset;
+    bridge.Synchronize(simulation, 0.10f, simulation.Frame().distance, &error);
+    runner.Expect(
+        bridge.Runtime().Enemies().front().desc.distanceOffset > firstMovedOffset + 0.1f,
+        "preview Actor movement should accumulate when authored-transform preservation is disabled");
+
+    simulation.MarkEnemyDefeated(placement.editorGuid);
+    runner.Expect(
+        bridge.Synchronize(simulation, 0.0f, simulation.Frame().distance, &error) &&
+            bridge.Runtime().ActiveEnemyCount() == 0 &&
+            bridge.Stats().removedThisFrame == 1,
+        "bridge should remove runtime actors when simulation state retires the placement");
+    simulation.Stop();
+    bridge.Synchronize(simulation, 0.0f, simulation.Frame().distance, &error);
+    runner.Expect(
+        !bridge.Active() && bridge.Runtime().ActiveEnemyCount() == 0,
+        "stopping preview should release the isolated Actor runtime atomically");
+}
+
+void TestCourseRuntimeCookAndGameplayWaveBridge(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Cooked Gameplay Course";
+    course.railPoints = {
+        {{-1.0f, 0.0f, 0.0f}, 18.0f, 10.0f},
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 10.0f},
+        {{1.0f, 0.0f, 0.0f}, 18.0f, 10.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "cooked-gameplay");
+    const CourseRailAuthoringModel rail(course);
+
+    CourseWaveDefinition first{};
+    first.editorGuid = "cook-wave-first";
+    first.displayName = "First";
+    first.triggerRailDistance = rail.Length() * 0.15f;
+    first.prewarmDistance = rail.Length() * 0.10f;
+    first.completionCondition = CourseWaveCompletionCondition::AllEnemiesDefeated;
+    first.executionPolicy = CourseWaveExecutionPolicy::Sequential;
+    first.nextWaveGuid = "cook-wave-second";
+    CourseWaveDefinition second{};
+    second.editorGuid = "cook-wave-second";
+    second.displayName = "Second";
+    second.triggerRailDistance = rail.Length() * 0.75f;
+    second.prewarmDistance = rail.Length() * 0.10f;
+    second.timeoutSeconds = 0.10f;
+    second.completionCondition = CourseWaveCompletionCondition::Timeout;
+    second.executionPolicy = CourseWaveExecutionPolicy::Sequential;
+    course.waveDefinitions = {first, second};
+
+    const auto makePlacement = [&](std::string guid, std::string waveGuid, float t) {
+        CourseEnemyPlacement placement{};
+        placement.editorGuid = std::move(guid);
+        placement.actorAssetId = "cook_actor";
+        placement.bulletPatternOverrideId = "cook_pattern";
+        placement.waveGroupGuid = std::move(waveGuid);
+        placement.railAnchor.segmentGuid = rail.Segments().front().guid;
+        placement.railAnchor.normalizedT = t;
+        return placement;
+    };
+    course.enemyPlacements = {
+        makePlacement("cook-actor-first", first.editorGuid, 0.35f),
+        makePlacement("cook-actor-second", second.editorGuid, 0.70f),
+    };
+
+    CourseRuntimeCookOptions options{};
+    options.configuration = CourseRuntimeBuildConfiguration::Debug;
+    options.allowDebugFallbackAssets = false;
+    options.compiler.actorAssetResolver = [](
+        std::string_view id, CourseActorAsset& asset, std::string& error) {
+        if (id != "cook_actor") {
+            error = "unknown cook actor";
+            return false;
+        }
+        asset.id = std::string(id);
+        asset.meshId = "animated_cube";
+        asset.bulletPatternId = "cook_pattern";
+        asset.hitPoints = 25.0f;
+        asset.lifetime = 30.0f;
+        return true;
+    };
+    options.compiler.bulletPatternResolver = [](
+        std::string_view id, BulletPatternAsset& asset, std::string& error) {
+        if (id != "cook_pattern") {
+            error = "unknown cook pattern";
+            return false;
+        }
+        asset.id = std::string(id);
+        asset.firePattern = CourseEnemyFirePattern::Twin;
+        asset.bulletCount = 2;
+        return true;
+    };
+
+    const CourseRuntimeCookResult cooked = CourseRuntimeCookPipeline{}.Cook(course, options);
+    runner.Expect(
+        cooked.succeeded && cooked.errors == 0 &&
+            cooked.program.Validate() && cooked.program.sourceAssetHash != 0 &&
+            cooked.program.sourceFingerprint != 0 &&
+            cooked.program.waves.size() == 2 && cooked.program.actors.size() == 2 &&
+            cooked.program.dependencies.size() == 2,
+        "runtime cook should emit one validated deterministic ProgramAsset and dependency table");
+
+    std::string bytes;
+    std::string error;
+    CourseRuntimeProgramAsset loaded{};
+    runner.Expect(
+        cooked.program.SaveToString(&bytes, &error) &&
+            loaded.LoadFromString(bytes, &error) &&
+            loaded.IsSourceCurrent(ComputeCourseAssetSourceHash(course)) &&
+            loaded.sourceFingerprint == cooked.program.sourceFingerprint &&
+            loaded.FindActor("cook-actor-second") != nullptr,
+        "runtime ProgramAsset should round-trip and reject stale source identity");
+    std::string corrupt = bytes;
+    if (!corrupt.empty()) corrupt[0] = 'X';
+    CourseRuntimeProgramAsset rejected{};
+    runner.Expect(
+        !rejected.LoadFromString(corrupt, &error),
+        "runtime ProgramAsset loader should reject corrupt file identity");
+
+    CourseRuntimeCookOptions releaseOptions = options;
+    releaseOptions.configuration = CourseRuntimeBuildConfiguration::Release;
+    releaseOptions.compiler.bulletPatternResolver = [](
+        std::string_view, BulletPatternAsset&, std::string& resolverError) {
+        resolverError = "release pattern intentionally missing";
+        return false;
+    };
+    const CourseRuntimeCookResult rejectedRelease =
+        CourseRuntimeCookPipeline{}.Cook(course, releaseOptions);
+    runner.Expect(
+        !rejectedRelease.succeeded && rejectedRelease.errors > 0 &&
+            std::any_of(
+                rejectedRelease.diagnostics.begin(), rejectedRelease.diagnostics.end(),
+                [](const CourseRuntimeProgramDiagnostic& diagnostic) {
+                    return diagnostic.code == "actor.pattern_fallback" &&
+                        diagnostic.severity ==
+                            CourseRuntimeProgramDiagnosticSeverity::Error;
+                }),
+        "release cook should promote unresolved runtime dependencies to fatal diagnostics");
+
+    CourseSpawnRuntime runtime;
+    CourseGameplayWaveRuntimeBridge gameplay;
+    runner.Expect(
+        gameplay.Bind(&loaded, &runtime, 0.0f, &error),
+        "gameplay Wave bridge should bind only a validated cooked ProgramAsset");
+    gameplay.Update({0.0f, first.triggerRailDistance + 0.01f, {}});
+    runner.Expect(
+        gameplay.Stats().activeWaves == 1 && runtime.ActiveEnemyCount() == 1 &&
+            runtime.Enemies().front().desc.sourcePlacementGuid == "cook-actor-first" &&
+            !runtime.Enemies().front().desc.previewOnly,
+        "gameplay bridge should materialize the authored Actor at the cooked Wave trigger");
+
+    const CourseGameplayWaveCheckpoint checkpoint = gameplay.CaptureCheckpoint();
+    runtime.MutableEnemies().front().desc.hitPoints = 0.0f;
+    gameplay.Update({0.0f, first.triggerRailDistance + 0.01f, {}});
+    runner.Expect(
+        gameplay.Stats().completedWaves == 1 && gameplay.Stats().activeWaves == 1 &&
+            runtime.ActiveEnemyCount() == 1 &&
+            runtime.Enemies().front().desc.sourcePlacementGuid == "cook-actor-second",
+        "defeat should complete the first Wave and activate its compiled next-Wave link");
+    gameplay.Update({0.11f, first.triggerRailDistance + 0.01f, {}});
+    runner.Expect(
+        gameplay.Stats().completedWaves == 2 && gameplay.Stats().activeWaves == 0 &&
+            runtime.ActiveEnemyCount() == 0,
+        "timeout completion should retire gameplay Actors through the shared SpawnRuntime");
+    runner.Expect(
+        gameplay.RestoreCheckpoint(checkpoint, &error) &&
+            gameplay.Stats().activeWaves == 1 && runtime.ActiveEnemyCount() == 1 &&
+            runtime.Enemies().front().desc.sourcePlacementGuid == "cook-actor-first",
+        "gameplay Wave checkpoint should restore only when Program fingerprints match");
+    gameplay.Unbind();
+    runner.Expect(
+        runtime.ActiveEnemyCount() == 0 && !gameplay.IsBound(),
+        "unbinding gameplay Wave runtime should remove only Program-owned Actors");
+}
+
+void TestCourseEnemyEditorViewportFoundation(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Enemy Viewport";
+    course.railPoints = {
+        {{-0.5f, 0.0f, 0.5f}, 18.0f, 30.0f},
+        {{0.0f, 0.0f, 0.5f}, 18.0f, 32.0f},
+        {{0.5f, 0.0f, 0.5f}, 18.0f, 34.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "enemy-viewport");
+    const CourseRailAuthoringModel rail(course);
+    CourseEnemyPlacement placement{};
+    placement.actorAssetId = "drone_scout";
+    placement.waveGroupGuid = "wave-viewport";
+    placement.railAnchor.segmentGuid = rail.Segments().front().guid;
+    placement.railAnchor.normalizedT = 0.5f;
+    placement.railAnchor.verticalOffset = 0.1f;
+    course.enemyPlacements.push_back(placement);
+
+    EditorDirtyStateService dirtyState;
+    CourseEnemyEditorController controller;
+    std::string error;
+    runner.Expect(
+        controller.Bind(
+            CourseEnemyEditorControllerBinding{
+                &course, nullptr, &dirtyState, "enemy-viewport", true},
+            &error) &&
+            controller.State().status == CourseEnemyEditorControllerStatus::Ready &&
+            controller.State().bindingGeneration == 1 &&
+            !course.enemyPlacements.front().editorGuid.empty(),
+        "course enemy controller should bind one document and assign persistent placement identity");
+    runner.Expect(
+        controller.State().dirty &&
+            dirtyState.HasDirtyDomain(EditorDirtyDomain::CourseAuthoring),
+        "enemy placement identity migration should participate in document dirty state");
+
+    const std::string placementGuid = course.enemyPlacements.front().editorGuid;
+    const float originalOffset = course.enemyPlacements.front().railAnchor.lateralOffset;
+    CourseEnemyPlacement moved = course.enemyPlacements.front();
+    moved.railAnchor.lateralOffset = 0.15f;
+    CourseEnemyMutationRequest move{};
+    move.kind = CourseEnemyMutationKind::SetAnchors;
+    move.placements.push_back(moved);
+    move.expectedRevision = controller.State().mutationRevision;
+    const CourseEnemyMutationResult movedResult = controller.Mutate(move);
+    runner.Expect(
+        movedResult.succeeded && movedResult.changed &&
+            controller.Transactions()->UndoDepth() == 1 &&
+            std::fabs(course.enemyPlacements.front().railAnchor.lateralOffset - 0.15f) <
+                0.0001f,
+        "enemy controller should commit one validated mutation as one Undo transaction");
+    runner.Expect(
+        controller.Undo(&error) &&
+            std::fabs(course.enemyPlacements.front().railAnchor.lateralOffset -
+                originalOffset) < 0.0001f &&
+            controller.Redo(&error) &&
+            std::fabs(course.enemyPlacements.front().railAnchor.lateralOffset - 0.15f) <
+                0.0001f,
+        "enemy controller should own executable Undo and Redo lifecycle");
+
+    controller.SetAuthoringAllowed(false);
+    CourseEnemyMutationRequest disable{};
+    disable.kind = CourseEnemyMutationKind::SetEnabled;
+    disable.placementGuids.push_back(placementGuid);
+    disable.stateValue = false;
+    disable.expectedRevision = controller.State().mutationRevision;
+    runner.Expect(
+        !controller.Mutate(disable).succeeded &&
+            controller.State().status == CourseEnemyEditorControllerStatus::ReadOnly &&
+            course.enemyPlacements.front().enabled,
+        "enemy controller should reject viewport mutations while authoring is read-only");
+    controller.SetAuthoringAllowed(true);
+
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        {0.0f, 0.0f, 800.0f, 600.0f},
+        800,
+        600,
+        MakeIdentity4x4()});
+    const CourseEnemyAuthoringModel* model = controller.Model();
+    const CourseEnemyPlacementResolution resolved = model != nullptr
+        ? model->Resolve(placementGuid) : CourseEnemyPlacementResolution{};
+    const EditorViewportProjectedPoint marker =
+        coordinates.ProjectWorld(resolved.worldPosition);
+    CourseEnemyPickingService picking;
+    const CourseEnemyPickResult pick = model != nullptr
+        ? picking.PickDisplay(*model, coordinates, marker.display.x, marker.display.y)
+        : CourseEnemyPickResult{};
+    const EditorViewportPickResult bridged = picking.ToViewportPick(
+        pick,
+        static_cast<uint32_t>(controller.State().mutationRevision));
+    runner.Expect(
+        resolved.valid && pick.hit && pick.placementGuid == placementGuid &&
+            pick.actorAssetId == "drone_scout" &&
+            bridged.canonicalHandle.domain == EditorDomainId::CourseEnemyPlacement &&
+            bridged.canonicalHandle.stableId ==
+                "course-enemy-placement:" + placementGuid,
+        "enemy picking should resolve the rendered marker to a stable canonical selection handle");
+
+    CourseEnemyViewportRenderer renderer(&controller);
+    renderer.SetSelectedPlacements({placementGuid});
+    renderer.SetHoveredPlacement(placementGuid);
+    EditorViewportOverlayService overlay;
+    EditorViewportRenderTargetState viewport{};
+    viewport.enabled = true;
+    viewport.displayRect = {0.0f, 0.0f, 800.0f, 600.0f};
+    viewport.renderWidth = 800;
+    viewport.renderHeight = 600;
+    viewport.aspectRatio = 4.0f / 3.0f;
+    overlay.BeginFrame(EditorViewportOverlayFrameContext{
+        viewport, 800, 600, &coordinates, {0.0f, 0.0f, -1.0f}, 1.0f});
+    auto sink = overlay.Sink(renderer.Layer());
+    renderer.Build(overlay.FrameContext(), sink);
+    overlay.Resolve();
+    const bool hasMarker = std::any_of(
+        overlay.ResolvedCommands().begin(), overlay.ResolvedCommands().end(),
+        [](const EditorViewportOverlayCommand& command) {
+            return command.type == EditorViewportOverlayCommandType::CircleFilled;
+        });
+    const bool hasLabel = std::any_of(
+        overlay.ResolvedCommands().begin(), overlay.ResolvedCommands().end(),
+        [](const EditorViewportOverlayCommand& command) {
+            return command.type == EditorViewportOverlayCommandType::Label;
+        });
+    runner.Expect(
+        renderer.Stats().modelValid && renderer.Stats().authoredPlacements == 1 &&
+            renderer.Stats().visiblePlacements == 1 &&
+            renderer.Stats().selectedPlacements == 1 && hasMarker && hasLabel,
+        "enemy viewport renderer should submit anchor, facing, marker, state and label overlays");
+
+    const uint32_t generationBefore = controller.State().bindingGeneration;
+    course.enemyPlacements.front().railAnchor.normalizedT = 0.8f;
+    const bool synchronized = controller.SynchronizeExternalChanges(&error);
+    const CourseEnemyAuthoringModel* synchronizedModel = controller.Model();
+    const CourseEnemyPlacement* synchronizedPlacement = synchronizedModel != nullptr
+        ? synchronizedModel->Find(placementGuid) : nullptr;
+    runner.Expect(
+        synchronized &&
+            controller.State().bindingGeneration == generationBefore + 1 &&
+            controller.Transactions()->UndoDepth() == 0 &&
+            synchronizedPlacement != nullptr &&
+            std::fabs(synchronizedPlacement->railAnchor.normalizedT - 0.8f) <
+                0.0001f,
+        "enemy controller should invalidate stale Undo snapshots and rebuild after rail-side edits");
+}
+
+void TestCourseEnemyViewportEditingSuite(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Enemy Viewport Editing";
+    course.railPoints = {
+        {{-0.7f, 0.0f, 0.5f}, 1.0f, 30.0f},
+        {{0.0f, 0.0f, 0.5f}, 1.0f, 32.0f},
+        {{0.7f, 0.0f, 0.5f}, 1.0f, 34.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "enemy-editing");
+    const CourseRailAuthoringModel rail(course);
+    CourseEnemyPlacement placement{};
+    placement.actorAssetId = "drone_editor";
+    placement.railAnchor.segmentGuid = rail.Segments().front().guid;
+    placement.railAnchor.normalizedT = 0.25f;
+    course.enemyPlacements.push_back(placement);
+
+    CourseEnemyEditorController controller;
+    std::string error;
+    runner.Expect(
+        controller.Bind(
+            CourseEnemyEditorControllerBinding{
+                &course, nullptr, nullptr, "enemy-editing", true},
+            &error),
+        "enemy viewport editing suite should bind its document controller");
+    const std::string originalGuid = course.enemyPlacements.front().editorGuid;
+
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        {0.0f, 0.0f, 800.0f, 600.0f},
+        800,
+        600,
+        MakeIdentity4x4()});
+    CourseEnemyPickingService enemyPicking;
+    CourseRailPickingService railPicking;
+    CourseEnemyViewportEditTool tool;
+    tool.Bind(&controller, &enemyPicking, &railPicking);
+    tool.SetActive(true);
+    CourseEnemyViewportEditSettings toolSettings = tool.Settings();
+    toolSettings.defaultActorAssetId = "drone_added";
+    toolSettings.defaultWaveGroupGuid = "wave-editor";
+    toolSettings.duplicateOffset = {0.1f, 0.1f, 0.0f};
+    tool.SetSettings(toolSettings);
+
+    tool.SetMode(CourseEnemyEditMode::Add);
+    const RailPathSample addSample =
+        controller.Model()->RailModel().RuntimePath().EvaluateSegmentAt(1, 0.6f);
+    const EditorViewportProjectedPoint addScreen =
+        coordinates.ProjectWorld(addSample.position);
+    CourseEnemyViewportEditInput toolInput{};
+    toolInput.coordinates = &coordinates;
+    toolInput.displayX = addScreen.display.x;
+    toolInput.displayY = addScreen.display.y;
+    toolInput.primaryPressed = true;
+    toolInput.primaryDown = true;
+    const std::size_t undoBeforeAdd = controller.Transactions()->UndoDepth();
+    tool.Tick(toolInput);
+    const std::optional<CourseEnemyPickResult> addedSelection =
+        tool.ConsumeSelectionRequest();
+    runner.Expect(
+        course.enemyPlacements.size() == 2 &&
+            controller.Transactions()->UndoDepth() == undoBeforeAdd + 1 &&
+            addedSelection.has_value() && addedSelection->hit &&
+            course.enemyPlacements.back().actorAssetId == "drone_added" &&
+            course.enemyPlacements.back().waveGroupGuid == "wave-editor",
+        "enemy Add mode should author one RailAnchor placement and select its persistent GUID");
+
+    const std::size_t undoBeforeActorDrop = controller.Transactions()->UndoDepth();
+    const CourseEnemyMutationResult actorDrop = tool.PlaceActorAssetAtDisplay(
+        "drone_chaser", coordinates, addScreen.display.x, addScreen.display.y);
+    const std::optional<CourseEnemyPickResult> droppedSelection =
+        tool.ConsumeSelectionRequest();
+    runner.Expect(
+        actorDrop.succeeded && actorDrop.changed &&
+            course.enemyPlacements.size() == 3 &&
+            controller.Transactions()->UndoDepth() == undoBeforeActorDrop + 1 &&
+            course.enemyPlacements.back().actorAssetId == "drone_chaser" &&
+            course.enemyPlacements.back().waveGroupGuid == "wave-editor" &&
+            droppedSelection.has_value() && droppedSelection->hit,
+        "ActorAsset viewport drop should project onto the rail and commit one placement transaction");
+
+    CourseEnemyWaveBulkEditRequest waveEdit{};
+    waveEdit.waveGroupGuid = "wave-editor";
+    waveEdit.bulletPatternOverrideId = "wave_barrage";
+    waveEdit.activationLeadDistance = 125.0f;
+    waveEdit.anchorOffsetDelta = Vector3{0.05f, 0.1f, 0.0f};
+    waveEdit.label = "Regression Wave Bulk Edit";
+    const std::size_t undoBeforeWaveEdit = controller.Transactions()->UndoDepth();
+    const CourseEnemyMutationResult waveEdited = controller.MutateWave(waveEdit);
+    const std::vector<const CourseEnemyPlacement*> editedWave =
+        controller.Model()->FindWaveGroup("wave-editor");
+    const bool allWaveMembersEdited = !editedWave.empty() && std::all_of(
+        editedWave.begin(), editedWave.end(),
+        [](const CourseEnemyPlacement* member) {
+            return member != nullptr &&
+                member->bulletPatternOverrideId == "wave_barrage" &&
+                std::fabs(member->activationLeadDistance - 125.0f) < 0.001f &&
+                member->railAnchor.verticalOffset >= 0.099f;
+        });
+    runner.Expect(
+        waveEdited.succeeded && waveEdited.changed && editedWave.size() == 2 &&
+            allWaveMembersEdited &&
+            controller.Transactions()->UndoDepth() == undoBeforeWaveEdit + 1,
+        "wave bulk editing should update every member as one validated Undo transaction");
+
+    CourseEnemyMutationRequest lockWaveMember{};
+    lockWaveMember.kind = CourseEnemyMutationKind::SetLocked;
+    lockWaveMember.expectedRevision = controller.State().mutationRevision;
+    lockWaveMember.placementGuids.push_back(editedWave.front()->editorGuid);
+    lockWaveMember.stateValue = true;
+    controller.Mutate(lockWaveMember);
+    CourseEnemyWaveBulkEditRequest rejectedWaveEdit{};
+    rejectedWaveEdit.waveGroupGuid = "wave-editor";
+    rejectedWaveEdit.enabled = false;
+    const CourseEnemyMutationResult waveRejected =
+        controller.MutateWave(rejectedWaveEdit);
+    const std::vector<const CourseEnemyPlacement*> rejectedWaveMembers =
+        controller.Model()->FindWaveGroup("wave-editor");
+    const bool waveStillEnabled = std::all_of(
+        rejectedWaveMembers.begin(), rejectedWaveMembers.end(),
+        [](const CourseEnemyPlacement* member) {
+            return member != nullptr && member->enabled;
+        });
+    runner.Expect(
+        !waveRejected.succeeded && waveStillEnabled,
+        "wave bulk editing should reject locked membership without partially applying changes");
+    CourseEnemyWaveBulkEditRequest unlockWave{};
+    unlockWave.waveGroupGuid = "wave-editor";
+    unlockWave.editorLocked = false;
+    unlockWave.includeLocked = true;
+    controller.MutateWave(unlockWave);
+
+    tool.SetMode(CourseEnemyEditMode::SelectMove);
+    CourseEnemyViewportEditInput marqueeInput{};
+    marqueeInput.coordinates = &coordinates;
+    marqueeInput.displayX = 5.0f;
+    marqueeInput.displayY = 5.0f;
+    marqueeInput.primaryPressed = true;
+    marqueeInput.primaryDown = true;
+    tool.Tick(marqueeInput);
+    EditorViewportOverlayService marqueeOverlay;
+    EditorViewportRenderTargetState marqueeViewport{};
+    marqueeViewport.enabled = true;
+    marqueeViewport.displayRect = {0.0f, 0.0f, 800.0f, 600.0f};
+    marqueeViewport.renderWidth = 800;
+    marqueeViewport.renderHeight = 600;
+    marqueeOverlay.BeginFrame(EditorViewportOverlayFrameContext{
+        marqueeViewport, 800, 600, &coordinates, {0.0f, 0.0f, -1.0f}, 1.0f});
+    tool.BuildViewportOverlay(marqueeOverlay);
+    marqueeOverlay.Resolve();
+    const bool marqueeVisible = std::any_of(
+        marqueeOverlay.ResolvedCommands().begin(),
+        marqueeOverlay.ResolvedCommands().end(),
+        [](const EditorViewportOverlayCommand& command) {
+            return command.type == EditorViewportOverlayCommandType::Rect;
+        });
+    marqueeInput.primaryPressed = false;
+    marqueeInput.displayX = 795.0f;
+    marqueeInput.displayY = 595.0f;
+    tool.Tick(marqueeInput);
+    marqueeInput.primaryDown = false;
+    marqueeInput.primaryReleased = true;
+    tool.Tick(marqueeInput);
+    const std::optional<CourseEnemyRangeSelectionRequest> marqueeSelection =
+        tool.ConsumeRangeSelectionRequest();
+    runner.Expect(
+        marqueeVisible && marqueeSelection.has_value() &&
+            !marqueeSelection->additive &&
+            marqueeSelection->placements.size() == course.enemyPlacements.size(),
+        "enemy marquee should render a selection rectangle and return stable visible placement GUIDs");
+
+    tool.SetSelectedPlacements({originalGuid});
+    const CourseEnemyPlacementResolution originalResolved =
+        controller.Model()->Resolve(originalGuid);
+    const EditorViewportProjectedPoint originalScreen =
+        coordinates.ProjectWorld(originalResolved.worldPosition);
+    toolInput = {};
+    toolInput.coordinates = &coordinates;
+    toolInput.displayX = originalScreen.display.x;
+    toolInput.displayY = originalScreen.display.y;
+    toolInput.primaryPressed = true;
+    toolInput.primaryDown = true;
+    const std::size_t undoBeforeDrag = controller.Transactions()->UndoDepth();
+    tool.Tick(toolInput);
+    toolInput.primaryPressed = false;
+    toolInput.displayX += 35.0f;
+    tool.Tick(toolInput);
+    runner.Expect(
+        tool.State().dragging && tool.PreviewModel() != nullptr &&
+            controller.Transactions()->UndoDepth() == undoBeforeDrag,
+        "enemy marker drag should stay in a valid private RailAnchor preview");
+    toolInput.primaryDown = false;
+    toolInput.primaryReleased = true;
+    tool.Tick(toolInput);
+    runner.Expect(
+        !tool.State().dragging &&
+            controller.Transactions()->UndoDepth() == undoBeforeDrag + 1,
+        "enemy marker release should commit exactly one Undo transaction");
+
+    tool.SetSelectedPlacements({originalGuid});
+    toolInput = {};
+    toolInput.coordinates = &coordinates;
+    toolInput.duplicatePressed = true;
+    const std::size_t placementsBeforeDuplicate = course.enemyPlacements.size();
+    tool.Tick(toolInput);
+    runner.Expect(
+        course.enemyPlacements.size() == placementsBeforeDuplicate + 1 &&
+            course.enemyPlacements.back().editorGuid != originalGuid,
+        "enemy duplicate command should preserve source identity and create a new stable GUID");
+    const std::string duplicateGuid = course.enemyPlacements.back().editorGuid;
+    tool.SetSelectedPlacements({duplicateGuid});
+    toolInput = {};
+    toolInput.coordinates = &coordinates;
+    toolInput.deletePressed = true;
+    const std::size_t placementsBeforeDelete = course.enemyPlacements.size();
+    tool.Tick(toolInput);
+    runner.Expect(
+        course.enemyPlacements.size() + 1 == placementsBeforeDelete &&
+            controller.Model()->Find(duplicateGuid) == nullptr,
+        "enemy Delete command should remove the selected persistent placement atomically");
+    toolInput = {};
+    toolInput.coordinates = &coordinates;
+    toolInput.undoPressed = true;
+    tool.Tick(toolInput);
+    runner.Expect(
+        course.enemyPlacements.size() == placementsBeforeDelete &&
+            controller.Model()->Find(duplicateGuid) != nullptr,
+        "enemy viewport tool should route Undo through its document controller");
+
+    EditorSelection selection;
+    EditorObjectHandle handle{};
+    handle.domain = EditorDomainId::CourseEnemyPlacement;
+    handle.stableId = "course-enemy-placement:" + originalGuid;
+    handle.localIndex = 0;
+    handle.generation = static_cast<uint32_t>(controller.State().mutationRevision);
+    handle.displayName = "drone_editor";
+    selection.SetPrimary(handle);
+
+    CourseEnemyTransformGizmo gizmo;
+    gizmo.Bind(&controller);
+    CourseEnemyTransformGizmoSettings gizmoSettings{};
+    gizmoSettings.mode = EditorTransformGizmoMode::Scale;
+    gizmoSettings.space = EditorTransformGizmoSpace::Local;
+    gizmo.SetSettings(gizmoSettings);
+    const CourseEnemyPlacementResolution beforeScale =
+        controller.Model()->Resolve(originalGuid);
+    const EditorViewportProjectedPoint gizmoPivot =
+        coordinates.ProjectWorld(beforeScale.worldPosition);
+    CourseEnemyTransformGizmoInput gizmoInput{};
+    gizmoInput.selection = &selection;
+    gizmoInput.coordinates = &coordinates;
+    gizmoInput.enabled = true;
+    gizmoInput.canMutate = true;
+    gizmoInput.displayX = gizmoPivot.display.x;
+    gizmoInput.displayY = gizmoPivot.display.y;
+    gizmoInput.primaryPressed = true;
+    gizmoInput.primaryDown = true;
+    const std::size_t undoBeforeScale = controller.Transactions()->UndoDepth();
+    gizmo.Tick(gizmoInput);
+    gizmoInput.primaryPressed = false;
+    gizmoInput.displayY -= 30.0f;
+    gizmo.Tick(gizmoInput);
+    runner.Expect(
+        gizmo.State().dragging && gizmo.PreviewModel() != nullptr &&
+            controller.Transactions()->UndoDepth() == undoBeforeScale,
+        "enemy scale gizmo should keep multi-transform data transient during drag");
+    gizmoInput.primaryDown = false;
+    gizmoInput.primaryReleased = true;
+    gizmo.Tick(gizmoInput);
+    const CourseEnemyPlacement* scaled = controller.Model()->Find(originalGuid);
+    runner.Expect(
+        !gizmo.State().dragging && scaled != nullptr && scaled->localScale.x > 1.0f &&
+            scaled->localScale.y > 1.0f && scaled->localScale.z > 1.0f &&
+            controller.Transactions()->UndoDepth() == undoBeforeScale + 1,
+        "enemy uniform scale gizmo should commit one validated placement transaction");
+
+    gizmoSettings.mode = EditorTransformGizmoMode::Rotate;
+    gizmo.SetSettings(gizmoSettings);
+    gizmoInput = {};
+    gizmoInput.selection = &selection;
+    gizmoInput.coordinates = &coordinates;
+    gizmoInput.enabled = true;
+    gizmoInput.canMutate = true;
+    gizmo.Tick(gizmoInput);
+    EditorViewportOverlayService overlay;
+    EditorViewportRenderTargetState viewport{};
+    viewport.enabled = true;
+    viewport.displayRect = {0.0f, 0.0f, 800.0f, 600.0f};
+    viewport.renderWidth = 800;
+    viewport.renderHeight = 600;
+    viewport.aspectRatio = 4.0f / 3.0f;
+    overlay.BeginFrame(EditorViewportOverlayFrameContext{
+        viewport, 800, 600, &coordinates, {0.0f, 0.0f, -1.0f}, 1.0f});
+    gizmo.BuildViewportOverlay(overlay);
+    overlay.Resolve();
+    runner.Expect(
+        gizmo.State().visible && gizmo.State().selectedPlacementCount == 1 &&
+            !overlay.ResolvedCommands().empty(),
+        "enemy transform gizmo should render local translate, rotate and scale handles");
+
+    CourseEnemyMutationRequest lock{};
+    lock.kind = CourseEnemyMutationKind::SetLocked;
+    lock.expectedRevision = controller.State().mutationRevision;
+    lock.placementGuids.push_back(originalGuid);
+    lock.stateValue = true;
+    controller.Mutate(lock);
+    gizmoInput = {};
+    gizmoInput.selection = &selection;
+    gizmoInput.coordinates = &coordinates;
+    gizmoInput.enabled = true;
+    gizmoInput.canMutate = true;
+    gizmo.Tick(gizmoInput);
+    runner.Expect(
+        gizmo.State().containsLockedPlacement && !gizmo.State().canMutate,
+        "enemy gizmo should expose locked selection and reject transform mutation");
+
+    CourseEnemyDetailsPanel details;
+    runner.Expect(
+        details.HandlesSelection(&selection),
+        "enemy details panel should claim stable CourseEnemyPlacement selections");
+}
+
+void TestCourseRailEditorViewportFoundation(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Viewport Rail";
+    course.railPoints = {
+        {{-0.5f, 0.0f, 0.5f}, 0.10f, 30.0f},
+        {{0.0f, 0.0f, 0.5f}, 0.12f, 34.0f},
+        {{0.5f, 0.0f, 0.5f}, 0.14f, 38.0f},
+    };
+    RailPath runtimePath;
+    EditorDirtyStateService dirtyState;
+    CourseRailEditorController controller;
+    std::string error;
+    runner.Expect(
+        controller.Bind(
+            CourseRailEditorControllerBinding{
+                &course,
+                &runtimePath,
+                nullptr,
+                &dirtyState,
+                "viewport-rail",
+                true},
+            &error) &&
+            controller.State().status == CourseRailEditorControllerStatus::Ready &&
+            controller.State().bindingGeneration == 1 &&
+            runtimePath.SegmentCount() == 2,
+        "course rail controller should bind document, runtime rail, execution context and stable IDs");
+    runner.Expect(
+        controller.State().dirty && dirtyState.HasDirtyDomain(EditorDirtyDomain::CourseAuthoring),
+        "rail identity migration should participate in document dirty state");
+
+    const Vector3 original = course.railPoints.front().position;
+    controller.SetAuthoringAllowed(false);
+    CourseRailMutationRequest move{};
+    move.kind = CourseRailMutationKind::MovePoint;
+    move.pointGuid = course.railPoints.front().editorGuid;
+    move.point.position = {-0.4f, 0.1f, 0.5f};
+    move.expectedRevision = controller.State().mutationRevision;
+    runner.Expect(
+        !controller.Mutate(move).succeeded &&
+            course.railPoints.front().position.x == original.x,
+        "course rail controller should reject mutation while play/read-only lock is active");
+    controller.SetAuthoringAllowed(true);
+    move.expectedRevision = controller.State().mutationRevision;
+    const CourseRailMutationResult moved = controller.Mutate(move);
+    runner.Expect(
+        moved.succeeded && controller.Transactions()->UndoDepth() == 1 &&
+            std::fabs(runtimePath.ControlPoints().front().position.x + 0.4f) < 0.0001f,
+        "course rail controller should atomically mutate authoring/runtime and record one Undo command");
+    runner.Expect(
+        controller.Undo(&error) &&
+            std::fabs(course.railPoints.front().position.x - original.x) < 0.0001f &&
+            controller.Redo(&error) &&
+            std::fabs(course.railPoints.front().position.x + 0.4f) < 0.0001f,
+        "course rail controller should own executable Undo and Redo lifecycle");
+
+    EditorViewportCoordinateService coordinates;
+    coordinates.Update(EditorViewportCoordinateContext{
+        {0.0f, 0.0f, 800.0f, 600.0f},
+        800,
+        600,
+        MakeIdentity4x4()});
+    const std::optional<CourseRailAuthoringModel> model = controller.BuildModel();
+    CourseRailPickingService picking;
+    const EditorViewportProjectedPoint firstPoint =
+        coordinates.ProjectWorld(course.railPoints.front().position);
+    const CourseRailPickResult pointPick = model.has_value()
+        ? picking.PickDisplay(*model, coordinates, firstPoint.display.x, firstPoint.display.y)
+        : CourseRailPickResult{};
+    runner.Expect(
+        pointPick.hit && pointPick.kind == CourseRailPickKind::ControlPoint &&
+            pointPick.guid == course.railPoints.front().editorGuid,
+        "rail picking should prefer a stable control-point GUID at visible handles");
+
+    const RailPathSample segmentMiddle = runtimePath.EvaluateSegmentAt(1, 0.5f);
+    const EditorViewportProjectedPoint middleScreen =
+        coordinates.ProjectWorld(segmentMiddle.position);
+    const CourseRailPickResult segmentPick = model.has_value()
+        ? picking.PickDisplay(*model, coordinates, middleScreen.display.x, middleScreen.display.y)
+        : CourseRailPickResult{};
+    const EditorViewportPickResult bridgedPick = picking.ToViewportPick(
+        segmentPick,
+        static_cast<uint32_t>(controller.State().mutationRevision));
+    runner.Expect(
+        segmentPick.hit && segmentPick.kind == CourseRailPickKind::Segment &&
+            segmentPick.normalizedT > 0.35f && segmentPick.normalizedT < 0.65f &&
+            bridgedPick.canonicalHandle.domain == EditorDomainId::CourseRailSegment &&
+            bridgedPick.canonicalHandle.stableId.find(segmentPick.guid) != std::string::npos,
+        "rail picking should return segment GUID, local t, world point and canonical selection handle");
+
+    CourseRailViewportRenderer renderer(&controller);
+    renderer.SetSelectedPoint(course.railPoints.front().editorGuid);
+    renderer.SetSelectedSegment(segmentPick.guid);
+    EditorViewportOverlayService overlay;
+    EditorViewportRenderTargetState viewport{};
+    viewport.enabled = true;
+    viewport.displayRect = {0.0f, 0.0f, 800.0f, 600.0f};
+    viewport.renderWidth = 800;
+    viewport.renderHeight = 600;
+    viewport.aspectRatio = 4.0f / 3.0f;
+    overlay.BeginFrame(EditorViewportOverlayFrameContext{
+        viewport, 800, 600, &coordinates, {0.0f, 0.0f, -1.0f}, 1.0f});
+    auto sink = overlay.Sink(renderer.Layer());
+    renderer.Build(overlay.FrameContext(), sink);
+    overlay.Resolve();
+    const bool hasRailLine = std::any_of(
+        overlay.ResolvedCommands().begin(), overlay.ResolvedCommands().end(),
+        [](const EditorViewportOverlayCommand& command) {
+            return command.type == EditorViewportOverlayCommandType::Line;
+        });
+    const bool hasControlPoint = std::any_of(
+        overlay.ResolvedCommands().begin(), overlay.ResolvedCommands().end(),
+        [](const EditorViewportOverlayCommand& command) {
+            return command.type == EditorViewportOverlayCommandType::CircleFilled;
+        });
+    runner.Expect(
+        renderer.Stats().modelValid && renderer.Stats().segments == 2 &&
+            renderer.Stats().visibleControlPoints == 3 &&
+            renderer.Stats().tangentHandles == 2 && hasRailLine && hasControlPoint,
+        "rail viewport renderer should submit curve, corridor, direction and stable control-point overlays");
+
+    CourseRailViewportEditTool editTool;
+    editTool.Bind(&controller, &picking);
+    editTool.SetActive(true);
+    editTool.SetSelectedPoint(course.railPoints.front().editorGuid);
+    const std::size_t undoBeforeViewportEdit = controller.Transactions()->UndoDepth();
+    const EditorViewportProjectedPoint moveStart =
+        coordinates.ProjectWorld(course.railPoints.front().position);
+    CourseRailViewportEditInput editInput{};
+    editInput.coordinates = &coordinates;
+    editInput.displayX = moveStart.display.x;
+    editInput.displayY = moveStart.display.y;
+    editInput.primaryPressed = true;
+    editInput.primaryDown = true;
+    editTool.Tick(editInput);
+    editInput.primaryPressed = false;
+    editInput.displayX += 24.0f;
+    editTool.Tick(editInput);
+    runner.Expect(
+        editTool.State().dragging && editTool.PreviewModel() != nullptr &&
+            controller.Transactions()->UndoDepth() == undoBeforeViewportEdit,
+        "rail point drag should remain transient until pointer release");
+    editInput.primaryDown = false;
+    editInput.primaryReleased = true;
+    editTool.Tick(editInput);
+    runner.Expect(
+        !editTool.State().dragging &&
+            controller.Transactions()->UndoDepth() == undoBeforeViewportEdit + 1,
+        "rail point release should commit exactly one Controller Undo transaction");
+
+    editTool.SetMode(CourseRailEditMode::Tangent);
+    editTool.SetSelectedPoint(course.railPoints.front().editorGuid);
+    const CourseRailAuthoringModel* tangentModel = controller.Model();
+    const Vector3 outgoingHandle = tangentModel->RuntimePath().TangentHandlePosition(0, false);
+    const EditorViewportProjectedPoint handleScreen = coordinates.ProjectWorld(outgoingHandle);
+    editInput = {};
+    editInput.coordinates = &coordinates;
+    editInput.displayX = handleScreen.display.x;
+    editInput.displayY = handleScreen.display.y;
+    editInput.primaryPressed = true;
+    editInput.primaryDown = true;
+    editTool.Tick(editInput);
+    editInput.primaryPressed = false;
+    editInput.displayY -= 20.0f;
+    editTool.Tick(editInput);
+    editInput.primaryDown = false;
+    editInput.primaryReleased = true;
+    editTool.Tick(editInput);
+    runner.Expect(
+        course.railPoints.front().tangentMode == RailPathTangentMode::Mirrored &&
+            controller.Transactions()->UndoDepth() == undoBeforeViewportEdit + 2,
+        "rail tangent drag should persist mirrored handles through SetPoint as one transaction");
+
+    editTool.SetMode(CourseRailEditMode::Add);
+    const CourseRailAuthoringModel* addModel = controller.Model();
+    const RailPathSample addSample = addModel->RuntimePath().EvaluateSegmentAt(1, 0.5f);
+    const EditorViewportProjectedPoint addScreen = coordinates.ProjectWorld(addSample.position);
+    editInput = {};
+    editInput.coordinates = &coordinates;
+    editInput.displayX = addScreen.display.x;
+    editInput.displayY = addScreen.display.y;
+    editInput.primaryPressed = true;
+    editTool.Tick(editInput);
+    const std::optional<CourseRailPickResult> insertedSelection =
+        editTool.ConsumeSelectionRequest();
+    runner.Expect(
+        course.railPoints.size() == 4 && insertedSelection.has_value() &&
+            insertedSelection->kind == CourseRailPickKind::ControlPoint,
+        "rail Add mode should insert on the picked segment and request stable selection");
+    editInput = {};
+    editInput.coordinates = &coordinates;
+    editInput.deletePressed = true;
+    editTool.Tick(editInput);
+    runner.Expect(
+        course.railPoints.size() == 3 && editTool.ConsumeClearSelectionRequest(),
+        "rail Delete key should remove the selected point while respecting the rail minimum");
+
+    EditorSelection railSelection;
+    EditorObjectHandle railPointHandle{};
+    railPointHandle.domain = EditorDomainId::CourseRailControlPoint;
+    railPointHandle.stableId =
+        "course-rail-point:" + course.railPoints.front().editorGuid;
+    railPointHandle.localIndex = 0;
+    railPointHandle.generation =
+        static_cast<uint32_t>(controller.State().mutationRevision);
+    railPointHandle.displayName = "Rail Control Point";
+    railSelection.SetPrimary(railPointHandle);
+    CourseRailDetailsPanel detailsPanel;
+    runner.Expect(
+        detailsPanel.HandlesSelection(&railSelection),
+        "Course Rail Details should claim stable rail point selection");
+
+    CourseRailTransformGizmo railGizmo;
+    railGizmo.Bind(&controller);
+    CourseRailTransformGizmoSettings gizmoSettings{};
+    gizmoSettings.snapEnabled = true;
+    gizmoSettings.gridSize = 0.05f;
+    railGizmo.SetSettings(gizmoSettings);
+    CourseRailTransformGizmoInput gizmoInput{};
+    gizmoInput.selection = &railSelection;
+    gizmoInput.coordinates = &coordinates;
+    gizmoInput.enabled = true;
+    gizmoInput.canMutate = true;
+    railGizmo.Tick(gizmoInput);
+    const Vector3 gizmoPositionBefore = course.railPoints.front().position;
+    const Vector3 xHandleWorld{
+        railGizmo.State().pivot.x + 0.1f,
+        railGizmo.State().pivot.y,
+        railGizmo.State().pivot.z};
+    const EditorViewportProjectedPoint xHandleScreen =
+        coordinates.ProjectWorld(xHandleWorld);
+    const std::size_t undoBeforeGizmo = controller.Transactions()->UndoDepth();
+    gizmoInput.displayX = xHandleScreen.display.x;
+    gizmoInput.displayY = xHandleScreen.display.y;
+    gizmoInput.primaryPressed = true;
+    gizmoInput.primaryDown = true;
+    railGizmo.Tick(gizmoInput);
+    gizmoInput.primaryPressed = false;
+    gizmoInput.displayX += 20.0f;
+    railGizmo.Tick(gizmoInput);
+    runner.Expect(
+        railGizmo.State().dragging && railGizmo.PreviewModel() != nullptr &&
+            std::fabs(course.railPoints.front().position.x - gizmoPositionBefore.x) < 0.0001f &&
+            controller.Transactions()->UndoDepth() == undoBeforeGizmo,
+        "rail transform gizmo should keep constrained movement transient while dragging");
+    gizmoInput.primaryDown = false;
+    gizmoInput.primaryReleased = true;
+    railGizmo.Tick(gizmoInput);
+    runner.Expect(
+        !railGizmo.State().dragging &&
+            std::fabs(course.railPoints.front().position.x - gizmoPositionBefore.x) >= 0.049f &&
+            controller.Transactions()->UndoDepth() == undoBeforeGizmo + 1,
+        "rail transform gizmo release should commit one snapped Controller transaction");
+
+    EditorViewportOverlayService gizmoOverlay;
+    gizmoOverlay.BeginFrame(EditorViewportOverlayFrameContext{
+        viewport, 800, 600, &coordinates, {0.0f, 0.0f, -1.0f}, 1.0f});
+    railGizmo.BuildViewportOverlay(gizmoOverlay);
+    gizmoOverlay.Resolve();
+    runner.Expect(
+        railGizmo.State().visible &&
+            std::any_of(gizmoOverlay.ResolvedCommands().begin(),
+                gizmoOverlay.ResolvedCommands().end(),
+                [](const EditorViewportOverlayCommand& command) {
+                    return command.type == EditorViewportOverlayCommandType::Line;
+                }),
+        "rail transform gizmo should render axis and plane handles for selected points");
+
+    controller.MarkSaved();
+    runner.Expect(
+        !controller.State().dirty && !dirtyState.IsDirty("course-rail:viewport-rail"),
+        "saving a course should clear controller-owned rail dirty state");
+}
+
+void TestCourseOverviewMapFoundation(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Overview Map";
+    course.railPoints = {
+        {{-12.0f, 1.0f, 0.0f}, 8.0f, 24.0f},
+        {{0.0f, 3.0f, 18.0f}, 10.0f, 28.0f},
+        {{16.0f, -2.0f, 38.0f}, 12.0f, 30.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "overview-map");
+    const CourseRailAuthoringModel initialRail(course);
+
+    CourseEnemyPlacement placement{};
+    placement.editorGuid = "overview-enemy";
+    placement.actorAssetId = "overview_drone";
+    placement.railAnchor.segmentGuid = initialRail.Segments().front().guid;
+    placement.railAnchor.normalizedT = 0.5f;
+    course.enemyPlacements.push_back(placement);
+    const RailAnchorResolution placementAnchor = initialRail.Resolve(placement.railAnchor);
+
+    CourseWaveDefinition wave{};
+    wave.editorGuid = "overview-wave";
+    wave.displayName = "Overview Wave";
+    wave.triggerRailDistance = placementAnchor.railSample.distance;
+    wave.prewarmDistance = 6.0f;
+    course.waveDefinitions.push_back(wave);
+
+    const CourseRailAuthoringModel rail(course);
+    CourseOverviewMapProjection projection;
+    CourseOverviewMapProjectionSettings projectionSettings{};
+    const CourseOverviewMapRect rect{20.0f, 30.0f, 900.0f, 420.0f};
+    const Vector3 sourceWorld = rail.RuntimePath().Evaluate(rail.Length() * 0.42f).position;
+    std::string error;
+    bool allModesRoundTrip = true;
+    for (const CourseOverviewMapProjectionMode mode : {
+            CourseOverviewMapProjectionMode::Top,
+            CourseOverviewMapProjectionMode::Side,
+            CourseOverviewMapProjectionMode::RailUnwrapped,
+            CourseOverviewMapProjectionMode::Free}) {
+        projectionSettings.mode = mode;
+        if (!projection.Configure(&rail, rect, projectionSettings, &error)) {
+            allModesRoundTrip = false;
+            continue;
+        }
+        const CourseOverviewMapProjectedPoint projected = projection.ProjectWorld(sourceWorld);
+        const Vector3 restored = projection.Unproject(projected.mapPosition, projected.depth);
+        const float errorSquared =
+            (restored.x - sourceWorld.x) * (restored.x - sourceWorld.x) +
+            (restored.y - sourceWorld.y) * (restored.y - sourceWorld.y) +
+            (restored.z - sourceWorld.z) * (restored.z - sourceWorld.z);
+        allModesRoundTrip = allModesRoundTrip && projected.valid && errorSquared < 0.05f;
+    }
+    runner.Expect(
+        allModesRoundTrip,
+        "overview map projection should round-trip Top, Side, RailUnwrapped and Free views");
+
+    CourseEnemyAuthoringModel enemies(course);
+    CourseWaveAuthoringModel waves(course);
+    EditorSelection selection;
+    projectionSettings.mode = CourseOverviewMapProjectionMode::RailUnwrapped;
+    projection.Configure(&rail, rect, projectionSettings, &error);
+    CourseOverviewMapRenderer renderer;
+    const CourseOverviewMapFrame renderFrame = renderer.Build({
+        &projection, &rail, &enemies, &waves, &selection, wave.triggerRailDistance, 1, 1, 1});
+    runner.Expect(
+        renderFrame.valid && renderFrame.stats.railSegments == 2 &&
+            renderFrame.stats.railControlPoints == 3 && renderFrame.stats.enemies == 1 &&
+            renderFrame.stats.waves == 1 && !renderFrame.lines.empty() &&
+            renderFrame.markers.size() >= 6,
+        "overview renderer should combine rail, enemy, wave and playhead into one retained frame");
+
+    CourseOverviewMapFrame denseVisibilityFrame{};
+    denseVisibilityFrame.valid = true;
+    denseVisibilityFrame.rect = {0.0f, 0.0f, 200.0f, 120.0f};
+    const EditorObjectHandle visibilityRailHandle{
+        EditorDomainId::CourseRailSegment,
+        "course-rail-segment:visibility-test", 0, 1, "Visibility Rail"};
+    for (uint32_t index = 0; index < 24u; ++index) {
+        const Vector2 start{10.0f + static_cast<float>(index) * 5.0f, 60.0f};
+        const Vector2 end{start.x + 5.0f, 60.0f};
+        denseVisibilityFrame.lines.push_back({CourseOverviewMapItemKind::RailSegment,
+            start, end, {}, {}, 0xffffffffu, 2.0f, visibilityRailHandle,
+            "visibility-test", true, false});
+    }
+    denseVisibilityFrame.markers.push_back({CourseOverviewMapItemKind::EnemyPlacement,
+        {40.0f, 40.0f}, {}, 0xffffffffu, 5.0f});
+    denseVisibilityFrame.markers.push_back({CourseOverviewMapItemKind::EnemyPlacement,
+        {500.0f, 500.0f}, {}, 0xffffffffu, 5.0f});
+    for (uint32_t index = 0; index < 12u; ++index) {
+        denseVisibilityFrame.labels.push_back({
+            {12.0f + static_cast<float>(index) * 12.0f, 18.0f},
+            0xffffffffu, "Crowded Label", CourseOverviewMapItemKind::EnemyPlacement,
+            {}, index == 11u});
+    }
+    CourseOverviewMapVisibilityService visibility;
+    CourseOverviewMapVisibilitySettings visibilitySettings{};
+    visibilitySettings.maximumLabels = 4u;
+    visibilitySettings.pixelsPerLabel = 1.0f;
+    visibility.SetSettings(visibilitySettings);
+    const CourseOverviewMapVisibleFrame& visibleFrame =
+        visibility.Build(denseVisibilityFrame, 7u);
+    const bool selectedLabelSurvived = std::find(
+        visibleFrame.labelIndices.begin(), visibleFrame.labelIndices.end(), 11u) !=
+        visibleFrame.labelIndices.end();
+    runner.Expect(
+        visibleFrame.valid && visibleFrame.lineBatches.size() == 1u &&
+            visibleFrame.lineBatches.front().points.size() == 2u &&
+            visibleFrame.markerIndices.size() == 1u &&
+            visibleFrame.labelIndices.size() <= 4u && selectedLabelSurvived,
+        "overview visibility should cull offscreen items, adapt straight rail LOD, "
+        "budget labels and retain selected labels");
+    const uint64_t visibilityCacheHits = visibility.State().cacheHits;
+    const uint64_t visibleRevision = visibleFrame.revision;
+    visibility.Build(denseVisibilityFrame, 7u);
+    runner.Expect(
+        visibility.State().cacheHits == visibilityCacheHits + 1u &&
+            visibility.Frame().revision == visibleRevision,
+        "overview visibility should retain a revision-keyed presentation frame");
+
+    const auto enemyMarker = std::find_if(
+        renderFrame.markers.begin(), renderFrame.markers.end(),
+        [](const CourseOverviewMapMarker& marker) {
+            return marker.kind == CourseOverviewMapItemKind::EnemyPlacement;
+        });
+    CourseOverviewMapPickingService picking;
+    const CourseOverviewMapPickResult overlappingPick = enemyMarker != renderFrame.markers.end()
+        ? picking.Pick(renderFrame, enemyMarker->position) : CourseOverviewMapPickResult{};
+    runner.Expect(
+        overlappingPick.hit &&
+            overlappingPick.kind == CourseOverviewMapItemKind::EnemyPlacement &&
+            overlappingPick.handle.stableId == "course-enemy-placement:overview-enemy",
+        "overview picking should prefer enemy over overlapping wave and rail proxies");
+
+    RailPath runtimeRail;
+    EditorDirtyStateService dirty;
+    CourseRailEditorController railController;
+    CourseEnemyEditorController enemyController;
+    CourseWaveEditorController waveController;
+    runner.Expect(
+        railController.Bind({&course, &runtimeRail, nullptr, &dirty, "overview-map", true}, &error) &&
+            enemyController.Bind({&course, nullptr, &dirty, "overview-map", true}, &error) &&
+            waveController.Bind({&course, nullptr, &dirty, "overview-map", true}, &error),
+        "overview controller dependencies should bind the same CourseAsset document");
+    CourseOverviewMapController controller;
+    runner.Expect(
+        controller.Bind({&railController, &enemyController, &waveController,
+                &selection, nullptr}, &error),
+        "overview controller should reject split documents and accept one canonical document");
+    controller.SetViewport(rect);
+    controller.SetMode(CourseOverviewMapProjectionMode::RailUnwrapped);
+    runner.Expect(
+        controller.Rebuild(wave.triggerRailDistance, &error),
+        "overview controller should rebuild a synchronized interactive frame");
+    runner.Expect(
+        controller.VisibleFrame().valid &&
+            controller.VisibleFrame().sourceRevision == controller.State().frameRevision,
+        "overview controller should publish a draw-ready visibility frame beside the full picking frame");
+    const auto controllerEnemy = std::find_if(
+        controller.Frame().markers.begin(), controller.Frame().markers.end(),
+        [](const CourseOverviewMapMarker& marker) {
+            return marker.kind == CourseOverviewMapItemKind::EnemyPlacement;
+        });
+    if (controllerEnemy != controller.Frame().markers.end()) {
+        const Vector2 cursor = controllerEnemy->position;
+        const Vector2 rawBefore = controller.Projection().MapToRaw(cursor);
+        controller.ZoomAt(cursor, 1.5f);
+        controller.Rebuild(wave.triggerRailDistance, &error);
+        const Vector2 rawAfter = controller.Projection().MapToRaw(cursor);
+        controller.SelectAt(cursor);
+        runner.Expect(
+            std::fabs(rawAfter.x - rawBefore.x) < 0.001f &&
+                std::fabs(rawAfter.y - rawBefore.y) < 0.001f,
+            "overview cursor-centered zoom should preserve the raw course coordinate");
+    }
+    runner.Expect(
+        selection.Primary() != nullptr &&
+            selection.Primary()->stableId == "course-enemy-placement:overview-enemy",
+        "overview selection should update the shared canonical EditorSelection");
+
+    runner.Expect(
+        controller.Rebuild(wave.triggerRailDistance, &error),
+        "overview cache test should first synchronize the selection revision");
+    const uint64_t cachedOverviewRevision = controller.State().frameRevision;
+    const uint64_t cachedOverviewHits = controller.State().frameCacheHits;
+    runner.Expect(
+        controller.Rebuild(wave.triggerRailDistance, &error) &&
+            controller.State().frameRevision == cachedOverviewRevision &&
+            controller.State().frameCacheHits == cachedOverviewHits + 1,
+        "overview retained-frame cache should reuse a frame when all revision keys are unchanged");
+    const uint64_t overviewOverlayRevision =
+        controller.State().playheadOverlayRevision;
+    const bool staticFrameContainsPlayhead = std::any_of(
+        controller.Frame().markers.begin(), controller.Frame().markers.end(),
+        [](const CourseOverviewMapMarker& marker) {
+            return marker.kind == CourseOverviewMapItemKind::Playhead;
+        });
+    runner.Expect(
+        controller.Rebuild(wave.triggerRailDistance + 2.0f, &error) &&
+            controller.State().frameRevision == cachedOverviewRevision &&
+            controller.State().playheadOverlayRevision == overviewOverlayRevision + 1 &&
+            controller.PlayheadOverlay().visible && !staticFrameContainsPlayhead,
+        "overview playhead movement should update only the dynamic overlay and retain static geometry");
+
+    selection.Clear();
+    runner.Expect(
+        controller.Rebuild(wave.triggerRailDistance, &error) &&
+            controller.State().frameRevision == cachedOverviewRevision + 1,
+        "overview retained-frame cache should invalidate on Selection revision changes");
+    uint64_t invalidationRevision = controller.State().frameRevision;
+    controller.SetViewport({rect.x, rect.y, rect.width - 20.0f, rect.height});
+    runner.Expect(
+        controller.Rebuild(wave.triggerRailDistance, &error) &&
+            controller.State().frameRevision == invalidationRevision + 1,
+        "overview retained-frame cache should invalidate on Viewport revision changes");
+
+    CourseEnemyMutationRequest enemyVisibility{};
+    enemyVisibility.kind = CourseEnemyMutationKind::SetVisible;
+    enemyVisibility.expectedRevision = enemyController.State().mutationRevision;
+    enemyVisibility.placementGuids = {"overview-enemy"};
+    enemyVisibility.stateValue = false;
+    const CourseEnemyMutationResult enemyVisibilityResult = enemyController.Mutate(enemyVisibility);
+    invalidationRevision = controller.State().frameRevision;
+    runner.Expect(
+        enemyVisibilityResult.succeeded && enemyVisibilityResult.changed &&
+            controller.Rebuild(wave.triggerRailDistance, &error) &&
+            controller.State().frameRevision == invalidationRevision + 1,
+        "overview retained-frame cache should invalidate on Enemy revision changes");
+
+    CourseWaveMutationRequest waveVisibility{};
+    waveVisibility.kind = CourseWaveMutationKind::SetVisible;
+    waveVisibility.expectedRevision = waveController.State().mutationRevision;
+    waveVisibility.waveGuids = {"overview-wave"};
+    waveVisibility.stateValue = false;
+    const CourseWaveMutationResult waveVisibilityResult = waveController.Mutate(waveVisibility);
+    invalidationRevision = controller.State().frameRevision;
+    runner.Expect(
+        waveVisibilityResult.succeeded && waveVisibilityResult.changed &&
+            controller.Rebuild(wave.triggerRailDistance, &error) &&
+            controller.State().frameRevision == invalidationRevision + 1,
+        "overview retained-frame cache should invalidate on Wave revision changes");
+
+    CourseRailMutationRequest railMove{};
+    railMove.kind = CourseRailMutationKind::MovePoint;
+    railMove.expectedRevision = railController.State().mutationRevision;
+    railMove.pointGuid = course.railPoints[1].editorGuid;
+    railMove.point = course.railPoints[1];
+    railMove.point.position.x += 1.0f;
+    const CourseRailMutationResult railMoveResult = railController.Mutate(railMove);
+    invalidationRevision = controller.State().frameRevision;
+    runner.Expect(
+        railMoveResult.succeeded && railMoveResult.changed &&
+            controller.Rebuild(wave.triggerRailDistance, &error) &&
+            controller.State().frameRevision == invalidationRevision + 1,
+        "overview retained-frame cache should invalidate on Rail revision changes");
+
+    CourseAsset replacement = course;
+    replacement.name = "Overview Replacement";
+    replacement.railPoints.front().position.x -= 20.0f;
+    RailPath replacementRuntimeRail;
+    CourseRailEditorController replacementRailController;
+    runner.Expect(
+        replacementRailController.Bind({&replacement, &replacementRuntimeRail,
+                nullptr, &dirty, "overview-replacement", true}, &error) &&
+            controller.Bind({&replacementRailController, nullptr, nullptr,
+                &selection, nullptr}, &error) &&
+            !controller.Frame().valid && !controller.State().valid,
+        "overview rebind should invalidate the retained frame before previous-frame input can consume it");
+    controller.SetViewport(rect);
+    runner.Expect(
+        controller.Rebuild(0.0f, &error) && controller.Frame().valid,
+        "overview replacement document should publish a fresh retained frame after rebind");
+}
+
+void TestCourseOverviewMapEditingSuite(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Overview Editing";
+    course.railPoints = {
+        {{0.0f, 0.0f, 0.0f}, 10.0f, 24.0f},
+        {{0.0f, 1.0f, 20.0f}, 10.0f, 24.0f},
+        {{8.0f, 2.0f, 42.0f}, 10.0f, 24.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "overview-editing");
+    const CourseRailAuthoringModel authoredRail(course);
+    CourseEnemyPlacement enemy{};
+    enemy.editorGuid = "overview-edit-enemy";
+    enemy.actorAssetId = "drone_basic";
+    enemy.railAnchor.segmentGuid = authoredRail.Segments().front().guid;
+    enemy.railAnchor.normalizedT = 0.35f;
+    course.enemyPlacements.push_back(enemy);
+    CourseWaveDefinition wave{};
+    wave.editorGuid = "overview-edit-wave";
+    wave.displayName = "Edit Wave";
+    wave.triggerRailDistance = authoredRail.Length() * 0.6f;
+    course.waveDefinitions.push_back(wave);
+
+    RailPath runtimeRail;
+    EditorDirtyStateService dirty;
+    CourseRailEditorController railController;
+    CourseEnemyEditorController enemyController;
+    CourseWaveEditorController waveController;
+    std::string error;
+    runner.Expect(
+        railController.Bind({&course, &runtimeRail, nullptr, &dirty, "overview-editing", true}, &error) &&
+            enemyController.Bind({&course, nullptr, &dirty, "overview-editing", true}, &error) &&
+            waveController.Bind({&course, nullptr, &dirty, "overview-editing", true}, &error),
+        "overview editing controllers should share one writable Course document");
+
+    EditorSelection selection;
+    CourseOverviewMapController overview;
+    overview.Bind({&railController, &enemyController, &waveController, &selection, nullptr}, &error);
+    overview.SetViewport({0.0f, 0.0f, 1000.0f, 500.0f});
+    overview.SetMode(CourseOverviewMapProjectionMode::RailUnwrapped);
+    overview.Rebuild(0.0f, &error);
+
+    CourseOverviewMapSnapService snapping;
+    CourseOverviewMapSnapSettings snapSettings{};
+    snapSettings.railDistanceStep = 2.0f;
+    snapSettings.lateralOffsetStep = 0.5f;
+    snapping.SetSettings(snapSettings);
+    const auto unsnapped = overview.Projection().ProjectRail(7.3f, 0.74f);
+    const CourseOverviewMapSnapResult snapped = snapping.SnapRailAnchor(
+        unsnapped.mapPosition, 0.0f, overview.Projection(), *railController.Model());
+    runner.Expect(
+        snapped.valid && std::fabs(snapped.railDistance - 8.0f) < 0.02f &&
+            std::fabs(snapped.railAnchor.lateralOffset - 0.5f) < 0.001f,
+        "overview snap service should quantize rail distance and lateral offset in unwrapped view");
+
+    CourseOverviewMapEditTool tool;
+    tool.Bind(&overview, &railController, &enemyController, &waveController,
+        &selection, &snapping);
+    const auto enemyMarker = std::find_if(
+        overview.Frame().markers.begin(), overview.Frame().markers.end(),
+        [](const CourseOverviewMapMarker& marker) {
+            return marker.kind == CourseOverviewMapItemKind::EnemyPlacement;
+        });
+    const std::size_t undoBeforeDrag = enemyController.Transactions()->UndoDepth();
+    if (enemyMarker != overview.Frame().markers.end()) {
+        CourseOverviewMapPickResult pick{};
+        pick.hit = true;
+        pick.kind = enemyMarker->kind;
+        pick.handle = enemyMarker->handle;
+        pick.guid = enemyMarker->guid;
+        pick.mapPosition = enemyMarker->position;
+        pick.worldPosition = enemyMarker->worldPosition;
+        pick.railDistance = enemyMarker->railDistance;
+        tool.Tick({enemyMarker->position, pick, true, true, false, false, false});
+        const auto target = overview.Projection().ProjectRail(
+            enemyMarker->railDistance + 5.1f, 1.12f);
+        tool.Tick({target.mapPosition, pick, false, true, false, false, false});
+        tool.Tick({target.mapPosition, pick, false, false, true, false, false});
+    }
+    const CourseEnemyPlacement* movedEnemy = enemyController.Model()->Find("overview-edit-enemy");
+    runner.Expect(
+        movedEnemy != nullptr && tool.State().editRevision == 1 &&
+            enemyController.Transactions()->UndoDepth() == undoBeforeDrag + 1 &&
+            std::fabs(movedEnemy->railAnchor.lateralOffset - 1.0f) < 0.001f &&
+            !overview.HasPreviewCourse(),
+        "overview enemy drag should preview privately then commit one SetAnchors Undo transaction");
+
+    overview.Rebuild(0.0f, &error);
+    const std::size_t waveCountBefore = course.waveDefinitions.size();
+    tool.SetMode(CourseOverviewMapEditMode::AddWave);
+    const auto wavePosition = overview.Projection().ProjectRail(12.4f);
+    tool.Tick({wavePosition.mapPosition, {}, true, true, false, false, false});
+    runner.Expect(
+        course.waveDefinitions.size() == waveCountBefore + 1 &&
+            selection.Primary() != nullptr &&
+            selection.Primary()->domain == EditorDomainId::CourseWaveDefinition,
+        "overview Add Wave mode should commit and select one schema-v7 Wave definition");
+
+    EditorAssetRegistry assets;
+    EditorAssetRecord actorRecord{};
+    actorRecord.kind = EditorAssetKind::Course;
+    actorRecord.id = "overview_actor_asset";
+    actorRecord.guid = "0123456789abcdef0123456789abcdef";
+    actorRecord.logicalPath = "Resources/courses/actors/drone_basic.actor";
+    actorRecord.sourcePath = actorRecord.logicalPath;
+    actorRecord.referenceable = true;
+    actorRecord.hasMetadata = true;
+    assets.Register(actorRecord);
+    CourseOverviewMapDragDropBridge dragDrop;
+    dragDrop.Bind(&enemyController, &selection, &snapping);
+    overview.Rebuild(0.0f, &error);
+    const std::size_t enemyCountBefore = course.enemyPlacements.size();
+    const auto dropPosition = overview.Projection().ProjectRail(18.0f, -1.0f);
+    const auto dropped = dragDrop.DropActorAsset(
+        {&assets, actorRecord.guid, dropPosition.mapPosition}, overview.Projection());
+    runner.Expect(
+        dropped.accepted && dropped.succeeded && dropped.actorAssetId == "drone_basic" &&
+            course.enemyPlacements.size() == enemyCountBefore + 1 &&
+            selection.Primary() != nullptr &&
+            selection.Primary()->stableId ==
+                "course-enemy-placement:" + dropped.placementGuid,
+        "overview ActorAsset drop should validate .actor data and commit one snapped placement");
+}
+
+void TestCourseRailSketchSuite(RegressionRunner& runner) {
+    CourseRailCurveFitService fitter;
+    std::vector<Vector3> noisyStroke;
+    for (uint32_t index = 0; index <= 30; ++index) {
+        const float t = static_cast<float>(index) / 30.0f;
+        noisyStroke.push_back({20.0f * t,
+            std::sin(t * 3.1415926535f) * 0.15f,
+            30.0f * t + std::sin(t * 12.0f) * 0.08f});
+    }
+    CourseRailCurveFitSettings fitSettings{};
+    fitSettings.minimumInputSpacing = 0.1f;
+    fitSettings.simplificationTolerance = 0.35f;
+    fitSettings.maximumControlPointSpacing = 6.0f;
+    fitSettings.smoothingIterations = 1;
+    const CourseRailCurveFitResult fitted = fitter.Fit(
+        noisyStroke, fitSettings, 12.0f, 28.0f);
+    runner.Expect(
+        fitted.succeeded && fitted.controlPoints.size() >= 2 &&
+            fitted.controlPoints.size() < noisyStroke.size() &&
+            std::fabs(fitted.controlPoints.front().position.x - noisyStroke.front().x) < 0.001f &&
+            std::fabs(fitted.controlPoints.back().position.z - noisyStroke.back().z) < 0.001f &&
+            fitted.fittedLength > 30.0f,
+        "rail curve fitter should denoise, simplify, resample and preserve stroke endpoints");
+
+    CourseAsset course{};
+    course.name = "Rail Sketch";
+    course.railPoints = {
+        {{0.0f, 2.0f, 0.0f}, 10.0f, 24.0f},
+        {{0.0f, 2.0f, 10.0f}, 10.0f, 24.0f},
+        {{0.0f, 2.0f, 20.0f}, 10.0f, 24.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "rail-sketch");
+    RailPath runtimeRail;
+    EditorDirtyStateService dirty;
+    CourseRailEditorController railController;
+    std::string error;
+    runner.Expect(
+        railController.Bind({&course, &runtimeRail, nullptr, &dirty,
+                "rail-sketch", true}, &error),
+        "rail sketch should bind a writable Rail Controller");
+    EditorSelection selection;
+    CourseOverviewMapController overview;
+    overview.Bind({&railController, nullptr, nullptr, &selection, nullptr}, &error);
+    overview.SetViewport({0.0f, 0.0f, 1000.0f, 600.0f});
+    overview.SetMode(CourseOverviewMapProjectionMode::Top);
+    overview.Rebuild(0.0f, &error);
+
+    CourseRailSketchTool sketch;
+    CourseRailSketchSettings sketchSettings{};
+    sketchSettings.minimumSamplePixels = 1.0f;
+    sketchSettings.curveFit.minimumInputSpacing = 0.05f;
+    sketchSettings.curveFit.simplificationTolerance = 0.1f;
+    sketchSettings.curveFit.maximumControlPointSpacing = 5.0f;
+    sketchSettings.curveFit.smoothingIterations = 0;
+    sketch.SetSettings(sketchSettings);
+    sketch.Bind(&overview, &railController, &selection, &fitter);
+    sketch.SetActive(true);
+    sketch.SetMode(CourseRailSketchMode::Append);
+
+    const Vector2 endpoint = overview.Projection().ProjectWorld(
+        course.railPoints.back().position).mapPosition;
+    sketch.Tick({endpoint, {}, true, true, false, false});
+    const Vector2 first = overview.Projection().ProjectWorld({5.0f, 2.0f, 27.0f}).mapPosition;
+    const Vector2 second = overview.Projection().ProjectWorld({10.0f, 2.0f, 34.0f}).mapPosition;
+    const Vector2 third = overview.Projection().ProjectWorld({15.0f, 2.0f, 42.0f}).mapPosition;
+    sketch.Tick({first, {}, false, true, false, false});
+    sketch.Tick({second, {}, false, true, false, false});
+    sketch.Tick({third, {}, false, true, false, false});
+    overview.Rebuild(0.0f, &error);
+    const CourseRailStrokePreviewFrame preview =
+        CourseRailStrokePreviewRenderer{}.Build(sketch, overview.Projection());
+    runner.Expect(
+        sketch.State().drawing && sketch.State().previewValid &&
+            overview.HasPreviewCourse() && preview.visible && preview.valid &&
+            !preview.lines.empty() && !preview.markers.empty(),
+        "rail sketch should retain raw ink and fitted preview without mutating the source Course");
+
+    const std::size_t originalCount = course.railPoints.size();
+    const std::size_t undoBefore = railController.Transactions()->UndoDepth();
+    sketch.Tick({third, {}, false, false, true, false});
+    runner.Expect(
+        !sketch.State().drawing && !overview.HasPreviewCourse() &&
+            sketch.State().editRevision == 1,
+        "releasing an appended rail stroke should finish and commit the preview");
+    runner.Expect(
+        course.railPoints.size() > originalCount,
+        "appended rail stroke should extend the persistent control-point topology");
+    runner.Expect(
+        railController.Transactions()->UndoDepth() == undoBefore + 1,
+        "appended rail stroke should push exactly one Undo transaction");
+    runner.Expect(
+        std::fabs(course.railPoints.back().position.x - 15.0f) < 0.1f &&
+            std::fabs(course.railPoints.back().position.y - 2.0f) < 0.1f,
+        std::string("appended rail stroke should preserve the drawn endpoint and hidden-axis depth; actual=") +
+            std::to_string(course.railPoints.back().position.x) + "," +
+            std::to_string(course.railPoints.back().position.y) + "," +
+            std::to_string(course.railPoints.back().position.z));
+    runner.Expect(
+        selection.Primary() != nullptr &&
+            selection.Primary()->domain == EditorDomainId::CourseRailControlPoint,
+        "appended rail stroke should select its resulting endpoint");
+    runner.Expect(
+        railController.Undo(&error) && course.railPoints.size() == originalCount,
+        "rail sketch ReplaceRail commit should restore the original topology through Undo");
+
+    overview.Rebuild(0.0f, &error);
+    sketch.SetActive(true);
+    sketch.SetMode(CourseRailSketchMode::ReplaceSegment);
+    const auto segmentMarker = std::find_if(
+        overview.Frame().lines.begin(), overview.Frame().lines.end(),
+        [](const CourseOverviewMapLine& line) {
+            return line.kind == CourseOverviewMapItemKind::RailSegment;
+        });
+    CourseOverviewMapPickResult segmentPick{};
+    if (segmentMarker != overview.Frame().lines.end()) {
+        segmentPick.hit = true;
+        segmentPick.kind = CourseOverviewMapItemKind::RailSegment;
+        segmentPick.handle = segmentMarker->handle;
+        segmentPick.guid = segmentMarker->guid;
+        segmentPick.mapPosition = segmentMarker->start;
+        segmentPick.worldPosition = segmentMarker->worldStart;
+        sketch.Tick({segmentMarker->start, segmentPick, true, true, false, false});
+    }
+    runner.Expect(
+        segmentMarker != overview.Frame().lines.end() && sketch.State().drawing &&
+            !sketch.State().targetSegmentGuid.empty(),
+        "Replace Segment sketch mode should require and capture a stable rail segment target");
+    sketch.Cancel();
+}
+
+void TestCourseMultiViewElevationConstraintSuite(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Multi View Elevation";
+    course.railPoints = {
+        {{0.0f, 0.0f, 0.0f}, 12.0f, 18.0f},
+        {{3.0f, 2.0f, 18.0f}, 12.0f, 18.0f},
+        {{12.0f, 6.0f, 38.0f}, 12.0f, 18.0f},
+        {{18.0f, 4.0f, 62.0f}, 12.0f, 18.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "multi-view-elevation");
+    RailPath runtimeRail;
+    EditorDirtyStateService dirty;
+    CourseRailEditorController railController;
+    EditorSelection selection;
+    std::string error;
+    runner.Expect(
+        railController.Bind({&course, &runtimeRail, nullptr, &dirty,
+                "multi-view-elevation", true}, &error),
+        "multi view suite should bind a writable Rail controller");
+
+    CourseOverviewMapMultiViewCoordinator multi;
+    runner.Expect(
+        multi.Bind({&railController, nullptr, nullptr, &selection, nullptr}, &error),
+        "multi view should bind to the canonical Rail controller and EditorSelection");
+    multi.SetEnabled(true);
+    multi.SetViewport({0.0f, 0.0f, 1000.0f, 420.0f});
+    runner.Expect(
+        multi.Rebuild(14.0f, &error) && multi.TopFrame().valid && multi.SideFrame().valid &&
+            multi.TopFrame().rect.width > 400.0f && multi.SideFrame().rect.width > 400.0f,
+        "multi view should build synchronized Top and Side retained frames");
+    const uint64_t cachedMultiRevision = multi.State().frameRevision;
+    const uint64_t cachedMultiHits = multi.State().frameCacheHits;
+    runner.Expect(
+        multi.Rebuild(14.0f, &error) &&
+            multi.State().frameRevision == cachedMultiRevision &&
+            multi.State().frameCacheHits == cachedMultiHits + 1,
+        "multi view should reuse both retained frames while their revision key is unchanged");
+    const uint64_t multiOverlayRevision = multi.State().playheadOverlayRevision;
+    runner.Expect(
+        multi.Rebuild(16.0f, &error) &&
+            multi.State().frameRevision == cachedMultiRevision &&
+            multi.State().playheadOverlayRevision == multiOverlayRevision + 1 &&
+            multi.TopPlayheadOverlay().visible &&
+            multi.SidePlayheadOverlay().visible,
+        "multi view playhead movement should retain Top and Side static frames");
+    const auto topPoint = std::find_if(multi.TopFrame().markers.begin(),
+        multi.TopFrame().markers.end(), [](const CourseOverviewMapMarker& marker) {
+            return marker.kind == CourseOverviewMapItemKind::RailControlPoint &&
+                marker.handle.localIndex == 1;
+        });
+    if (topPoint != multi.TopFrame().markers.end()) {
+        multi.HoverAt(topPoint->position);
+        multi.SelectAt(topPoint->position);
+    }
+    runner.Expect(
+        topPoint != multi.TopFrame().markers.end() && multi.State().crosshair.valid &&
+            selection.Primary() != nullptr &&
+            selection.Primary()->domain == EditorDomainId::CourseRailControlPoint &&
+            multi.SideFrame().rect.Contains(multi.State().crosshair.sidePosition),
+        "hover and selection in Top view should synchronize the canonical crosshair and selection into Side view");
+    runner.Expect(
+        multi.Rebuild(14.0f, &error) &&
+            multi.State().frameRevision == cachedMultiRevision + 1,
+        "multi view retained-frame cache should invalidate after shared Selection changes");
+    const uint64_t multiSelectionRevision = multi.State().frameRevision;
+    multi.SetViewport({0.0f, 0.0f, 980.0f, 420.0f});
+    runner.Expect(
+        multi.Rebuild(14.0f, &error) &&
+            multi.State().frameRevision == multiSelectionRevision + 1,
+        "multi view retained-frame cache should invalidate after its Viewport revision changes");
+
+    CourseRailConstraintValidationSystem validator;
+    CourseRailConstraintSettings permissive{};
+    permissive.minimumTurnRadius = 0.0f;
+    permissive.maximumGrade = 100.0f;
+    permissive.maximumCurvatureDelta = 100.0f;
+    permissive.maximumLateralAcceleration = 100000.0f;
+    permissive.detectSelfIntersections = false;
+    const CourseRailConstraintReportRevisionKey validationRevision{
+        railController.State().mutationRevision,
+        railController.State().bindingGeneration,
+        0};
+    const CourseRailConstraintReport& firstCachedHealthy = validator.ValidateCached(
+        *railController.Model(), validationRevision, permissive);
+    const CourseRailConstraintReport healthy = firstCachedHealthy;
+    const uint64_t healthyReportRevision = healthy.revision;
+    const uint64_t cacheHitsBefore = validator.CacheState().hits;
+    const CourseRailConstraintReport& secondCachedHealthy = validator.ValidateCached(
+        *railController.Model(), validationRevision, permissive);
+    runner.Expect(
+        healthy.valid && healthy.errors == 0 && healthy.Playable() &&
+            !healthy.samples.empty() && healthy.sourceSignature != 0,
+        "constraint validation should produce deterministic sampled diagnostics for a playable rail");
+    runner.Expect(
+        healthyReportRevision != 0 &&
+            secondCachedHealthy.revision == healthyReportRevision &&
+            validator.CacheState().hits == cacheHitsBefore + 1 &&
+            validator.CacheState().misses == 1,
+        "constraint report cache should retain one report while all revision keys are unchanged");
+
+    CourseRailConstraintSettings changedConstraintSettings = permissive;
+    changedConstraintSettings.maximumGrade = 99.0f;
+    const uint64_t missesBeforeSettings = validator.CacheState().misses;
+    const CourseRailConstraintReport& settingsReport = validator.ValidateCached(
+        *railController.Model(), validationRevision, changedConstraintSettings);
+    runner.Expect(
+        settingsReport.revision > healthyReportRevision &&
+            validator.CacheState().misses == missesBeforeSettings + 1,
+        "constraint report cache should invalidate when normalized validation settings change");
+
+    CourseRailConstraintReportRevisionKey changedRailRevision = validationRevision;
+    ++changedRailRevision.railRevision;
+    const uint64_t missesBeforeRail = validator.CacheState().misses;
+    validator.ValidateCached(*railController.Model(), changedRailRevision, permissive);
+    runner.Expect(
+        validator.CacheState().misses == missesBeforeRail + 1,
+        "constraint report cache should invalidate when the Rail mutation revision changes");
+
+    CourseRailConstraintEnvironment environment{};
+    environment.queryClearance = [](const Vector3&, float) { return 1000.0f; };
+    CourseRailConstraintReportRevisionKey environmentRevision = validationRevision;
+    environmentRevision.environmentRevision = 1;
+    validator.ValidateCached(
+        *railController.Model(), environmentRevision, permissive, &environment);
+    const uint64_t environmentReportRevision = validator.CacheState().reportRevision;
+    const uint64_t environmentHits = validator.CacheState().hits;
+    validator.ValidateCached(
+        *railController.Model(), environmentRevision, permissive, &environment);
+    ++environmentRevision.environmentRevision;
+    validator.ValidateCached(
+        *railController.Model(), environmentRevision, permissive, &environment);
+    runner.Expect(
+        validator.CacheState().hits == environmentHits + 1 &&
+            validator.CacheState().reportRevision > environmentReportRevision,
+        "constraint report cache should reuse a stable Environment revision and invalidate when it advances");
+
+    CourseAsset invalidCourse = course;
+    invalidCourse.railPoints[1].position = {0.01f, 0.01f, 0.01f};
+    CourseRailAuthoringModel invalidRail(invalidCourse);
+    const CourseRailConstraintReport invalid = validator.Validate(invalidRail);
+    const bool foundSpacing = std::any_of(invalid.issues.begin(), invalid.issues.end(),
+        [](const CourseRailConstraintIssue& issue) { return issue.code == "rail.spacing"; });
+    runner.Expect(
+        invalid.valid && invalid.errors > 0 && !invalid.Playable() && foundSpacing,
+        "constraint validation should block rails with undersized control-point spacing");
+
+    CourseOverviewMapController overview;
+    overview.Bind({&railController, nullptr, nullptr, &selection, nullptr}, &error);
+    CourseRailElevationProfileEditor elevation;
+    runner.Expect(
+        elevation.Bind(&railController, &selection, &overview, &multi, &error),
+        "elevation profile should bind to the same document and synchronized views");
+    elevation.SetViewport({0.0f, 430.0f, 1000.0f, 260.0f});
+    elevation.Rebuild(14.0f, &healthy, &error);
+    const uint64_t cachedElevationRevision = elevation.State().frameRevision;
+    const uint64_t cachedElevationHits = elevation.State().frameCacheHits;
+    runner.Expect(
+        elevation.Rebuild(14.0f, &healthy, &error) &&
+            elevation.State().frameRevision == cachedElevationRevision &&
+            elevation.State().frameCacheHits == cachedElevationHits + 1,
+        "elevation profile should reuse its retained frame while revision keys are unchanged");
+    const uint64_t elevationOverlayRevision =
+        elevation.State().playheadOverlayRevision;
+    runner.Expect(
+        elevation.Rebuild(16.0f, &healthy, &error) &&
+            elevation.State().frameRevision == cachedElevationRevision &&
+            elevation.State().playheadOverlayRevision == elevationOverlayRevision + 1 &&
+            elevation.PlayheadOverlay().visible,
+        "elevation playhead movement should update only its dynamic overlay");
+    elevation.Pan({1.0f, 0.0f});
+    runner.Expect(
+        elevation.Rebuild(14.0f, &healthy, &error) &&
+            elevation.State().frameRevision == cachedElevationRevision + 1,
+        "elevation retained-frame cache should invalidate after its Viewport revision changes");
+    const std::size_t undoBefore = railController.Transactions()->UndoDepth();
+    const float originalHeight = course.railPoints[1].position.y;
+    if (elevation.Frame().markers.size() > 1) {
+        const Vector2 point = elevation.Frame().markers[1].position;
+        elevation.Tick({point, true, true, false, false});
+        elevation.Tick({{point.x, point.y - 55.0f}, false, true, false, false});
+        runner.Expect(
+            elevation.State().dragging && elevation.State().previewValid &&
+                elevation.PreviewCourse() != nullptr &&
+                std::fabs(course.railPoints[1].position.y - originalHeight) < 0.0001f,
+            "elevation drag should publish a private multi-view preview without mutating CourseAsset");
+        elevation.Tick({{point.x, point.y - 55.0f}, false, false, true, false});
+    }
+    runner.Expect(
+        elevation.State().editRevision == 1 && !elevation.State().dragging &&
+            railController.Transactions()->UndoDepth() == undoBefore + 1 &&
+            course.railPoints[1].position.y > originalHeight,
+        "elevation release should commit exactly one snapped MovePoint Undo transaction");
+    runner.Expect(
+        railController.Undo(&error) &&
+            std::fabs(course.railPoints[1].position.y - originalHeight) < 0.0001f,
+        "elevation edit should restore the original height through canonical Rail Undo");
+}
+
 } // namespace
 
 int RunEditorCoreRegressionTests() {
@@ -19091,6 +21956,54 @@ int RunEditorCoreRegressionTests() {
          {"rail aim assist system", [&]() { TestRailAimAssistSystem(runner); }},
          {"rail aim assist preset and input routing", [&]() {
               TestRailAimAssistPresetAndInputRouting(runner);
+          }},
+         {"enemy attack telegraph system", [&]() {
+              TestEnemyAttackTelegraphSystem(runner);
+          }},
+         {"enemy attack telegraph feedback bridge", [&]() {
+              TestEnemyAttackTelegraphFeedbackBridge(runner);
+          }},
+         {"course rail authoring and mutation", [&]() {
+              TestCourseRailAuthoringAndMutation(runner);
+          }},
+         {"course enemy authoring and mutation", [&]() {
+              TestCourseEnemyAuthoringAndMutation(runner);
+          }},
+         {"course wave authoring and mutation", [&]() {
+              TestCourseWaveAuthoringAndMutation(runner);
+          }},
+         {"course wave editor suite", [&]() {
+              TestCourseWaveEditorSuite(runner);
+          }},
+         {"course preview simulation system", [&]() {
+              TestCoursePreviewSimulationSystem(runner);
+          }},
+         {"course wave runtime compiler and preview actor bridge", [&]() {
+              TestCourseWaveRuntimeCompilerAndPreviewActorBridge(runner);
+          }},
+         {"course runtime cook and gameplay wave bridge", [&]() {
+              TestCourseRuntimeCookAndGameplayWaveBridge(runner);
+          }},
+         {"course enemy editor viewport foundation", [&]() {
+              TestCourseEnemyEditorViewportFoundation(runner);
+          }},
+         {"course enemy viewport editing suite", [&]() {
+              TestCourseEnemyViewportEditingSuite(runner);
+          }},
+         {"course rail editor viewport foundation", [&]() {
+              TestCourseRailEditorViewportFoundation(runner);
+          }},
+         {"course overview map foundation", [&]() {
+              TestCourseOverviewMapFoundation(runner);
+          }},
+         {"course overview map editing suite", [&]() {
+              TestCourseOverviewMapEditingSuite(runner);
+          }},
+         {"course rail sketch suite", [&]() {
+              TestCourseRailSketchSuite(runner);
+          }},
+         {"course multi view elevation and constraints", [&]() {
+              TestCourseMultiViewElevationConstraintSuite(runner);
           }},
          {"course enemy presentation fallback", [&]() {
               TestCourseEnemyPresentationFallback(runner);

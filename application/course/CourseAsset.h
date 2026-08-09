@@ -6,6 +6,7 @@
 
 #include "../terrain/RailPath.h"
 #include "../terrain/TerrainEditLayer.h"
+#include "RailAnchor.h"
 #include "utils/math/Vector.h"
 
 struct CourseCameraKey {
@@ -36,6 +37,55 @@ struct CourseEventMarker {
     std::string id;
     std::string payload;
     std::string editorGuid;
+    bool editorVisible = true;
+    bool editorLocked = false;
+};
+
+// Persistent, editor-authored enemy instance. Runtime actor IDs and mutable
+// combat state deliberately do not live here: this record is the CourseAsset
+// source of truth and remains stable across play sessions and rail edits.
+struct CourseEnemyPlacement {
+    std::string editorGuid;
+    std::string actorAssetId = "drone";
+    std::string bulletPatternOverrideId;
+    std::string waveGroupGuid;
+    RailAnchor railAnchor{};
+    Vector3 localRotation{};
+    Vector3 localScale{1.0f, 1.0f, 1.0f};
+    float activationLeadDistance = 80.0f;
+    bool enabled = true;
+    bool editorVisible = true;
+    bool editorLocked = false;
+};
+
+enum class CourseWaveCompletionCondition {
+    AllEnemiesDefeated,
+    Timeout,
+    ReachRailDistance,
+    ScriptedEvent,
+};
+
+enum class CourseWaveExecutionPolicy {
+    Parallel,
+    Sequential,
+    Exclusive,
+};
+
+// First-class encounter authoring record. Enemy placements reference
+// editorGuid; displayName is presentation-only and may be renamed safely.
+struct CourseWaveDefinition {
+    std::string editorGuid;
+    std::string displayName = "Wave";
+    float triggerRailDistance = 0.0f;
+    float prewarmDistance = 80.0f;
+    float timeoutSeconds = 30.0f;
+    CourseWaveCompletionCondition completionCondition =
+        CourseWaveCompletionCondition::AllEnemiesDefeated;
+    CourseWaveExecutionPolicy executionPolicy =
+        CourseWaveExecutionPolicy::Parallel;
+    std::string nextWaveGuid;
+    std::string triggerEventId;
+    bool enabled = true;
     bool editorVisible = true;
     bool editorLocked = false;
 };
@@ -219,9 +269,12 @@ struct CourseCinematicShotSet {
 struct CourseAsset {
     std::string name = "Untitled Course";
     std::vector<RailPathControlPoint> railPoints;
+    std::vector<CourseRailAnchorBinding> railAnchors;
     std::vector<CourseCameraKey> cameraKeys;
     std::vector<CourseSection> sections;
     std::vector<CourseEventMarker> events;
+    std::vector<CourseWaveDefinition> waveDefinitions;
+    std::vector<CourseEnemyPlacement> enemyPlacements;
     std::vector<CourseTerrainPlacement> terrainPlacements;
     TerrainEditLayer terrainEditLayer{};
     std::vector<CourseRockCluster> rockClusters;
@@ -256,6 +309,13 @@ CourseTerrainLayer ParseCourseTerrainLayer(const std::string& text);
 CourseTerrainCollisionMode ParseCourseTerrainCollisionMode(const std::string& text);
 CourseRockClusterType ParseCourseRockClusterType(const std::string& text);
 CourseRockClusterAnchor ParseCourseRockClusterAnchor(const std::string& text);
+const char* ToCourseWaveCompletionConditionString(
+    CourseWaveCompletionCondition condition);
+const char* ToCourseWaveExecutionPolicyString(CourseWaveExecutionPolicy policy);
+CourseWaveCompletionCondition ParseCourseWaveCompletionCondition(
+    const std::string& text);
+CourseWaveExecutionPolicy ParseCourseWaveExecutionPolicy(
+    const std::string& text);
 
 class CourseRuntime {
 public:
