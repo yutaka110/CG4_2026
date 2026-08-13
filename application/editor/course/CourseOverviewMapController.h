@@ -42,9 +42,21 @@ public:
     bool Synchronize(std::string* errorMessage = nullptr);
 
     void SetViewport(CourseOverviewMapRect rect);
+    void SetSceneFitPoints(
+        const std::vector<Vector3>* fitPoints,
+        uint64_t revision);
     void SetMode(CourseOverviewMapProjectionMode mode);
     void FrameAll();
+    bool FrameMapPoints(
+        const std::vector<Vector2>& mapPoints,
+        float minimumZoom = 5.5f,
+        float paddingPixels = 96.0f);
+    // Interactive pan is a presentation transaction: canonical projection
+    // settings accumulate immediately, while the retained frame is translated
+    // in screen space until EndInteractivePan commits one rebuild.
+    void BeginInteractivePan() noexcept;
     void PanPixels(Vector2 delta);
+    bool EndInteractivePan() noexcept;
     void ZoomAt(Vector2 mapPosition, float factor);
     bool Rebuild(float fallbackPlayheadDistance = -1.0f, std::string* errorMessage = nullptr);
     void SetPreviewCourse(const CourseAsset* previewCourse);
@@ -66,6 +78,8 @@ public:
         return playheadOverlay_;
     }
     const CourseOverviewMapProjection& Projection() const noexcept { return projection_; }
+    bool InteractivePanActive() const noexcept { return interactivePanActive_; }
+    Vector2 PresentationOffset() const noexcept { return presentationOffset_; }
     const CourseOverviewMapControllerState& State() const noexcept { return state_; }
     CourseOverviewMapProjectionSettings& MutableProjectionSettings() noexcept {
         return projectionSettings_;
@@ -82,6 +96,7 @@ private:
         uint64_t rendererSignature = 0;
         uint64_t viewportRevision = 0;
         uint64_t visibilitySettingsRevision = 0;
+        uint64_t sceneBoundsRevision = 0;
         uint32_t railGeneration = 0;
         uint32_t enemyGeneration = 0;
         uint32_t waveGeneration = 0;
@@ -112,6 +127,8 @@ private:
     CourseOverviewMapControllerState state_{};
     CourseOverviewMapRect viewport_{};
     CourseOverviewMapProjectionSettings projectionSettings_{};
+    const std::vector<Vector3>* sceneFitPoints_ = nullptr;
+    uint64_t sceneBoundsRevision_ = 0;
     CourseOverviewMapProjection projection_{};
     CourseOverviewMapRenderer renderer_{};
     CourseOverviewMapPickingService picking_{};
@@ -122,6 +139,8 @@ private:
     std::optional<PlayheadOverlayKey> playheadOverlayKey_;
     uint64_t previewRevision_ = 0;
     uint64_t viewportRevision_ = 0;
+    bool interactivePanActive_ = false;
+    Vector2 presentationOffset_{};
     std::optional<CourseRailAuthoringModel> previewRail_;
     std::optional<CourseEnemyAuthoringModel> previewEnemies_;
     std::optional<CourseWaveAuthoringModel> previewWaves_;

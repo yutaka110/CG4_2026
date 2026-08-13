@@ -479,7 +479,8 @@
     <ClCompile Include="application\editor\world\CourseWorldObjectProvider.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\scene\EditorScene.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\world\SceneWorldObjectProvider.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
-    <ClCompile Include="application\editor\world\EditorWorldModel.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+      <ClCompile Include="application\editor\world\EditorWorldModel.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
+      <ClCompile Include="application\editor\world\EditorWorldRefreshRevisionGate.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\world\EditorWorldMutation.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\world\EditorWorldMutationService.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
     <ClCompile Include="application\editor\world\EditorWorldMutationUndoCommand.cpp"><Filter>ソース ファイル\application\editor</Filter></ClCompile>
@@ -755,6 +756,60 @@
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
     <ClCompile Include="application\editor\course\CourseOverviewMapPanel.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapEditorWorkspace.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapEditorMajorTab.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapSceneVisualizationPipeline.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapVisualAsset.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapVisualBakePipeline.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapHologramRenderer.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapGeometryExtractionService.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseTerrainProductionMeshResolver.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapRegionAsset.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapCartographyBakePipeline.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapCartographyRenderer.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseTerrainMapAsset.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseTerrainMapBakePipeline.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseTerrainMapRenderer.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapHybridCartographyCompositor.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapSceneBoundsService.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapSemanticLODSystem.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapLabelLayoutSystem.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
     <ClCompile Include="application\editor\course\CourseOverviewMapSnapService.cpp">
@@ -1952,7 +2007,8 @@
     <ClInclude Include="application\editor\world\CourseWorldObjectProvider.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\scene\EditorScene.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\world\SceneWorldObjectProvider.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
-    <ClInclude Include="application\editor\world\EditorWorldModel.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+      <ClInclude Include="application\editor\world\EditorWorldModel.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
+      <ClInclude Include="application\editor\world\EditorWorldRefreshRevisionGate.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\world\EditorWorldMutation.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\world\EditorWorldMutationService.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
     <ClInclude Include="application\editor\world\EditorWorldMutationUndoCommand.h"><Filter>ヘッダー ファイル\application\editor</Filter></ClInclude>
@@ -2250,6 +2306,60 @@
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\course\CourseOverviewMapPanel.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapEditorWorkspace.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapEditorMajorTab.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapSceneVisualizationPipeline.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapVisualAsset.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapVisualBakePipeline.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapHologramRenderer.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapGeometryExtractionService.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseTerrainProductionMeshResolver.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapRegionAsset.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapCartographyBakePipeline.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapCartographyRenderer.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseTerrainMapAsset.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseTerrainMapBakePipeline.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseTerrainMapRenderer.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapHybridCartographyCompositor.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapSceneBoundsService.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapSemanticLODSystem.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapLabelLayoutSystem.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\course\CourseOverviewMapSnapService.h">

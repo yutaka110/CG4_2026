@@ -73,6 +73,16 @@ class CourseRailViewportRenderer;
 #include "editor/course/CourseOverviewMapEditTool.h"
 #include "editor/course/CourseOverviewMapMultiViewCoordinator.h"
 #include "editor/course/CourseOverviewMapSnapService.h"
+#include "editor/course/CourseMapEditorWorkspace.h"
+#include "editor/course/CourseMapEditorMajorTab.h"
+#include "editor/course/CourseMapCartographyBakePipeline.h"
+#include "editor/course/CourseMapCartographyRenderer.h"
+#include "editor/course/CourseTerrainMapBakePipeline.h"
+#include "editor/course/CourseTerrainMapRenderer.h"
+#include "editor/course/CourseMapHologramRenderer.h"
+#include "editor/course/CourseMapHybridCartographyCompositor.h"
+#include "editor/course/CourseMapSceneVisualizationPipeline.h"
+#include "editor/course/CourseMapVisualBakePipeline.h"
 #include "editor/course/CourseRailConstraintValidationSystem.h"
 #include "editor/course/CourseRailCurveFitService.h"
 #include "editor/course/CourseRailElevationProfileEditor.h"
@@ -159,6 +169,7 @@ class CourseRailViewportRenderer;
 #include "editor/world/CourseWorldObjectProvider.h"
 #include "editor/world/SceneWorldObjectProvider.h"
 #include "editor/world/EditorWorldModel.h"
+#include "editor/world/EditorWorldRefreshRevisionGate.h"
 #include "editor/world/EditorWorldMutationService.h"
 #include "editor/world/EditorWorldOutlinerPanel.h"
 #include "editor/world/VfxWorldObjectProvider.h"
@@ -431,6 +442,7 @@ private:
     editor::VfxWorldObjectProvider editorVfxWorldProvider_{};
     editor::EditorWorldObjectRegistry editorWorldObjectRegistry_{};
     editor::EditorWorldModel editorWorldModel_{editorWorldObjectRegistry_};
+    editor::EditorWorldRefreshRevisionGate editorWorldRefreshRevisionGate_{};
     editor::EditorWorldMutationService editorWorldMutationService_{
         editorWorldObjectRegistry_, editorWorldModel_};
     editor::EditorWorldMutationExecutionService editorWorldMutationExecution_{
@@ -523,6 +535,18 @@ private:
     editor::CourseEnemyDetailsPanel courseEnemyDetailsPanel_{};
     editor::CourseWaveDetailsPanel courseWaveDetailsPanel_{};
     editor::CourseOverviewMapController courseOverviewMapController_{};
+    editor::CourseMapEditorWorkspace courseMapEditorWorkspace_{};
+    editor::CourseMapEditorMajorTab courseMapEditorMajorTab_{};
+    editor::CourseMapSceneBoundsService courseMapSceneBounds_{};
+    editor::CourseMapVisualBakePipeline courseMapVisualBake_{};
+    editor::CourseMapCartographyBakePipeline courseMapCartographyBake_{};
+    editor::CourseMapCartographyRenderer courseMapCartographyRenderer_{};
+    editor::CourseTerrainMapBakePipeline courseTerrainMapBake_{};
+    editor::CourseTerrainMapRenderer courseTerrainMapRenderer_{};
+    editor::CourseMapHologramRenderer courseMapHologramRenderer_{};
+    editor::CourseMapHybridCartographyCompositor courseMapHybridCompositor_{};
+    editor::CourseMapSceneVisualizationPipeline courseMapSceneVisualization_{};
+    bool courseMapSceneVisualizationSettingsRestored_ = false;
     editor::CourseOverviewMapSnapService courseOverviewMapSnapService_{};
     editor::CourseOverviewMapDragDropBridge courseOverviewMapDragDropBridge_{};
     editor::CourseOverviewMapEditTool courseOverviewMapEditTool_{};
@@ -548,7 +572,6 @@ private:
     bool editorCourseObjectDirtyRevisionInitialized_ = false;
     uint32_t editorCourseObjectDirtyRevision_ = 0;
     uint64_t editorDocumentServiceFrame_ = 0;
-    uint64_t editorWorldInputSignature_ = static_cast<uint64_t>(-1);
     bool editorDocumentRecoveryScanned_ = false;
     std::vector<editor::EditorDocumentRecoveryCandidate> editorDocumentRecoveryCandidates_{};
     bool editorAssetRegistryInitialized_ = false;

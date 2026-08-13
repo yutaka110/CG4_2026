@@ -388,6 +388,7 @@ vcpkg_installed/
 # Machine-local editor crash recovery state
 .editor/autosave/
 .editor/recovery/
+.editor/derived-data/
 
 # Submission dependency libraries
 !externals/assimp/lib/

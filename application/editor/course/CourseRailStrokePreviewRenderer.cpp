@@ -21,7 +21,7 @@ CourseRailStrokePreviewFrame CourseRailStrokePreviewRenderer::Build(
     std::vector<Vector2> fittedMap;
     fittedMap.reserve(fitted.size());
     for (const RailPathControlPoint& point : fitted) {
-        const auto projected = projection.ProjectWorld(point.position);
+        const auto projected = projection.ProjectWorldScreenOnly(point.position);
         if (!projected.valid) continue;
         fittedMap.push_back(projected.mapPosition);
         frame.markers.push_back({projected.mapPosition,

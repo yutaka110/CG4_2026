@@ -39,9 +39,12 @@ bool CourseOverviewMapProjection::Configure(
     CourseOverviewMapRect rect,
     CourseOverviewMapProjectionSettings settings,
     std::string* errorMessage,
-    const CourseRailAuthoringModel* boundsRail) {
+    const CourseRailAuthoringModel* boundsRail,
+    const std::vector<Vector3>* additionalFitPoints) {
+    ownedRailSnapshot_.reset();
     rail_ = rail;
     boundsRail_ = boundsRail != nullptr ? boundsRail : rail;
+    additionalFitPoints_ = additionalFitPoints;
     settings_ = settings;
     settings_.zoom = (std::clamp)(settings_.zoom, 0.05f, 64.0f);
     settings_.paddingPixels = (std::clamp)(settings_.paddingPixels, 0.0f, 256.0f);
@@ -74,6 +77,23 @@ bool CourseOverviewMapProjection::Configure(
 
 CourseOverviewMapProjectedPoint CourseOverviewMapProjection::ProjectWorld(
     const Vector3& world) const {
+    CourseOverviewMapProjectedPoint result = ProjectWorldScreenOnly(world);
+    if (!result.valid || settings_.mode ==
+            CourseOverviewMapProjectionMode::RailUnwrapped) {
+        return result;
+    }
+    // Full editor queries preserve the canonical rail distance used by
+    // picking and authoring. Render-only callers use ProjectWorldScreenOnly.
+    const RailAnchorProjection projected = rail_->Project(world, 12);
+    if (projected.valid) {
+        result.railDistance = projected.resolution.railSample.distance;
+    }
+    return result;
+}
+
+CourseOverviewMapProjectedPoint
+CourseOverviewMapProjection::ProjectWorldScreenOnly(
+    const Vector3& world) const {
     CourseOverviewMapProjectedPoint result{};
     if (!state_.valid) return result;
     float depth = 0.0f;
@@ -87,8 +107,6 @@ CourseOverviewMapProjectedPoint CourseOverviewMapProjection::ProjectWorld(
         depth = projected.anchor.verticalOffset;
     } else {
         raw = ProjectRaw(world, &depth);
-        const RailAnchorProjection projected = rail_->Project(world, 12);
-        if (projected.valid) railDistance = projected.resolution.railSample.distance;
     }
     result.valid = true;
     result.mapPosition = RawToMap(raw);
@@ -97,6 +115,23 @@ CourseOverviewMapProjectedPoint CourseOverviewMapProjection::ProjectWorld(
     result.railDistance = railDistance;
     result.depth = depth;
     return result;
+}
+
+CourseOverviewMapProjection
+CourseOverviewMapProjection::MakeBackgroundSnapshot() const {
+    CourseOverviewMapProjection snapshot = *this;
+    snapshot.additionalFitPoints_ = nullptr;
+    if (rail_ == nullptr) {
+        snapshot.rail_ = nullptr;
+        snapshot.boundsRail_ = nullptr;
+        snapshot.ownedRailSnapshot_.reset();
+        return snapshot;
+    }
+    snapshot.ownedRailSnapshot_ =
+        std::make_shared<CourseRailAuthoringModel>(*rail_);
+    snapshot.rail_ = snapshot.ownedRailSnapshot_.get();
+    snapshot.boundsRail_ = snapshot.rail_;
+    return snapshot;
 }
 
 CourseOverviewMapProjectedPoint CourseOverviewMapProjection::ProjectRail(
@@ -220,6 +255,19 @@ void CourseOverviewMapProjection::BuildRawBounds() {
             include({distance, sample.corridorRadius});
         } else {
             include(ProjectRaw(sample.position, nullptr));
+        }
+    }
+    if (additionalFitPoints_ != nullptr) {
+        for (const Vector3& world : *additionalFitPoints_) {
+            if (settings_.mode == CourseOverviewMapProjectionMode::RailUnwrapped) {
+                const RailAnchorProjection projected = rail_->Project(world, 24);
+                if (!projected.valid) continue;
+                include({projected.resolution.railSample.distance +
+                    projected.anchor.forwardOffset,
+                    projected.anchor.lateralOffset});
+            } else {
+                include(ProjectRaw(world, nullptr));
+            }
         }
     }
     if (settings_.mode != CourseOverviewMapProjectionMode::RailUnwrapped) {

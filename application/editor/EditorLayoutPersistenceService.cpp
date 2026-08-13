@@ -10,7 +10,7 @@
 namespace editor {
 namespace {
 
-constexpr int kLayoutPersistenceVersion = 2;
+constexpr int kLayoutPersistenceVersion = 3;
 constexpr std::chrono::milliseconds kLayoutSaveDebounce(750);
 
 bool StartsWith(std::string_view value, std::string_view prefix) {
@@ -304,6 +304,25 @@ void EditorLayoutPersistenceService::SetOverlayOption(
     MarkDirty();
 }
 
+EditorMajorWorkspaceLayoutState
+EditorLayoutPersistenceService::MajorWorkspaceLayout(
+    std::string_view workspaceId,
+    EditorMajorWorkspaceLayoutState fallback) const {
+    const auto found = majorWorkspaceLayouts_.find(std::string(workspaceId));
+    return found != majorWorkspaceLayouts_.end() ? found->second : fallback;
+}
+
+void EditorLayoutPersistenceService::SetMajorWorkspaceLayout(
+    std::string_view workspaceId,
+    const EditorMajorWorkspaceLayoutState& layout) {
+    if (workspaceId.empty()) return;
+    std::string id(workspaceId);
+    const auto found = majorWorkspaceLayouts_.find(id);
+    if (found != majorWorkspaceLayouts_.end() && found->second == layout) return;
+    majorWorkspaceLayouts_[std::move(id)] = layout;
+    MarkDirty();
+}
+
 std::string EditorLayoutPersistenceService::ActivePanel(EditorPanelHostArea area) const {
     const auto found = activePanels_.find(area);
     return found != activePanels_.end() ? found->second : std::string{};
@@ -397,6 +416,29 @@ bool EditorLayoutPersistenceService::Load() {
         } else if (StartsWith(key, "overlay.") && ParseBool(value, parsedBool)) {
             overlayOptions_[key.substr(8)] = parsedBool;
             ++parsedLines;
+        } else if (StartsWith(key, "majorWorkspace.")) {
+            const std::string_view suffix = std::string_view(key).substr(15);
+            const std::size_t propertySeparator = suffix.rfind('.');
+            if (propertySeparator == std::string_view::npos ||
+                propertySeparator == 0 ||
+                propertySeparator + 1 >= suffix.size() ||
+                !ParseBool(value, parsedBool)) {
+                ++ignoredLines;
+            } else {
+                const std::string workspaceId(suffix.substr(0, propertySeparator));
+                const std::string_view property = suffix.substr(propertySeparator + 1);
+                EditorMajorWorkspaceLayoutState& workspace =
+                    majorWorkspaceLayouts_[workspaceId];
+                if (property == "open") {
+                    workspace.open = parsedBool;
+                    ++parsedLines;
+                } else if (property == "maximized") {
+                    workspace.maximized = parsedBool;
+                    ++parsedLines;
+                } else {
+                    ++ignoredLines;
+                }
+            }
         } else if (StartsWith(key, "active.")) {
             EditorPanelHostArea area = EditorPanelHostArea::Diagnostics;
             if (AreaFromKey(std::string_view(key).substr(7), area)) {
@@ -511,6 +553,18 @@ bool EditorLayoutPersistenceService::Save() {
                << (entry.second ? "1" : "0")
                << "\n";
     }
+    for (const auto& entry : majorWorkspaceLayouts_) {
+        output << "majorWorkspace."
+               << entry.first
+               << ".open="
+               << (entry.second.open ? "1" : "0")
+               << "\n";
+        output << "majorWorkspace."
+               << entry.first
+               << ".maximized="
+               << (entry.second.maximized ? "1" : "0")
+               << "\n";
+    }
 
     EditorFileTransaction transaction(std::filesystem::current_path());
     std::string transactionError;
@@ -620,6 +674,7 @@ void EditorLayoutPersistenceService::ResetToDefaults() {
     panelPinned_.clear();
     bottomDockGroups_.clear();
     overlayOptions_.clear();
+    majorWorkspaceLayouts_.clear();
     activePanels_.clear();
     activeBottomDockGroup_ = EditorBottomDockGroup::Output;
     bottomDockSearch_.clear();

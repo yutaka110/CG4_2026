@@ -167,6 +167,7 @@ struct EditorImguiFrameTiming {
     double assetPreviewJobMs = 0.0;
     double assetGpuSetupMs = 0.0;
     double assetGpuProcessMs = 0.0;
+    double worldRefreshMs = 0.0;
     double validationMs = 0.0;
     double panelRegistryMs = 0.0;
     double panelDrawMs = 0.0;
@@ -185,6 +186,10 @@ struct EditorImguiFrameTiming {
     uint32_t gpuRendering = 0;
     uint32_t gpuReady = 0;
     uint32_t gpuFailed = 0;
+    uint32_t worldRefreshReasons = 0;
+    uint64_t worldRefreshRevision = 0;
+    uint64_t worldRefreshCacheHits = 0;
+    bool worldRefreshExecuted = false;
     bool developerTools = false;
     bool viewportFocus = false;
 };
@@ -309,6 +314,7 @@ std::vector<editor::EditorSelectionPanelTarget> BuildProductionSelectionTargets(
 void LogEditorImguiBreakdown(const EditorImguiFrameTiming& timing) {
     if (timing.buildUiMs < 8.0 &&
         timing.assetPipelineMs < 2.0 &&
+        timing.worldRefreshMs < 2.0 &&
         timing.validationMs < 2.0 &&
         timing.panelDrawMs < 4.0) {
         return;
@@ -332,6 +338,11 @@ void LogEditorImguiBreakdown(const EditorImguiFrameTiming& timing) {
         << " assetPreviewJobMs=" << timing.assetPreviewJobMs
         << " assetGpuSetupMs=" << timing.assetGpuSetupMs
         << " assetGpuProcessMs=" << timing.assetGpuProcessMs
+        << " worldRefreshMs=" << timing.worldRefreshMs
+        << " worldRefreshExecuted=" << (timing.worldRefreshExecuted ? 1 : 0)
+        << " worldRefreshReasons=" << timing.worldRefreshReasons
+        << " worldRefreshRevision=" << timing.worldRefreshRevision
+        << " worldRefreshCacheHits=" << timing.worldRefreshCacheHits
         << " previewJobs=" << timing.previewJobs
         << " gpuThumbnails=" << timing.gpuThumbnails
         << " assetRecords=" << timing.assetRecords
@@ -528,7 +539,9 @@ bool DrawEditorWorkspaceSplitters(
         beforeContent != config.contentBrowserWidthRatio;
 }
 
-void DrawEditorWorkspacePanel(editor::EditorLayoutPersistenceService& persistence) {
+void DrawEditorWorkspacePanel(
+    editor::EditorLayoutPersistenceService& persistence,
+    editor::CourseMapEditorWorkspace& courseMapWorkspace) {
     static constexpr std::array<const char*, 4> kWorkspacePresets{{
         "Authoring",
         "VFX Debug",
@@ -559,6 +572,19 @@ void DrawEditorWorkspacePanel(editor::EditorLayoutPersistenceService& persistenc
     }
     if (saveLayoutDisabled) {
         ImGui::EndDisabled();
+    }
+    ImGui::SeparatorText("Major Editors");
+    if (ImGui::Button(
+            courseMapWorkspace.IsOpen()
+                ? "Focus Course Map Editor"
+                : "Open Course Map Editor")) {
+        courseMapWorkspace.Open();
+    }
+    if (courseMapWorkspace.IsOpen()) {
+        ImGui::SameLine();
+        if (ImGui::Button("Close##CourseMapEditor")) {
+            courseMapWorkspace.Close();
+        }
     }
     ImGui::TextWrapped("Layout: %s", persistence.StatusMessage().c_str());
 }
@@ -1320,7 +1346,7 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
                 &editorAssetRegistry_,
                 &editorAssetSelection_,
                 [this](const editor::EditorWorldMutationResult& result) {
-                    editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+                    editorWorldRefreshRevisionGate_.Invalidate();
                     editorDirtyState_.MarkDirty(
                         editor::EditorDirtyDomain::Unknown,
                         "world:" + result.document.assetGuid,
@@ -1351,8 +1377,7 @@ bool AppImGuiLayer::Initialize(HWND hwnd,
                 &editorSceneWorldProvider_,
                 &editorSelection_,
                 [this](const editor::EditorWorldMutationResult& result) {
-                    editorWorldInputSignature_ =
-                        static_cast<uint64_t>(-1);
+                    editorWorldRefreshRevisionGate_.Invalidate();
                     editorDirtyState_.MarkDirty(
                         editor::EditorDirtyDomain::Unknown,
                         "world:" + result.document.assetGuid,
@@ -1806,6 +1831,11 @@ void AppImGuiLayer::RefreshEditorViewportRenderTargetLayout() {
     }
 
     editorLayoutPersistence_.EnsureLoaded();
+    if (!courseMapEditorWorkspace_.IsRestored()) {
+        courseMapEditorWorkspace_.Restore(
+            editorLayoutPersistence_.MajorWorkspaceLayout(
+                editor::CourseMapEditorWorkspace::kWorkspaceId));
+    }
     editorLayout_.Configure(
         editor::EditorLayoutConfig{
             showDeveloperTools_,
@@ -2009,7 +2039,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                     terrainRuntime->terrain.lastEditDirtyRegion = dirty;
                     ++terrainRuntime->terrain.courseObjectEditRevision;
                 }
-                editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+                editorWorldRefreshRevisionGate_.Invalidate();
                 editorDirtyState_.MarkDirty(
                     editor::EditorDirtyDomain::CourseAuthoring,
                     "course.terrain_edit_layer",
@@ -2054,7 +2084,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     editorSequencer_.SetMutationCallback(
         [this, &runtimeState, courseWorldDocument](std::string_view reason) {
             ++runtimeState.terrain.courseObjectEditRevision;
-            editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+            editorWorldRefreshRevisionGate_.Invalidate();
             editorDirtyState_.MarkDirty(
                 editor::EditorDirtyDomain::CourseAuthoring,
                 "course.sequencer",
@@ -2091,7 +2121,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorGeometryExecution_.Bind(
             editorSceneDocumentId_, geometryScene,
             [this](std::string_view) {
-                editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+                editorWorldRefreshRevisionGate_.Invalidate();
                 editorDirtyState_.MarkDirty(
                     editor::EditorDirtyDomain::Unknown,
                     "scene.geometry",
@@ -2108,7 +2138,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             editorSceneDocumentId_, geometryScene, &editorAssetRegistry_,
             &editorProductionMeshRuntimeCache_, std::filesystem::current_path(),
             [this](std::string_view, std::string_view assetGuid) {
-                editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+                editorWorldRefreshRevisionGate_.Invalidate();
                 editorAssetThumbnails_.Sync(editorAssetRegistry_);
                 editorDirtyState_.MarkDirty(
                     editor::EditorDirtyDomain::Unknown,
@@ -2305,7 +2335,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &editorDocumentManager_);
     editorPrefabs_.SetMutationCallback(
         [this](std::string_view reason, std::string_view changedAssetGuid) {
-            editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+            editorWorldRefreshRevisionGate_.Invalidate();
             editorDirtyState_.MarkDirty(
                 editor::EditorDirtyDomain::Unknown,
                 "prefab",
@@ -2447,38 +2477,94 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         {editor::MakeEditorDocumentGuid(
              editor::EditorDocumentTypes::Effect, std::filesystem::path("runtime-vfx.effect")),
          std::string(editor::EditorDocumentTypes::Effect)});
-    uint64_t worldInputSignature = editor::EditorDocumentHash64(
+    editor::EditorWorldRefreshRevisionKey worldRevisionKey{};
+    worldRevisionKey.providerRegistryRevision =
+        editorWorldObjectRegistry_.Revision();
+
+    // Provider source identity includes binding changes and the read-only VFX
+    // hierarchy. This is intentionally much cheaper than enumerating and
+    // rebuilding every Editor World record.
+    uint64_t providerSourceRevision = editor::EditorDocumentHash64(
         courseWorldDocument.Key(), 1469598103934665603ull);
-    const auto mixWorldInput = [&worldInputSignature](uint64_t value) {
-        worldInputSignature ^= value;
-        worldInputSignature *= 1099511628211ull;
+    const auto mixProviderSource = [&providerSourceRevision](uint64_t value) {
+        providerSourceRevision ^= value;
+        providerSourceRevision *= 1099511628211ull;
     };
-    mixWorldInput(runtimeState.terrain.courseObjectEditRevision);
-    if (const editor::EditorScene* scene = editorSceneDocumentProvider_.Scene(activeSceneDocument)) {
-        mixWorldInput(scene->revision);
-        mixWorldInput(scene->entities.size());
+    mixProviderSource(editor::EditorDocumentHash64(
+        activeSceneDocument.Key(), 1099511628211ull));
+    mixProviderSource(static_cast<uint64_t>(
+        reinterpret_cast<std::uintptr_t>(editableCourse)));
+    const editor::EditorScene* worldScene =
+        editorSceneDocumentProvider_.Scene(activeSceneDocument);
+    mixProviderSource(static_cast<uint64_t>(
+        reinterpret_cast<std::uintptr_t>(worldScene)));
+    mixProviderSource(context.effectRuntime->Assets().size());
+    mixProviderSource(context.effectRuntime->Instances().size());
+    mixProviderSource(context.effectRuntime->ParticlePoolResetSerial());
+    uint64_t vfxAssetIdentity = 0;
+    for (const auto& [name, asset] : context.effectRuntime->Assets()) {
+        (void)asset;
+        vfxAssetIdentity ^= editor::EditorDocumentHash64(
+            name, 1099511628211ull);
+    }
+    uint64_t vfxInstanceIdentity = 0;
+    for (const EffectInstance& instance : context.effectRuntime->Instances()) {
+        uint64_t identity = editor::EditorDocumentHash64(
+            instance.assetName, 1469598103934665603ull);
+        identity ^= static_cast<uint64_t>(instance.id);
+        identity *= 1099511628211ull;
+        vfxInstanceIdentity ^= identity;
+    }
+    mixProviderSource(vfxAssetIdentity);
+    mixProviderSource(vfxInstanceIdentity);
+    worldRevisionKey.providerSourceRevision = providerSourceRevision;
+    worldRevisionKey.sceneRevision = worldScene != nullptr
+        ? worldScene->revision : 0;
+
+    uint64_t courseRevision = runtimeState.terrain.courseObjectEditRevision;
+    const auto mixCourseRevision = [&courseRevision](uint64_t value) {
+        courseRevision ^= value;
+        courseRevision *= 1099511628211ull;
+    };
+    if (const editor::EditorDocumentRecord* document =
+            editorDocumentManager_.Find(courseWorldDocument)) {
+        mixCourseRevision(document->editRevision);
     }
     if (context.course != nullptr) {
-        mixWorldInput(context.course->terrainPlacements.size());
-        mixWorldInput(context.course->rockClusters.size());
-        mixWorldInput(context.course->cameraKeys.size());
-        mixWorldInput(context.course->events.size());
+        mixCourseRevision(context.course->terrainPlacements.size());
+        mixCourseRevision(context.course->rockClusters.size());
+        mixCourseRevision(context.course->cameraKeys.size());
+        mixCourseRevision(context.course->events.size());
     }
-    mixWorldInput(context.effectRuntime->Assets().size());
-    mixWorldInput(context.effectRuntime->Instances().size());
-    mixWorldInput(context.effectRuntime->ParticlePoolResetSerial());
-    const bool periodicWorldRefresh = editorDocumentServiceFrame_ % 30u == 0u;
-    if (worldInputSignature != editorWorldInputSignature_ || periodicWorldRefresh) {
+    worldRevisionKey.courseRevision = courseRevision;
+
+    const editor::EditorWorldRefreshDecision worldRefreshDecision =
+        editorWorldRefreshRevisionGate_.Evaluate(worldRevisionKey);
+    if (worldRefreshDecision.shouldRefresh) {
+        const auto worldRefreshStart = EditorUiTimingClock::now();
         const editor::EditorWorldModelRefreshResult worldRefresh = editorWorldModel_.Refresh();
+        imguiTiming.worldRefreshMs = EditorUiElapsedMs(
+            worldRefreshStart, EditorUiTimingClock::now());
+        imguiTiming.worldRefreshExecuted = true;
+        imguiTiming.worldRefreshReasons =
+            static_cast<uint32_t>(worldRefreshDecision.reasons);
         if (worldRefresh.succeeded) {
-            editorWorldInputSignature_ = worldInputSignature;
-        } else if (editorDocumentServiceFrame_ == 0) {
-            editorNotifications_.Push(
-                editor::EditorNotificationSeverity::Error,
-                "Editor World",
-                worldRefresh.message);
+            editorWorldRefreshRevisionGate_.Commit(
+                worldRevisionKey, worldRefreshDecision);
+        } else {
+            editorWorldRefreshRevisionGate_.RecordFailure();
+            if (editorWorldRefreshRevisionGate_.State().failures == 1u) {
+                editorNotifications_.Push(
+                    editor::EditorNotificationSeverity::Error,
+                    "Editor World",
+                    worldRefresh.message);
+            }
         }
     }
+    imguiTiming.worldRefreshRevision =
+        editorWorldRefreshRevisionGate_.State().revision;
+    imguiTiming.worldRefreshCacheHits =
+        editorWorldRefreshRevisionGate_.State().cacheHits;
     SyncEditorTransactionsFromFrame(editorTransactions, runtimeState);
     editorRailRuntimePause_.Sync(
         editor::EditorRailRuntimePauseInput{
@@ -2698,6 +2784,36 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 ? context.frameState->viewProjectionMatrix
                 : MakeIdentity4x4()});
     editorLayoutPersistence_.EnsureLoaded();
+    if (!courseMapEditorWorkspace_.IsRestored()) {
+        courseMapEditorWorkspace_.Restore(
+            editorLayoutPersistence_.MajorWorkspaceLayout(
+                editor::CourseMapEditorWorkspace::kWorkspaceId));
+    }
+    if (!courseMapSceneVisualizationSettingsRestored_) {
+        editor::CourseMapSceneVisualizationSettings settings =
+            courseMapSceneVisualization_.Settings();
+        settings.enabled = editorLayoutPersistence_.OverlayOption(
+            "course-map.scene.enabled", settings.enabled);
+        settings.showTerrain = editorLayoutPersistence_.OverlayOption(
+            "course-map.scene.terrain", settings.showTerrain);
+        settings.showRockClusters = editorLayoutPersistence_.OverlayOption(
+            "course-map.scene.rocks", settings.showRockClusters);
+        settings.showSceneStructures = editorLayoutPersistence_.OverlayOption(
+            "course-map.scene.structures", settings.showSceneStructures);
+        settings.showAuthoredEnemies = editorLayoutPersistence_.OverlayOption(
+            "course-map.scene.authored-enemies", settings.showAuthoredEnemies);
+        settings.showEncounterPreview = editorLayoutPersistence_.OverlayOption(
+            "course-map.scene.encounter-preview", settings.showEncounterPreview);
+        settings.showLabels = editorLayoutPersistence_.OverlayOption(
+            "course-map.scene.labels", settings.showLabels);
+        courseMapSceneVisualization_.SetSettings(settings);
+        editor::CourseMapHybridCartographySettings hybridSettings =
+            courseMapHybridCompositor_.Settings();
+        hybridSettings.enabled = editorLayoutPersistence_.OverlayOption(
+            "course-map.hybrid.enabled", hybridSettings.enabled);
+        courseMapHybridCompositor_.SetSettings(hybridSettings);
+        courseMapSceneVisualizationSettingsRestored_ = true;
+    }
     editorViewportOverlay_.SetGameplayVisible(
         editorLayoutPersistence_.OverlayOption("gameplay-visible", true));
     editorViewportOverlay_.SetEditorVisible(
@@ -4054,7 +4170,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                     &editorSceneComponentRegistry_,
                     &editorGimmickDefinitionRegistry_);
             }
-            editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+            editorWorldRefreshRevisionGate_.Invalidate();
             editorSelection_.Clear();
         };
     editor::EditorBlenderSceneImportExecutionService
@@ -4081,7 +4197,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         if (result.document.type == editor::EditorDocumentTypes::Course) {
             ++runtimeState.terrain.courseObjectEditRevision;
         }
-        editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+        editorWorldRefreshRevisionGate_.Invalidate();
         editorDirtyState_.MarkDirty(
             result.document.type == editor::EditorDocumentTypes::Course
                 ? editor::EditorDirtyDomain::CourseAuthoring
@@ -4409,7 +4525,8 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             editor::EditorPanelHostArea::LeftSidebar,
             panelVisible("editor.workspace"),
             [&]() {
-                DrawEditorWorkspacePanel(editorLayoutPersistence_);
+                DrawEditorWorkspacePanel(
+                    editorLayoutPersistence_, courseMapEditorWorkspace_);
             }});
     registerPanel(
         editor::EditorPanelDescriptor{
@@ -4644,7 +4761,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                             if (result.document.type == editor::EditorDocumentTypes::Course) {
                                 ++runtimeState.terrain.courseObjectEditRevision;
                             }
-                            editorWorldInputSignature_ = static_cast<uint64_t>(-1);
+                            editorWorldRefreshRevisionGate_.Invalidate();
                             editorDirtyState_.MarkDirty(
                                 result.document.type == editor::EditorDocumentTypes::Course
                                     ? editor::EditorDirtyDomain::CourseAuthoring
@@ -5020,6 +5137,35 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         context.transientBufferCount,
                         context.transientBufferStorageCount});
             }});
+    const editor::CourseOverviewMapPanelContext courseMapPanelContext{
+        context.courseRailEditorController,
+        context.courseEnemyEditorController,
+        context.courseWaveEditorController,
+        &editorSelection_,
+        context.coursePreviewSimulationSystem,
+        &courseOverviewMapEditTool_,
+        &courseOverviewMapDragDropBridge_,
+        &courseOverviewMapSnapService_,
+        &courseRailCurveFitService_,
+        &courseRailSketchTool_,
+        &courseRailStrokePreviewRenderer_,
+        &courseOverviewMapMultiViewCoordinator_,
+        &courseRailElevationProfileEditor_,
+        &courseRailConstraintValidationSystem_,
+        &editorAssetRegistry_,
+        &editorAssetSelection_,
+        context.courseDistance,
+        &courseMapSceneBounds_,
+        &courseMapVisualBake_,
+        &courseMapCartographyBake_,
+        &courseMapCartographyRenderer_,
+        &courseTerrainMapBake_,
+        &courseTerrainMapRenderer_,
+        &runtimeState.terrain.settings,
+        &courseMapHologramRenderer_,
+        &courseMapHybridCompositor_,
+        &courseMapSceneVisualization_,
+        ActiveEditorScene()};
     registerPanel(
         editor::EditorPanelDescriptor{
             "course.overviewMap",
@@ -5028,26 +5174,13 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             editor::EditorPanelHostArea::BottomDock,
             panelVisible("course.overviewMap"),
             [&]() {
-                editor::DrawCourseOverviewMapPanel(
-                    courseOverviewMapController_,
-                    editor::CourseOverviewMapPanelContext{
-                        context.courseRailEditorController,
-                        context.courseEnemyEditorController,
-                        context.courseWaveEditorController,
-                        &editorSelection_,
-                        context.coursePreviewSimulationSystem,
-                        &courseOverviewMapEditTool_,
-                        &courseOverviewMapDragDropBridge_,
-                        &courseOverviewMapSnapService_,
-                        &courseRailCurveFitService_,
-                        &courseRailSketchTool_,
-                        &courseRailStrokePreviewRenderer_,
-                        &courseOverviewMapMultiViewCoordinator_,
-                        &courseRailElevationProfileEditor_,
-                        &courseRailConstraintValidationSystem_,
-                        &editorAssetRegistry_,
-                        &editorAssetSelection_,
-                        context.courseDistance});
+                courseMapEditorMajorTab_.DrawCompactEntry(
+                    courseMapEditorWorkspace_);
+                if (!courseMapEditorWorkspace_.IsOpen()) {
+                    ImGui::Separator();
+                    editor::DrawCourseOverviewMapPanel(
+                        courseOverviewMapController_, courseMapPanelContext);
+                }
             }});
     registerPanel(
         editor::EditorPanelDescriptor{
@@ -5091,9 +5224,11 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     const auto panelDrawStart = EditorUiTimingClock::now();
     editorLayoutPersistence_.CaptureRegistryDefaults(editorPanelRegistry_);
     editorLayoutPersistence_.ValidateActivePanels(editorPanelRegistry_);
+    const bool courseMapOpenBeforePanels = courseMapEditorWorkspace_.IsOpen();
     const bool contentBrowserMaximized =
-        showDeveloperTools_ && editorContentBrowserMaximized_;
-    if (!contentBrowserMaximized) {
+        showDeveloperTools_ && editorContentBrowserMaximized_ &&
+        !courseMapOpenBeforePanels;
+    if (!contentBrowserMaximized && !courseMapOpenBeforePanels) {
         editorPanelHost_.DrawArea(
             editorPanelRegistry_,
             editor::EditorPanelHostArea::Viewport,
@@ -5113,6 +5248,9 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorPanelLayout_.InspectorRect(),
         "Editor Right Inspector",
         &editorLayoutPersistence_);
+    const bool courseMapOpen = courseMapEditorWorkspace_.IsOpen();
+    const bool courseMapFillsCenter =
+        courseMapOpen && courseMapEditorWorkspace_.IsMaximized();
     const std::vector<editor::EditorPanelHostAction>
         contentBrowserLayoutActions{{
             contentBrowserMaximized ? "Restore" : "Maximize",
@@ -5126,20 +5264,30 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 editorContentBrowserMaximized_ =
                     !editorContentBrowserMaximized_;
             }}};
-    editorPanelHost_.DrawArea(
-        editorPanelRegistry_,
-        editor::EditorPanelHostArea::ContentBrowser,
-        editorPanelLayout_.ContentBrowserPresentationRect(contentBrowserMaximized),
-        "Editor Content Browser",
-        &editorLayoutPersistence_,
-        &contentBrowserLayoutActions);
-    if (!contentBrowserMaximized) {
+    if (!courseMapFillsCenter) {
+        editorPanelHost_.DrawArea(
+            editorPanelRegistry_,
+            editor::EditorPanelHostArea::ContentBrowser,
+            editorPanelLayout_.ContentBrowserPresentationRect(contentBrowserMaximized),
+            "Editor Content Browser",
+            &editorLayoutPersistence_,
+            &contentBrowserLayoutActions);
+    }
+    if (!contentBrowserMaximized && !courseMapFillsCenter) {
         editorPanelHost_.DrawArea(
             editorPanelRegistry_,
             editor::EditorPanelHostArea::BottomDock,
             editorPanelLayout_.DiagnosticsRect(),
             "Editor Bottom Dock",
             &editorLayoutPersistence_);
+    }
+    if (courseMapEditorWorkspace_.IsOpen()) {
+        courseMapEditorMajorTab_.Draw(
+            courseMapEditorWorkspace_,
+            courseOverviewMapController_,
+            courseMapPanelContext,
+            editor::CourseMapEditorMajorTab::ResolvePresentationRect(
+                editorPanelLayout_, courseMapEditorWorkspace_.IsMaximized()));
     }
     if (showDeveloperTools_ &&
         contentDrawerPresentationRect.Valid() &&
@@ -5205,7 +5353,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     imguiTiming.panelDrawMs = EditorUiElapsedMs(panelDrawStart, EditorUiTimingClock::now());
 
     const auto layoutPersistenceStart = EditorUiTimingClock::now();
-    if (!contentBrowserMaximized &&
+    if (!contentBrowserMaximized && !courseMapEditorWorkspace_.IsOpen() &&
         DrawEditorWorkspaceSplitters(editorPanelLayoutConfig, editorPanelLayout_)) {
         editorPanelLayout_.Configure(editorPanelLayoutConfig);
         editorLayoutPersistence_.CaptureLayout(editorPanelLayoutConfig);
@@ -5218,6 +5366,27 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     } else {
         editorLayoutPersistence_.CaptureLayout(editorPanelLayoutConfig);
     }
+    editorLayoutPersistence_.SetMajorWorkspaceLayout(
+        editor::CourseMapEditorWorkspace::kWorkspaceId,
+        courseMapEditorWorkspace_.CaptureLayout());
+    const editor::CourseMapSceneVisualizationSettings courseMapSceneSettings =
+        courseMapSceneVisualization_.Settings();
+    editorLayoutPersistence_.SetOverlayOption(
+        "course-map.scene.enabled", courseMapSceneSettings.enabled);
+    editorLayoutPersistence_.SetOverlayOption(
+        "course-map.scene.terrain", courseMapSceneSettings.showTerrain);
+    editorLayoutPersistence_.SetOverlayOption(
+        "course-map.scene.rocks", courseMapSceneSettings.showRockClusters);
+    editorLayoutPersistence_.SetOverlayOption(
+        "course-map.scene.structures", courseMapSceneSettings.showSceneStructures);
+    editorLayoutPersistence_.SetOverlayOption(
+        "course-map.scene.authored-enemies", courseMapSceneSettings.showAuthoredEnemies);
+    editorLayoutPersistence_.SetOverlayOption(
+        "course-map.scene.encounter-preview", courseMapSceneSettings.showEncounterPreview);
+    editorLayoutPersistence_.SetOverlayOption(
+        "course-map.scene.labels", courseMapSceneSettings.showLabels);
+    editorLayoutPersistence_.SetOverlayOption(
+        "course-map.hybrid.enabled", courseMapHybridCompositor_.Settings().enabled);
     editorLayoutPersistence_.SaveIfDirty();
     editorContentBrowserState_.SaveIfDirty();
     editorDetailsViewState_.SaveIfDirty();
@@ -5248,6 +5417,15 @@ void AppImGuiLayer::Render(ID3D12GraphicsCommandList* cmdList) {
 void AppImGuiLayer::Shutdown() {
     if (!initialized_) {
         return;
+    }
+
+    if (courseMapEditorWorkspace_.IsRestored()) {
+        editorLayoutPersistence_.SetMajorWorkspaceLayout(
+            editor::CourseMapEditorWorkspace::kWorkspaceId,
+            courseMapEditorWorkspace_.CaptureLayout());
+    }
+    if (editorLayoutPersistence_.Dirty()) {
+        editorLayoutPersistence_.Save();
     }
 
     editorInteractiveTools_.Shutdown();

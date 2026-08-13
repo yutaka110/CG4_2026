@@ -119,6 +119,10 @@ void CourseOverviewMapMultiViewCoordinator::Unbind() {
     sidePlayheadOverlay_ = {};
     InvalidateFrameCache();
     InvalidatePlayheadOverlays();
+    sceneFitPoints_ = nullptr;
+    sceneBoundsRevision_ = 0;
+    interactivePanView_ = CourseOverviewMapViewId::None;
+    presentationOffset_ = {};
 }
 
 void CourseOverviewMapMultiViewCoordinator::SetEnabled(bool enabled) {
@@ -128,6 +132,16 @@ void CourseOverviewMapMultiViewCoordinator::SetEnabled(bool enabled) {
 void CourseOverviewMapMultiViewCoordinator::SetViewport(CourseOverviewMapRect rect) {
     if (SameRect(viewport_, rect)) return;
     viewport_ = rect;
+    ++viewportRevision_;
+    InvalidateFrameCache();
+}
+
+void CourseOverviewMapMultiViewCoordinator::SetSceneFitPoints(
+    const std::vector<Vector3>* fitPoints,
+    uint64_t revision) {
+    if (sceneFitPoints_ == fitPoints && sceneBoundsRevision_ == revision) return;
+    sceneFitPoints_ = fitPoints;
+    sceneBoundsRevision_ = revision;
     ++viewportRevision_;
     InvalidateFrameCache();
 }
@@ -171,6 +185,12 @@ bool CourseOverviewMapMultiViewCoordinator::Rebuild(
         return false;
     }
     const float playheadDistance = PlayheadDistance(fallbackPlayheadDistance);
+    if (InteractivePanActive() && state_.valid && topFrame_.valid &&
+        sideFrame_.valid) {
+        ++state_.frameCacheHits;
+        RefreshPlayheadOverlays(playheadDistance);
+        return true;
+    }
     const RetainedFrameKey key = BuildFrameKey();
     if (retainedFrameKey_.has_value() && state_.valid && topFrame_.valid &&
         sideFrame_.valid && SameFrameKey(*retainedFrameKey_, key)) {
@@ -185,8 +205,10 @@ bool CourseOverviewMapMultiViewCoordinator::Rebuild(
     const CourseOverviewMapRect sideRect{viewport_.x + half + gap, viewport_.y, half, viewport_.height};
     const CourseRailAuthoringModel* rail = RailModel();
     const CourseRailAuthoringModel* boundsRail = binding_.rail->Model();
-    if (!topProjection_.Configure(rail, topRect, topSettings_, errorMessage, boundsRail) ||
-        !sideProjection_.Configure(rail, sideRect, sideSettings_, errorMessage, boundsRail)) {
+    if (!topProjection_.Configure(rail, topRect, topSettings_, errorMessage,
+            boundsRail, sceneFitPoints_) ||
+        !sideProjection_.Configure(rail, sideRect, sideSettings_, errorMessage,
+            boundsRail, sceneFitPoints_)) {
         state_.valid = false;
         InvalidateFrameCache();
         InvalidatePlayheadOverlays();
@@ -227,10 +249,13 @@ CourseOverviewMapViewId CourseOverviewMapMultiViewCoordinator::ViewAt(
 CourseOverviewMapPickResult CourseOverviewMapMultiViewCoordinator::HoverAt(
     Vector2 mapPosition) {
     state_.hoveredView = ViewAt(mapPosition);
+    const Vector2 offset = PresentationOffset(state_.hoveredView);
+    const Vector2 retainedPosition{
+        mapPosition.x - offset.x, mapPosition.y - offset.y};
     state_.hovered = state_.hoveredView == CourseOverviewMapViewId::Top
-        ? picking_.Pick(topFrame_, mapPosition)
+        ? picking_.Pick(topFrame_, retainedPosition)
         : state_.hoveredView == CourseOverviewMapViewId::Side
-            ? picking_.Pick(sideFrame_, mapPosition) : CourseOverviewMapPickResult{};
+            ? picking_.Pick(sideFrame_, retainedPosition) : CourseOverviewMapPickResult{};
     if (state_.hovered.hit) SetFocusDistance(state_.hovered.railDistance);
     else UpdateCrosshair(mapPosition);
     return state_.hovered;
@@ -246,7 +271,9 @@ CourseOverviewMapPickResult CourseOverviewMapMultiViewCoordinator::SelectAt(
     const CourseOverviewMapFrame* frame = view == CourseOverviewMapViewId::Top
         ? &topFrame_ : view == CourseOverviewMapViewId::Side ? &sideFrame_ : nullptr;
     if (frame == nullptr) return {};
-    const auto candidates = picking_.PickAll(*frame, mapPosition);
+    const Vector2 offset = PresentationOffset(view);
+    const auto candidates = picking_.PickAll(*frame,
+        {mapPosition.x - offset.x, mapPosition.y - offset.y});
     if (candidates.empty()) {
         if (!additive && !toggle) binding_.selection->Clear();
         cycleOffset_ = 0;
@@ -268,12 +295,22 @@ bool CourseOverviewMapMultiViewCoordinator::UpdateCrosshair(Vector2 mapPosition)
         ? &topProjection_ : view == CourseOverviewMapViewId::Side ? &sideProjection_ : nullptr;
     const CourseRailAuthoringModel* rail = RailModel();
     if (projection == nullptr || rail == nullptr) return false;
-    const Vector3 world = projection->Unproject(mapPosition, 0.0f);
+    const Vector2 offset = PresentationOffset(view);
+    const Vector3 world = projection->Unproject(
+        {mapPosition.x - offset.x, mapPosition.y - offset.y}, 0.0f);
     const RailAnchorProjection projected = rail->Project(world, 64);
     if (!projected.valid) return false;
     SetFocusDistance(projected.resolution.railSample.distance);
     state_.hoveredView = view;
     return true;
+}
+
+void CourseOverviewMapMultiViewCoordinator::BeginInteractivePan(
+    CourseOverviewMapViewId view) noexcept {
+    if (view == CourseOverviewMapViewId::None || interactivePanView_ == view) return;
+    if (InteractivePanActive()) EndInteractivePan();
+    interactivePanView_ = view;
+    presentationOffset_ = {};
 }
 
 void CourseOverviewMapMultiViewCoordinator::SetFocusDistance(float railDistance) {
@@ -294,8 +331,27 @@ void CourseOverviewMapMultiViewCoordinator::Pan(
     if (deltaPixels.x == 0.0f && deltaPixels.y == 0.0f) return;
     settings->panPixels.x += deltaPixels.x;
     settings->panPixels.y += deltaPixels.y;
+    if (interactivePanView_ == view) {
+        presentationOffset_.x += deltaPixels.x;
+        presentationOffset_.y += deltaPixels.y;
+        return;
+    }
     ++viewportRevision_;
     InvalidateFrameCache();
+}
+
+bool CourseOverviewMapMultiViewCoordinator::EndInteractivePan() noexcept {
+    if (!InteractivePanActive()) return false;
+    interactivePanView_ = CourseOverviewMapViewId::None;
+    const bool changed = presentationOffset_.x != 0.0f ||
+        presentationOffset_.y != 0.0f;
+    presentationOffset_ = {};
+    if (changed) {
+        ++viewportRevision_;
+        InvalidateFrameCache();
+        InvalidatePlayheadOverlays();
+    }
+    return changed;
 }
 
 void CourseOverviewMapMultiViewCoordinator::ZoomAt(
@@ -311,7 +367,8 @@ void CourseOverviewMapMultiViewCoordinator::ZoomAt(
     settings->zoom = (std::clamp)(settings->zoom * factor, 0.05f, 64.0f);
     const CourseRailAuthoringModel* rail = RailModel();
     const CourseRailAuthoringModel* bounds = binding_.rail->Model();
-    projection->Configure(rail, projection->State().rect, *settings, nullptr, bounds);
+    projection->Configure(rail, projection->State().rect, *settings, nullptr,
+        bounds, sceneFitPoints_);
     const Vector2 after = projection->RawToMap(raw);
     settings->panPixels.x += mapPosition.x - after.x;
     settings->panPixels.y += mapPosition.y - after.y;
@@ -327,6 +384,64 @@ void CourseOverviewMapMultiViewCoordinator::FrameAll() {
     topSettings_.panPixels = sideSettings_.panPixels = {};
     ++viewportRevision_;
     InvalidateFrameCache();
+}
+
+bool CourseOverviewMapMultiViewCoordinator::FrameMapPoints(
+    CourseOverviewMapViewId view,
+    const std::vector<Vector2>& mapPoints,
+    float minimumZoom,
+    float paddingPixels) {
+    CourseOverviewMapProjectionSettings* settings =
+        view == CourseOverviewMapViewId::Top ? &topSettings_ :
+        view == CourseOverviewMapViewId::Side ? &sideSettings_ : nullptr;
+    CourseOverviewMapProjection* projection =
+        view == CourseOverviewMapViewId::Top ? &topProjection_ :
+        view == CourseOverviewMapViewId::Side ? &sideProjection_ : nullptr;
+    if (settings == nullptr || projection == nullptr ||
+        !projection->State().valid || mapPoints.empty()) {
+        return false;
+    }
+    Vector2 rawMinimum = projection->MapToRaw(mapPoints.front());
+    Vector2 rawMaximum = rawMinimum;
+    for (std::size_t index = 1; index < mapPoints.size(); ++index) {
+        const Vector2 raw = projection->MapToRaw(mapPoints[index]);
+        rawMinimum.x = (std::min)(rawMinimum.x, raw.x);
+        rawMinimum.y = (std::min)(rawMinimum.y, raw.y);
+        rawMaximum.x = (std::max)(rawMaximum.x, raw.x);
+        rawMaximum.y = (std::max)(rawMaximum.y, raw.y);
+    }
+    const Vector2 rawCenter{(rawMinimum.x + rawMaximum.x) * 0.5f,
+        (rawMinimum.y + rawMaximum.y) * 0.5f};
+    float targetZoom = (std::max)(settings->zoom, minimumZoom);
+    if (mapPoints.size() > 1u) {
+        const float width = (std::max)(0.001f,
+            rawMaximum.x - rawMinimum.x);
+        const float height = (std::max)(0.001f,
+            rawMaximum.y - rawMinimum.y);
+        const CourseOverviewMapRect rect = projection->State().rect;
+        const float desiredScale = (std::min)(
+            (std::max)(1.0f, rect.width - paddingPixels * 2.0f) / width,
+            (std::max)(1.0f, rect.height - paddingPixels * 2.0f) / height);
+        targetZoom = (std::clamp)(desiredScale /
+            (std::max)(0.000001f, projection->State().baseScale),
+            0.05f, 64.0f);
+    }
+    settings->zoom = (std::clamp)(targetZoom, 0.05f, 64.0f);
+    const CourseRailAuthoringModel* rail = RailModel();
+    if (!projection->Configure(rail, projection->State().rect, *settings,
+            nullptr, binding_.rail->Model(), sceneFitPoints_)) {
+        return false;
+    }
+    const CourseOverviewMapRect rect = projection->State().rect;
+    const Vector2 center{rect.x + rect.width * 0.5f,
+        rect.y + rect.height * 0.5f};
+    const Vector2 projectedCenter = projection->RawToMap(rawCenter);
+    settings->panPixels.x += center.x - projectedCenter.x;
+    settings->panPixels.y += center.y - projectedCenter.y;
+    ++viewportRevision_;
+    InvalidateFrameCache();
+    InvalidatePlayheadOverlays();
+    return true;
 }
 
 bool CourseOverviewMapMultiViewCoordinator::Validate(std::string* errorMessage) const {
@@ -369,10 +484,10 @@ const CourseWaveAuthoringModel* CourseOverviewMapMultiViewCoordinator::WaveModel
 
 void CourseOverviewMapMultiViewCoordinator::RefreshCrosshairPositions() {
     if (!state_.crosshair.valid || !topProjection_.State().valid || !sideProjection_.State().valid) return;
-    state_.crosshair.topPosition =
-        topProjection_.ProjectWorld(state_.crosshair.worldPosition).mapPosition;
-    state_.crosshair.sidePosition =
-        sideProjection_.ProjectWorld(state_.crosshair.worldPosition).mapPosition;
+    state_.crosshair.topPosition = topProjection_.ProjectRail(
+        state_.crosshair.railDistance).mapPosition;
+    state_.crosshair.sidePosition = sideProjection_.ProjectRail(
+        state_.crosshair.railDistance).mapPosition;
 }
 
 CourseOverviewMapMultiViewCoordinator::RetainedFrameKey
@@ -396,6 +511,7 @@ CourseOverviewMapMultiViewCoordinator::BuildFrameKey() const {
     key.viewportRevision = viewportRevision_;
     key.topVisibilitySettingsRevision = topVisibility_.SettingsRevision();
     key.sideVisibilitySettingsRevision = sideVisibility_.SettingsRevision();
+    key.sceneBoundsRevision = sceneBoundsRevision_;
     key.viewport = viewport_;
     key.topProjection = topSettings_;
     key.sideProjection = sideSettings_;
@@ -412,6 +528,7 @@ bool CourseOverviewMapMultiViewCoordinator::SameFrameKey(
         lhs.viewportRevision == rhs.viewportRevision &&
         lhs.topVisibilitySettingsRevision == rhs.topVisibilitySettingsRevision &&
         lhs.sideVisibilitySettingsRevision == rhs.sideVisibilitySettingsRevision &&
+        lhs.sceneBoundsRevision == rhs.sceneBoundsRevision &&
         lhs.railGeneration == rhs.railGeneration &&
         lhs.enemyGeneration == rhs.enemyGeneration &&
         lhs.waveGeneration == rhs.waveGeneration &&

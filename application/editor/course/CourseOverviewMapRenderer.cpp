@@ -64,8 +64,8 @@ CourseOverviewMapFrame CourseOverviewMapRenderer::BuildStatic(
                 segmentIndex, static_cast<float>(sampleIndex - 1u) / static_cast<float>(samples - 1u));
             const RailPathSample b = path.EvaluateSegmentAt(
                 segmentIndex, static_cast<float>(sampleIndex) / static_cast<float>(samples - 1u));
-            const auto pa = input.projection->ProjectWorld(a.position);
-            const auto pb = input.projection->ProjectWorld(b.position);
+            const auto pa = input.projection->ProjectWorldScreenOnly(a.position);
+            const auto pb = input.projection->ProjectWorldScreenOnly(b.position);
             if (!pa.valid || !pb.valid) continue;
             frame.lines.push_back({CourseOverviewMapItemKind::RailSegment,
                 pa.mapPosition, pb.mapPosition, a.position, b.position, color,
@@ -76,7 +76,7 @@ CourseOverviewMapFrame CourseOverviewMapRenderer::BuildStatic(
 
     const auto& points = path.ControlPoints();
     for (uint32_t index = 0; index < points.size(); ++index) {
-        const auto projected = input.projection->ProjectWorld(points[index].position);
+        const auto projected = input.projection->ProjectWorldScreenOnly(points[index].position);
         if (!projected.valid) continue;
         const EditorObjectHandle handle = MakeHandle(
             EditorDomainId::CourseRailControlPoint,
@@ -84,10 +84,12 @@ CourseOverviewMapFrame CourseOverviewMapRenderer::BuildStatic(
             index,
             input.railGeneration,
             "Rail Control Point");
+        const float pointDistance = index < segments.size()
+            ? segments[index].startDistance : input.rail->Length();
         frame.markers.push_back({CourseOverviewMapItemKind::RailControlPoint,
             projected.mapPosition, points[index].position,
             IsSelected(input.selection, handle) ? style_.selectedColor : style_.railPointColor,
-            style_.pointRadius, projected.railDistance, handle, points[index].editorGuid,
+            style_.pointRadius, pointDistance, handle, points[index].editorGuid,
             true, IsSelected(input.selection, handle), true, false});
         ++frame.stats.railControlPoints;
     }
@@ -99,7 +101,7 @@ CourseOverviewMapFrame CourseOverviewMapRenderer::BuildStatic(
             if (!placement.editorVisible || (!style_.showDisabled && !placement.enabled)) continue;
             const auto resolved = input.enemies->Resolve(placement);
             if (!resolved.valid) continue;
-            const auto projected = input.projection->ProjectWorld(resolved.worldPosition);
+            const auto projected = input.projection->ProjectWorldScreenOnly(resolved.worldPosition);
             if (!projected.valid) continue;
             const EditorObjectHandle handle = MakeHandle(
                 EditorDomainId::CourseEnemyPlacement,

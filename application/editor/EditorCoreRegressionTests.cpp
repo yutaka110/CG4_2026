@@ -33,6 +33,7 @@
 #include "EditorDetailsViewState.h"
 #include "EditorFontService.h"
 #include "EditorLayoutPersistenceService.h"
+#include "course/CourseMapEditorWorkspace.h"
 #include "EditorPanelLayoutService.h"
 #include "EditorContentDrawerService.h"
 #include "EditorFramePacingService.h"
@@ -91,6 +92,22 @@
 #include "course/CourseOverviewMapDragDropBridge.h"
 #include "course/CourseOverviewMapEditTool.h"
 #include "course/CourseOverviewMapMultiViewCoordinator.h"
+#include "course/CourseMapSceneVisualizationPipeline.h"
+#include "course/CourseMapSceneBoundsService.h"
+#include "course/CourseMapGeometryExtractionService.h"
+#include "course/CourseTerrainProductionMeshResolver.h"
+#include "course/CourseMapRegionAsset.h"
+#include "course/CourseMapCartographyBakePipeline.h"
+#include "course/CourseMapCartographyRenderer.h"
+#include "course/CourseTerrainMapAsset.h"
+#include "course/CourseTerrainMapBakePipeline.h"
+#include "course/CourseTerrainMapRenderer.h"
+#include "course/CourseMapHybridCartographyCompositor.h"
+#include "course/CourseMapVisualAsset.h"
+#include "course/CourseMapVisualBakePipeline.h"
+#include "course/CourseMapHologramRenderer.h"
+#include "course/CourseMapSemanticLODSystem.h"
+#include "course/CourseMapLabelLayoutSystem.h"
 #include "course/CourseRailConstraintValidationSystem.h"
 #include "course/CourseRailCurveFitService.h"
 #include "course/CourseRailElevationProfileEditor.h"
@@ -154,6 +171,7 @@
 #include "world/CourseWorldObjectProvider.h"
 #include "../../externals/imgui/imgui.h"
 #include "world/EditorWorldModel.h"
+#include "world/EditorWorldRefreshRevisionGate.h"
 #include "world/EditorWorldMutationService.h"
 #include "world/SceneWorldObjectProvider.h"
 #include "world/IEditorWorldMutationProvider.h"
@@ -6636,6 +6654,9 @@ void TestLayoutPersistence(RegressionRunner& runner) {
     persistence.SetPanelVisible("vfx.inspector", false);
     persistence.SetOverlayOption("object-labels.visible", false);
     persistence.SetOverlayOption("object-labels.selected-only", true);
+    persistence.SetMajorWorkspaceLayout(
+        CourseMapEditorWorkspace::kWorkspaceId,
+        EditorMajorWorkspaceLayoutState{true, false});
     runner.Expect(persistence.Save(), "layout persistence should save test layout");
 
     EditorLayoutPersistenceService loaded;
@@ -6655,6 +6676,25 @@ void TestLayoutPersistence(RegressionRunner& runner) {
         !loaded.OverlayOption("object-labels.visible", true) &&
             loaded.OverlayOption("object-labels.selected-only", false),
         "viewport overlay layer preferences should round-trip atomically");
+    const EditorMajorWorkspaceLayoutState restoredCourseMap =
+        loaded.MajorWorkspaceLayout(CourseMapEditorWorkspace::kWorkspaceId);
+    runner.Expect(
+        restoredCourseMap.open && !restoredCourseMap.maximized,
+        "major workspace open and presentation state should round-trip");
+    CourseMapEditorWorkspace courseMapWorkspace;
+    courseMapWorkspace.Restore(restoredCourseMap);
+    runner.Expect(
+        courseMapWorkspace.IsOpen() && courseMapWorkspace.IsRestored() &&
+            courseMapWorkspace.ConsumeFocusRequest(),
+        "restored open course map workspace should request focus once");
+    runner.Expect(
+        !courseMapWorkspace.ConsumeFocusRequest(),
+        "course map workspace focus request should be consumable");
+    courseMapWorkspace.Close();
+    runner.Expect(
+        !courseMapWorkspace.IsOpen() &&
+            !courseMapWorkspace.CaptureLayout().open,
+        "course map workspace close should update captured layout");
     loaded.SetActivePanel(EditorPanelHostArea::RightInspector, "missing.panel");
     runner.Expect(
         !loaded.ValidateActivePanels(panels),
@@ -7458,6 +7498,63 @@ void TestGenericDocumentModel(RegressionRunner& runner) {
 }
 
 void TestEditorWorldModel(RegressionRunner& runner) {
+    EditorWorldRefreshRevisionGate refreshGate;
+    const EditorWorldRefreshRevisionKey initialWorldRevision{1u, 10u, 20u, 30u};
+    const EditorWorldRefreshDecision initialRefresh =
+        refreshGate.Evaluate(initialWorldRevision);
+    refreshGate.Commit(initialWorldRevision, initialRefresh);
+    bool unchangedWorldStayedCached = true;
+    for (uint32_t frame = 0; frame < 120u; ++frame) {
+        unchangedWorldStayedCached = unchangedWorldStayedCached &&
+            !refreshGate.Evaluate(initialWorldRevision).shouldRefresh;
+    }
+    runner.Expect(
+        initialRefresh.shouldRefresh &&
+            HasEditorWorldRefreshReason(
+                initialRefresh.reasons, EditorWorldRefreshReason::Initial) &&
+            unchangedWorldStayedCached && refreshGate.State().refreshes == 1u &&
+            refreshGate.State().cacheHits == 120u,
+        "world refresh revision gate should initialize once and never refresh from frame passage alone");
+
+    EditorWorldRefreshRevisionKey changedWorldRevision = initialWorldRevision;
+    ++changedWorldRevision.sceneRevision;
+    const EditorWorldRefreshDecision sceneRefresh =
+        refreshGate.Evaluate(changedWorldRevision);
+    refreshGate.RecordFailure();
+    const EditorWorldRefreshDecision retryRefresh =
+        refreshGate.Evaluate(changedWorldRevision);
+    refreshGate.Commit(changedWorldRevision, retryRefresh);
+    runner.Expect(
+        sceneRefresh.shouldRefresh && retryRefresh.shouldRefresh &&
+            HasEditorWorldRefreshReason(
+                sceneRefresh.reasons, EditorWorldRefreshReason::Scene) &&
+            refreshGate.State().failures == 1u &&
+            refreshGate.State().committedKey.sceneRevision ==
+                changedWorldRevision.sceneRevision,
+        "world refresh revision gate should retry failed Scene refreshes before committing a key");
+
+    ++changedWorldRevision.providerRegistryRevision;
+    ++changedWorldRevision.providerSourceRevision;
+    ++changedWorldRevision.courseRevision;
+    const EditorWorldRefreshDecision sourceRefresh =
+        refreshGate.Evaluate(changedWorldRevision);
+    refreshGate.Commit(changedWorldRevision, sourceRefresh);
+    refreshGate.Invalidate();
+    const EditorWorldRefreshDecision forcedRefresh =
+        refreshGate.Evaluate(changedWorldRevision);
+    runner.Expect(
+        sourceRefresh.shouldRefresh &&
+            HasEditorWorldRefreshReason(
+                sourceRefresh.reasons, EditorWorldRefreshReason::ProviderRegistry) &&
+            HasEditorWorldRefreshReason(
+                sourceRefresh.reasons, EditorWorldRefreshReason::ProviderSource) &&
+            HasEditorWorldRefreshReason(
+                sourceRefresh.reasons, EditorWorldRefreshReason::Course) &&
+            forcedRefresh.shouldRefresh &&
+            HasEditorWorldRefreshReason(
+                forcedRefresh.reasons, EditorWorldRefreshReason::Forced),
+        "world refresh revision gate should react to Provider, Course and explicit invalidation revisions");
+
     CourseAsset course{};
     course.BuildFallbackCanyon(32.0f);
     course.name = "B1 World Course";
@@ -21136,6 +21233,7 @@ void TestCourseOverviewMapFoundation(RegressionRunner& runner) {
     const Vector3 sourceWorld = rail.RuntimePath().Evaluate(rail.Length() * 0.42f).position;
     std::string error;
     bool allModesRoundTrip = true;
+    bool screenOnlyMatches = true;
     for (const CourseOverviewMapProjectionMode mode : {
             CourseOverviewMapProjectionMode::Top,
             CourseOverviewMapProjectionMode::Side,
@@ -21147,6 +21245,17 @@ void TestCourseOverviewMapFoundation(RegressionRunner& runner) {
             continue;
         }
         const CourseOverviewMapProjectedPoint projected = projection.ProjectWorld(sourceWorld);
+        const CourseOverviewMapProjectedPoint screenOnly =
+            projection.ProjectWorldScreenOnly(sourceWorld);
+        const bool needsRailProjection =
+            mode == CourseOverviewMapProjectionMode::RailUnwrapped;
+        screenOnlyMatches = screenOnlyMatches && screenOnly.valid &&
+            std::abs(screenOnly.mapPosition.x - projected.mapPosition.x) < 0.001f &&
+            std::abs(screenOnly.mapPosition.y - projected.mapPosition.y) < 0.001f &&
+            std::abs(screenOnly.depth - projected.depth) < 0.001f &&
+            (needsRailProjection
+                ? std::abs(screenOnly.railDistance - projected.railDistance) < 0.001f
+                : screenOnly.railDistance == 0.0f);
         const Vector3 restored = projection.Unproject(projected.mapPosition, projected.depth);
         const float errorSquared =
             (restored.x - sourceWorld.x) * (restored.x - sourceWorld.x) +
@@ -21157,6 +21266,10 @@ void TestCourseOverviewMapFoundation(RegressionRunner& runner) {
     runner.Expect(
         allModesRoundTrip,
         "overview map projection should round-trip Top, Side, RailUnwrapped and Free views");
+    runner.Expect(
+        screenOnlyMatches,
+        "screen-only projection should preserve map coordinates while skipping "
+        "rail-distance resolution outside Rail Unwrapped mode");
 
     CourseEnemyAuthoringModel enemies(course);
     CourseWaveAuthoringModel waves(course);
@@ -21281,6 +21394,80 @@ void TestCourseOverviewMapFoundation(RegressionRunner& runner) {
             selection.Primary()->stableId == "course-enemy-placement:overview-enemy",
         "overview selection should update the shared canonical EditorSelection");
 
+    controller.Rebuild(wave.triggerRailDistance, &error);
+    const CourseOverviewMapProjectedPoint focusBefore =
+        controller.Projection().ProjectWorld(sourceWorld);
+    runner.Expect(
+        focusBefore.valid && controller.FrameMapPoints({focusBefore.mapPosition}) &&
+            controller.Rebuild(wave.triggerRailDistance, &error),
+        "overview Frame Selected should accept retained screen-space proxy points");
+    const CourseOverviewMapProjectedPoint focusAfter =
+        controller.Projection().ProjectWorld(sourceWorld);
+    const CourseOverviewMapRect focusRect = controller.Frame().rect;
+    runner.Expect(
+        focusAfter.valid && controller.Projection().Settings().zoom >= 5.5f &&
+            std::fabs(focusAfter.mapPosition.x -
+                (focusRect.x + focusRect.width * 0.5f)) < 0.01f &&
+            std::fabs(focusAfter.mapPosition.y -
+                (focusRect.y + focusRect.height * 0.5f)) < 0.01f,
+        "overview Frame Selected should center one target at Detail LOD or closer");
+
+    const CourseOverviewMapProjectedPoint panPointBefore =
+        controller.Projection().ProjectWorld(sourceWorld);
+    controller.PanPixels({47.0f, -31.0f});
+    runner.Expect(
+        controller.Rebuild(wave.triggerRailDistance, &error),
+        "overview pan should rebuild the retained frame after a drag gesture");
+    const CourseOverviewMapProjectedPoint panPointAfter =
+        controller.Projection().ProjectWorld(sourceWorld);
+    runner.Expect(
+        panPointBefore.valid && panPointAfter.valid &&
+            std::fabs((panPointAfter.mapPosition.x - panPointBefore.mapPosition.x) -
+                47.0f) < 0.001f &&
+            std::fabs((panPointAfter.mapPosition.y - panPointBefore.mapPosition.y) +
+                31.0f) < 0.001f,
+        "overview pixel pan should move the visible map without changing its zoom");
+
+    const uint64_t interactivePanRevision = controller.State().frameRevision;
+    const CourseOverviewMapProjectedPoint interactivePanBefore =
+        controller.Projection().ProjectWorld(sourceWorld);
+    controller.BeginInteractivePan();
+    controller.PanPixels({13.0f, 9.0f});
+    controller.PanPixels({-2.0f, 4.0f});
+    const Vector2 retainedPanOffset = controller.PresentationOffset();
+    runner.Expect(
+        controller.InteractivePanActive() &&
+            retainedPanOffset.x == 11.0f && retainedPanOffset.y == 13.0f &&
+            controller.Rebuild(wave.triggerRailDistance, &error) &&
+            controller.State().frameRevision == interactivePanRevision,
+        "overview interactive pan should translate the retained presentation "
+        "without rebuilding static geometry");
+    const CourseOverviewMapProjectedPoint interactivePanDuring =
+        controller.Projection().ProjectWorld(sourceWorld);
+    const bool interactivePanCommitted = controller.EndInteractivePan();
+    runner.Expect(
+        interactivePanCommitted && !controller.InteractivePanActive() &&
+            controller.PresentationOffset().x == 0.0f &&
+            controller.PresentationOffset().y == 0.0f &&
+            controller.Rebuild(wave.triggerRailDistance, &error) &&
+            controller.State().frameRevision == interactivePanRevision + 1u,
+        "overview interactive pan should commit exactly one rebuild on release");
+    const CourseOverviewMapProjectedPoint interactivePanAfter =
+        controller.Projection().ProjectWorld(sourceWorld);
+    runner.Expect(
+        interactivePanBefore.valid && interactivePanDuring.valid &&
+            interactivePanAfter.valid &&
+            std::fabs(interactivePanDuring.mapPosition.x -
+                interactivePanBefore.mapPosition.x) < 0.001f &&
+            std::fabs(interactivePanDuring.mapPosition.y -
+                interactivePanBefore.mapPosition.y) < 0.001f &&
+            std::fabs((interactivePanAfter.mapPosition.x -
+                interactivePanBefore.mapPosition.x) - 11.0f) < 0.001f &&
+            std::fabs((interactivePanAfter.mapPosition.y -
+                interactivePanBefore.mapPosition.y) - 13.0f) < 0.001f,
+        "overview interactive pan should keep the canonical projection stable "
+        "until release and then apply all accumulated deltas");
+
     runner.Expect(
         controller.Rebuild(wave.triggerRailDistance, &error),
         "overview cache test should first synchronize the selection revision");
@@ -21373,6 +21560,983 @@ void TestCourseOverviewMapFoundation(RegressionRunner& runner) {
     runner.Expect(
         controller.Rebuild(0.0f, &error) && controller.Frame().valid,
         "overview replacement document should publish a fresh retained frame after rebind");
+}
+
+void TestCourseMapSceneVisualizationPipeline(RegressionRunner& runner) {
+    CourseAsset course{};
+    std::string error;
+    runner.Expect(
+        course.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course", &error),
+        "course map scene visualization fixture should load the production canyon course");
+    if (!course.IsValid()) return;
+
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "course-map-scene-visualization");
+    const CourseRailAuthoringModel rail(course);
+    const CourseEnemyAuthoringModel enemies(course);
+    CourseOverviewMapProjection projection;
+    CourseOverviewMapProjectionSettings projectionSettings{};
+    projectionSettings.mode = CourseOverviewMapProjectionMode::Top;
+    runner.Expect(
+        projection.Configure(&rail, {0.0f, 0.0f, 1200.0f, 680.0f},
+            projectionSettings, &error),
+        "course map scene visualization should share the valid overview projection");
+
+    EditorScene scene{};
+    EditorSceneEntity structure{};
+    structure.guid = "map-scene-structure";
+    structure.name = "Map Structure";
+    structure.components.push_back(EditorSceneComponent{
+        std::string(kEditorTransformComponentType), true,
+        {{"translation", "0 10 300"}, {"rotation", "0 0 0"},
+            {"scale", "24 32 18"}}, {}});
+    structure.components.push_back(EditorSceneComponent{
+        std::string(kEditorMeshRendererComponentType), true, {},
+        {{"asset", {}, "map-structure-mesh"}}});
+    scene.entities.push_back(std::move(structure));
+    scene.Touch();
+
+    EditorSelection selection;
+    CourseMapSceneVisualizationPipeline pipeline;
+    pipeline.SetResourceRoot("Resources/courses");
+    const CourseMapSceneVisualizationInput input{
+        &projection, &rail, &enemies, &course, &scene, &selection,
+        1, 1, 1};
+    const CourseMapSceneVisualizationFrame& first = pipeline.Build(input);
+    const bool readableStructureProxy = std::any_of(
+        first.screenSpaceProxies.begin(), first.screenSpaceProxies.end(),
+        [](const CourseMapScreenSpaceProxy& proxy) {
+            return proxy.kind == CourseMapSceneVisualKind::SceneStructure &&
+                proxy.radiusPixels >= 9.0f;
+        });
+    runner.Expect(
+        first.valid && first.stats.terrainPlacements > 0 &&
+            first.stats.rockClusterEnvelopes > 0 &&
+            first.stats.rockInstances == 0 &&
+            first.stats.sceneStructures == 1 &&
+            first.stats.encounterEnemies > 0 &&
+            first.stats.encounterClusters > 0 &&
+            first.semanticLod == CourseMapSemanticLODLevel::Course &&
+            first.labels.size() <= 18u && readableStructureProxy &&
+            !first.polygons.empty() && !first.actors.empty(),
+        "course map scene visualization should compose a readable Course LOD with "
+        "fixed-size structure proxies, encounter clusters and a bounded label set");
+    const uint64_t firstBuilds = pipeline.LifetimeStats().builds;
+    const uint64_t firstHits = pipeline.LifetimeStats().cacheHits;
+    pipeline.Build(input);
+    runner.Expect(
+        pipeline.LifetimeStats().builds == firstBuilds &&
+            pipeline.LifetimeStats().cacheHits == firstHits + 1,
+        "course map scene visualization should retain frames by Course, Scene, Selection "
+        "and Projection revisions");
+
+    CourseMapSceneVisualizationSettings settings = pipeline.Settings();
+    settings.showEncounterPreview = false;
+    settings.showSceneStructures = false;
+    pipeline.SetSettings(settings);
+    const CourseMapSceneVisualizationFrame& filtered = pipeline.Build(input);
+    runner.Expect(
+        filtered.valid && filtered.stats.encounterEnemies == 0 &&
+            filtered.stats.sceneStructures == 0 &&
+            filtered.stats.terrainPlacements > 0,
+        "course map visual layer settings should independently filter scene and encounter layers");
+
+    settings.showEncounterPreview = true;
+    settings.showSceneStructures = true;
+    pipeline.SetSettings(settings);
+    projectionSettings.mode = CourseOverviewMapProjectionMode::Side;
+    projection.Configure(&rail, {0.0f, 0.0f, 1200.0f, 680.0f},
+        projectionSettings, &error);
+    const CourseMapSceneVisualizationFrame& side = pipeline.Build(
+        CourseMapSceneVisualizationInput{&projection, &rail, &enemies,
+            &course, &scene, &selection, 1, 1, 1});
+    runner.Expect(
+        side.valid && !side.polygons.empty() && !side.actors.empty(),
+        "course map scene visualization should generate independent Top and Side retained frames");
+}
+
+void TestCourseMapPresentationSystems(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Map Presentation Systems";
+    course.railPoints = {
+        {{0.0f, 0.0f, 0.0f}, 8.0f, 20.0f},
+        {{0.0f, 0.0f, 100.0f}, 8.0f, 20.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "map-presentation-systems");
+    CourseTerrainPlacement landmark{};
+    landmark.editorGuid = "presentation-landmark";
+    landmark.id = "Far Landmark";
+    landmark.layer = CourseTerrainLayer::HeroLandmark;
+    landmark.distance = 50.0f;
+    landmark.lateralOffset = 80.0f;
+    landmark.scale = {20.0f, 30.0f, 20.0f};
+    course.terrainPlacements.push_back(landmark);
+    const CourseRailAuthoringModel rail(course);
+    const CourseEnemyAuthoringModel enemies(course);
+
+    EditorScene scene{};
+    EditorSceneEntity structure{};
+    structure.guid = "presentation-structure";
+    structure.name = "Presentation Structure";
+    structure.components.push_back(EditorSceneComponent{
+        std::string(kEditorTransformComponentType), true,
+        {{"translation", "-60 10 75"}, {"scale", "16 20 18"}}, {}});
+    structure.components.push_back(EditorSceneComponent{
+        std::string(kEditorMeshRendererComponentType), true, {}, {}});
+    scene.entities.push_back(std::move(structure));
+    scene.Touch();
+
+    CourseMapSceneBoundsService bounds;
+    const CourseMapSceneBoundsFrame& boundsFrame = bounds.Build({
+        &rail, &enemies, &course, &scene, 1u, 1u, 1u, 1u});
+    runner.Expect(boundsFrame.valid && boundsFrame.fitPoints.size() >= 16u &&
+            boundsFrame.worldMinimum.x < -50.0f &&
+            boundsFrame.worldMaximum.x > 80.0f,
+        "course map scene bounds should include hero terrain and scene structures");
+    const uint64_t boundsBuilds = boundsFrame.stats.builds;
+    const uint64_t boundsHits = boundsFrame.stats.cacheHits;
+    const CourseMapSceneBoundsFrame& cachedBounds = bounds.Build({
+        &rail, &enemies, &course, &scene, 1u, 1u, 1u, 1u});
+    runner.Expect(cachedBounds.stats.builds == boundsBuilds &&
+            cachedBounds.stats.cacheHits == boundsHits + 1u,
+        "course map scene bounds should be retained by Course and Scene revisions");
+
+    CourseOverviewMapProjection railOnlyProjection;
+    CourseOverviewMapProjection sceneProjection;
+    CourseOverviewMapProjectionSettings projectionSettings{};
+    std::string error;
+    runner.Expect(railOnlyProjection.Configure(&rail,
+            {0.0f, 0.0f, 800.0f, 500.0f}, projectionSettings, &error) &&
+        sceneProjection.Configure(&rail, {0.0f, 0.0f, 800.0f, 500.0f},
+            projectionSettings, &error, nullptr, &boundsFrame.fitPoints) &&
+        sceneProjection.State().baseScale < railOnlyProjection.State().baseScale,
+        "overview projection should fit the complete scene bounds instead of only the rail");
+
+    CourseMapSemanticLODSystem semanticLod;
+    runner.Expect(
+        semanticLod.Evaluate(sceneProjection).level == CourseMapSemanticLODLevel::Course,
+        "semantic LOD should begin at Course tier");
+    projectionSettings.zoom = 2.0f;
+    sceneProjection.Configure(&rail, {0.0f, 0.0f, 800.0f, 500.0f},
+        projectionSettings, &error, nullptr, &boundsFrame.fitPoints);
+    runner.Expect(
+        semanticLod.Evaluate(sceneProjection).level == CourseMapSemanticLODLevel::Region,
+        "semantic LOD should promote to Region as the editor zooms in");
+    projectionSettings.zoom = 5.0f;
+    sceneProjection.Configure(&rail, {0.0f, 0.0f, 800.0f, 500.0f},
+        projectionSettings, &error, nullptr, &boundsFrame.fitPoints);
+    runner.Expect(
+        semanticLod.Evaluate(sceneProjection).level == CourseMapSemanticLODLevel::Detail,
+        "semantic LOD should promote to Detail at editing scale");
+    projectionSettings.zoom = 12.0f;
+    sceneProjection.Configure(&rail, {0.0f, 0.0f, 800.0f, 500.0f},
+        projectionSettings, &error, nullptr, &boundsFrame.fitPoints);
+    runner.Expect(
+        semanticLod.Evaluate(sceneProjection).level == CourseMapSemanticLODLevel::Inspect,
+        "semantic LOD should promote to Inspect at close range");
+
+    CourseMapLabelLayoutSystem labelLayout;
+    CourseMapLabelLayoutSettings labelSettings = labelLayout.Settings();
+    labelSettings.maximumLabels = 5u;
+    labelSettings.displacementRings = 5u;
+    labelLayout.SetSettings(labelSettings);
+    std::vector<CourseMapLabelCandidate> candidates;
+    for (uint32_t i = 0; i < 20u; ++i) {
+        candidates.push_back({{200.0f, 200.0f}, {206.0f, 194.0f},
+            0xffffffffu, "Overlapping Label " + std::to_string(i),
+            "label:" + std::to_string(i), CourseMapLabelPriority::Enemy,
+            i == 19u, true});
+    }
+    const CourseMapLabelLayoutFrame& labels = labelLayout.Build(
+        candidates, {0.0f, 0.0f, 640.0f, 360.0f});
+    const bool selectedPlaced = std::any_of(labels.labels.begin(), labels.labels.end(),
+        [](const CourseMapPlacedLabel& label) { return label.selected; });
+    runner.Expect(labels.valid && selectedPlaced && labels.labels.size() <= 5u &&
+            labels.stats.suppressedByCollision + labels.stats.suppressedByBudget > 0u &&
+            labels.stats.displaced > 0u,
+        "course map label layout should preserve selected labels while displacing or "
+        "suppressing lower priority collisions");
+}
+
+void TestCourseTerrainMapPersistenceAndRendering(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Terrain Map Regression";
+    course.railPoints = {
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 36.0f},
+        {{12.0f, 8.0f, 80.0f}, 18.0f, 36.0f},
+        {{-8.0f, 4.0f, 160.0f}, 18.0f, 36.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(
+        course, "terrain-map-regression");
+    const CourseRailAuthoringModel rail(course);
+    TerrainGenerationSettings terrainSettings{};
+
+    CourseTerrainMapBakePipeline bake;
+    CourseTerrainMapBakeSettings bakeSettings = bake.Settings();
+    bakeSettings.persistDerivedAsset = false;
+    bakeSettings.tileLength = 80.0f;
+    bakeSettings.longitudinalSegments = {24u, 32u, 48u};
+    bakeSettings.radialSegments = {8u, 10u, 12u};
+    bake.SetSettings(bakeSettings);
+    const CourseTerrainMapBakeInput input{
+        &rail, &terrainSettings, &course.terrainEditLayer, course.name, 1u};
+    const CourseTerrainMapBakeResult baked = bake.Bake(input);
+    const CourseTerrainMapAsset* current = bake.CurrentAsset();
+    runner.Expect(
+        baked.status == CourseTerrainMapBakeStatus::Current &&
+            baked.builtThisCall && current != nullptr &&
+            current->lods.size() == 3u && current->railLength > 150.0f &&
+            current->worldMaximum.z > current->worldMinimum.z,
+        "course terrain map bake should compile the complete procedural terrain "
+        "field into three persistent LOD tiers");
+    if (current == nullptr) return;
+
+    CourseTerrainMapAsset retained = *current;
+    bool everyLodHasGeometry = true;
+    for (const CourseTerrainMapLod& lod : retained.lods) {
+        everyLodHasGeometry = everyLodHasGeometry && !lod.tiles.empty() &&
+            std::any_of(lod.tiles.begin(), lod.tiles.end(),
+                [](const CourseTerrainMapTile& tile) {
+                    return !tile.vertices.empty() && !tile.indices.empty();
+                });
+    }
+    runner.Expect(everyLodHasGeometry,
+        "every terrain map LOD should retain tiled surface geometry");
+
+    std::string serialized;
+    std::string error;
+    CourseTerrainMapAsset roundTrip{};
+    runner.Expect(retained.SaveToString(&serialized, &error) &&
+            roundTrip.LoadFromString(serialized, &error) &&
+            roundTrip.sourceFingerprint == retained.sourceFingerprint &&
+            roundTrip.contentRevision == retained.contentRevision &&
+            roundTrip.lods.size() == retained.lods.size(),
+        "course terrain map asset should round-trip its versioned durable schema");
+    runner.Expect(bake.Assess(roundTrip, input) ==
+            CourseTerrainMapBakeStatus::Current,
+        "course terrain map stale detection should accept matching rail, terrain "
+        "settings and sculpt revisions");
+
+    std::vector<Vector3> fitPoints;
+    fitPoints.reserve(8u);
+    for (uint32_t corner = 0; corner < 8u; ++corner) {
+        fitPoints.push_back({
+            (corner & 1u) != 0u ? retained.worldMaximum.x : retained.worldMinimum.x,
+            (corner & 2u) != 0u ? retained.worldMaximum.y : retained.worldMinimum.y,
+            (corner & 4u) != 0u ? retained.worldMaximum.z : retained.worldMinimum.z});
+    }
+    CourseOverviewMapProjection projection;
+    CourseOverviewMapProjectionSettings projectionSettings{};
+    runner.Expect(projection.Configure(&rail,
+            {0.0f, 0.0f, 900.0f, 540.0f}, projectionSettings,
+            &error, nullptr, &fitPoints),
+        "course terrain map renderer should share the overview map projection");
+    CourseTerrainMapRenderer renderer;
+    const CourseTerrainMapFrame& frame = renderer.Build(&retained, projection);
+    runner.Expect(frame.valid && !frame.triangles.empty() &&
+            frame.sourceLod == 0u && frame.stats.visibleTiles > 0u &&
+            frame.stats.inspectedTriangles <=
+                renderer.Settings().courseTriangleBudget,
+        "course terrain map renderer should use Course LOD and an investigation "
+        "budget for the full-map view");
+    const uint64_t builds = renderer.LifetimeStats().builds;
+    const uint64_t hits = renderer.LifetimeStats().cacheHits;
+    renderer.Build(&retained, projection);
+    runner.Expect(renderer.LifetimeStats().builds == builds &&
+            renderer.LifetimeStats().cacheHits == hits + 1u,
+        "course terrain map renderer should retain projected frames by source and "
+        "projection revisions");
+
+    CourseAsset changedCourse = course;
+    TerrainBrushStamp sculpt{};
+    sculpt.strokeGuid = "terrain-map-sculpt";
+    sculpt.stampGuid = "terrain-map-sculpt-0";
+    sculpt.operation = TerrainEditOperation::Sculpt;
+    sculpt.distance = 64.0f;
+    sculpt.angle = 0.5f;
+    sculpt.radius = 8.0f;
+    sculpt.surfaceRadius = 20.0f;
+    sculpt.strength = 3.0f;
+    runner.Expect(changedCourse.terrainEditLayer.ApplyStroke({sculpt}, &error),
+        "terrain map regression should author a valid sculpt revision");
+    const CourseRailAuthoringModel changedRail(changedCourse);
+    const CourseTerrainMapBakeInput changedInput{&changedRail, &terrainSettings,
+        &changedCourse.terrainEditLayer, changedCourse.name, 2u};
+    runner.Expect(bake.Assess(retained, changedInput) ==
+            CourseTerrainMapBakeStatus::Stale,
+        "course terrain map stale detection should invalidate a changed sculpt layer");
+}
+
+void TestCourseMapVisualBakeAndHologram(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Visual Bake Regression";
+    course.railPoints = {
+        {{0.0f, 0.0f, 0.0f}, 8.0f, 20.0f},
+        {{0.0f, 0.0f, 120.0f}, 8.0f, 20.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "visual-bake-regression");
+    CourseTerrainPlacement terrain{};
+    terrain.editorGuid = "visual-bake-terrain";
+    terrain.id = "Hero Canyon";
+    terrain.meshId = "hero-canyon-mesh";
+    terrain.layer = CourseTerrainLayer::HeroLandmark;
+    terrain.distance = 60.0f;
+    terrain.lateralOffset = 12.0f;
+    terrain.scale = {28.0f, 16.0f, 44.0f};
+    course.terrainPlacements.push_back(terrain);
+    const CourseRailAuthoringModel rail(course);
+    const CourseEnemyAuthoringModel enemies(course);
+
+    EditorScene scene{};
+    EditorSceneEntity structure{};
+    structure.guid = "visual-bake-structure";
+    structure.name = "Canyon Gate";
+    structure.components.push_back(EditorSceneComponent{
+        std::string(kEditorTransformComponentType), true,
+        {{"translation", "-18 8 82"}, {"scale", "20 18 12"}}, {}});
+    structure.components.push_back(EditorSceneComponent{
+        std::string(kEditorMeshRendererComponentType), true,
+        {{"mesh", "canyon-gate-mesh"}}, {}});
+    scene.entities.push_back(std::move(structure));
+    scene.Touch();
+
+    CourseMapVisualBakePipeline bake;
+    CourseMapVisualBakeSettings bakeSettings = bake.Settings();
+    bakeSettings.persistDerivedAsset = false;
+    bake.SetSettings(bakeSettings);
+    const CourseMapVisualBakeInput input{
+        &rail, &enemies, &course, &scene, 1u, 1u, 1u, 1u};
+    const CourseMapVisualBakeResult& baked = bake.Ensure(input);
+    const CourseMapVisualAsset* asset = bake.CurrentAsset();
+    runner.Expect(
+        baked.status == CourseMapVisualBakeStatus::Current &&
+            baked.bakedThisCall && !baked.fallbackRequired && asset != nullptr &&
+            asset->primitives.size() == 2u && asset->contours.size() == 2u &&
+            !asset->tiles.empty() && !asset->landmarks.empty(),
+        "course map visual bake should compile terrain and scene structures into "
+        "a current tiled derived asset");
+    if (asset == nullptr) return;
+
+    CourseMapVisualAsset retainedAsset = *asset;
+    std::string serialized;
+    std::string error;
+    CourseMapVisualAsset roundTrip;
+    runner.Expect(
+        retainedAsset.SaveToString(&serialized, &error) &&
+            roundTrip.LoadFromString(serialized, &error) &&
+            roundTrip.sourceFingerprint == retainedAsset.sourceFingerprint &&
+            roundTrip.primitives.size() == retainedAsset.primitives.size() &&
+            roundTrip.contours.size() == retainedAsset.contours.size() &&
+            roundTrip.tiles.size() == retainedAsset.tiles.size(),
+        "course map visual asset should round-trip its versioned derived-data schema");
+    runner.Expect(
+        bake.Assess(roundTrip, input) == CourseMapVisualBakeStatus::Current,
+        "course map visual stale assessment should accept a matching source fingerprint");
+
+    CourseMapSceneBoundsService bounds;
+    const CourseMapSceneBoundsFrame& boundsFrame = bounds.Build(
+        {&rail, &enemies, &course, &scene, 1u, 1u, 1u, 1u});
+    CourseOverviewMapProjection projection;
+    CourseOverviewMapProjectionSettings projectionSettings{};
+    runner.Expect(
+        projection.Configure(&rail, {0.0f, 0.0f, 900.0f, 540.0f},
+            projectionSettings, &error, nullptr, &boundsFrame.fitPoints),
+        "course map hologram should use the shared overview projection");
+    CourseMapHologramRenderer renderer;
+    const CourseMapHologramFrame& frame = renderer.Build(
+        &retainedAsset, CourseMapVisualBakeStatus::Current, projection);
+    runner.Expect(
+        frame.valid && !frame.fallbackRequested && !frame.polygons.empty() &&
+            frame.stats.sourcePrimitives == retainedAsset.primitives.size(),
+        "course map hologram renderer should project current baked geometry");
+    const uint64_t builds = renderer.LifetimeStats().builds;
+    const uint64_t hits = renderer.LifetimeStats().cacheHits;
+    renderer.Build(&retainedAsset, CourseMapVisualBakeStatus::Current, projection);
+    runner.Expect(
+        renderer.LifetimeStats().builds == builds &&
+            renderer.LifetimeStats().cacheHits == hits + 1u,
+        "course map hologram renderer should retain frames by asset and projection revisions");
+
+    CourseAsset changedCourse = course;
+    changedCourse.terrainPlacements.front().scale.x += 3.0f;
+    const CourseRailAuthoringModel changedRail(changedCourse);
+    const CourseEnemyAuthoringModel changedEnemies(changedCourse);
+    const CourseMapVisualBakeInput changedInput{
+        &changedRail, &changedEnemies, &changedCourse, &scene, 2u, 1u, 1u, 1u};
+    runner.Expect(
+        bake.Assess(retainedAsset, changedInput) == CourseMapVisualBakeStatus::Stale,
+        "course map visual stale assessment should reject changed authoring sources");
+    const CourseMapHologramFrame& fallback = renderer.Build(
+        &retainedAsset, CourseMapVisualBakeStatus::Stale, projection);
+    runner.Expect(
+        !fallback.valid && fallback.fallbackRequested && fallback.polygons.empty(),
+        "stale Course Map visuals should request the live authoring fallback without "
+        "rendering partial baked geometry");
+}
+
+void TestCourseTerrainProductionMeshResolution(RegressionRunner& runner) {
+    EditorAssetRegistry assets;
+    CourseMeshAssetAdapter{}.RegisterAssets(assets);
+    const std::array<const char*, 6> courseMeshIds{
+        "curved_canyon_wall",
+        "vista_hole_wall",
+        "organic_arch_large",
+        "root_spire_column",
+        "rib_tunnel_wall",
+        "spire_broken_bridge_arc",
+    };
+    CourseTerrainProductionMeshResolver resolver;
+    bool allResolved = true;
+    for (const char* meshId : courseMeshIds) {
+        const CourseTerrainProductionMeshResolution& resolution =
+            resolver.Resolve(assets, meshId);
+        allResolved = allResolved && resolution.Resolved() &&
+            resolution.source ==
+                CourseTerrainMeshResolutionSource::ImportedAuthoringSource &&
+            resolution.geometry.vertices.size() > 8u &&
+            resolution.geometry.triangles.size() > 12u &&
+            resolution.sourceGeometryHash == resolution.geometry.ContentHash();
+    }
+    runner.Expect(allResolved,
+        "all authored Canyon course Mesh IDs should resolve through the exact "
+        "Production Import geometry path instead of box proxies");
+
+    const CourseTerrainProductionMeshResolution& normalized =
+        resolver.Resolve(assets, "Curved-Canyon-Wall");
+    runner.Expect(
+        normalized.Resolved() && normalized.normalizedAlias &&
+            normalized.canonicalMeshId == "curved_canyon_wall",
+        "course Mesh resolution should normalize case and separator aliases to "
+        "the canonical Asset ID");
+    bool cacheHit = false;
+    resolver.Resolve(assets, "curved_canyon_wall", &cacheHit);
+    runner.Expect(cacheHit && resolver.Stats().cacheHits > 0u,
+        "course Mesh resolution should retain Production Geometry by Registry revision");
+
+    CourseMapVisualAsset visual{};
+    visual.sourceCourseName = "Course Mesh Resolver Regression";
+    visual.sourceCourseHash = 1u;
+    visual.sourceSceneHash = 2u;
+    visual.bakeSettingsHash = 3u;
+    visual.sourceFingerprint = 4u;
+    visual.worldMinimum = {-20.0f, -10.0f, -30.0f};
+    visual.worldMaximum = {20.0f, 20.0f, 30.0f};
+    CourseMapVisualPrimitive primitive{};
+    primitive.stableId = "terrain:production-resolver";
+    primitive.sourceMeshId = "curved_canyon_wall";
+    primitive.layer = CourseMapVisualLayer::HeroLandmark;
+    primitive.worldCenter = {};
+    for (uint32_t corner = 0; corner < 8u; ++corner) {
+        primitive.worldCorners.push_back({
+            (corner & 1u) != 0u ? 20.0f : -20.0f,
+            (corner & 2u) != 0u ? 20.0f : -10.0f,
+            (corner & 4u) != 0u ? 30.0f : -30.0f});
+    }
+    primitive.minimumHeight = -10.0f;
+    primitive.maximumHeight = 20.0f;
+    visual.primitives.push_back(std::move(primitive));
+    std::string error;
+    runner.Expect(visual.Validate(&error),
+        "course Mesh resolver regression Visual Asset should be valid");
+    CourseMapGeometryExtractionService extraction;
+    const CourseMapGeometryExtractionResult extracted = extraction.Extract(
+        {&visual, &assets});
+    runner.Expect(
+        extracted.succeeded && !extracted.usedFallback &&
+            extracted.stats.exactSources == 1u &&
+            extracted.stats.importedAuthoringSources == 1u &&
+            extracted.stats.fallbackSources == 0u &&
+            extracted.sources.size() == 1u &&
+            extracted.sources.front().meshResolutionSource ==
+                CourseTerrainMeshResolutionSource::ImportedAuthoringSource &&
+            extracted.sources.front().worldVertices.size() > 8u,
+        "Course Map extraction should consume resolved terrain Production Geometry "
+        "as exact map shape data");
+}
+
+void TestCourseMapCartographyPersistenceUnit(RegressionRunner& runner) {
+    const auto boxCorners = [](Vector3 center, Vector3 extent) {
+        std::vector<Vector3> corners;
+        corners.reserve(8u);
+        for (uint32_t corner = 0; corner < 8u; ++corner) {
+            corners.push_back({
+                center.x + ((corner & 1u) != 0u ? extent.x : -extent.x),
+                center.y + ((corner & 2u) != 0u ? extent.y : -extent.y),
+                center.z + ((corner & 4u) != 0u ? extent.z : -extent.z)});
+        }
+        return corners;
+    };
+
+    CourseMapVisualAsset visual{};
+    visual.sourceCourseName = "Cartography Regression";
+    visual.sourceCourseHash = 101u;
+    visual.sourceSceneHash = 202u;
+    visual.bakeSettingsHash = 303u;
+    visual.sourceFingerprint = 404u;
+    visual.worldMinimum = {-20.0f, -10.0f, -30.0f};
+    visual.worldMaximum = {35.0f, 18.0f, 45.0f};
+    CourseMapVisualPrimitive exact{};
+    exact.stableId = "cartography-exact";
+    exact.sourceMeshId = "ball_production";
+    exact.layer = CourseMapVisualLayer::HeroLandmark;
+    exact.worldCenter = {0.0f, 4.0f, 0.0f};
+    exact.worldCorners = boxCorners(exact.worldCenter, {18.0f, 10.0f, 14.0f});
+    exact.minimumHeight = -6.0f;
+    exact.maximumHeight = 14.0f;
+    visual.primitives.push_back(exact);
+    CourseMapVisualPrimitive fallback{};
+    fallback.stableId = "cartography-fallback";
+    fallback.sourceMeshId = "legacy_canyon_wall";
+    fallback.layer = CourseMapVisualLayer::GameplayTerrain;
+    fallback.worldCenter = {24.0f, 1.0f, 28.0f};
+    fallback.worldCorners = boxCorners(fallback.worldCenter, {8.0f, 6.0f, 12.0f});
+    fallback.minimumHeight = -5.0f;
+    fallback.maximumHeight = 7.0f;
+    visual.primitives.push_back(fallback);
+    std::string error;
+    runner.Expect(visual.Validate(&error),
+        "cartography regression visual source should be valid");
+
+    EditorAssetRegistry assets;
+    EditorAssetRecord productionMesh{};
+    productionMesh.kind = EditorAssetKind::Mesh;
+    productionMesh.id = "ball_production";
+    productionMesh.guid = "341b4a9d19b537b30668ed32e1090d63";
+    productionMesh.logicalPath = "Generated/Imported/ball_production.mesh";
+    productionMesh.sourcePath = "Resources/Generated/Imported/ball_production.mesh";
+    productionMesh.displayName = "Ball Production";
+    productionMesh.sourceTimestamp = 1u;
+    productionMesh.referenceable = true;
+    runner.Expect(assets.Register(std::move(productionMesh)),
+        "cartography regression should register its Production Mesh source");
+
+    CourseMapGeometryExtractionService extraction;
+    const CourseMapGeometryExtractionResult extracted = extraction.Extract(
+        {&visual, &assets});
+    runner.Expect(
+        extracted.succeeded && extracted.usedFallback &&
+            extracted.stats.exactSources == 1u &&
+            extracted.stats.fallbackSources == 1u &&
+            extracted.sources.size() == 2u &&
+            extracted.sources.front().worldVertices.size() > 8u,
+        "geometry extraction should transform Production Mesh triangles and retain "
+        "an explicit box fallback for unresolved legacy terrain");
+
+    CourseMapCartographyBakePipeline pipeline;
+    CourseMapCartographyBakeSettings settings = pipeline.Settings();
+    settings.persistDerivedAsset = false;
+    settings.maximumTrianglesPerRegion = 128u;
+    settings.maximumFootprintPoints = 48u;
+    pipeline.SetSettings(settings);
+    const CourseMapCartographyBakeInput input{
+        &visual, &assets, visual.contentRevision, assets.Revision()};
+    const CourseMapCartographyBakeResult baked = pipeline.Bake(input);
+    const CourseMapRegionAsset* regionAsset = pipeline.CurrentAsset();
+    runner.Expect(
+        baked.status == CourseMapCartographyBakeStatus::Current &&
+            baked.bakedThisCall && !baked.fallbackRequired &&
+            baked.usedGeometryFallback && regionAsset != nullptr &&
+            regionAsset->regions.size() == 2u &&
+            baked.stats.exactRegions == 1u && baked.stats.fallbackRegions == 1u &&
+            baked.stats.bakedTriangles <= 140u && !regionAsset->tiles.empty(),
+        "cartography bake should persist exact and fallback sources as bounded "
+        "semantic regions and spatial tiles");
+
+    CourseMapCartographyBakePipeline openingPipeline;
+    openingPipeline.SetCacheRoot(
+        "generated/editor/tests/course_map_non_blocking_missing_cache");
+    const CourseMapCartographyBakeResult& opening =
+        openingPipeline.Ensure(input);
+    runner.Expect(
+        opening.status == CourseMapCartographyBakeStatus::Loading &&
+            opening.stats.extractionBuilds == 0u &&
+            openingPipeline.CurrentAsset() == nullptr,
+        "opening Course Map should schedule cache I/O without synchronously "
+        "extracting or baking Production Mesh geometry on the UI thread");
+    if (regionAsset == nullptr) return;
+
+    const CourseMapRegionAsset retained = *regionAsset;
+    std::string serialized;
+    CourseMapRegionAsset roundTrip;
+    runner.Expect(
+        retained.SaveToString(&serialized, &error) &&
+            roundTrip.LoadFromString(serialized, &error) &&
+            roundTrip.sourceFingerprint == retained.sourceFingerprint &&
+            roundTrip.regions.size() == retained.regions.size() &&
+            roundTrip.tiles.size() == retained.tiles.size() &&
+            roundTrip.regions.front().indices.size() ==
+                retained.regions.front().indices.size(),
+        "Course Map region asset should round-trip its versioned geometry, footprint "
+        "and tile persistence schema");
+    runner.Expect(
+        pipeline.Assess(roundTrip, input) ==
+            CourseMapCartographyBakeStatus::Current,
+        "cartography stale detection should accept unchanged Visual and Mesh sources");
+
+    CourseAsset projectionCourse{};
+    projectionCourse.name = "Cartography Renderer Regression";
+    projectionCourse.railPoints = {
+        {{0.0f, 0.0f, -30.0f}, 8.0f, 20.0f},
+        {{0.0f, 0.0f, 45.0f}, 8.0f, 20.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(
+        projectionCourse, "cartography-renderer-regression");
+    const CourseRailAuthoringModel projectionRail(projectionCourse);
+    CourseOverviewMapProjection projection;
+    CourseOverviewMapProjectionSettings projectionSettings{};
+    std::vector<Vector3> fitPoints = boxCorners(
+        {(visual.worldMinimum.x + visual.worldMaximum.x) * 0.5f,
+            (visual.worldMinimum.y + visual.worldMaximum.y) * 0.5f,
+            (visual.worldMinimum.z + visual.worldMaximum.z) * 0.5f},
+        {(visual.worldMaximum.x - visual.worldMinimum.x) * 0.5f,
+            (visual.worldMaximum.y - visual.worldMinimum.y) * 0.5f,
+            (visual.worldMaximum.z - visual.worldMinimum.z) * 0.5f});
+    runner.Expect(
+        projection.Configure(&projectionRail,
+            {0.0f, 0.0f, 900.0f, 540.0f}, projectionSettings,
+            &error, nullptr, &fitPoints),
+        "cartography renderer should share the Overview projection");
+    CourseMapCartographyRenderer renderer;
+    const CourseMapCartographyFrame firstFrame = renderer.Build(
+        &retained, CourseMapCartographyBakeStatus::Current, projection);
+    runner.Expect(
+        !firstFrame.valid && firstFrame.fallbackRequested &&
+            renderer.LifetimeStats().asynchronousBuildStarts == 1u,
+        "cartography cache misses should schedule a background build and keep "
+        "the visual fallback interactive");
+    const auto waitForFrame = [&](const auto& predicate) {
+        CourseMapCartographyFrame result{};
+        for (uint32_t attempt = 0; attempt < 2000u; ++attempt) {
+            result = renderer.Build(
+                &retained, CourseMapCartographyBakeStatus::Current, projection);
+            if (predicate(result)) return result;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return result;
+    };
+    const CourseMapCartographyFrame frame = waitForFrame(
+        [](const CourseMapCartographyFrame& candidate) {
+            return candidate.valid && !candidate.fallbackRequested &&
+                candidate.stats.visibleExactRegions == 1u &&
+                candidate.stats.visibleFallbackRegions == 1u;
+        });
+    runner.Expect(
+        frame.valid && !frame.fallbackRequested &&
+            !frame.triangles.empty() && !frame.outlines.empty() &&
+            frame.stats.visibleExactRegions == 1u &&
+            frame.stats.visibleFallbackRegions == 1u,
+        "cartography renderer should draw the RegionAsset's real triangles and "
+        "keep explicitly identified legacy fallback regions");
+    const uint64_t renderBuilds = renderer.LifetimeStats().builds;
+    const uint64_t renderHits = renderer.LifetimeStats().cacheHits;
+    renderer.Build(&retained, CourseMapCartographyBakeStatus::Current, projection);
+    runner.Expect(
+        renderer.LifetimeStats().builds == renderBuilds &&
+            renderer.LifetimeStats().cacheHits == renderHits + 1u,
+        "cartography renderer should retain projected frames by RegionAsset, "
+        "projection and render-setting revisions");
+
+    projectionSettings.panPixels.x += 37.0f;
+    projection.Configure(&projectionRail,
+        {0.0f, 0.0f, 900.0f, 540.0f}, projectionSettings,
+        &error, nullptr, &fitPoints);
+    const uint64_t buildsBeforePan = renderer.LifetimeStats().builds;
+    const CourseMapCartographyFrame retainedWhilePanning = renderer.Build(
+        &retained, CourseMapCartographyBakeStatus::Current, projection);
+    runner.Expect(
+        retainedWhilePanning.valid &&
+            renderer.LifetimeStats().builds == buildsBeforePan &&
+            renderer.LifetimeStats().retainedFramesWhileBuilding > 0u,
+        "projection changes should keep the previous front frame visible while "
+        "the replacement cartography frame builds in the background");
+    const CourseMapCartographyFrame pannedFrame = waitForFrame(
+        [&](const CourseMapCartographyFrame& candidate) {
+            return candidate.valid &&
+                renderer.LifetimeStats().builds > buildsBeforePan;
+        });
+    runner.Expect(
+        pannedFrame.valid &&
+            renderer.LifetimeStats().asynchronousBuildCompletions >= 2u,
+        "completed background cartography should atomically replace the retained frame");
+
+    CourseMapCartographyRenderSettings renderSettings = renderer.Settings();
+    renderSettings.showFallbackGeometry = false;
+    renderer.SetSettings(renderSettings);
+    const uint64_t buildsBeforeExactOnly = renderer.LifetimeStats().builds;
+    renderer.Build(&retained, CourseMapCartographyBakeStatus::Current, projection);
+    const CourseMapCartographyFrame exactOnly = waitForFrame(
+        [&](const CourseMapCartographyFrame& candidate) {
+            return candidate.valid &&
+                renderer.LifetimeStats().builds > buildsBeforeExactOnly &&
+                candidate.stats.visibleFallbackRegions == 0u;
+        });
+    runner.Expect(
+        exactOnly.valid && exactOnly.stats.visibleExactRegions == 1u &&
+            exactOnly.stats.visibleFallbackRegions == 0u,
+        "cartography renderer should support hiding legacy box fallback regions");
+
+    renderSettings.courseTriangleBudget = 1u;
+    renderer.SetSettings(renderSettings);
+    const uint64_t buildsBeforeBudget = renderer.LifetimeStats().builds;
+    renderer.Build(&retained, CourseMapCartographyBakeStatus::Current, projection);
+    const CourseMapCartographyFrame budgeted = waitForFrame(
+        [&](const CourseMapCartographyFrame& candidate) {
+            return candidate.valid &&
+                renderer.LifetimeStats().builds > buildsBeforeBudget &&
+                candidate.stats.inspectedTriangles <= 1u;
+        });
+    runner.Expect(
+        budgeted.valid && budgeted.stats.inspectedTriangles <= 1u &&
+            budgeted.stats.emittedTriangles <= 1u &&
+            budgeted.stats.budgetCulledTriangles > 0u,
+        "cartography triangle budget should cap inspected source triangles, not "
+        "only triangles accepted after projection");
+    const CourseMapCartographyFrame& staleFrame = renderer.Build(
+        &retained, CourseMapCartographyBakeStatus::Stale, projection);
+    runner.Expect(
+        !staleFrame.valid && staleFrame.fallbackRequested &&
+            staleFrame.triangles.empty() && staleFrame.outlines.empty(),
+        "stale RegionAssets should request the Visual Hologram fallback without "
+        "mixing stale real-shape geometry into the map");
+
+    const uint64_t extractionBuilds = baked.stats.extractionBuilds;
+    pipeline.Ensure(input);
+    runner.Expect(
+        pipeline.LastResult().status == CourseMapCartographyBakeStatus::Current &&
+            pipeline.LastResult().stats.extractionBuilds == extractionBuilds &&
+            pipeline.LastResult().stats.extractionCacheHits > 0u,
+        "cartography pipeline should retain extracted geometry by Visual and Registry revisions");
+
+    CourseMapVisualAsset changedVisual = visual;
+    ++changedVisual.sourceFingerprint;
+    const CourseMapCartographyBakeInput changedInput{
+        &changedVisual, &assets, visual.contentRevision + 1u, assets.Revision()};
+    runner.Expect(
+        pipeline.Assess(retained, changedInput) ==
+            CourseMapCartographyBakeStatus::Stale,
+        "cartography stale detection should invalidate regions when the upstream "
+        "Course Map visual source changes");
+}
+
+void TestCourseMapCartographyAsyncRenderer(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Async Cartography Renderer";
+    course.railPoints = {
+        {{0.0f, 0.0f, 0.0f}, 8.0f, 20.0f},
+        {{0.0f, 0.0f, 100.0f}, 8.0f, 20.0f},
+    };
+    CourseRailAuthoringModel::EnsureStableIdentity(
+        course, "async-cartography-renderer");
+    const CourseRailAuthoringModel rail(course);
+    CourseOverviewMapProjection projection;
+    CourseOverviewMapProjectionSettings projectionSettings{};
+    std::string error;
+    runner.Expect(
+        projection.Configure(&rail, {0.0f, 0.0f, 800.0f, 480.0f},
+            projectionSettings, &error),
+        "async cartography fixture should configure a Top projection");
+
+    CourseMapRegionAsset asset{};
+    asset.sourceFingerprint = 77u;
+    asset.contentRevision = 1u;
+    const auto addRegion = [&](std::string id, float xOffset,
+        CourseMapVisualLayer layer, bool exact) {
+        CourseMapRegion region{};
+        region.stableId = std::move(id);
+        region.sourceStableId = region.stableId + ":source";
+        region.sourceMeshId = region.stableId + ":mesh";
+        region.layer = layer;
+        region.minimumHeight = 0.0f;
+        region.maximumHeight = 3.0f;
+        region.worldVertices = {
+            {xOffset - 8.0f, 0.0f, 24.0f},
+            {xOffset + 8.0f, 1.0f, 24.0f},
+            {xOffset, 3.0f, 44.0f},
+        };
+        region.indices = {0u, 1u, 2u};
+        region.footprint = region.worldVertices;
+        region.worldCentroid = {xOffset, 1.0f, 32.0f};
+        region.projectedArea = 160.0f;
+        region.exactSourceGeometry = exact;
+        asset.regions.push_back(std::move(region));
+    };
+    addRegion("region:exact", -12.0f,
+        CourseMapVisualLayer::HeroLandmark, true);
+    addRegion("region:fallback", 12.0f,
+        CourseMapVisualLayer::GameplayTerrain, false);
+
+    CourseMapCartographyRenderer renderer;
+    const CourseMapCartographyFrame first = renderer.Build(
+        &asset, CourseMapCartographyBakeStatus::Current, projection);
+    runner.Expect(
+        !first.valid && first.fallbackRequested &&
+            renderer.LifetimeStats().asynchronousBuildStarts == 1u,
+        "a cold cartography render should return fallback without blocking");
+    const auto waitFor = [&](const auto& predicate) {
+        CourseMapCartographyFrame result{};
+        for (uint32_t attempt = 0; attempt < 2000u; ++attempt) {
+            result = renderer.Build(
+                &asset, CourseMapCartographyBakeStatus::Current, projection);
+            if (predicate(result)) return result;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return result;
+    };
+    const CourseMapCartographyFrame ready = waitFor(
+        [](const CourseMapCartographyFrame& candidate) {
+            return candidate.valid && candidate.stats.emittedTriangles == 2u;
+        });
+    runner.Expect(
+        ready.valid && ready.stats.inspectedTriangles == 2u &&
+            ready.stats.visibleExactRegions == 1u &&
+            ready.stats.visibleFallbackRegions == 1u,
+        "background cartography should publish the complete front frame");
+
+    const Vector2 originalTrianglePosition = ready.triangles.front().a;
+    projectionSettings.panPixels.x = 35.0f;
+    projection.Configure(&rail, {0.0f, 0.0f, 800.0f, 480.0f},
+        projectionSettings, &error);
+    const uint64_t buildsBeforePan = renderer.LifetimeStats().builds;
+    const uint64_t startsBeforePan =
+        renderer.LifetimeStats().asynchronousBuildStarts;
+    const CourseMapCartographyFrame retained = renderer.Build(
+        &asset, CourseMapCartographyBakeStatus::Current, projection, {true});
+    runner.Expect(
+        retained.valid && renderer.LifetimeStats().builds == buildsBeforePan &&
+            renderer.LifetimeStats().asynchronousBuildStarts == startsBeforePan &&
+            std::abs(retained.presentationOffset.x - 35.0f) < 0.001f &&
+            renderer.LifetimeStats().interactivePanDeferrals > 0u,
+        "interactive pan should translate the retained front frame without "
+        "starting replacement work");
+
+    projectionSettings.panPixels.x = 70.0f;
+    projection.Configure(&rail, {0.0f, 0.0f, 800.0f, 480.0f},
+        projectionSettings, &error);
+    const CourseMapCartographyFrame latestPan = renderer.Build(
+        &asset, CourseMapCartographyBakeStatus::Current, projection, {true});
+    runner.Expect(
+        latestPan.valid &&
+            renderer.LifetimeStats().asynchronousBuildStarts == startsBeforePan &&
+            std::abs(latestPan.presentationOffset.x - 70.0f) < 0.001f,
+        "successive pan input should update only the screen-space presentation "
+        "offset");
+
+    renderer.Build(
+        &asset, CourseMapCartographyBakeStatus::Current, projection);
+    const CourseMapCartographyFrame moved = waitFor(
+        [&](const CourseMapCartographyFrame& candidate) {
+            return candidate.valid &&
+                renderer.LifetimeStats().builds > buildsBeforePan &&
+                std::abs(candidate.presentationOffset.x) < 0.001f;
+        });
+    runner.Expect(
+        moved.valid &&
+            std::abs(moved.triangles.front().a.x -
+                originalTrianglePosition.x - 70.0f) < 0.001f &&
+            renderer.LifetimeStats().asynchronousBuildCompletions >= 2u,
+        "pan release should build and atomically publish only the latest "
+        "requested projection");
+
+    const uint64_t buildsBeforeRapidRequests = renderer.LifetimeStats().builds;
+    const uint64_t supersededBeforeRapidRequests =
+        renderer.LifetimeStats().supersededBuildCompletions;
+    projectionSettings.panPixels.x = 100.0f;
+    projection.Configure(&rail, {0.0f, 0.0f, 800.0f, 480.0f},
+        projectionSettings, &error);
+    renderer.Build(&asset, CourseMapCartographyBakeStatus::Current, projection);
+    projectionSettings.panPixels.x = 140.0f;
+    projection.Configure(&rail, {0.0f, 0.0f, 800.0f, 480.0f},
+        projectionSettings, &error);
+    renderer.Build(&asset, CourseMapCartographyBakeStatus::Current, projection);
+    const CourseMapCartographyFrame latestOnly = waitFor(
+        [&](const CourseMapCartographyFrame& candidate) {
+            return candidate.valid &&
+                renderer.LifetimeStats().builds > buildsBeforeRapidRequests &&
+                std::abs(candidate.presentationOffset.x) < 0.001f &&
+                std::abs(candidate.triangles.front().a.x -
+                    originalTrianglePosition.x - 140.0f) < 0.001f;
+        });
+    runner.Expect(
+        latestOnly.valid &&
+            renderer.LifetimeStats().supersededBuildCompletions >
+                supersededBeforeRapidRequests,
+        "the cartography scheduler should discard an obsolete completion and "
+        "publish the latest projection request only");
+
+    CourseMapCartographyRenderSettings settings = renderer.Settings();
+    settings.courseTriangleBudget = 1u;
+    renderer.SetSettings(settings);
+    const uint64_t buildsBeforeBudget = renderer.LifetimeStats().builds;
+    renderer.Build(&asset, CourseMapCartographyBakeStatus::Current, projection);
+    const CourseMapCartographyFrame budgeted = waitFor(
+        [&](const CourseMapCartographyFrame& candidate) {
+            return candidate.valid &&
+                renderer.LifetimeStats().builds > buildsBeforeBudget &&
+                candidate.stats.inspectedTriangles <= 1u;
+        });
+    runner.Expect(
+        budgeted.valid && budgeted.stats.inspectedTriangles == 1u &&
+            budgeted.stats.emittedTriangles <= 1u &&
+            budgeted.stats.budgetCulledTriangles == 1u,
+        "the triangle budget should cap inspected input as well as emitted output");
+}
+
+void TestCourseMapHybridCartographyCompositor(RegressionRunner& runner) {
+    CourseMapCartographyFrame cartography{};
+    cartography.valid = true;
+    cartography.fallbackRequested = false;
+    cartography.generation = 1u;
+    cartography.rect = {0.0f, 0.0f, 1000.0f, 500.0f};
+    cartography.semanticLod = CourseMapSemanticLODLevel::Course;
+
+    CourseMapCartographyOutline terrain{};
+    terrain.points = {{490.0f, 240.0f}, {510.0f, 240.0f},
+        {510.0f, 260.0f}, {490.0f, 260.0f}};
+    terrain.exactSourceGeometry = true;
+    terrain.stableId = "hybrid:tiny-terrain";
+    terrain.layer = CourseMapVisualLayer::GameplayTerrain;
+    cartography.outlines.push_back(terrain);
+
+    CourseMapHybridCartographyCompositor compositor;
+    const CourseMapHybridCartographyFrame courseFrame =
+        compositor.Compose(&cartography);
+    const CourseMapHybridLayerCoverage& courseTerrain = courseFrame.layers[
+        static_cast<std::size_t>(CourseMapHybridGeometryLayer::Terrain)];
+    runner.Expect(
+        courseFrame.valid && courseFrame.drawCartography &&
+            !courseFrame.requestHologramFallback &&
+            courseFrame.coarseGeometry.terrain &&
+            courseTerrain.drawExactGeometry &&
+            courseTerrain.exactRegions == 1u,
+        "Hybrid Cartography should retain the semantic terrain silhouette under "
+        "small exact geometry at Course LOD");
+
+    cartography.semanticLod = CourseMapSemanticLODLevel::Detail;
+    cartography.generation = 2u;
+    cartography.outlines.front().points = {{100.0f, 80.0f}, {900.0f, 80.0f},
+        {900.0f, 420.0f}, {100.0f, 420.0f}};
+    const CourseMapHybridCartographyFrame detailFrame =
+        compositor.Compose(&cartography);
+    runner.Expect(
+        !detailFrame.coarseGeometry.terrain &&
+            detailFrame.coarseGeometry.rocks &&
+            detailFrame.coarseGeometry.structures &&
+            detailFrame.layers[static_cast<std::size_t>(
+                CourseMapHybridGeometryLayer::Terrain)].occupiedScreenRatio > 0.4f,
+        "screen-significant exact terrain should replace only its own coarse layer "
+        "at Detail LOD while missing rock and structure layers keep fallbacks");
+
+    CourseMapCartographyFrame unavailable{};
+    unavailable.fallbackRequested = true;
+    const CourseMapHybridCartographyFrame fallbackFrame =
+        compositor.Compose(&unavailable);
+    runner.Expect(
+        !fallbackFrame.drawCartography &&
+            fallbackFrame.requestHologramFallback &&
+            fallbackFrame.coarseGeometry.terrain &&
+            fallbackFrame.coarseGeometry.rocks &&
+            fallbackFrame.coarseGeometry.structures,
+        "missing or stale exact cartography should keep every semantic layer and "
+        "request the hologram fallback");
 }
 
 void TestCourseOverviewMapEditingSuite(RegressionRunner& runner) {
@@ -21698,6 +22862,66 @@ void TestCourseMultiViewElevationConstraintSuite(RegressionRunner& runner) {
         multi.Rebuild(14.0f, &error) &&
             multi.State().frameRevision == multiSelectionRevision + 1,
         "multi view retained-frame cache should invalidate after its Viewport revision changes");
+    const CourseOverviewMapProjectedPoint topPanBefore =
+        multi.TopProjection().ProjectWorld(course.railPoints[1].position);
+    const CourseOverviewMapProjectedPoint sidePanBefore =
+        multi.SideProjection().ProjectWorld(course.railPoints[1].position);
+    multi.Pan(CourseOverviewMapViewId::Top, {-26.0f, 18.0f});
+    runner.Expect(
+        multi.Rebuild(14.0f, &error),
+        "multi view pan should rebuild the view where the gesture began");
+    const CourseOverviewMapProjectedPoint topPanAfter =
+        multi.TopProjection().ProjectWorld(course.railPoints[1].position);
+    const CourseOverviewMapProjectedPoint sidePanAfter =
+        multi.SideProjection().ProjectWorld(course.railPoints[1].position);
+    runner.Expect(
+        topPanBefore.valid && topPanAfter.valid && sidePanBefore.valid &&
+            sidePanAfter.valid &&
+            std::fabs((topPanAfter.mapPosition.x - topPanBefore.mapPosition.x) +
+                26.0f) < 0.001f &&
+            std::fabs((topPanAfter.mapPosition.y - topPanBefore.mapPosition.y) -
+                18.0f) < 0.001f &&
+            std::fabs(sidePanAfter.mapPosition.x - sidePanBefore.mapPosition.x) <
+                0.001f &&
+            std::fabs(sidePanAfter.mapPosition.y - sidePanBefore.mapPosition.y) <
+                0.001f,
+        "multi view pan should remain captured by its origin view and leave the "
+        "other projection unchanged");
+
+    const uint64_t interactiveMultiRevision = multi.State().frameRevision;
+    const CourseOverviewMapProjectedPoint retainedTopBefore =
+        multi.TopProjection().ProjectWorld(course.railPoints[1].position);
+    multi.BeginInteractivePan(CourseOverviewMapViewId::Top);
+    multi.Pan(CourseOverviewMapViewId::Top, {8.0f, -5.0f});
+    multi.Pan(CourseOverviewMapViewId::Top, {4.0f, 2.0f});
+    runner.Expect(
+        multi.InteractivePanActive() &&
+            multi.InteractivePanView() == CourseOverviewMapViewId::Top &&
+            multi.PresentationOffset(CourseOverviewMapViewId::Top).x == 12.0f &&
+            multi.PresentationOffset(CourseOverviewMapViewId::Top).y == -3.0f &&
+            multi.PresentationOffset(CourseOverviewMapViewId::Side).x == 0.0f &&
+            multi.Rebuild(14.0f, &error) &&
+            multi.State().frameRevision == interactiveMultiRevision,
+        "multi view interactive pan should translate only the captured retained view");
+    const CourseOverviewMapProjectedPoint retainedTopDuring =
+        multi.TopProjection().ProjectWorld(course.railPoints[1].position);
+    runner.Expect(
+        multi.EndInteractivePan() && multi.Rebuild(14.0f, &error) &&
+            multi.State().frameRevision == interactiveMultiRevision + 1u,
+        "multi view interactive pan should rebuild Top and Side exactly once on release");
+    const CourseOverviewMapProjectedPoint retainedTopAfter =
+        multi.TopProjection().ProjectWorld(course.railPoints[1].position);
+    runner.Expect(
+        retainedTopBefore.valid && retainedTopDuring.valid && retainedTopAfter.valid &&
+            std::fabs(retainedTopDuring.mapPosition.x -
+                retainedTopBefore.mapPosition.x) < 0.001f &&
+            std::fabs(retainedTopDuring.mapPosition.y -
+                retainedTopBefore.mapPosition.y) < 0.001f &&
+            std::fabs((retainedTopAfter.mapPosition.x -
+                retainedTopBefore.mapPosition.x) - 12.0f) < 0.001f &&
+            std::fabs((retainedTopAfter.mapPosition.y -
+                retainedTopBefore.mapPosition.y) + 3.0f) < 0.001f,
+        "multi view interactive pan should defer canonical projection changes until release");
 
     CourseRailConstraintValidationSystem validator;
     CourseRailConstraintSettings permissive{};
@@ -21995,6 +23219,30 @@ int RunEditorCoreRegressionTests() {
           }},
          {"course overview map foundation", [&]() {
               TestCourseOverviewMapFoundation(runner);
+          }},
+         {"course map scene visualization pipeline", [&]() {
+              TestCourseMapSceneVisualizationPipeline(runner);
+          }},
+         {"course map bounds semantic lod and label layout", [&]() {
+              TestCourseMapPresentationSystems(runner);
+          }},
+         {"course terrain map persistence and rendering", [&]() {
+              TestCourseTerrainMapPersistenceAndRendering(runner);
+          }},
+         {"course map visual bake hologram and fallback", [&]() {
+              TestCourseMapVisualBakeAndHologram(runner);
+          }},
+         {"course terrain Production Mesh resolution", [&]() {
+              TestCourseTerrainProductionMeshResolution(runner);
+          }},
+         {"course map cartography persistence unit", [&]() {
+              TestCourseMapCartographyPersistenceUnit(runner);
+          }},
+         {"course map cartography async renderer", [&]() {
+              TestCourseMapCartographyAsyncRenderer(runner);
+          }},
+         {"course map hybrid cartography compositor", [&]() {
+              TestCourseMapHybridCartographyCompositor(runner);
           }},
          {"course overview map editing suite", [&]() {
               TestCourseOverviewMapEditingSuite(runner);

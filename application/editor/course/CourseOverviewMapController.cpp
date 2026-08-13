@@ -106,6 +106,16 @@ void CourseOverviewMapController::Unbind() {
     ClearPreviewCourse();
     overlapCycle_ = 0;
     lastPickStableId_.clear();
+    sceneFitPoints_ = nullptr;
+    sceneBoundsRevision_ = 0;
+    interactivePanActive_ = false;
+    presentationOffset_ = {};
+}
+
+void CourseOverviewMapController::BeginInteractivePan() noexcept {
+    if (interactivePanActive_) return;
+    interactivePanActive_ = true;
+    presentationOffset_ = {};
 }
 
 bool CourseOverviewMapController::Synchronize(std::string* errorMessage) {
@@ -120,6 +130,16 @@ bool CourseOverviewMapController::Synchronize(std::string* errorMessage) {
 void CourseOverviewMapController::SetViewport(CourseOverviewMapRect rect) {
     if (SameRect(viewport_, rect)) return;
     viewport_ = rect;
+    ++viewportRevision_;
+    InvalidateFrameCache();
+}
+
+void CourseOverviewMapController::SetSceneFitPoints(
+    const std::vector<Vector3>* fitPoints,
+    uint64_t revision) {
+    if (sceneFitPoints_ == fitPoints && sceneBoundsRevision_ == revision) return;
+    sceneFitPoints_ = fitPoints;
+    sceneBoundsRevision_ = revision;
     ++viewportRevision_;
     InvalidateFrameCache();
 }
@@ -143,12 +163,87 @@ void CourseOverviewMapController::FrameAll() {
     InvalidateFrameCache();
 }
 
+bool CourseOverviewMapController::FrameMapPoints(
+    const std::vector<Vector2>& mapPoints,
+    float minimumZoom,
+    float paddingPixels) {
+    if (!projection_.State().valid || mapPoints.empty() || !viewport_.Valid()) {
+        return false;
+    }
+    Vector2 rawMinimum = projection_.MapToRaw(mapPoints.front());
+    Vector2 rawMaximum = rawMinimum;
+    for (std::size_t index = 1; index < mapPoints.size(); ++index) {
+        const Vector2 raw = projection_.MapToRaw(mapPoints[index]);
+        rawMinimum.x = (std::min)(rawMinimum.x, raw.x);
+        rawMinimum.y = (std::min)(rawMinimum.y, raw.y);
+        rawMaximum.x = (std::max)(rawMaximum.x, raw.x);
+        rawMaximum.y = (std::max)(rawMaximum.y, raw.y);
+    }
+    const Vector2 rawCenter{(rawMinimum.x + rawMaximum.x) * 0.5f,
+        (rawMinimum.y + rawMaximum.y) * 0.5f};
+    float targetZoom = (std::max)(projectionSettings_.zoom, minimumZoom);
+    if (mapPoints.size() > 1u) {
+        const float width = (std::max)(0.001f, rawMaximum.x - rawMinimum.x);
+        const float height = (std::max)(0.001f, rawMaximum.y - rawMinimum.y);
+        const float availableWidth = (std::max)(1.0f,
+            viewport_.width - paddingPixels * 2.0f);
+        const float availableHeight = (std::max)(1.0f,
+            viewport_.height - paddingPixels * 2.0f);
+        const float desiredScale = (std::min)(
+            availableWidth / width, availableHeight / height);
+        targetZoom = (std::clamp)(desiredScale /
+            (std::max)(0.000001f, projection_.State().baseScale),
+            0.05f, 64.0f);
+    }
+    projectionSettings_.zoom = (std::clamp)(targetZoom, 0.05f, 64.0f);
+    const Vector2 viewportCenter{viewport_.x + viewport_.width * 0.5f,
+        viewport_.y + viewport_.height * 0.5f};
+    // RawToMap used the old scale. Reconfigure a lightweight projection once
+    // to center accurately at the new zoom; the retained frame is rebuilt by
+    // the caller exactly once afterwards.
+    const CourseRailAuthoringModel* rail = previewRail_.has_value()
+        ? &*previewRail_ : binding_.rail->Model();
+    const CourseRailAuthoringModel* boundsRail = previewRail_.has_value()
+        ? binding_.rail->Model() : rail;
+    std::string ignored;
+    if (!projection_.Configure(rail, viewport_, projectionSettings_, &ignored,
+            boundsRail, sceneFitPoints_)) {
+        return false;
+    }
+    const Vector2 projectedCenter = projection_.RawToMap(rawCenter);
+    projectionSettings_.panPixels.x += viewportCenter.x - projectedCenter.x;
+    projectionSettings_.panPixels.y += viewportCenter.y - projectedCenter.y;
+    ++viewportRevision_;
+    InvalidateFrameCache();
+    InvalidatePlayheadOverlay();
+    return true;
+}
+
 void CourseOverviewMapController::PanPixels(Vector2 delta) {
     if (delta.x == 0.0f && delta.y == 0.0f) return;
     projectionSettings_.panPixels.x += delta.x;
     projectionSettings_.panPixels.y += delta.y;
+    if (interactivePanActive_) {
+        presentationOffset_.x += delta.x;
+        presentationOffset_.y += delta.y;
+        return;
+    }
     ++viewportRevision_;
     InvalidateFrameCache();
+}
+
+bool CourseOverviewMapController::EndInteractivePan() noexcept {
+    if (!interactivePanActive_) return false;
+    interactivePanActive_ = false;
+    const bool changed = presentationOffset_.x != 0.0f ||
+        presentationOffset_.y != 0.0f;
+    presentationOffset_ = {};
+    if (changed) {
+        ++viewportRevision_;
+        InvalidateFrameCache();
+        InvalidatePlayheadOverlay();
+    }
+    return changed;
 }
 
 void CourseOverviewMapController::ZoomAt(Vector2 mapPosition, float factor) {
@@ -156,7 +251,8 @@ void CourseOverviewMapController::ZoomAt(Vector2 mapPosition, float factor) {
     const Vector2 rawBefore = projection_.MapToRaw(mapPosition);
     projectionSettings_.zoom = (std::clamp)(projectionSettings_.zoom * factor, 0.05f, 64.0f);
     std::string ignored;
-    if (!projection_.Configure(binding_.rail->Model(), viewport_, projectionSettings_, &ignored)) return;
+    if (!projection_.Configure(binding_.rail->Model(), viewport_, projectionSettings_,
+            &ignored, nullptr, sceneFitPoints_)) return;
     const Vector2 mapAfter = projection_.RawToMap(rawBefore);
     projectionSettings_.panPixels.x += mapPosition.x - mapAfter.x;
     projectionSettings_.panPixels.y += mapPosition.y - mapAfter.y;
@@ -173,6 +269,14 @@ bool CourseOverviewMapController::Rebuild(
         return false;
     }
     const float playheadDistance = ResolvePlayheadDistance(fallbackPlayheadDistance);
+    if (interactivePanActive_ && frame_.valid) {
+        // A pan gesture presents the immutable previous frame with a screen
+        // offset. Even an accidental Rebuild call must not enter projection,
+        // visibility or label work until the gesture commits.
+        ++state_.frameCacheHits;
+        RefreshPlayheadOverlay(playheadDistance);
+        return true;
+    }
     const RetainedFrameKey key = BuildFrameKey();
     if (retainedFrameKey_.has_value() && frame_.valid &&
         SameFrameKey(*retainedFrameKey_, key)) {
@@ -194,7 +298,8 @@ bool CourseOverviewMapController::Rebuild(
     const CourseRailAuthoringModel* projectionRail = previewRail_.has_value()
         ? binding_.rail->Model() : rail;
     if (!projection_.Configure(
-            rail, viewport_, projectionSettings_, errorMessage, projectionRail)) {
+            rail, viewport_, projectionSettings_, errorMessage, projectionRail,
+            sceneFitPoints_)) {
         state_.valid = false;
         state_.message = errorMessage != nullptr ? *errorMessage : "Overview Map projection failed.";
         frame_ = {};
@@ -269,6 +374,7 @@ CourseOverviewMapController::BuildFrameKey() const {
     key.rendererSignature = RendererSignature(renderer_.Style());
     key.viewportRevision = viewportRevision_;
     key.visibilitySettingsRevision = visibility_.SettingsRevision();
+    key.sceneBoundsRevision = sceneBoundsRevision_;
     key.viewport = viewport_;
     key.projection = projectionSettings_;
     return key;
@@ -283,6 +389,7 @@ bool CourseOverviewMapController::SameFrameKey(
         lhs.rendererSignature == rhs.rendererSignature &&
         lhs.viewportRevision == rhs.viewportRevision &&
         lhs.visibilitySettingsRevision == rhs.visibilitySettingsRevision &&
+        lhs.sceneBoundsRevision == rhs.sceneBoundsRevision &&
         lhs.railGeneration == rhs.railGeneration &&
         lhs.enemyGeneration == rhs.enemyGeneration &&
         lhs.waveGeneration == rhs.waveGeneration &&
@@ -323,7 +430,11 @@ void CourseOverviewMapController::InvalidatePlayheadOverlay() noexcept {
 }
 
 CourseOverviewMapPickResult CourseOverviewMapController::HoverAt(Vector2 mapPosition) {
-    state_.hovered = picking_.Pick(frame_, mapPosition);
+    const Vector2 retainedPosition = interactivePanActive_
+        ? Vector2{mapPosition.x - presentationOffset_.x,
+            mapPosition.y - presentationOffset_.y}
+        : mapPosition;
+    state_.hovered = picking_.Pick(frame_, retainedPosition);
     return state_.hovered;
 }
 
@@ -333,7 +444,11 @@ CourseOverviewMapPickResult CourseOverviewMapController::SelectAt(
     bool toggle,
     bool cycleOverlaps) {
     if (binding_.selection == nullptr) return {};
-    const auto candidates = picking_.PickAll(frame_, mapPosition);
+    const Vector2 retainedPosition = interactivePanActive_
+        ? Vector2{mapPosition.x - presentationOffset_.x,
+            mapPosition.y - presentationOffset_.y}
+        : mapPosition;
+    const auto candidates = picking_.PickAll(frame_, retainedPosition);
     if (candidates.empty()) {
         if (!additive && !toggle) binding_.selection->Clear();
         overlapCycle_ = 0;

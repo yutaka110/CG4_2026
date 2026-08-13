@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
+#include <vector>
 
 #include "CourseRailAuthoringModel.h"
 
@@ -67,9 +69,16 @@ public:
         CourseOverviewMapRect rect,
         CourseOverviewMapProjectionSettings settings,
         std::string* errorMessage = nullptr,
-        const CourseRailAuthoringModel* boundsRail = nullptr);
+        const CourseRailAuthoringModel* boundsRail = nullptr,
+        const std::vector<Vector3>* additionalFitPoints = nullptr);
 
     CourseOverviewMapProjectedPoint ProjectWorld(const Vector3& world) const;
+    // Lightweight render-only projection. Top, Side and Free are pure
+    // world-to-screen transforms and deliberately skip the O(rail segments x
+    // subdivisions) nearest-rail query. Rail Unwrapped still resolves the
+    // nearest rail anchor because its screen coordinates require it.
+    CourseOverviewMapProjectedPoint ProjectWorldScreenOnly(
+        const Vector3& world) const;
     CourseOverviewMapProjectedPoint ProjectRail(
         float railDistance,
         float lateralOffset = 0.0f,
@@ -84,6 +93,11 @@ public:
     const CourseOverviewMapProjectionState& State() const noexcept { return state_; }
     const CourseRailAuthoringModel* Rail() const noexcept { return rail_; }
 
+    // Produces an immutable, self-contained projection that can safely be
+    // consumed by a background render job while the authoring model changes on
+    // the editor thread.
+    CourseOverviewMapProjection MakeBackgroundSnapshot() const;
+
 private:
     Vector2 ProjectRaw(const Vector3& world, float* depth) const;
     void BuildFreeBasis();
@@ -91,6 +105,8 @@ private:
 
     const CourseRailAuthoringModel* rail_ = nullptr;
     const CourseRailAuthoringModel* boundsRail_ = nullptr;
+    const std::vector<Vector3>* additionalFitPoints_ = nullptr;
+    std::shared_ptr<const CourseRailAuthoringModel> ownedRailSnapshot_{};
     CourseOverviewMapProjectionSettings settings_{};
     CourseOverviewMapProjectionState state_{};
 };

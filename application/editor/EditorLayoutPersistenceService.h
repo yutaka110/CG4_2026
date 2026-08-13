@@ -12,6 +12,18 @@
 
 namespace editor {
 
+struct EditorMajorWorkspaceLayoutState final {
+    bool open = false;
+    bool maximized = true;
+
+    bool operator==(const EditorMajorWorkspaceLayoutState& other) const {
+        return open == other.open && maximized == other.maximized;
+    }
+    bool operator!=(const EditorMajorWorkspaceLayoutState& other) const {
+        return !(*this == other);
+    }
+};
+
 class EditorLayoutPersistenceService {
 public:
     EditorLayoutPersistenceService();
@@ -47,6 +59,12 @@ public:
     void SetBottomDockDeveloperPanelsVisible(bool visible);
     bool OverlayOption(std::string_view optionId, bool fallback = false) const;
     void SetOverlayOption(std::string_view optionId, bool enabled);
+    EditorMajorWorkspaceLayoutState MajorWorkspaceLayout(
+        std::string_view workspaceId,
+        EditorMajorWorkspaceLayoutState fallback = {}) const;
+    void SetMajorWorkspaceLayout(
+        std::string_view workspaceId,
+        const EditorMajorWorkspaceLayoutState& layout);
 
     std::string ActivePanel(EditorPanelHostArea area) const;
     void SetActivePanel(EditorPanelHostArea area, std::string_view panelId);
@@ -92,6 +110,8 @@ private:
     std::unordered_map<std::string, bool> panelPinned_;
     std::unordered_map<std::string, EditorBottomDockGroup> bottomDockGroups_;
     std::unordered_map<std::string, bool> overlayOptions_;
+    std::unordered_map<std::string, EditorMajorWorkspaceLayoutState>
+        majorWorkspaceLayouts_;
     std::unordered_map<EditorPanelHostArea, std::string> activePanels_;
     EditorBottomDockGroup activeBottomDockGroup_ = EditorBottomDockGroup::Output;
     std::string bottomDockSearch_;

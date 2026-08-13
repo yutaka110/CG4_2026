@@ -43,6 +43,17 @@ public:
         const EditorAssetRecord& production,
         const EditorAssetRecord& source,
         const std::filesystem::path& projectRoot = std::filesystem::current_path());
+    // Read-only half of Production Import. This exposes the exact source-to-
+    // authoring-geometry conversion used by ImportAndBake without writing an
+    // Asset, changing the Registry, or publishing a runtime generation.
+    static bool LoadSourceGeometry(
+        const EditorAssetRecord& source,
+        const std::filesystem::path& projectRoot,
+        EditorGeometryMesh& geometry,
+        uint64_t* sourceFileHash = nullptr,
+        uint32_t* materialSlotCount = nullptr,
+        std::vector<std::string>* diagnostics = nullptr,
+        std::string* errorMessage = nullptr);
 
     EditorObjProductionImportResult ImportAndBake(
         const EditorObjProductionImportRequest& request);

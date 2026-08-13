@@ -4,6 +4,15 @@
 #include "CourseOverviewMapDragDropBridge.h"
 #include "CourseOverviewMapEditTool.h"
 #include "CourseOverviewMapMultiViewCoordinator.h"
+#include "CourseMapCartographyBakePipeline.h"
+#include "CourseMapCartographyRenderer.h"
+#include "CourseMapHologramRenderer.h"
+#include "CourseMapHybridCartographyCompositor.h"
+#include "CourseMapSceneBoundsService.h"
+#include "CourseMapSceneVisualizationPipeline.h"
+#include "CourseMapVisualBakePipeline.h"
+#include "CourseTerrainMapBakePipeline.h"
+#include "CourseTerrainMapRenderer.h"
 #include "CourseRailCurveFitService.h"
 #include "CourseRailElevationProfileEditor.h"
 #include "CourseRailConstraintValidationSystem.h"
@@ -31,6 +40,17 @@ struct CourseOverviewMapPanelContext final {
     const EditorAssetRegistry* assets = nullptr;
     EditorAssetSelection* assetSelection = nullptr;
     float courseDistance = 0.0f;
+    CourseMapSceneBoundsService* sceneBounds = nullptr;
+    CourseMapVisualBakePipeline* visualBake = nullptr;
+    CourseMapCartographyBakePipeline* cartographyBake = nullptr;
+    CourseMapCartographyRenderer* cartographyRenderer = nullptr;
+    CourseTerrainMapBakePipeline* terrainMapBake = nullptr;
+    CourseTerrainMapRenderer* terrainMapRenderer = nullptr;
+    const TerrainGenerationSettings* terrainSettings = nullptr;
+    CourseMapHologramRenderer* hologramRenderer = nullptr;
+    CourseMapHybridCartographyCompositor* hybridCompositor = nullptr;
+    CourseMapSceneVisualizationPipeline* sceneVisualization = nullptr;
+    const EditorScene* scene = nullptr;
 };
 
 void DrawCourseOverviewMapPanel(

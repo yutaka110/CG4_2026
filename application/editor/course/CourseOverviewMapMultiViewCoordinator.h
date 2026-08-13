@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "CourseOverviewMapPickingService.h"
 #include "CourseOverviewMapVisibilityService.h"
@@ -57,6 +58,9 @@ public:
     void Unbind();
     void SetEnabled(bool enabled);
     void SetViewport(CourseOverviewMapRect rect);
+    void SetSceneFitPoints(
+        const std::vector<Vector3>* fitPoints,
+        uint64_t revision);
     void SetPreviewCourse(const CourseAsset* previewCourse);
     void ClearPreviewCourse();
     bool Rebuild(float fallbackPlayheadDistance = -1.0f, std::string* errorMessage = nullptr);
@@ -70,9 +74,16 @@ public:
         bool cycle = false);
     bool UpdateCrosshair(Vector2 mapPosition);
     void SetFocusDistance(float railDistance);
+    void BeginInteractivePan(CourseOverviewMapViewId view) noexcept;
     void Pan(CourseOverviewMapViewId view, Vector2 deltaPixels);
+    bool EndInteractivePan() noexcept;
     void ZoomAt(CourseOverviewMapViewId view, Vector2 mapPosition, float factor);
     void FrameAll();
+    bool FrameMapPoints(
+        CourseOverviewMapViewId view,
+        const std::vector<Vector2>& mapPoints,
+        float minimumZoom = 5.5f,
+        float paddingPixels = 72.0f);
 
     const CourseOverviewMapMultiViewState& State() const noexcept { return state_; }
     const CourseOverviewMapFrame& TopFrame() const noexcept { return topFrame_; }
@@ -91,6 +102,15 @@ public:
     }
     const CourseOverviewMapProjection& TopProjection() const noexcept { return topProjection_; }
     const CourseOverviewMapProjection& SideProjection() const noexcept { return sideProjection_; }
+    bool InteractivePanActive() const noexcept {
+        return interactivePanView_ != CourseOverviewMapViewId::None;
+    }
+    CourseOverviewMapViewId InteractivePanView() const noexcept {
+        return interactivePanView_;
+    }
+    Vector2 PresentationOffset(CourseOverviewMapViewId view) const noexcept {
+        return view == interactivePanView_ ? presentationOffset_ : Vector2{};
+    }
     CourseOverviewMapVisibilityService& TopVisibility() noexcept {
         return topVisibility_;
     }
@@ -108,6 +128,7 @@ private:
         uint64_t viewportRevision = 0;
         uint64_t topVisibilitySettingsRevision = 0;
         uint64_t sideVisibilitySettingsRevision = 0;
+        uint64_t sceneBoundsRevision = 0;
         uint32_t railGeneration = 0;
         uint32_t enemyGeneration = 0;
         uint32_t waveGeneration = 0;
@@ -144,6 +165,8 @@ private:
     CourseOverviewMapRect viewport_{};
     CourseOverviewMapProjectionSettings topSettings_{};
     CourseOverviewMapProjectionSettings sideSettings_{};
+    const std::vector<Vector3>* sceneFitPoints_ = nullptr;
+    uint64_t sceneBoundsRevision_ = 0;
     CourseOverviewMapProjection topProjection_{};
     CourseOverviewMapProjection sideProjection_{};
     CourseOverviewMapRenderer renderer_{};
@@ -158,6 +181,8 @@ private:
     std::optional<PlayheadOverlayKey> playheadOverlayKey_;
     uint64_t previewRevision_ = 0;
     uint64_t viewportRevision_ = 0;
+    CourseOverviewMapViewId interactivePanView_ = CourseOverviewMapViewId::None;
+    Vector2 presentationOffset_{};
     CourseAsset previewCourse_{};
     std::optional<CourseRailAuthoringModel> previewRail_;
     std::optional<CourseEnemyAuthoringModel> previewEnemies_;

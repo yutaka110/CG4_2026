@@ -376,6 +376,60 @@ bool EditorObjProductionImportBridge::IsProductionForSource(
         sourceLogicalPath);
 }
 
+bool EditorObjProductionImportBridge::LoadSourceGeometry(
+    const EditorAssetRecord& source,
+    const std::filesystem::path& projectRoot,
+    EditorGeometryMesh& geometry,
+    uint64_t* sourceFileHash,
+    uint32_t* materialSlotCount,
+    std::vector<std::string>* diagnostics,
+    std::string* errorMessage) {
+    geometry = {};
+    if (sourceFileHash != nullptr) *sourceFileHash = 0;
+    if (materialSlotCount != nullptr) *materialSlotCount = 0;
+    if (!CanImport(source)) {
+        if (errorMessage != nullptr) {
+            *errorMessage =
+                "Mesh source must be an available OBJ, glTF, GLB, or FBX Asset.";
+        }
+        return false;
+    }
+    const std::filesystem::path sourcePath =
+        ResolveProjectPath(projectRoot, source.sourcePath);
+    std::string hashError;
+    const uint64_t fileHash = HashFile(sourcePath, &hashError);
+    if (fileHash == 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = hashError.empty()
+                ? "Mesh source hash could not be computed." : std::move(hashError);
+        }
+        return false;
+    }
+    ModelData model = LoadObjFile_Assimp(
+        sourcePath.parent_path().string(), sourcePath.filename().string());
+    uint32_t resolvedMaterialSlotCount = 0;
+    std::vector<std::string> localDiagnostics;
+    std::string conversionError;
+    if (!ConvertObjModel(source, model, geometry, resolvedMaterialSlotCount,
+            localDiagnostics, &conversionError)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = conversionError.empty()
+                ? "Mesh source could not be converted to Production Geometry."
+                : std::move(conversionError);
+        }
+        return false;
+    }
+    if (sourceFileHash != nullptr) *sourceFileHash = fileHash;
+    if (materialSlotCount != nullptr) {
+        *materialSlotCount = resolvedMaterialSlotCount;
+    }
+    if (diagnostics != nullptr) {
+        diagnostics->insert(diagnostics->end(), localDiagnostics.begin(),
+            localDiagnostics.end());
+    }
+    return true;
+}
+
 EditorObjProductionImportResult
 EditorObjProductionImportBridge::ImportAndBake(
     const EditorObjProductionImportRequest& request) {
@@ -409,28 +463,12 @@ EditorObjProductionImportBridge::ImportAndBake(
 
     const std::filesystem::path sourcePath =
         ResolveProjectPath(projectRoot_, sourceSnapshot.sourcePath);
-    std::string sourceReadError;
-    const uint64_t sourceFileHash = HashFile(sourcePath, &sourceReadError);
-    if (sourceFileHash == 0) {
-        SetError(
-            result,
-            sourceReadError.empty()
-                ? "OBJ source hash could not be computed."
-                : sourceReadError);
-        return result;
-    }
-    ModelData model = LoadObjFile_Assimp(
-        sourcePath.parent_path().string(),
-        sourcePath.filename().string());
     EditorGeometryMesh geometry{};
+    uint64_t sourceFileHash = 0;
     uint32_t materialSlotCount = 0;
     std::string conversionError;
-    if (!ConvertObjModel(
-            sourceSnapshot,
-            model,
-            geometry,
-            materialSlotCount,
-            result.diagnostics,
+    if (!LoadSourceGeometry(sourceSnapshot, projectRoot_, geometry,
+            &sourceFileHash, &materialSlotCount, &result.diagnostics,
             &conversionError)) {
         SetError(
             result,
