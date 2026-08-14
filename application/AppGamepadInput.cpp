@@ -127,6 +127,10 @@ AppGamepadFrame AppGamepadInput::Poll() noexcept {
         IsPressed(buttons, edgeBaseline, XINPUT_GAMEPAD_B);
     frame.toggleHelpPressed =
         IsPressed(buttons, edgeBaseline, XINPUT_GAMEPAD_Y);
+    frame.leftShoulderPressed =
+        IsPressed(buttons, edgeBaseline, XINPUT_GAMEPAD_LEFT_SHOULDER);
+    frame.rightShoulderPressed =
+        IsPressed(buttons, edgeBaseline, XINPUT_GAMEPAD_RIGHT_SHOULDER);
     previousButtons_ = buttons;
     wasConnected_ = true;
     return frame;

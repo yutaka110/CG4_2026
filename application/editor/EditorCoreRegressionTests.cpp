@@ -92,6 +92,9 @@
 #include "course/CourseOverviewMapDragDropBridge.h"
 #include "course/CourseOverviewMapEditTool.h"
 #include "course/CourseOverviewMapMultiViewCoordinator.h"
+#include "course/CourseMap3DViewportController.h"
+#include "course/CourseMap3DViewportRenderer.h"
+#include "course/CourseMap3DPickingService.h"
 #include "course/CourseMapSceneVisualizationPipeline.h"
 #include "course/CourseMapSceneBoundsService.h"
 #include "course/CourseMapGeometryExtractionService.h"
@@ -248,6 +251,11 @@
 #include "../course/CourseSpawnRuntime.h"
 #include "../course/CourseRuntimeProgramAsset.h"
 #include "../course/CourseGameplayWaveRuntimeBridge.h"
+#include "../course/GameSessionSystem.h"
+#include "../course/GameSessionPresentationBridge.h"
+#include "../course/GameSessionRetryCoordinator.h"
+#include "../course/RailDodgeSystem.h"
+#include "../course/RailPlayerMovementSystem.h"
 #include "../course/EnemyAttackTelegraphFeedbackBridge.h"
 #include "../course/EnemyAttackTelegraphSystem.h"
 #include "../course/PlayerCombatFeelSystem.h"
@@ -18029,6 +18037,385 @@ void TestCourseEnemyPresentationFallback(RegressionRunner& runner) {
         "the shipped drone and turret fallback mesh IDs must both enter the normal enemy render path");
 }
 
+void TestGameSessionSystem(RegressionRunner& runner) {
+    GameSessionDefinition invalid = GameSessionDefinition::RailShooterDefaults();
+    invalid.maximumPlayerHealth = 0.0f;
+    std::string error;
+    runner.Expect(
+        !invalid.Validate(&error) && !error.empty(),
+        "game session definition should reject an invalid authoritative health budget");
+
+    GameSessionDefinition definition = GameSessionDefinition::RailShooterDefaults();
+    definition.sessionId = "regression.rail_session";
+    definition.introDurationSeconds = 0.10f;
+    definition.resultDelaySeconds = 0.20f;
+    definition.startingRetries = 2;
+    definition.timeLimitSeconds = 0.0f;
+
+    GameSessionSystem session;
+    runner.Expect(
+        session.Initialize(definition, 100.0f, &error) &&
+            session.State().phase == GameSessionPhase::Ready &&
+            session.State().playerHealth == 100.0f &&
+            session.State().retriesRemaining == 2,
+        "game session should initialize a validated Ready state from its definition");
+    runner.Expect(
+        session.Start(5.0f, &error) &&
+            session.State().phase == GameSessionPhase::Intro &&
+            std::abs(session.State().courseDistance - 5.0f) < 0.001f,
+        "session start should create the first attempt at the requested rail distance");
+
+    GameSessionFrameInput frame{};
+    frame.deltaTime = 0.05f;
+    frame.courseDistance = 5.0f;
+    session.Update(frame);
+    const float introElapsed = session.State().phaseElapsedSeconds;
+    runner.Expect(
+        session.Pause() && session.State().phase == GameSessionPhase::Paused &&
+            !session.AllowsGameplaySimulation(),
+        "session pause should disable authoritative gameplay simulation");
+    frame.deltaTime = 1.0f;
+    frame.courseDistance = 80.0f;
+    session.Update(frame);
+    runner.Expect(
+        std::abs(session.State().courseDistance - 5.0f) < 0.001f &&
+            std::abs(session.State().phaseElapsedSeconds) < 0.001f,
+        "paused updates should not advance rail distance or session phase time");
+    runner.Expect(session.Resume(), "paused session should resume its previous phase");
+    frame.deltaTime = 0.06f;
+    frame.courseDistance = 5.0f;
+    session.Update(frame);
+    runner.Expect(
+        introElapsed > 0.049f &&
+            session.State().phase == GameSessionPhase::Playing &&
+            session.AllowsGameplaySimulation(),
+        "intro timing should survive pause/resume and transition once into Playing");
+
+    session.AddScore(500, "enemy_01");
+    session.SetCombo(4, "enemy_01");
+    runner.Expect(
+        session.RegisterCheckpoint(40.0f, "section_b") &&
+            session.State().checkpointScore == 500 &&
+            session.State().maximumCombo == 4,
+        "checkpoint should snapshot the canonical distance and retry score");
+    runner.Expect(
+        std::abs(session.ApplyPlayerDamage(25.0f, "enemy_bullet") - 25.0f) < 0.001f &&
+            std::abs(session.State().playerHealth - 75.0f) < 0.001f,
+        "player damage should be clamped and accepted only through the session authority");
+
+    frame = {};
+    frame.deltaTime = 0.016f;
+    frame.courseDistance = 100.0f;
+    frame.completedMandatoryWaves = 0;
+    frame.totalMandatoryWaves = 1;
+    session.Update(frame);
+    runner.Expect(
+        session.State().phase == GameSessionPhase::Playing &&
+            session.State().courseEndReached &&
+            !session.State().mandatoryWavesSatisfied,
+        "course end alone should not win while a mandatory Wave remains incomplete");
+    frame.completedMandatoryWaves = 1;
+    session.Update(frame);
+    runner.Expect(
+        session.State().phase == GameSessionPhase::Victory &&
+            session.State().outcome == GameSessionOutcome::Victory &&
+            session.State().endReason == GameSessionEndReason::CourseCompleted &&
+            !session.AllowsGameplaySimulation(),
+        "course end plus mandatory completion should confirm Victory exactly at the session boundary");
+    frame.deltaTime = 0.21f;
+    session.Update(frame);
+    runner.Expect(
+        session.State().phase == GameSessionPhase::Result,
+        "terminal presentation delay should advance Victory into Result");
+
+    runner.Expect(
+        session.RestartRun(0.0f, &error),
+        "completed session should support an explicit full-run restart");
+    frame = {};
+    frame.deltaTime = 0.11f;
+    session.Update(frame);
+    session.AddScore(250, "pre_checkpoint_score");
+    session.RegisterCheckpoint(40.0f, "retry_checkpoint");
+    session.AddScore(750, "post_checkpoint_score");
+    session.ApplyPlayerDamage(1000.0f, "lethal_hit");
+    frame.deltaTime = 0.016f;
+    frame.courseDistance = 100.0f;
+    frame.completedMandatoryWaves = 1;
+    frame.totalMandatoryWaves = 1;
+    session.Update(frame);
+    runner.Expect(
+        session.State().phase == GameSessionPhase::Defeat &&
+            session.State().outcome == GameSessionOutcome::Defeat &&
+            session.State().endReason == GameSessionEndReason::PlayerDestroyed,
+        "same-frame lethal damage should take priority over otherwise valid Victory conditions");
+    runner.Expect(
+        session.Retry(&error) &&
+            session.State().phase == GameSessionPhase::Intro &&
+            session.State().attemptIndex == 2 &&
+            session.State().retriesRemaining == 1 &&
+            std::abs(session.State().courseDistance - 40.0f) < 0.001f &&
+            session.State().score == 250 &&
+            std::abs(session.State().playerHealth - 100.0f) < 0.001f,
+        "retry should consume one retry and restore checkpoint distance, score and health deterministically");
+
+    GameSessionDefinition timedDefinition = GameSessionDefinition::RailShooterDefaults();
+    timedDefinition.sessionId = "regression.timed_session";
+    timedDefinition.timeLimitSeconds = 0.10f;
+    timedDefinition.resultDelaySeconds = 0.0f;
+    GameSessionSystem timed;
+    runner.Expect(
+        timed.Initialize(timedDefinition, 100.0f, &error) && timed.Start(0.0f, &error),
+        "time-limited session should initialize and start");
+    frame = {};
+    frame.deltaTime = 0.11f;
+    timed.Update(frame);
+    runner.Expect(
+        timed.State().phase == GameSessionPhase::Defeat &&
+            timed.State().endReason == GameSessionEndReason::TimeExpired,
+        "authoritative time limit should produce a typed defeat reason");
+}
+
+void TestGameSessionPresentationAndRetry(RegressionRunner& runner) {
+    std::string error;
+    GameSessionDefinition definition = GameSessionDefinition::RailShooterDefaults();
+    definition.sessionId = "regression.presentation_retry";
+    definition.resultDelaySeconds = 0.0f;
+    GameSessionSystem session;
+    runner.Expect(
+        session.Initialize(definition, 100.0f, &error) &&
+            session.Start(0.0f, &error),
+        "presentation/retry session should initialize and enter Playing");
+
+    GameSessionPresentationBridge presentation;
+    GameSessionPresentationInput presentationInput{};
+    presentationInput.definition = &session.Definition();
+    presentationInput.state = &session.State();
+    presentationInput.eventHistory = &session.EventHistory();
+    presentationInput.deltaTime = 0.016f;
+    presentation.Update(presentationInput);
+    runner.Expect(
+        presentation.Frame().hud.visible &&
+            presentation.Frame().hud.phase == GameSessionPhase::Playing &&
+            std::any_of(
+                presentation.Frame().cues.begin(),
+                presentation.Frame().cues.end(),
+                [](const GameSessionPresentationCue& cue) {
+                    return cue.kind ==
+                        GameSessionPresentationCueKind::SessionStarted;
+                }),
+        "presentation bridge should turn session start into a HUD view and bounded cue");
+
+    session.ApplyPlayerDamage(20.0f, "presentation_hit");
+    session.Update({0.016f, 10.0f, 0, 1, 0, 0, false, false});
+    presentationInput.state = &session.State();
+    presentation.Update(presentationInput);
+    runner.Expect(
+        std::abs(presentation.Frame().hud.healthNormalized - 0.8f) < 0.001f &&
+            presentation.Frame().screenFlashIntensity > 0.0f &&
+            presentation.Frame().hapticsActive &&
+            std::any_of(
+                presentation.Frame().cues.begin(),
+                presentation.Frame().cues.end(),
+                [](const GameSessionPresentationCue& cue) {
+                    return cue.kind ==
+                        GameSessionPresentationCueKind::PlayerDamaged &&
+                        cue.cameraShake > 0.0f;
+                }),
+        "presentation bridge should consume retained damage history even after the session frame clears transient events");
+    presentation.Update(presentationInput);
+    runner.Expect(
+        presentation.Frame().cues.empty(),
+        "presentation bridge should consume every session event sequence exactly once");
+
+    CourseAsset course{};
+    course.name = "Retry Coordinator Course";
+    CourseRuntime courseRuntime;
+    courseRuntime.Bind(&course);
+    CourseRuntimeProgramAsset program{};
+    program.sourceCourseName = course.name;
+    program.sourceAssetHash = 11;
+    program.sourceFingerprint = 22;
+    program.railLength = 100.0f;
+    CourseRuntimeWaveNode wave{};
+    wave.waveGuid = "retry-wave";
+    wave.displayName = "Retry Wave";
+    wave.triggerRailDistance = 10.0f;
+    wave.actorIndices = {0};
+    program.waves.push_back(wave);
+    CourseRuntimeActorRecord actor{};
+    actor.placementGuid = "retry-actor";
+    actor.waveGuid = wave.waveGuid;
+    actor.waveIndex = 0;
+    actor.actor.sourcePlacementGuid = actor.placementGuid;
+    actor.actor.waveId = actor.waveGuid;
+    actor.actor.spawnDistance = 15.0f;
+    actor.actor.hitPoints = 30.0f;
+    program.actors.push_back(actor);
+
+    CourseSpawnRuntime spawn;
+    CourseGameplayWaveRuntimeBridge waveRuntime;
+    runner.Expect(
+        waveRuntime.Bind(&program, &spawn, 0.0f, &error),
+        "retry coordinator test Wave runtime should bind a valid ProgramAsset");
+    waveRuntime.Update({0.0f, 20.0f, {}});
+    CourseObstacleActorDesc legacyObstacle{};
+    legacyObstacle.id = "checkpoint_obstacle";
+    legacyObstacle.spawnDistance = 24.0f;
+    spawn.SpawnObstacle(legacyObstacle);
+    CourseBulletActor hostileProjectile{};
+    hostileProjectile.damage = 99.0f;
+    spawn.MutableBullets().push_back(hostileProjectile);
+
+    CourseCollisionSystem collision;
+    SectionCheckpointSystem sections;
+    sections.Reset(&course, 0.0f);
+    RailPlayerMovementSystem playerMovement;
+    RailDodgeSystem playerDodge;
+    GameSessionRetryCoordinator coordinator;
+    runner.Expect(
+        coordinator.Bind(
+            {&session, &courseRuntime, &waveRuntime, &spawn, &collision, &sections,
+             &course, &playerMovement, &playerDodge},
+            &error) &&
+            coordinator.CaptureCheckpoint(20.0f, "retry_section", &error),
+        "retry coordinator should atomically capture Session, Spawn and Wave state");
+
+    RailPlayerMovementInput movedInput{};
+    movedInput.deltaTime = 0.25f;
+    movedInput.moveX = 1.0f;
+    playerMovement.Update(movedInput);
+    RailDodgeInput activeDodge{};
+    activeDodge.deltaTime = 0.016f;
+    activeDodge.dodgePressed = true;
+    activeDodge.directionX = -1.0f;
+    playerDodge.Update(activeDodge);
+    waveRuntime.NotifyEnemyDefeated("retry-actor");
+    waveRuntime.Update({0.0f, 90.0f, {}});
+    spawn.MutableObstacles().clear();
+    session.ApplyPlayerDamage(1000.0f, "retry_lethal");
+    session.Update({0.016f, 90.0f, 1, 1, 0, 0, false, false});
+    runner.Expect(
+        session.State().phase == GameSessionPhase::Defeat &&
+            coordinator.CanRetry(),
+        "lethal session state should expose retry only when a matching checkpoint exists");
+
+    const GameSessionRetryResult retry = coordinator.Retry(&error);
+    runner.Expect(
+        retry.succeeded && retry.status == GameSessionRetryStatus::Succeeded &&
+            session.State().phase == GameSessionPhase::Playing &&
+            session.State().attemptIndex == 2 &&
+            session.State().retriesRemaining == 1 &&
+            std::abs(session.State().courseDistance - 20.0f) < 0.001f &&
+            std::abs(courseRuntime.Distance() - 20.0f) < 0.001f &&
+            waveRuntime.Stats().activeWaves == 1 &&
+            spawn.ActiveEnemyCount() == 1 &&
+            spawn.ActiveObstacleCount() == 1 &&
+            spawn.ActiveBulletCount() == 0 &&
+            collision.Player().hitPoints == session.State().playerHealth &&
+            std::abs(playerMovement.State().lateralOffset) < 0.001f &&
+            playerDodge.State().phase == RailDodgePhase::Ready,
+        "retry should restore Course/Wave/Spawn/player/collision state and clear hostile projectiles as one recovery transaction");
+
+    presentationInput.state = &session.State();
+    presentation.Update(presentationInput);
+    runner.Expect(
+        presentation.Frame().hud.showBanner &&
+            presentation.Frame().hud.headline == "RETRY" &&
+            std::any_of(
+                presentation.Frame().cues.begin(),
+                presentation.Frame().cues.end(),
+                [](const GameSessionPresentationCue& cue) {
+                    return cue.kind == GameSessionPresentationCueKind::Retry;
+                }),
+        "successful coordinated retry should publish one RETRY presentation cue");
+}
+
+void TestRailPlayerMovementAndDodge(RegressionRunner& runner) {
+    std::string error;
+    RailPlayerMovementDefinition movementDefinition =
+        RailPlayerMovementDefinition::RailShooterDefaults();
+    RailPlayerMovementSystem movement;
+    runner.Expect(
+        movement.Initialize(movementDefinition, &error),
+        "rail player movement defaults should validate and initialize");
+
+    RailPlayerMovementInput movementInput{};
+    movementInput.deltaTime = 1.0f / 60.0f;
+    movementInput.moveX = 1.0f;
+    movementInput.moveY = 0.5f;
+    for (int frame = 0; frame < 20; ++frame) movement.Update(movementInput);
+    const RailPlayerMovementRuntimeState movingState = movement.State();
+    std::ostringstream movementDiagnostic;
+    movementDiagnostic <<
+        "movement system should accelerate in rail-local space and derive bounded attitude"
+        " lateral=" << movingState.lateralOffset <<
+        " vertical=" << movingState.verticalOffset <<
+        " vx=" << movingState.lateralVelocity <<
+        " bank=" << movingState.bankDegrees;
+    runner.Expect(
+        movingState.lateralOffset > movementDefinition.initialLateralOffset &&
+            movingState.verticalOffset > movementDefinition.initialVerticalOffset &&
+            movingState.lateralOffset <= movementDefinition.maximumLateralOffset &&
+            movingState.verticalOffset <= movementDefinition.maximumVerticalOffset &&
+            movingState.lateralVelocity > 0.0f && movingState.bankDegrees < 0.0f,
+        movementDiagnostic.str());
+
+    const RailPlayerMovementRuntimeState checkpoint = movement.State();
+    movementInput.moveX = -1.0f;
+    movementInput.moveY = -1.0f;
+    for (int frame = 0; frame < 30; ++frame) movement.Update(movementInput);
+    runner.Expect(
+        movement.RestoreState(checkpoint, &error) &&
+            std::abs(movement.State().lateralOffset - checkpoint.lateralOffset) < 0.001f &&
+            std::abs(movement.State().verticalVelocity - checkpoint.verticalVelocity) < 0.001f,
+        "movement runtime state should restore deterministically from a checkpoint");
+
+    RailDodgeSystem dodge;
+    RailDodgeInput dodgeInput{};
+    dodgeInput.deltaTime = 1.0f / 60.0f;
+    dodgeInput.dodgePressed = true;
+    dodgeInput.directionX = 1.0f;
+    const RailDodgeFrame started = dodge.Update(dodgeInput);
+    runner.Expect(
+        started.startedThisFrame && started.invulnerable &&
+            started.lateralDisplacement > 0.0f &&
+            started.state.dodgeCount == 1 && !dodge.CanDodge(),
+        "dodge should begin once, produce displacement and expose an invulnerability window");
+
+    dodgeInput.dodgePressed = true;
+    dodge.Update(dodgeInput);
+    runner.Expect(
+        dodge.State().dodgeCount == 1,
+        "dodge cooldown should reject repeated requests without consuming another dodge");
+    dodgeInput.dodgePressed = false;
+    for (int frame = 0; frame < 90; ++frame) dodge.Update(dodgeInput);
+    runner.Expect(
+        dodge.CanDodge() && dodge.State().phase == RailDodgePhase::Ready &&
+            dodge.State().invulnerabilityRemainingSeconds <= 0.0f,
+        "dodge should pass through recovery/cooldown and return to Ready deterministically");
+
+    CourseSpawnRuntime collisionRuntime;
+    CourseBulletActor bullet{};
+    bullet.spawnDistance = 0.0f;
+    bullet.lateralOffset = 0.0f;
+    bullet.verticalOffset = 4.0f;
+    bullet.radius = 2.0f;
+    bullet.damage = 50.0f;
+    bullet.lifetime = 2.0f;
+    collisionRuntime.MutableBullets().push_back(bullet);
+    CourseCollisionSystem collision;
+    CourseCollisionFrameInput collisionInput{};
+    collisionInput.deltaTime = 0.016f;
+    collisionInput.player.hitPoints = 100.0f;
+    collisionInput.player.invulnerabilityTime = 0.10f;
+    const CourseCollisionFrameStats protectedFrame =
+        collision.Update(collisionRuntime, collisionInput);
+    runner.Expect(
+        protectedFrame.playerDamage == 0.0f &&
+            collisionRuntime.ActiveBulletCount() == 1,
+        "collision system should honor authoritative dodge invulnerability without consuming the hostile projectile");
+}
+
 void TestRailWorldRaycast(RegressionRunner& runner) {
     RailPath rail;
     rail.SetControlPoints({
@@ -21394,6 +21781,86 @@ void TestCourseOverviewMapFoundation(RegressionRunner& runner) {
             selection.Primary()->stableId == "course-enemy-placement:overview-enemy",
         "overview selection should update the shared canonical EditorSelection");
 
+    CourseMap3DViewportController viewport3D;
+    runner.Expect(
+        viewport3D.Bind({&railController, &enemyController, &waveController,
+                &selection}, &error),
+        "course map 3D controller should bind the canonical course document");
+    viewport3D.SetActive(true);
+    viewport3D.SetViewport(rect);
+    viewport3D.FrameAll();
+    runner.Expect(viewport3D.Rebuild(nullptr, nullptr, &error) &&
+            viewport3D.Frame().valid && !viewport3D.Frame().lines.empty() &&
+            viewport3D.Frame().stats.controlPoints == 3u &&
+            viewport3D.Frame().stats.enemies == 1u &&
+            viewport3D.Frame().stats.waves == 1u,
+        "course map 3D renderer should publish retained perspective rail, enemy "
+        "and wave proxies");
+    const auto viewportEnemy = std::find_if(
+        viewport3D.Frame().markers.begin(), viewport3D.Frame().markers.end(),
+        [](const CourseMap3DMarker& marker) {
+            return marker.kind == CourseOverviewMapItemKind::EnemyPlacement;
+        });
+    const CourseMap3DPickResult viewportPick =
+        viewportEnemy != viewport3D.Frame().markers.end()
+        ? viewport3D.SelectAt(viewportEnemy->screen)
+        : CourseMap3DPickResult{};
+    runner.Expect(viewportPick.hit && viewportPick.ray.valid &&
+            viewportPick.kind == CourseOverviewMapItemKind::EnemyPlacement &&
+            viewportPick.handle.stableId ==
+                "course-enemy-placement:overview-enemy" &&
+            selection.Primary() != nullptr &&
+            selection.Primary()->stableId == viewportPick.handle.stableId,
+        "course map 3D world-ray picking should select the same canonical enemy handle");
+    viewport3D.Rebuild(nullptr, nullptr, &error);
+    const uint64_t viewportRevision = viewport3D.State().frameRevision;
+    const uint64_t viewportCacheHits = viewport3D.State().frameCacheHits;
+    const float oldYaw = viewport3D.Camera().yawRadians;
+    runner.Expect(viewport3D.Rebuild(nullptr, nullptr, &error) &&
+            viewport3D.State().frameRevision == viewportRevision &&
+            viewport3D.State().frameCacheHits == viewportCacheHits + 1u,
+        "course map 3D retained frame should reuse unchanged revision keys");
+    viewport3D.Orbit({12.0f, -5.0f});
+    runner.Expect(viewport3D.Camera().yawRadians != oldYaw &&
+            viewport3D.Rebuild(nullptr, nullptr, &error) &&
+            viewport3D.State().frameRevision == viewportRevision + 1u,
+        "course map 3D orbit should invalidate exactly one retained perspective frame");
+    CourseMapSceneVisualizationFrame semanticScene{};
+    semanticScene.valid = true;
+    semanticScene.stats.builds = 41u;
+    CourseMapSceneActorProxy encounterActor{};
+    encounterActor.kind = CourseMapSceneVisualKind::EncounterEnemy;
+    encounterActor.stableId = "encounter:3d-regression:0";
+    encounterActor.actorAssetId = "preview_fighter";
+    encounterActor.displayName = "Preview Fighter";
+    encounterActor.fillColor = 0xffd87848u;
+    encounterActor.outlineColor = 0xffffd7a0u;
+    encounterActor.radiusPixels = 8.0f;
+    encounterActor.worldPosition = sourceWorld;
+    encounterActor.worldHeadingEnd = {sourceWorld.x, sourceWorld.y,
+        sourceWorld.z + 8.0f};
+    semanticScene.actors.push_back(encounterActor);
+    CourseMapScreenSpaceProxy structureProxy{};
+    structureProxy.kind = CourseMapSceneVisualKind::SceneStructure;
+    structureProxy.worldPosition = {sourceWorld.x + 5.0f,
+        sourceWorld.y, sourceWorld.z};
+    structureProxy.fillColor = 0xffb29731u;
+    structureProxy.outlineColor = 0xfff5e07eu;
+    structureProxy.stableId = "scene-structure:3d-regression";
+    structureProxy.displayName = "3D Structure";
+    structureProxy.domain = EditorDomainId::SceneEntity;
+    semanticScene.screenSpaceProxies.push_back(structureProxy);
+    runner.Expect(viewport3D.Rebuild(nullptr, &semanticScene, &error),
+        "course map 3D should accept the retained semantic scene information");
+    viewport3D.UpdatePlayhead(wave.triggerRailDistance);
+    runner.Expect(viewport3D.Frame().stats.encounterEnemies == 1u &&
+            viewport3D.Frame().stats.sceneProxies == 1u &&
+            viewport3D.DynamicOverlay().valid &&
+            viewport3D.DynamicOverlay().player.kind ==
+                CourseOverviewMapItemKind::Playhead,
+        "course map 3D should show encounter craft, scene proxies and a dynamic "
+        "player overlay without baking the playhead into static terrain");
+
     controller.Rebuild(wave.triggerRailDistance, &error);
     const CourseOverviewMapProjectedPoint focusBefore =
         controller.Projection().ProjectWorld(sourceWorld);
@@ -23255,6 +23722,13 @@ int RunEditorCoreRegressionTests() {
           }},
          {"course enemy presentation fallback", [&]() {
               TestCourseEnemyPresentationFallback(runner);
+          }},
+         {"game session authority", [&]() { TestGameSessionSystem(runner); }},
+         {"game session presentation and retry", [&]() {
+              TestGameSessionPresentationAndRetry(runner);
+          }},
+         {"rail player movement and dodge", [&]() {
+              TestRailPlayerMovementAndDodge(runner);
           }},
          {"rail world raycast", [&]() { TestRailWorldRaycast(runner); }},
          {"rail world shot routing", [&]() { TestRailWorldShotRouting(runner); }},

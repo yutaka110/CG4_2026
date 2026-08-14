@@ -6,6 +6,7 @@
 #include "CourseOverviewMapMultiViewCoordinator.h"
 #include "CourseMapCartographyBakePipeline.h"
 #include "CourseMapCartographyRenderer.h"
+#include "CourseMap3DViewportController.h"
 #include "CourseMapHologramRenderer.h"
 #include "CourseMapHybridCartographyCompositor.h"
 #include "CourseMapSceneBoundsService.h"
@@ -28,6 +29,7 @@ struct CourseOverviewMapPanelContext final {
     CourseWaveEditorController* waves = nullptr;
     EditorSelection* selection = nullptr;
     CoursePreviewSimulationSystem* preview = nullptr;
+    CourseMap3DViewportController* viewport3D = nullptr;
     CourseOverviewMapEditTool* editTool = nullptr;
     CourseOverviewMapDragDropBridge* dragDrop = nullptr;
     CourseOverviewMapSnapService* snapping = nullptr;

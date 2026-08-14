@@ -1585,20 +1585,28 @@ void CourseRuntime::Reset(float distance) {
 }
 
 std::vector<CourseEventMarker> CourseRuntime::Advance(float deltaTime, const RailPath& railPath) {
-    return AdvanceInternal(deltaTime, railPath, nullptr);
+    return AdvanceInternal(deltaTime, railPath, nullptr, true);
 }
 
 std::vector<CourseEventMarker> CourseRuntime::Advance(
     float deltaTime,
     const RailPath& railPath,
     float speedOverride) {
-    return AdvanceInternal(deltaTime, railPath, &speedOverride);
+    return AdvanceInternal(deltaTime, railPath, &speedOverride, true);
+}
+
+std::vector<CourseEventMarker> CourseRuntime::AdvanceClamped(
+    float deltaTime,
+    const RailPath& railPath,
+    float speedOverride) {
+    return AdvanceInternal(deltaTime, railPath, &speedOverride, false);
 }
 
 std::vector<CourseEventMarker> CourseRuntime::AdvanceInternal(
     float deltaTime,
     const RailPath& railPath,
-    const float* speedOverride) {
+    const float* speedOverride,
+    bool loopAtEnd) {
     std::vector<CourseEventMarker> triggered;
     if (asset_ == nullptr || railPath.Length() <= 0.0f) {
         return triggered;
@@ -1610,8 +1618,12 @@ std::vector<CourseEventMarker> CourseRuntime::AdvanceInternal(
     const float speed = (std::max)(12.0f, requestedSpeed);
     distance_ += speed * (std::max)(0.0f, deltaTime);
     if (distance_ > railPath.Length()) {
-        distance_ = std::fmod(distance_, railPath.Length());
-        nextEventIndex_ = 0;
+        if (loopAtEnd) {
+            distance_ = std::fmod(distance_, railPath.Length());
+            nextEventIndex_ = 0;
+        } else {
+            distance_ = railPath.Length();
+        }
     }
 
     while (nextEventIndex_ < asset_->events.size()) {

@@ -65,6 +65,7 @@ class CourseCollisionSystem {
 public:
     CourseCollisionSystem();
     void Reset();
+    void SynchronizePlayerHitPoints(float hitPoints);
     CourseCollisionFrameStats Update(CourseSpawnRuntime& runtime, const CourseCollisionFrameInput& input);
     void AppendDebugDraw(ge3::debug::DebugDrawSystem& debugDraw, const RailPath& railPath) const;
 

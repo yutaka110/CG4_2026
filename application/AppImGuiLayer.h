@@ -77,6 +77,7 @@ class CourseRailViewportRenderer;
 #include "editor/course/CourseMapEditorMajorTab.h"
 #include "editor/course/CourseMapCartographyBakePipeline.h"
 #include "editor/course/CourseMapCartographyRenderer.h"
+#include "editor/course/CourseMap3DViewportController.h"
 #include "editor/course/CourseTerrainMapBakePipeline.h"
 #include "editor/course/CourseTerrainMapRenderer.h"
 #include "editor/course/CourseMapHologramRenderer.h"
@@ -535,6 +536,7 @@ private:
     editor::CourseEnemyDetailsPanel courseEnemyDetailsPanel_{};
     editor::CourseWaveDetailsPanel courseWaveDetailsPanel_{};
     editor::CourseOverviewMapController courseOverviewMapController_{};
+    editor::CourseMap3DViewportController courseMap3DViewportController_{};
     editor::CourseMapEditorWorkspace courseMapEditorWorkspace_{};
     editor::CourseMapEditorMajorTab courseMapEditorMajorTab_{};
     editor::CourseMapSceneBoundsService courseMapSceneBounds_{};

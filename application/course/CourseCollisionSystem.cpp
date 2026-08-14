@@ -143,6 +143,12 @@ void CourseCollisionSystem::Reset() {
     damageReceiver_.Reset();
 }
 
+void CourseCollisionSystem::SynchronizePlayerHitPoints(float hitPoints) {
+    if (std::isfinite(hitPoints)) {
+        player_.hitPoints = (std::max)(0.0f, hitPoints);
+    }
+}
+
 bool CourseCollisionSystem::LoadWeaponDefinitions(
     const std::filesystem::path& directory,
     std::string* errorMessage) {
@@ -187,8 +193,9 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     if (player_.hitPoints <= 0.0f && input.player.hitPoints > 0.0f) {
         player_.hitPoints = input.player.hitPoints;
     }
-    player_.invulnerabilityTime =
-        (std::max)(0.0f, player_.invulnerabilityTime - dt);
+    player_.invulnerabilityTime = (std::max)(
+        (std::max)(0.0f, player_.invulnerabilityTime - dt),
+        (std::max)(0.0f, input.player.invulnerabilityTime));
 
     weapon_.enabled = input.weapon.enabled;
     weapon_.triggerHeld = input.weapon.triggerHeld;

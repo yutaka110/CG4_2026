@@ -323,6 +323,10 @@ public:
     void Reset(float distance = 0.0f);
     std::vector<CourseEventMarker> Advance(float deltaTime, const RailPath& railPath);
     std::vector<CourseEventMarker> Advance(float deltaTime, const RailPath& railPath, float speedOverride);
+    std::vector<CourseEventMarker> AdvanceClamped(
+        float deltaTime,
+        const RailPath& railPath,
+        float speedOverride);
 
     float Distance() const { return distance_; }
     const CourseSection* CurrentSection() const;
@@ -331,7 +335,8 @@ private:
     std::vector<CourseEventMarker> AdvanceInternal(
         float deltaTime,
         const RailPath& railPath,
-        const float* speedOverride);
+        const float* speedOverride,
+        bool loopAtEnd);
 
     const CourseAsset* asset_ = nullptr;
     float distance_ = 0.0f;

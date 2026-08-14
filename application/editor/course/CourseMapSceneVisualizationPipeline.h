@@ -56,6 +56,10 @@ struct CourseMapSceneActorProxy final {
     bool enabled = true;
     bool locked = false;
     uint32_t clusterCount = 1;
+    // Retained world data lets perspective map views reuse the exact same
+    // semantic actor set without reverse-projecting a 2D silhouette.
+    Vector3 worldPosition{};
+    Vector3 worldHeadingEnd{};
 };
 
 // Editor-only billboard layered over true projected geometry. Its radius is

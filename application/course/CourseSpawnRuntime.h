@@ -154,9 +154,24 @@ struct CourseVfxCue {
     bool submitted = false;
 };
 
+// Retry-safe snapshot of gameplay actors. Transient VFX are deliberately not
+// captured; hostile projectiles are retained in the snapshot only so a mode
+// may explicitly opt into restoring them. Rail-shooter retries clear them by
+// default to guarantee a readable recovery frame.
+struct CourseSpawnRuntimeCheckpoint final {
+    std::vector<CourseEnemyActor> enemies;
+    std::vector<CourseBulletActor> bullets;
+    std::vector<CourseObstacleActor> obstacles;
+    uint32_t nextActorId = 1;
+};
+
 class CourseSpawnRuntime {
 public:
     void Reset();
+    CourseSpawnRuntimeCheckpoint CaptureCheckpoint() const;
+    void RestoreCheckpoint(
+        const CourseSpawnRuntimeCheckpoint& checkpoint,
+        bool restoreProjectiles = false);
     void Update(float deltaTime);
     void Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput);
 

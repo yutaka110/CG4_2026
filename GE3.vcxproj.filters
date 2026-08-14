@@ -791,6 +791,15 @@
     <ClCompile Include="application\editor\course\CourseMapCartographyRenderer.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMap3DViewportController.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMap3DViewportRenderer.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMap3DPickingService.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
     <ClCompile Include="application\editor\course\CourseTerrainMapAsset.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
@@ -1026,6 +1035,21 @@
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\EnemyWaveAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\GameSessionSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\GameSessionPresentationBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\GameSessionRetryCoordinator.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailPlayerMovementSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailDodgeSystem.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\ObstacleAsset.cpp">
@@ -1544,6 +1568,21 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\EnemyWaveAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\GameSessionSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\GameSessionPresentationBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\GameSessionRetryCoordinator.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailPlayerMovementSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailDodgeSystem.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\ObstacleAsset.h">
@@ -2339,6 +2378,15 @@
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\course\CourseMapCartographyRenderer.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMap3DViewportController.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMap3DViewportRenderer.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMap3DPickingService.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\course\CourseTerrainMapAsset.h">

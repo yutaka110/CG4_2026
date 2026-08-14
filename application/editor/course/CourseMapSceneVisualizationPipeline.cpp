@@ -26,6 +26,10 @@ Vector3 Add(Vector3 a, Vector3 b) {
     return {a.x + b.x, a.y + b.y, a.z + b.z};
 }
 
+Vector3 Subtract(Vector3 a, Vector3 b) {
+    return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+
 Vector3 Scale(Vector3 value, float scale) {
     return {value.x * scale, value.y * scale, value.z * scale};
 }
@@ -749,6 +753,9 @@ CourseMapSceneVisualizationPipeline::BuildFrame(
         actor.selected = selected;
         actor.enabled = enabled;
         actor.locked = locked;
+        actor.worldPosition = center;
+        actor.worldHeadingEnd = Add(center,
+            Scale(tangent, (std::max)(4.0f, radius * 3.0f)));
         frame.actors.push_back(std::move(actor));
     };
 
@@ -813,6 +820,7 @@ CourseMapSceneVisualizationPipeline::BuildFrame(
         struct Cluster final {
             CourseMapSceneActorProxy actor{};
             Vector2 sum{};
+            Vector3 worldSum{};
         };
         std::unordered_map<uint64_t, std::size_t> clusterLookup;
         std::vector<Cluster> clusters;
@@ -836,17 +844,24 @@ CourseMapSceneVisualizationPipeline::BuildFrame(
                 cluster.actor.actorAssetId = "encounter_cluster";
                 cluster.actor.clusterCount = 1u;
                 cluster.sum = cluster.actor.center;
+                cluster.worldSum = cluster.actor.worldPosition;
                 clusterLookup.emplace(key, clusters.size());
                 clusters.push_back(std::move(cluster));
             } else {
                 Cluster& cluster = clusters[found->second];
                 cluster.sum = Add(cluster.sum, actor.center);
+                cluster.worldSum = Add(cluster.worldSum, actor.worldPosition);
                 ++cluster.actor.clusterCount;
             }
         }
         for (Cluster& cluster : clusters) {
             const float inverse = 1.0f / static_cast<float>(cluster.actor.clusterCount);
+            const Vector3 worldHeading = Subtract(
+                cluster.actor.worldHeadingEnd, cluster.actor.worldPosition);
             cluster.actor.center = Scale(cluster.sum, inverse);
+            cluster.actor.worldPosition = Scale(cluster.worldSum, inverse);
+            cluster.actor.worldHeadingEnd = Add(
+                cluster.actor.worldPosition, worldHeading);
             cluster.actor.radiusPixels = (std::clamp)(
                 6.0f + std::sqrt(static_cast<float>(cluster.actor.clusterCount)) * 1.8f,
                 7.0f, 18.0f);

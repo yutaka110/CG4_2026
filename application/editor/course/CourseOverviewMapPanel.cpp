@@ -85,6 +85,7 @@ const CourseMapScreenSpaceProxy* PickScreenSpaceProxy(
 
 void DrawToolbar(
     CourseOverviewMapController& controller,
+    CourseMap3DViewportController* viewport3D,
     CourseRailEditorController* rail,
     EditorSelection* selection,
     CourseOverviewMapEditTool* tool,
@@ -140,14 +141,21 @@ void DrawToolbar(
     if (multiView != nullptr) {
         const bool enabled = multiView->State().enabled;
         if (enabled) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(56, 122, 156, 255));
-        if (ImGui::Button("Multi View")) multiView->SetEnabled(!enabled);
+        if (ImGui::Button("Multi View")) {
+            multiView->SetEnabled(!enabled);
+            if (!enabled && viewport3D != nullptr) viewport3D->SetActive(false);
+        }
         if (enabled) ImGui::PopStyleColor();
         ImGui::SameLine();
     }
     const auto modeButton = [&](const char* label, CourseOverviewMapProjectionMode mode) {
-        const bool selected = controller.State().mode == mode;
+        const bool selected = (viewport3D == nullptr || !viewport3D->State().active) &&
+            controller.State().mode == mode;
         if (selected) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(55, 115, 145, 255));
-        if (ImGui::Button(label)) controller.SetMode(mode);
+        if (ImGui::Button(label)) {
+            if (viewport3D != nullptr) viewport3D->SetActive(false);
+            controller.SetMode(mode);
+        }
         if (selected) ImGui::PopStyleColor();
         ImGui::SameLine();
     };
@@ -155,9 +163,27 @@ void DrawToolbar(
     modeButton("Side", CourseOverviewMapProjectionMode::Side);
     modeButton("Rail", CourseOverviewMapProjectionMode::RailUnwrapped);
     modeButton("Free", CourseOverviewMapProjectionMode::Free);
+    if (viewport3D != nullptr) {
+        const bool selected = viewport3D->State().active;
+        if (selected) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(55, 115, 145, 255));
+        if (ImGui::Button(selected ? "Exit 3D" : "3D")) {
+            viewport3D->SetActive(!selected);
+            if (!selected && multiView != nullptr) multiView->SetEnabled(false);
+        }
+        if (selected) ImGui::PopStyleColor();
+        ImGui::SameLine();
+    }
     if (ImGui::Button("Frame All")) {
-        controller.FrameAll();
-        if (multiView != nullptr) multiView->FrameAll();
+        if (viewport3D != nullptr && viewport3D->State().active) {
+            viewport3D->FrameAll(terrainMapBake != nullptr
+                    ? terrainMapBake->CurrentAsset() : nullptr,
+                sceneVisualization != nullptr
+                    ? sceneVisualization->CurrentFrame(
+                        controller.Projection().Settings().mode) : nullptr);
+        } else {
+            controller.FrameAll();
+            if (multiView != nullptr) multiView->FrameAll();
+        }
     }
     if (tool != nullptr) {
         ImGui::Separator();
@@ -560,6 +586,99 @@ void DrawSceneVisualizationForeground(
         draw->AddText(ToIm(WithOffset(label.position, presentationOffset)),
             label.color, label.text.c_str());
     }
+}
+
+void DrawCourseMap3DFrame(
+    const CourseMap3DFrame& frame,
+    const CourseMap3DPickResult& hovered,
+    const CourseMap3DDynamicOverlay* overlay) {
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec2 minimum{frame.viewport.x, frame.viewport.y};
+    const ImVec2 maximum{frame.viewport.x + frame.viewport.width,
+        frame.viewport.y + frame.viewport.height};
+    draw->AddRectFilled(minimum, maximum, IM_COL32(8, 14, 19, 255));
+    draw->AddRect(minimum, maximum, IM_COL32(58, 93, 108, 255));
+    draw->PushClipRect(minimum, maximum, true);
+
+    for (const CourseMap3DLine& line : frame.gridLines) {
+        draw->AddLine(ToIm(line.start), ToIm(line.end),
+            line.color, line.thickness);
+    }
+    for (const CourseMap3DTriangle& triangle : frame.terrainTriangles) {
+        draw->AddTriangleFilled(ToIm(triangle.a), ToIm(triangle.b),
+            ToIm(triangle.c), triangle.color);
+    }
+    for (const CourseMap3DLine& line : frame.lines) {
+        const bool hot = hovered.hit && line.selectable &&
+            line.handle.SameObject(hovered.handle);
+        draw->AddLine(ToIm(line.start), ToIm(line.end),
+            hot ? IM_COL32(255, 255, 255, 245) : line.color,
+            line.thickness + (hot ? 2.0f : line.selected ? 1.0f : 0.0f));
+    }
+    for (const CourseMap3DMarker& marker : frame.markers) {
+        const bool hot = hovered.hit && marker.selectable &&
+            marker.handle.SameObject(hovered.handle);
+        const float radius = marker.radiusPixels + (hot ? 2.0f : 0.0f);
+        const ImVec2 point = ToIm(marker.screen);
+        if (marker.visualKind == CourseMapSceneVisualKind::SceneStructure) {
+            draw->AddRectFilled({point.x - radius, point.y - radius},
+                {point.x + radius, point.y + radius}, marker.color, 2.0f);
+        } else if (marker.visualKind == CourseMapSceneVisualKind::HeroLandmark) {
+            draw->AddQuadFilled({point.x, point.y - radius},
+                {point.x + radius, point.y}, {point.x, point.y + radius},
+                {point.x - radius, point.y}, marker.color);
+        } else if (marker.kind == CourseOverviewMapItemKind::Wave) {
+            draw->AddQuadFilled({point.x, point.y - radius},
+                {point.x + radius, point.y}, {point.x, point.y + radius},
+                {point.x - radius, point.y}, marker.color);
+        } else if (marker.kind == CourseOverviewMapItemKind::EnemyPlacement) {
+            draw->AddTriangleFilled({point.x, point.y - radius},
+                {point.x + radius, point.y + radius},
+                {point.x - radius, point.y + radius}, marker.color);
+        } else {
+            draw->AddCircleFilled(point, radius, marker.color, 18);
+        }
+        if (marker.selected || hot) {
+            draw->AddCircle(point, radius + 2.5f,
+                IM_COL32(255, 255, 255, 235), 20, 1.7f);
+        }
+        if (marker.locked) {
+            draw->AddLine({point.x - radius * 0.65f, point.y + radius * 0.65f},
+                {point.x + radius * 0.65f, point.y - radius * 0.65f},
+                IM_COL32(224, 132, 255, 235), 1.5f);
+        }
+    }
+    for (const CourseMap3DLabel& label : frame.labels) {
+        draw->AddText(ToIm(label.screen), label.color, label.text.c_str());
+    }
+    if (overlay != nullptr && overlay->valid) {
+        draw->AddLine(ToIm(overlay->heading.start), ToIm(overlay->heading.end),
+            overlay->heading.color, overlay->heading.thickness);
+        const ImVec2 center = ToIm(overlay->player.screen);
+        const float dx = overlay->heading.end.x - overlay->heading.start.x;
+        const float dy = overlay->heading.end.y - overlay->heading.start.y;
+        const float length = std::sqrt(dx * dx + dy * dy);
+        const float fx = length > 0.001f ? dx / length : 0.0f;
+        const float fy = length > 0.001f ? dy / length : -1.0f;
+        const float rx = -fy;
+        const float ry = fx;
+        const float radius = overlay->player.radiusPixels;
+        draw->AddTriangleFilled(
+            {center.x + fx * radius, center.y + fy * radius},
+            {center.x - fx * radius * 0.7f + rx * radius * 0.75f,
+                center.y - fy * radius * 0.7f + ry * radius * 0.75f},
+            {center.x - fx * radius * 0.7f - rx * radius * 0.75f,
+                center.y - fy * radius * 0.7f - ry * radius * 0.75f},
+            overlay->player.color);
+        draw->AddCircle(center, radius + 3.0f,
+            IM_COL32(220, 255, 255, 235), 20, 1.5f);
+        draw->AddText(ToIm(overlay->label.screen), overlay->label.color,
+            overlay->label.text.c_str());
+    }
+    draw->AddText({minimum.x + 9.0f, minimum.y + 7.0f},
+        IM_COL32(184, 215, 228, 235),
+        "PERSPECTIVE 3D | RMB orbit | MMB pan | Wheel dolly | F focus | Esc exit");
+    draw->PopClipRect();
 }
 
 void DrawFrame(
@@ -1091,6 +1210,12 @@ void DrawCourseOverviewMapPanel(
         ImGui::TextWrapped("%s", bindingError.c_str());
         return;
     }
+    if (context.viewport3D != nullptr && !context.viewport3D->Bind(
+            {context.rail, context.enemies, context.waves, context.selection},
+            &bindingError)) {
+        ImGui::TextWrapped("%s", bindingError.c_str());
+        return;
+    }
     if (context.editTool != nullptr) {
         context.editTool->Bind(&controller, context.rail, context.enemies,
             context.waves, context.selection, context.snapping);
@@ -1103,7 +1228,7 @@ void DrawCourseOverviewMapPanel(
             &controller, context.rail, context.selection, context.curveFit);
     }
 
-    DrawToolbar(controller, context.rail, context.selection,
+    DrawToolbar(controller, context.viewport3D, context.rail, context.selection,
         context.editTool, context.snapping, context.sketchTool,
         context.multiView, context.visualBake, context.cartographyBake,
         context.cartographyRenderer, context.terrainMapBake,
@@ -1121,6 +1246,85 @@ void DrawCourseOverviewMapPanel(
     const bool activeCanvas = ImGui::IsItemActive();
     ImGuiIO& io = ImGui::GetIO();
     const Vector2 mouse{io.MousePos.x, io.MousePos.y};
+
+    if (context.viewport3D != nullptr && context.viewport3D->State().active &&
+        !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        context.viewport3D->SetActive(false);
+    }
+    if (context.viewport3D != nullptr && context.viewport3D->State().active) {
+        CourseMap3DViewportController& viewport3D = *context.viewport3D;
+        if (context.sketchTool != nullptr && context.sketchTool->State().drawing) {
+            context.sketchTool->Cancel(
+                "Rail Sketch cancelled when the 3D viewport took input ownership.");
+        }
+        if (context.editTool != nullptr && context.editTool->State().dragging) {
+            context.editTool->Cancel(
+                "Overview drag cancelled when the 3D viewport took input ownership.");
+        }
+
+        const CourseTerrainMapAsset* terrain = nullptr;
+        if (context.terrainMapBake != nullptr && context.terrainSettings != nullptr) {
+            context.terrainMapBake->Ensure(MakeTerrainMapBakeInput(context));
+            terrain = context.terrainMapBake->CurrentAsset();
+        }
+        viewport3D.SetViewport({origin.x, origin.y, available.x, available.y});
+        const bool orbiting = activeCanvas &&
+            ImGui::IsMouseDown(ImGuiMouseButton_Right);
+        const bool panning = activeCanvas &&
+            ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+        if (orbiting) {
+            viewport3D.Orbit({io.MouseDelta.x, io.MouseDelta.y});
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        } else if (panning) {
+            viewport3D.Pan({io.MouseDelta.x, io.MouseDelta.y});
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+        }
+        if (hoveredCanvas && io.MouseWheel != 0.0f) {
+            viewport3D.Dolly(io.MouseWheel);
+        }
+        const bool focusGesture = hoveredCanvas && !io.WantTextInput &&
+            (ImGui::IsKeyPressed(ImGuiKey_F) ||
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left));
+        if (focusGesture) viewport3D.FrameSelected();
+
+        const CourseMapSceneVisualizationFrame* semanticScene = nullptr;
+        controller.SetViewport({origin.x, origin.y, available.x, available.y});
+        controller.Rebuild(context.courseDistance, nullptr);
+        if (context.sceneVisualization != nullptr && controller.Frame().valid) {
+            semanticScene = &context.sceneVisualization->Build(
+                MakeSceneVisualizationInput(context, controller.Projection(),
+                    {true, true, true}));
+        }
+        viewport3D.Rebuild(terrain, semanticScene);
+        const float playheadDistance = context.preview != nullptr &&
+                context.preview->HasSnapshot()
+            ? context.preview->Frame().distance : context.courseDistance;
+        viewport3D.UpdatePlayhead(playheadDistance);
+        CourseMap3DPickResult hot{};
+        if (hoveredCanvas && !orbiting && !panning) {
+            hot = viewport3D.HoverAt(mouse);
+        }
+        if (hoveredCanvas && !focusGesture &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            hot = viewport3D.SelectAt(mouse, io.KeyCtrl, io.KeyAlt, io.KeyShift);
+            viewport3D.Rebuild(terrain, semanticScene);
+        }
+        if (viewport3D.Frame().valid) {
+            DrawCourseMap3DFrame(viewport3D.Frame(), hot,
+                &viewport3D.DynamicOverlay());
+        } else {
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            draw->AddRectFilled(origin, {origin.x + available.x, origin.y + available.y},
+                IM_COL32(8, 14, 19, 255));
+            draw->AddText({origin.x + 12.0f, origin.y + 12.0f},
+                IM_COL32(255, 170, 110, 255), viewport3D.State().message.c_str());
+        }
+        if (hot.hit && hoveredCanvas) {
+            ImGui::SetTooltip("%s\nRay distance: %.2f",
+                hot.handle.displayName.c_str(), hot.rayDistance);
+        }
+        return;
+    }
 
     if (context.multiView != nullptr && context.elevationProfile != nullptr &&
         context.multiView->State().enabled) {

@@ -5143,6 +5143,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         context.courseWaveEditorController,
         &editorSelection_,
         context.coursePreviewSimulationSystem,
+        &courseMap3DViewportController_,
         &courseOverviewMapEditTool_,
         &courseOverviewMapDragDropBridge_,
         &courseOverviewMapSnapService_,

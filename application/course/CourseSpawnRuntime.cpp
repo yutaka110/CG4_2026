@@ -60,6 +60,28 @@ void CourseSpawnRuntime::Reset() {
     nextActorId_ = 1;
 }
 
+CourseSpawnRuntimeCheckpoint CourseSpawnRuntime::CaptureCheckpoint() const {
+    CourseSpawnRuntimeCheckpoint checkpoint{};
+    checkpoint.enemies = enemies_;
+    checkpoint.bullets = bullets_;
+    checkpoint.obstacles = obstacles_;
+    checkpoint.nextActorId = nextActorId_;
+    return checkpoint;
+}
+
+void CourseSpawnRuntime::RestoreCheckpoint(
+    const CourseSpawnRuntimeCheckpoint& checkpoint,
+    bool restoreProjectiles) {
+    enemies_ = checkpoint.enemies;
+    bullets_ = restoreProjectiles
+        ? checkpoint.bullets
+        : std::vector<CourseBulletActor>{};
+    obstacles_ = checkpoint.obstacles;
+    vfxCues_.clear();
+    fireSafetyStats_ = {};
+    nextActorId_ = (std::max)(1u, checkpoint.nextActorId);
+}
+
 void CourseSpawnRuntime::Update(float deltaTime) {
     CourseEnemyFireSafetyFrameInput safetyInput{};
     safetyInput.deltaTime = deltaTime;

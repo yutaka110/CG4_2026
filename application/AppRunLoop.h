@@ -30,6 +30,11 @@
 #include "course/CourseEventDispatcher.h"
 #include "course/CourseGameplayWaveRuntimeBridge.h"
 #include "course/CourseRuntimeProgramAsset.h"
+#include "course/GameSessionSystem.h"
+#include "course/GameSessionPresentationBridge.h"
+#include "course/GameSessionRetryCoordinator.h"
+#include "course/RailDodgeSystem.h"
+#include "course/RailPlayerMovementSystem.h"
 #include "course/EnemyAttackTelegraphSystem.h"
 #include "course/EnemyAttackTelegraphFeedbackBridge.h"
 #include "course/EncounterDirector.h"
@@ -218,6 +223,8 @@ private:
         float deltaTime,
         bool gameplayActive);
     void StopRailEnemyAttackFeedback();
+    void DispatchGameSessionPresentation(const AppGamepadFrame& gamepad);
+    void StopGameSessionPresentation();
     bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
@@ -261,6 +268,12 @@ private:
     CourseRuntime railShooterCourseRuntime_;
     CourseCollisionSystem railShooterCollisionSystem_;
     SectionCheckpointSystem railShooterCheckpointSystem_;
+    GameSessionSystem railShooterGameSession_{};
+    GameSessionPresentationBridge railShooterSessionPresentation_{};
+    GameSessionPresentationSettings railShooterSessionPresentationSettings_{};
+    GameSessionRetryCoordinator railShooterRetryCoordinator_{};
+    RailPlayerMovementSystem railShooterPlayerMovement_{};
+    RailDodgeSystem railShooterPlayerDodge_{};
     PlayerCombatFeelSystem railShooterCombatFeelSystem_;
     CourseEventDispatcher railShooterEventDispatcher_;
     EncounterDirector railShooterEncounterDirector_;
@@ -277,7 +290,14 @@ private:
     audio::SoundHandle railTelegraphAcquiredSound_{};
     audio::SoundHandle railTelegraphImminentSound_{};
     audio::SoundHandle railTelegraphFiredSound_{};
+    audio::SoundHandle railSessionStartSound_{};
+    audio::SoundHandle railSessionCheckpointSound_{};
+    audio::SoundHandle railSessionDamageSound_{};
+    audio::SoundHandle railSessionVictorySound_{};
+    audio::SoundHandle railSessionDefeatSound_{};
+    audio::SoundHandle railSessionRetrySound_{};
     uint32_t railTelegraphVibrationController_ = UINT32_MAX;
+    uint32_t railSessionVibrationController_ = UINT32_MAX;
     RailLockOnSystem railShooterLockOnSystem_;
     RailAimAssistPresetRegistry railAimAssistPresetRegistry_{};
     struct RailHudAtlasVertex {
