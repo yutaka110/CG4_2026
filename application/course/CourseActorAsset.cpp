@@ -59,6 +59,51 @@ bool CourseActorAsset::LoadFromFile(const std::string& path, std::string* errorM
             }
         } else if (parts[0] == "movement") {
             loaded.forwardSpeed = ParseFloatOr(parts, 1, loaded.forwardSpeed);
+        } else if (parts[0] == "behavior") {
+            EnemyBehaviorArchetype archetype = EnemyBehaviorArchetype::Assault;
+            if (parts.size() < 2 ||
+                !TryParseEnemyBehaviorArchetype(parts[1], archetype)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid behavior archetype at line " +
+                        std::to_string(lineNumber);
+                }
+                return false;
+            }
+            loaded.behaviorDefinition =
+                EnemyBehaviorDefinition::Commercial(archetype);
+            loaded.behaviorDefinition.definitionId =
+                loaded.id.empty() ? "actor_behavior" : loaded.id + "_behavior";
+            loaded.behaviorDefinition.entryDurationSeconds = ParseFloatOr(
+                parts, 2, loaded.behaviorDefinition.entryDurationSeconds);
+            loaded.behaviorDefinition.positioningDurationSeconds = ParseFloatOr(
+                parts, 3, loaded.behaviorDefinition.positioningDurationSeconds);
+            loaded.behaviorDefinition.aimingDurationSeconds = ParseFloatOr(
+                parts, 4, loaded.behaviorDefinition.aimingDurationSeconds);
+            loaded.behaviorDefinition.attackLeadSeconds = ParseFloatOr(
+                parts, 5, loaded.behaviorDefinition.attackLeadSeconds);
+            loaded.behaviorDefinition.attackCooldownSeconds = ParseFloatOr(
+                parts, 6, loaded.behaviorDefinition.attackCooldownSeconds);
+            loaded.behaviorDefinition.evadeDurationSeconds = ParseFloatOr(
+                parts, 7, loaded.behaviorDefinition.evadeDurationSeconds);
+            loaded.behaviorDefinition.repositionDurationSeconds = ParseFloatOr(
+                parts, 8, loaded.behaviorDefinition.repositionDurationSeconds);
+            loaded.behaviorDefinition.lateralAmplitude = ParseFloatOr(
+                parts, 9, loaded.behaviorDefinition.lateralAmplitude);
+            loaded.behaviorDefinition.verticalAmplitude = ParseFloatOr(
+                parts, 10, loaded.behaviorDefinition.verticalAmplitude);
+            loaded.behaviorDefinition.movementFrequency = ParseFloatOr(
+                parts, 11, loaded.behaviorDefinition.movementFrequency);
+            loaded.behaviorDefinition.requireTelegraphPresentation = ParseBoolOr(
+                parts, 12,
+                loaded.behaviorDefinition.requireTelegraphPresentation);
+            std::string behaviorError;
+            if (!loaded.behaviorDefinition.Validate(&behaviorError)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid behavior row at line " +
+                        std::to_string(lineNumber) + ": " + behaviorError;
+                }
+                return false;
+            }
         } else if (errorMessage != nullptr) {
             *errorMessage = "Unknown actor asset row at line " + std::to_string(lineNumber) + ": " + parts[0];
             return false;

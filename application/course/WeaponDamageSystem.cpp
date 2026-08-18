@@ -113,12 +113,27 @@ DamageResult CourseActorDamageReceiver::Apply(
                 continue;
             }
             result.targetResolved = true;
-            if (enemy.desc.hitPoints <= 0.0f) {
+            const float currentHitPoints = enemy.combatState.initialized
+                ? enemy.combatState.currentHitPoints
+                : enemy.desc.hitPoints;
+            if (currentHitPoints <= 0.0f) {
                 result.rejectReason = DamageRejectReason::TargetAlreadyDestroyed;
                 result.remainingHitPoints = 0.0f;
                 return result;
             }
-            ApplyHitPoints(enemy.desc.hitPoints, result);
+            if (enemy.combatState.initialized &&
+                !enemy.combatState.canReceiveDamage) {
+                result.rejectReason = DamageRejectReason::TargetNotDamageable;
+                result.hitPointsBefore = currentHitPoints;
+                result.remainingHitPoints = currentHitPoints;
+                return result;
+            }
+            if (enemy.combatState.initialized) {
+                ApplyHitPoints(enemy.combatState.currentHitPoints, result);
+                enemy.desc.hitPoints = enemy.combatState.currentHitPoints;
+            } else {
+                ApplyHitPoints(enemy.desc.hitPoints, result);
+            }
             return result;
         }
         result.rejectReason = DamageRejectReason::TargetNotFound;
@@ -187,6 +202,7 @@ const char* ToDamageRejectReasonString(DamageRejectReason reason) {
     case DamageRejectReason::UnsupportedHitKind: return "Unsupported Hit Kind";
     case DamageRejectReason::TargetNotFound: return "Target Not Found";
     case DamageRejectReason::TargetAlreadyDestroyed: return "Target Already Destroyed";
+    case DamageRejectReason::TargetNotDamageable: return "Target Not Damageable";
     case DamageRejectReason::Indestructible: return "Indestructible";
     }
     return "Unknown";

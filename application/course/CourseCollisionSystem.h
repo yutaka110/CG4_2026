@@ -6,6 +6,9 @@
 #include "../terrain/RailPath.h"
 #include "CourseAsset.h"
 #include "CourseSpawnRuntime.h"
+#include "PlayerDamageSystem.h"
+#include "PlayerHitboxSystem.h"
+#include "PlayerNearMissSystem.h"
 #include "RailAimState.h"
 #include "WeaponDamageSystem.h"
 #include "WeaponDefinitionRegistry.h"
@@ -18,7 +21,9 @@ struct CourseCollisionPlayerState {
     float verticalOffset = 4.0f;
     float radius = 1.6f;
     float hitPoints = 100.0f;
+    float maximumHitPoints = 100.0f;
     float invulnerabilityTime = 0.0f;
+    bool dodgeActive = false;
 };
 
 struct CourseCollisionWeaponState {
@@ -52,6 +57,8 @@ struct CourseCollisionFrameInput {
 struct CourseCollisionFrameStats {
     uint32_t enemyBulletHits = 0;
     uint32_t obstacleHits = 0;
+    uint32_t playerHitsRejected = 0;
+    uint32_t playerNearMisses = 0;
     uint32_t playerShotsFired = 0;
     uint32_t playerShotWorldHits = 0;
     uint32_t playerShotEnemyHits = 0;
@@ -65,13 +72,38 @@ class CourseCollisionSystem {
 public:
     CourseCollisionSystem();
     void Reset();
-    void SynchronizePlayerHitPoints(float hitPoints);
+    void SynchronizePlayerHitPoints(
+        float hitPoints,
+        float maximumHitPoints = 100.0f);
     CourseCollisionFrameStats Update(CourseSpawnRuntime& runtime, const CourseCollisionFrameInput& input);
     void AppendDebugDraw(ge3::debug::DebugDrawSystem& debugDraw, const RailPath& railPath) const;
 
     const CourseCollisionPlayerState& Player() const { return player_; }
     const CourseCollisionWeaponState& Weapon() const { return weapon_; }
     const CourseCollisionFrameStats& LastFrameStats() const { return lastFrameStats_; }
+    const PlayerDamageSystem& PlayerDamage() const noexcept {
+        return playerDamageSystem_;
+    }
+    PlayerDamageSystem& PlayerDamage() noexcept { return playerDamageSystem_; }
+    const std::vector<PlayerDamageResult>& PlayerDamageResults() const noexcept {
+        return playerDamageSystem_.ResultsThisFrame();
+    }
+    const PlayerDamageResult& LastPlayerDamageResult() const noexcept {
+        return playerDamageSystem_.LastResult();
+    }
+    const PlayerHitboxSystem& PlayerHitbox() const noexcept {
+        return playerHitboxSystem_;
+    }
+    PlayerHitboxSystem& PlayerHitbox() noexcept { return playerHitboxSystem_; }
+    const PlayerNearMissSystem& PlayerNearMiss() const noexcept {
+        return playerNearMissSystem_;
+    }
+    PlayerNearMissSystem& PlayerNearMiss() noexcept {
+        return playerNearMissSystem_;
+    }
+    const std::vector<PlayerNearMissResult>& PlayerNearMissResults() const noexcept {
+        return playerNearMissSystem_.ResultsThisFrame();
+    }
     bool LastShotVisible() const { return lastShotVisible_; }
     float LastShotDistance() const { return lastShotDistance_; }
     float LastShotLateralOffset() const { return lastShotLateralOffset_; }
@@ -112,11 +144,15 @@ private:
         CourseSpawnRuntime& runtime,
         const CourseCollisionFrameInput& input,
         const WeaponShot& shot);
+    PlayerDamageResult SubmitPlayerHit(const PlayerHitRequest& request);
     void LogFrameStats(const CourseCollisionFrameStats& stats) const;
 
     CourseCollisionPlayerState player_{};
     CourseCollisionWeaponState weapon_{};
     CourseCollisionFrameStats lastFrameStats_{};
+    PlayerDamageSystem playerDamageSystem_{};
+    PlayerHitboxSystem playerHitboxSystem_{};
+    PlayerNearMissSystem playerNearMissSystem_{};
     float lastShotDistance_ = 0.0f;
     float lastShotLateralOffset_ = 0.0f;
     float lastShotVerticalOffset_ = 0.0f;

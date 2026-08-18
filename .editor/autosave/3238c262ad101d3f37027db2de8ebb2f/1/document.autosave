@@ -67,7 +67,7 @@ section|2100.000|2380.000|Final Gate|Finale
 # Layered course terrain: gameplay collision, hero landmarks, and vista background.
 terrain|15.000|hero_landmark|intro_left_silhouette_wall|curved_canyon_wall|-48.000|11.000|72.000|9.000|26.000|30.000|0.000|16.000|-7.000|none|12|80.000|260.000|2d6369e9ab380c5bc13a6d34986319ab|1|0
 terrain|40.000|vista_background|intro_far_hole_wall_left|vista_hole_wall|46.000|58.000|980.000|58.000|46.000|5.000|0.000|10.000|2.000|none|0|260.000|820.000|53bd9fee62bafe1cf7c1476ec85b902c|1|0
-terrain|55.000|hero_landmark|intro_right_silhouette_wall|curved_canyon_wall|50.000|12.000|105.000|8.000|24.000|32.000|0.000|-14.000|6.000|none|12|90.000|280.000|7c050a2de61385168f6a8e7c8eca8926|1|0
+terrain|55.000|hero_landmark|intro_right_silhouette_wall|curved_canyon_wall|52.240|21.280|105.000|8.000|24.000|32.000|0.000|-14.000|6.000|none|12|90.000|280.000|7c050a2de61385168f6a8e7c8eca8926|1|0
 terrain|115.000|hero_landmark|intro_organic_arch_gate|organic_arch_large|0.000|38.000|330.000|34.000|52.000|7.000|0.000|0.000|0.000|none|20|220.000|640.000|8407fb57ea6855d6fd60fa56c7809ae6|1|0
 terrain|155.000|vista_background|intro_mist_spire_stack|root_spire_column|12.000|62.000|1060.000|36.000|72.000|6.000|0.000|-8.000|-3.000|none|0|260.000|860.000|cc90d58f752a9d15e051d803661391c5|1|0
 terrain|430.000|hero_landmark|crossfire_left_curved_wall|curved_canyon_wall|-32.000|10.000|70.000|7.000|18.000|18.000|0.000|12.000|-8.000|none|10|140.000|180.000|33a013dc651040981b20a20928b24148|1|0

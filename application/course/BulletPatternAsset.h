@@ -8,6 +8,7 @@
 struct BulletPatternAsset {
     std::string id;
     std::string displayName;
+    std::string projectileDefinitionId;
     CourseEnemyFirePattern firePattern = CourseEnemyFirePattern::Single;
     int bulletCount = 1;
     float lateralSpreadSpeed = 0.0f;

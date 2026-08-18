@@ -3,6 +3,7 @@
 #include <string>
 
 #include "utils/math/Vector.h"
+#include "EnemyBehaviorSystem.h"
 
 struct CourseActorAsset {
     std::string id;
@@ -17,6 +18,7 @@ struct CourseActorAsset {
     float firstShotDelay = 0.35f;
     float bulletSpeed = 48.0f;
     Vector4 color{1.0f, 0.25f, 0.18f, 1.0f};
+    EnemyBehaviorDefinition behaviorDefinition{};
 
     bool LoadFromFile(const std::string& path, std::string* errorMessage = nullptr);
 };

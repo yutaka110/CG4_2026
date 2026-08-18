@@ -29,6 +29,8 @@ struct RailLockOnFrameInput {
     float aimRayMaxDistance = 120.0f;
     bool gamepadConnected = false;
     Vector2 gamepadAim{};
+    bool keyboardDirectionalAimEnabled = true;
+    bool shiftLockEnabled = true;
     bool aimAssistEnabled = true;
 };
 

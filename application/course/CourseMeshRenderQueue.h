@@ -14,6 +14,7 @@
 #include "utils/math/Vector.h"
 
 class CourseSpawnRuntime;
+class EnemyCombatPresentationBridge;
 
 struct CourseMeshModelBinding {
     std::string name;
@@ -47,6 +48,9 @@ struct CourseMeshRenderItem {
     bool visible = false;
     Microsoft::WRL::ComPtr<ID3D12Resource> transformResource;
     TransformationMatrix* transformData = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12Resource> materialResource;
+    Material* materialData = nullptr;
+    bool useMaterialOverride = false;
 };
 
 class CourseMeshRenderQueue {
@@ -60,7 +64,8 @@ public:
         const RailPath& railPath,
         std::span<const CourseMeshModelBinding> models,
         const Matrix4x4& viewMatrix,
-        const Matrix4x4& projMatrix);
+        const Matrix4x4& projMatrix,
+        const EnemyCombatPresentationBridge* enemyPresentation = nullptr);
 
     const std::vector<CourseMeshRenderItem>& Items() const { return items_; }
     size_t Capacity() const { return items_.size(); }
@@ -71,7 +76,8 @@ private:
         const CourseSpawnRuntime& runtime,
         const RailPath& railPath,
         std::span<const CourseMeshModelBinding> models,
-        const Matrix4x4& viewProjection);
+        const Matrix4x4& viewProjection,
+        const EnemyCombatPresentationBridge* enemyPresentation);
     void AddCourseDebrisInstances(
         const CourseAsset& course,
         float currentDistance,

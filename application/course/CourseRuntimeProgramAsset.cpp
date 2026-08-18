@@ -104,12 +104,109 @@ bool ReadVector4(BinaryReader& reader, Vector4& value) {
         reader.F32(value.z) && reader.F32(value.w);
 }
 
+void WriteBehaviorDefinition(
+    BinaryWriter& writer,
+    const EnemyBehaviorDefinition& value) {
+    writer.String(value.definitionId);
+    writer.U8(static_cast<uint8_t>(value.archetype));
+    writer.F32(value.entryDurationSeconds);
+    writer.F32(value.positioningDurationSeconds);
+    writer.F32(value.aimingDurationSeconds);
+    writer.F32(value.attackLeadSeconds);
+    writer.F32(value.attackCooldownSeconds);
+    writer.F32(value.evadeDurationSeconds);
+    writer.F32(value.repositionDurationSeconds);
+    writer.F32(value.lateralAmplitude);
+    writer.F32(value.verticalAmplitude);
+    writer.F32(value.movementFrequency);
+    writer.F32(value.forwardMotionScale);
+    writer.F32(value.maximumBankRadians);
+    writer.Bool(value.commercialBehavior);
+    writer.Bool(value.movementEnabled);
+    writer.Bool(value.requireTelegraphPresentation);
+}
+
+bool ReadBehaviorDefinition(
+    BinaryReader& reader,
+    EnemyBehaviorDefinition& value) {
+    uint8_t archetype = 0;
+    if (!reader.String(value.definitionId) || !reader.U8(archetype) ||
+        archetype > static_cast<uint8_t>(EnemyBehaviorArchetype::Boss) ||
+        !reader.F32(value.entryDurationSeconds) ||
+        !reader.F32(value.positioningDurationSeconds) ||
+        !reader.F32(value.aimingDurationSeconds) ||
+        !reader.F32(value.attackLeadSeconds) ||
+        !reader.F32(value.attackCooldownSeconds) ||
+        !reader.F32(value.evadeDurationSeconds) ||
+        !reader.F32(value.repositionDurationSeconds) ||
+        !reader.F32(value.lateralAmplitude) ||
+        !reader.F32(value.verticalAmplitude) ||
+        !reader.F32(value.movementFrequency) ||
+        !reader.F32(value.forwardMotionScale) ||
+        !reader.F32(value.maximumBankRadians) ||
+        !reader.Bool(value.commercialBehavior) ||
+        !reader.Bool(value.movementEnabled) ||
+        !reader.Bool(value.requireTelegraphPresentation)) {
+        return false;
+    }
+    value.archetype = static_cast<EnemyBehaviorArchetype>(archetype);
+    return value.definitionId.empty() || value.Validate(nullptr);
+}
+
+void WriteProjectileDefinition(
+    BinaryWriter& writer,
+    const EnemyProjectileDefinitionAsset& value) {
+    writer.String(value.id);
+    writer.String(value.displayName);
+    writer.U8(static_cast<uint8_t>(value.trajectory));
+    writer.F32(value.initialSpeed);
+    writer.F32(value.acceleration);
+    writer.F32(value.maximumSpeed);
+    writer.F32(value.homingTurnRateRadians);
+    writer.F32(value.predictionScale);
+    writer.F32(value.maximumPredictionSeconds);
+    writer.F32(value.arcGravity);
+    writer.F32(value.radius);
+    writer.F32(value.lifetime);
+    writer.F32(value.damage);
+    WriteVector4(writer, value.color);
+    writer.String(value.trailEffectId);
+    writer.String(value.impactEffectId);
+}
+
+bool ReadProjectileDefinition(
+    BinaryReader& reader,
+    EnemyProjectileDefinitionAsset& value) {
+    uint8_t trajectory = 0;
+    if (!reader.String(value.id) || !reader.String(value.displayName) ||
+        !reader.U8(trajectory) ||
+        trajectory > static_cast<uint8_t>(EnemyProjectileTrajectory::Arc) ||
+        !reader.F32(value.initialSpeed) ||
+        !reader.F32(value.acceleration) ||
+        !reader.F32(value.maximumSpeed) ||
+        !reader.F32(value.homingTurnRateRadians) ||
+        !reader.F32(value.predictionScale) ||
+        !reader.F32(value.maximumPredictionSeconds) ||
+        !reader.F32(value.arcGravity) ||
+        !reader.F32(value.radius) ||
+        !reader.F32(value.lifetime) ||
+        !reader.F32(value.damage) ||
+        !ReadVector4(reader, value.color) ||
+        !reader.String(value.trailEffectId) ||
+        !reader.String(value.impactEffectId)) {
+        return false;
+    }
+    value.trajectory = static_cast<EnemyProjectileTrajectory>(trajectory);
+    return value.id.empty() || value.Validate(nullptr);
+}
+
 void WriteActorDesc(BinaryWriter& writer, const CourseEnemyActorDesc& value) {
     writer.String(value.waveId);
     writer.String(value.sourcePlacementGuid);
     writer.String(value.actorAssetId);
     writer.String(value.meshId);
     writer.String(value.bulletPatternId);
+    writer.String(value.projectileDefinitionId);
     writer.String(value.role);
     writer.F32(value.spawnDistance);
     writer.F32(value.distanceOffset);
@@ -129,10 +226,12 @@ void WriteActorDesc(BinaryWriter& writer, const CourseEnemyActorDesc& value) {
     writer.F32(value.bulletLifetime);
     writer.F32(value.bulletDamage);
     WriteVector4(writer, value.bulletColor);
+    WriteProjectileDefinition(writer, value.projectileDefinition);
     writer.U32(static_cast<uint32_t>(value.firePattern));
     WriteVector4(writer, value.color);
     WriteVector3(writer, value.localRotation);
     WriteVector3(writer, value.localScale);
+    WriteBehaviorDefinition(writer, value.behaviorDefinition);
     writer.Bool(value.previewOnly);
     writer.Bool(value.suppressFire);
 }
@@ -145,6 +244,7 @@ bool ReadActorDesc(BinaryReader& reader, CourseEnemyActorDesc& value) {
         !reader.String(value.actorAssetId) ||
         !reader.String(value.meshId) ||
         !reader.String(value.bulletPatternId) ||
+        !reader.String(value.projectileDefinitionId) ||
         !reader.String(value.role) ||
         !reader.F32(value.spawnDistance) ||
         !reader.F32(value.distanceOffset) ||
@@ -164,10 +264,12 @@ bool ReadActorDesc(BinaryReader& reader, CourseEnemyActorDesc& value) {
         !reader.F32(value.bulletLifetime) ||
         !reader.F32(value.bulletDamage) ||
         !ReadVector4(reader, value.bulletColor) ||
+        !ReadProjectileDefinition(reader, value.projectileDefinition) ||
         !reader.U32(firePattern) ||
         !ReadVector4(reader, value.color) ||
         !ReadVector3(reader, value.localRotation) ||
         !ReadVector3(reader, value.localScale) ||
+        !ReadBehaviorDefinition(reader, value.behaviorDefinition) ||
         !reader.Bool(value.previewOnly) ||
         !reader.Bool(value.suppressFire)) {
         return false;
@@ -258,6 +360,14 @@ bool CourseRuntimeProgramAsset::Validate(std::string* errorMessage) const {
             !std::isfinite(actor.actor.radius) || actor.actor.radius <= 0.0f ||
             !std::isfinite(actor.actor.hitPoints) || actor.actor.hitPoints <= 0.0f) {
             return fail("Course runtime program contains invalid Actor transform or combat data.");
+        }
+        if (!actor.actor.behaviorDefinition.definitionId.empty() &&
+            !actor.actor.behaviorDefinition.Validate(nullptr)) {
+            return fail("Course runtime program contains invalid Actor behavior data.");
+        }
+        if (!actor.actor.projectileDefinition.id.empty() &&
+            !actor.actor.projectileDefinition.Validate(nullptr)) {
+            return fail("Course runtime program contains invalid Actor projectile data.");
         }
     }
     return true;
@@ -367,7 +477,7 @@ bool CourseRuntimeProgramAsset::LoadFromString(
     for (auto& dependency : loaded.dependencies) {
         uint8_t kind = 0;
         if (!reader.U8(kind) ||
-            kind > static_cast<uint8_t>(CourseRuntimeDependencyKind::BulletPattern) ||
+            kind > static_cast<uint8_t>(CourseRuntimeDependencyKind::EnemyProjectile) ||
             !reader.String(dependency.id) ||
             !reader.String(dependency.sourcePath) ||
             !reader.U64(dependency.contentHash)) {
@@ -519,6 +629,7 @@ const char* ToString(CourseRuntimeDependencyKind kind) {
     switch (kind) {
     case CourseRuntimeDependencyKind::ActorAsset: return "ActorAsset";
     case CourseRuntimeDependencyKind::BulletPattern: return "BulletPattern";
+    case CourseRuntimeDependencyKind::EnemyProjectile: return "EnemyProjectile";
     }
     return "Unknown";
 }

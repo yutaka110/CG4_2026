@@ -97,7 +97,9 @@ bool CourseGameplayWaveRuntimeBridge::NotifyEnemyDefeated(
     }
     actorPhases_[actorIndex] = CourseGameplayActorPhase::Defeated;
     for (CourseEnemyActor& actor : runtime_->MutableEnemies()) {
-        if (actor.desc.sourcePlacementGuid == placementGuid) actor.desc.hitPoints = 0.0f;
+        if (actor.desc.sourcePlacementGuid == placementGuid) {
+            runtime_->EnemyCombat().ForceDefeat(*runtime_, actor.actorId);
+        }
     }
     runtime_->PruneDestroyedActors();
     PushEvent(CourseGameplayWaveEventType::ActorDefeated,
@@ -205,7 +207,10 @@ void CourseGameplayWaveRuntimeBridge::ReconcileDefeatedActors() {
                 return actor.desc.sourcePlacementGuid == record.placementGuid;
             });
         const bool defeated = found != runtime_->Enemies().end() &&
-            found->desc.hitPoints <= 0.0f;
+            (found->desc.hitPoints <= 0.0f ||
+             (found->combatState.initialized &&
+              (found->combatState.phase == EnemyCombatPhase::Dying ||
+               found->combatState.phase == EnemyCombatPhase::Retired)));
         const bool missing = found == runtime_->Enemies().end() &&
             settings_.detectMissingActiveActorsAsDefeated;
         if (defeated || missing) {

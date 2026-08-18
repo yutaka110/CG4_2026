@@ -17,6 +17,12 @@ struct RailReticleFrameInput {
     // Runtime Win32 input remains the fallback when this is false.
     bool hasLockHeldOverride = false;
     bool lockHeldOverride = false;
+    // Input ownership flags allow the host game to reserve keyboard movement
+    // keys and Shift for player flight without changing reusable editor/tests.
+    bool keyboardDirectionalAimEnabled = true;
+    bool hasKeyboardAimOverride = false;
+    Vector2 keyboardAimOverride{};
+    bool shiftLockEnabled = true;
     bool gamepadConnected = false;
     Vector2 gamepadAim{};
     float aimFrictionScale = 1.0f;

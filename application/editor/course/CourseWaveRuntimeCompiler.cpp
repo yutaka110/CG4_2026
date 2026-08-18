@@ -62,10 +62,12 @@ void ApplyActorAsset(CourseEnemyActorDesc& actor, const CourseActorAsset& asset)
     actor.firstShotDelay = asset.firstShotDelay;
     actor.bulletSpeed = asset.bulletSpeed;
     actor.color = asset.color;
+    actor.behaviorDefinition = asset.behaviorDefinition;
 }
 
 void ApplyBulletPattern(CourseEnemyActorDesc& actor, const BulletPatternAsset& asset) {
     actor.bulletPatternId = asset.id;
+    actor.projectileDefinitionId = asset.projectileDefinitionId;
     actor.firePattern = asset.firePattern;
     actor.bulletCount = (std::max)(1, asset.bulletCount);
     actor.bulletLateralSpreadSpeed = asset.lateralSpreadSpeed;
@@ -237,6 +239,26 @@ CourseWaveRuntimeCompileResult CourseWaveRuntimeCompiler::Compile(
             std::string patternError;
             if (ResolveBulletPattern(patternId, options, pattern, patternError)) {
                 ApplyBulletPattern(compiled.actor, pattern);
+                if (!pattern.projectileDefinitionId.empty()) {
+                    EnemyProjectileDefinitionAsset projectile{};
+                    std::string projectileError;
+                    if (ResolveProjectileDefinition(
+                            pattern.projectileDefinitionId,
+                            options,
+                            projectile,
+                            projectileError)) {
+                        compiled.actor.projectileDefinitionId = projectile.id;
+                        compiled.actor.projectileDefinition = std::move(projectile);
+                    } else {
+                        AddDiagnostic(result,
+                            CourseWaveRuntimeDiagnosticSeverity::Warning,
+                            "actor.projectile_fallback",
+                            placement.editorGuid,
+                            projectileError.empty()
+                                ? "Projectile definition could not be resolved; runtime-safe fallback selected."
+                                : projectileError);
+                    }
+                }
             } else {
                 AddDiagnostic(result, CourseWaveRuntimeDiagnosticSeverity::Warning,
                     "actor.pattern_fallback", placement.editorGuid,
@@ -284,6 +306,11 @@ CourseWaveRuntimeCompileResult CourseWaveRuntimeCompiler::Compile(
         HashValue(fingerprint, actor.actor.bulletSpeed);
         HashValue(fingerprint, actor.actor.bulletCount);
         HashValue(fingerprint, actor.actor.bulletDamage);
+        HashString(fingerprint, actor.actor.projectileDefinitionId);
+        HashValue(fingerprint, actor.actor.projectileDefinition.trajectory);
+        HashValue(fingerprint, actor.actor.projectileDefinition.initialSpeed);
+        HashValue(fingerprint, actor.actor.projectileDefinition.maximumSpeed);
+        HashValue(fingerprint, actor.actor.projectileDefinition.homingTurnRateRadians);
         HashValue(fingerprint, actor.actor.color);
         HashValue(fingerprint, actor.authoredRotation);
         HashValue(fingerprint, actor.authoredScale);
@@ -329,6 +356,21 @@ bool CourseWaveRuntimeCompiler::ResolveBulletPattern(
     const std::filesystem::path path =
         std::filesystem::path(options.bulletPatternDirectory) /
         (std::string(id) + ".pattern");
+    return asset.LoadFromFile(path.generic_string(), &errorMessage);
+}
+
+bool CourseWaveRuntimeCompiler::ResolveProjectileDefinition(
+    std::string_view id,
+    const CourseWaveRuntimeCompileOptions& options,
+    EnemyProjectileDefinitionAsset& asset,
+    std::string& errorMessage) {
+    if (id.empty()) return false;
+    if (options.projectileDefinitionResolver) {
+        return options.projectileDefinitionResolver(id, asset, errorMessage);
+    }
+    const std::filesystem::path path =
+        std::filesystem::path(options.projectileDefinitionDirectory) /
+        (std::string(id) + ".projectile");
     return asset.LoadFromFile(path.generic_string(), &errorMessage);
 }
 

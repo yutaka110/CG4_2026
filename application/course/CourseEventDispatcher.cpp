@@ -318,12 +318,36 @@ void CourseEventDispatcher::ApplyActorAsset(CourseEnemyActorDesc& desc, const Co
     desc.firstShotDelay = asset.firstShotDelay;
     desc.bulletSpeed = asset.bulletSpeed;
     desc.color = asset.color;
+    desc.behaviorDefinition = asset.behaviorDefinition;
+}
+
+const EnemyProjectileDefinitionAsset*
+CourseEventDispatcher::LoadProjectileDefinitionAsset(const std::string& id) {
+    if (id.empty()) return nullptr;
+    const auto cached = projectileDefinitionAssetCache_.find(id);
+    if (cached != projectileDefinitionAssetCache_.end()) {
+        return cached->second.id.empty() ? nullptr : &cached->second;
+    }
+    EnemyProjectileDefinitionAsset asset{};
+    std::string error;
+    const std::string path =
+        "Resources/courses/projectiles/" + id + ".projectile";
+    if (!asset.LoadFromFile(path, &error)) {
+        projectileDefinitionAssetCache_[id] = {};
+        OutputDebugStringA(("[CourseEventDispatcher] " + error + "\n").c_str());
+        return nullptr;
+    }
+    auto [it, inserted] =
+        projectileDefinitionAssetCache_.emplace(id, std::move(asset));
+    (void)inserted;
+    return &it->second;
 }
 
 void CourseEventDispatcher::ApplyBulletPatternAsset(
     CourseEnemyActorDesc& desc,
     const BulletPatternAsset& asset) {
     desc.bulletPatternId = asset.id;
+    desc.projectileDefinitionId = asset.projectileDefinitionId;
     desc.firePattern = asset.firePattern;
     desc.bulletCount = asset.bulletCount > 0
         ? asset.bulletCount
@@ -334,6 +358,11 @@ void CourseEventDispatcher::ApplyBulletPatternAsset(
     desc.bulletLifetime = asset.bulletLifetime;
     desc.bulletDamage = asset.damage;
     desc.bulletColor = asset.color;
+    if (const EnemyProjectileDefinitionAsset* projectile =
+            LoadProjectileDefinitionAsset(asset.projectileDefinitionId)) {
+        desc.projectileDefinition = *projectile;
+        desc.projectileDefinitionId = projectile->id;
+    }
 }
 
 void CourseEventDispatcher::SpawnEnemyWave(

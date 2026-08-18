@@ -19,6 +19,9 @@
 #include "utils/math/Vector.h"
 #include "utils/dx12/BufferHelper.h"
 #include "ModelLoaderAssimp.h"
+
+struct RailVehicleRenderFrame;
+class EnemyCombatPresentationBridge;
 struct SphereMeshData {
     Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource;
     D3D12_VERTEX_BUFFER_VIEW vbv{};
@@ -201,6 +204,7 @@ struct AppModelObjectInstance {
 // Kept public so the CPU regression suite can verify the exact procedural asset
 // that is uploaded by AppSceneResources.
 [[nodiscard]] ModelData BuildTrainingSwordModelDataForSubmission();
+[[nodiscard]] ModelData BuildRailVehicleModelDataForSubmission();
 
 class AppSceneResources {
 public:
@@ -250,6 +254,9 @@ public:
     [[nodiscard]] uint32_t TrainingSwordModelIndex() const noexcept {
         return trainingSwordModelIndex;
     }
+    [[nodiscard]] uint32_t RailVehicleModelIndex() const noexcept {
+        return railVehicleModelIndex;
+    }
     [[nodiscard]] const AppModelObjectInstance& WeaponAttachmentObject() const noexcept {
         return weaponAttachmentObject;
     }
@@ -259,12 +266,20 @@ public:
         const Matrix4x4& projMatrix);
     const std::vector<AppManagedModelResource>& ManagedModelLibrary() const { return vfxModelLibrary; }
     const std::vector<AppModelObjectInstance>& ModelObjectInstances() const { return vfxModelObjects; }
+    const AppModelObjectInstance& RailVehicleObject() const noexcept {
+        return railVehicleObject;
+    }
     const CourseMeshRenderQueue& CourseMeshes() const { return courseMeshRenderQueue; }
     void SyncCourseMeshRenderQueue(
         const CourseSpawnRuntime& courseRuntime,
         const CourseAsset* course,
         float currentDistance,
         const RailPath& railPath,
+        const Matrix4x4& viewMatrix,
+        const Matrix4x4& projMatrix,
+        const EnemyCombatPresentationBridge* enemyPresentation = nullptr);
+    void SyncRailVehicleRenderFrame(
+        const RailVehicleRenderFrame& frame,
         const Matrix4x4& viewMatrix,
         const Matrix4x4& projMatrix);
 
@@ -363,7 +378,9 @@ public:
     std::vector<AppManagedModelResource> vfxModelLibrary;
     std::vector<AppModelObjectInstance> vfxModelObjects;
     uint32_t trainingSwordModelIndex = UINT32_MAX;
+    uint32_t railVehicleModelIndex = UINT32_MAX;
     AppModelObjectInstance weaponAttachmentObject{};
+    AppModelObjectInstance railVehicleObject{};
     CourseMeshRenderQueue courseMeshRenderQueue;
 
     // Sphere

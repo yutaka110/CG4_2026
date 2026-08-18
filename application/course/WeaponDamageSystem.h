@@ -23,6 +23,7 @@ enum class DamageRejectReason : uint8_t {
     UnsupportedHitKind,
     TargetNotFound,
     TargetAlreadyDestroyed,
+    TargetNotDamageable,
     Indestructible,
 };
 

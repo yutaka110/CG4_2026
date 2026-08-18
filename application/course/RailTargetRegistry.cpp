@@ -133,6 +133,11 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
     }
 
     for (const CourseEnemyActor& enemy : input.spawnRuntime->Enemies()) {
+        if (enemy.desc.hitPoints <= 0.0f ||
+            (enemy.combatState.initialized &&
+             !enemy.combatState.canBeTargeted)) {
+            continue;
+        }
         const float distance = EnemyDistance(enemy);
         RailLockAnchor anchor{};
         anchor.target.kind = RailLockTargetKind::Enemy;

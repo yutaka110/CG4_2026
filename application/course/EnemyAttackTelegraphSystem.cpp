@@ -235,7 +235,9 @@ void EnemyAttackTelegraphSystem::Update(
     candidates.reserve(input.spawnRuntime->Enemies().size());
 
     for (const CourseEnemyActor& enemy : input.spawnRuntime->Enemies()) {
-        if (enemy.actorId == 0 || enemy.desc.hitPoints <= 0.0f) {
+        if (enemy.actorId == 0 || enemy.desc.hitPoints <= 0.0f ||
+            (enemy.combatState.initialized &&
+             !enemy.combatState.canTelegraph)) {
             continue;
         }
         ++frame_.stats.activeEnemies;
@@ -258,9 +260,21 @@ void EnemyAttackTelegraphSystem::Update(
                 0.01f, input.settings.firedFlashSeconds);
         }
         tracked.lastFireSequence = enemy.fireSequence;
+        const bool firedFlash = tracked.firedFlashRemaining > 0.0f;
 
         const bool warming = IsVisibilityWarmup(enemy);
-        float timeToFire = (std::max)(0.0f, enemy.fireTimer);
+        const bool behaviorDriven = enemy.behaviorState.initialized &&
+            enemy.behaviorDefinition.commercialBehavior;
+        if (behaviorDriven && !firedFlash &&
+            (!enemy.behaviorState.attackIntentActive ||
+             !enemy.attackState.tokenReserved ||
+             enemy.attackState.intentSequence !=
+                enemy.behaviorState.attackIntentSequence)) {
+            continue;
+        }
+        float timeToFire = behaviorDriven
+            ? (std::max)(0.0f, enemy.behaviorState.attackTimeRemaining)
+            : (std::max)(0.0f, enemy.fireTimer);
         if (warming) {
             const float remainingWarmup = (std::max)(
                 0.0f,
@@ -268,9 +282,10 @@ void EnemyAttackTelegraphSystem::Update(
                     enemy.fireVisibleTime);
             timeToFire = (std::max)(timeToFire, remainingWarmup);
         }
-        const bool countdownReadable = enemy.fireSafetyAllowed || warming ||
-            !input.spawnRuntime->FireSafetySettings().enabled;
-        const bool firedFlash = tracked.firedFlashRemaining > 0.0f;
+        const bool countdownReadable = behaviorDriven
+            ? enemy.behaviorState.attackIntentActive
+            : enemy.fireSafetyAllowed || warming ||
+                !input.spawnRuntime->FireSafetySettings().enabled;
         if (!firedFlash &&
             (!countdownReadable || timeToFire > leadSeconds)) {
             continue;
@@ -279,6 +294,25 @@ void EnemyAttackTelegraphSystem::Update(
         EnemyAttackTelegraphCue cue{};
         cue.actorId = enemy.actorId;
         cue.fireSequence = enemy.fireSequence;
+        cue.attackIntentSequence = behaviorDriven
+            ? enemy.behaviorState.attackIntentSequence
+            : 0;
+        cue.attackTokenId = behaviorDriven
+            ? enemy.attackState.tokenId
+            : 0;
+        if (behaviorDriven && enemy.targetingState.solutionLocked &&
+            enemy.targetingState.attackIntentSequence ==
+                enemy.attackState.intentSequence &&
+            enemy.targetingState.attackTokenId == enemy.attackState.tokenId) {
+            cue.targetRailDistance = enemy.targetingState.targetDistance;
+            cue.targetLateralOffset =
+                enemy.targetingState.targetLateralOffset;
+            cue.targetVerticalOffset =
+                enemy.targetingState.targetVerticalOffset;
+            cue.predictedFlightSeconds =
+                enemy.targetingState.predictedFlightSeconds;
+            cue.hasLockedTarget = true;
+        }
         cue.attackPattern = enemy.desc.firePattern;
         cue.worldPosition = EnemyWorldPosition(enemy, *input.railPath);
         cue.timeToFire = timeToFire;

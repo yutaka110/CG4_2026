@@ -256,9 +256,26 @@
 #include "../course/GameSessionRetryCoordinator.h"
 #include "../course/RailDodgeSystem.h"
 #include "../course/RailPlayerMovementSystem.h"
+#include "../course/RailPlayerVehicleMountSystem.h"
+#include "../course/RailVehicleMovementSystem.h"
+#include "../course/RailVehiclePresentationBridge.h"
+#include "../course/RailVehicleActor.h"
+#include "../course/RailVehicleRenderer.h"
+#include "../course/RailVehicleAudioBridge.h"
+#include "../course/EnemyCombatSystem.h"
+#include "../course/EnemyCombatPresentationBridge.h"
+#include "../course/EnemyProjectilePresentationBridge.h"
+#include "../course/EnemyProjectileRenderer.h"
+#include "../course/EnemyProjectileAudioBridge.h"
+#include "../course/GrazeScoreSystem.h"
+#include "../course/ThreatResponseDirector.h"
+#include "../course/EnemyBehaviorSystem.h"
 #include "../course/EnemyAttackTelegraphFeedbackBridge.h"
 #include "../course/EnemyAttackTelegraphSystem.h"
 #include "../course/PlayerCombatFeelSystem.h"
+#include "../course/PlayerDamagePresentationBridge.h"
+#include "../course/PlayerHitboxSystem.h"
+#include "../course/PlayerNearMissSystem.h"
 #include "../course/AimInputDeviceRouter.h"
 #include "../course/RailAimAssistPresetRegistry.h"
 #include "../course/RailAimAssistSystem.h"
@@ -18271,11 +18288,17 @@ void TestGameSessionPresentationAndRetry(RegressionRunner& runner) {
     sections.Reset(&course, 0.0f);
     RailPlayerMovementSystem playerMovement;
     RailDodgeSystem playerDodge;
+    RailPath retryRail;
+    retryRail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 30.0f},
+        {{0.0f, 0.0f, 100.0f}, 18.0f, 30.0f}});
+    RailVehicleMovementSystem railVehicle;
+    railVehicle.Reset(20.0f, 12.0f, &retryRail);
     GameSessionRetryCoordinator coordinator;
     runner.Expect(
         coordinator.Bind(
             {&session, &courseRuntime, &waveRuntime, &spawn, &collision, &sections,
-             &course, &playerMovement, &playerDodge},
+             &course, &playerMovement, &playerDodge, &railVehicle, &retryRail},
             &error) &&
             coordinator.CaptureCheckpoint(20.0f, "retry_section", &error),
         "retry coordinator should atomically capture Session, Spawn and Wave state");
@@ -18289,6 +18312,7 @@ void TestGameSessionPresentationAndRetry(RegressionRunner& runner) {
     activeDodge.dodgePressed = true;
     activeDodge.directionX = -1.0f;
     playerDodge.Update(activeDodge);
+    railVehicle.Reset(70.0f, 30.0f, &retryRail);
     waveRuntime.NotifyEnemyDefeated("retry-actor");
     waveRuntime.Update({0.0f, 90.0f, {}});
     spawn.MutableObstacles().clear();
@@ -18312,9 +18336,16 @@ void TestGameSessionPresentationAndRetry(RegressionRunner& runner) {
             spawn.ActiveObstacleCount() == 1 &&
             spawn.ActiveBulletCount() == 0 &&
             collision.Player().hitPoints == session.State().playerHealth &&
+            collision.PlayerDamage().State().initialized &&
+            collision.PlayerDamage().State().consumedProjectileIds.empty() &&
+            collision.PlayerDamage().State().invulnerabilityRemainingSeconds == 0.0f &&
+            !collision.PlayerHitbox().State().initialized &&
+            collision.PlayerNearMiss().State().processedProjectileIds.empty() &&
             std::abs(playerMovement.State().lateralOffset) < 0.001f &&
-            playerDodge.State().phase == RailDodgePhase::Ready,
-        "retry should restore Course/Wave/Spawn/player/collision state and clear hostile projectiles as one recovery transaction");
+            playerDodge.State().phase == RailDodgePhase::Ready &&
+            std::abs(railVehicle.State().distance - 20.0f) < 0.001f &&
+            std::abs(railVehicle.State().speed - 12.0f) < 0.001f,
+        "retry should restore Course/Wave/Spawn/player/vehicle/collision state and clear hostile projectiles as one recovery transaction");
 
     presentationInput.state = &session.State();
     presentation.Update(presentationInput);
@@ -18328,6 +18359,104 @@ void TestGameSessionPresentationAndRetry(RegressionRunner& runner) {
                     return cue.kind == GameSessionPresentationCueKind::Retry;
                 }),
         "successful coordinated retry should publish one RETRY presentation cue");
+}
+
+void TestPlayerDamageAuthorityAndPresentation(RegressionRunner& runner) {
+    PlayerDamageSystem damage;
+    std::string error;
+    runner.Expect(
+        damage.Initialize(100.0f, 100.0f, &error),
+        "player damage authority should initialize from session health");
+
+    PlayerHitRequest projectileHit{};
+    projectileHit.kind = PlayerHitKind::EnemyProjectile;
+    projectileHit.sourceActorId = 42;
+    projectileHit.sourceProjectileId = 501;
+    projectileHit.attackIntentSequence = 17;
+    projectileHit.attackTokenId = 29;
+    projectileHit.sourceId = "regression_predictive_projectile";
+    projectileHit.impactEffectId = "regression_player_impact";
+    projectileHit.rawDamage = 28.0f;
+    projectileHit.postHitInvulnerabilitySeconds = 0.65f;
+    projectileHit.railDistance = 40.0f;
+    projectileHit.lateralOffset = 2.0f;
+    projectileHit.verticalOffset = 4.0f;
+
+    damage.Update(0.0f, 0.25f);
+    const PlayerDamageResult dodged = damage.Submit(projectileHit);
+    runner.Expect(
+        !dodged.accepted &&
+            dodged.rejectReason == PlayerDamageRejectReason::Invulnerable &&
+            !dodged.projectileConsumed &&
+            std::abs(damage.State().hitPoints - 100.0f) < 0.0001f,
+        "Dodge invulnerability should reject damage without consuming the hostile projectile");
+
+    damage.Update(0.26f, 0.0f);
+    const PlayerDamageResult accepted = damage.Submit(projectileHit);
+    runner.Expect(
+        accepted.accepted && accepted.appliedDamage == 28.0f &&
+            accepted.hitPointsBefore == 100.0f &&
+            accepted.hitPointsAfter == 72.0f &&
+            accepted.projectileConsumed && !accepted.lethal &&
+            accepted.request.sourceActorId == 42 &&
+            accepted.request.attackTokenId == 29,
+        "accepted projectile damage should preserve source identity and become the only authoritative HP transition");
+
+    const PlayerDamageResult duplicate = damage.Submit(projectileHit);
+    runner.Expect(
+        !duplicate.accepted &&
+            duplicate.rejectReason ==
+                PlayerDamageRejectReason::DuplicateProjectile &&
+            duplicate.projectileConsumed &&
+            damage.State().acceptedHits == 1,
+        "the same Projectile ID should never damage the player twice");
+
+    PlayerHitRequest secondProjectile = projectileHit;
+    secondProjectile.sourceProjectileId = 502;
+    const PlayerDamageResult hitIFrame = damage.Submit(secondProjectile);
+    runner.Expect(
+        !hitIFrame.accepted &&
+            hitIFrame.rejectReason == PlayerDamageRejectReason::Invulnerable &&
+            !hitIFrame.projectileConsumed,
+        "post-hit invulnerability should keep a different projectile alive instead of silently consuming it");
+
+    const PlayerDamageRuntimeState checkpoint = damage.CaptureCheckpoint();
+    damage.Update(0.66f, 0.0f);
+    PlayerHitRequest lethalHit = secondProjectile;
+    lethalHit.rawDamage = 200.0f;
+    const PlayerDamageResult lethal = damage.Submit(lethalHit);
+    runner.Expect(
+        lethal.accepted && lethal.lethal && lethal.appliedDamage == 72.0f &&
+            lethal.hitPointsAfter == 0.0f,
+        "damage authority should clamp overkill and explicitly report the lethal transition");
+    runner.Expect(
+        damage.RestoreCheckpoint(checkpoint, &error) &&
+            damage.State().hitPoints == 72.0f &&
+            damage.State().invulnerabilityRemainingSeconds > 0.0f &&
+            damage.State().consumedProjectileIds.size() == 1,
+        "player damage state should restore health, i-frames and duplicate-hit history atomically");
+
+    PlayerDamagePresentationBridge presentation;
+    const std::array<PlayerDamageResult, 2> presentationResults{
+        accepted,
+        lethal};
+    PlayerDamagePresentationInput presentationInput{};
+    presentationInput.results = presentationResults;
+    presentationInput.deltaTime = 1.0f / 60.0f;
+    presentationInput.gameplayActive = true;
+    presentation.Update(presentationInput);
+    runner.Expect(
+        presentation.Frame().acceptedHits == 2 &&
+            presentation.Frame().audioCues.size() == 2 &&
+            presentation.Frame().vfxCommands.size() == 2 &&
+            presentation.Frame().lethal &&
+            presentation.Frame().screenFlashIntensity > 0.9f &&
+            presentation.Frame().cameraShake >=
+                presentation.Settings().lethalCameraShake &&
+            presentation.Frame().hapticRemainingSeconds > 0.0f &&
+            presentation.Frame().vfxCommands.back().effectId ==
+                lethal.request.impactEffectId,
+        "PlayerDamagePresentationBridge should derive HUD flash, camera, haptic, audio and VFX from DamageResult only");
 }
 
 void TestRailPlayerMovementAndDodge(RegressionRunner& runner) {
@@ -18412,8 +18541,208 @@ void TestRailPlayerMovementAndDodge(RegressionRunner& runner) {
         collision.Update(collisionRuntime, collisionInput);
     runner.Expect(
         protectedFrame.playerDamage == 0.0f &&
-            collisionRuntime.ActiveBulletCount() == 1,
+            protectedFrame.playerHitsRejected == 1 &&
+            collisionRuntime.ActiveBulletCount() == 1 &&
+            collision.LastPlayerDamageResult().rejectReason ==
+                PlayerDamageRejectReason::Invulnerable,
         "collision system should honor authoritative dodge invulnerability without consuming the hostile projectile");
+
+    RailReticleController ownedReticle;
+    RailReticleFrameInput reticleInput{};
+    reticleInput.deltaTime = 0.10f;
+    reticleInput.viewportWidth = 800;
+    reticleInput.viewportHeight = 600;
+    reticleInput.hasCursorPosition = true;
+    reticleInput.cursorPosition = {400.0f, 300.0f};
+    reticleInput.hasKeyboardAimOverride = true;
+    reticleInput.keyboardAimOverride = {1.0f, 0.0f};
+    reticleInput.keyboardDirectionalAimEnabled = false;
+    ownedReticle.Update(reticleInput);
+    const float movementOwnedX = ownedReticle.State().currentScreenPosition.x;
+    ownedReticle.Update(reticleInput);
+    runner.Expect(
+        std::abs(ownedReticle.State().currentScreenPosition.x - movementOwnedX) < 0.001f,
+        "movement-owned keyboard directions must not move the gameplay reticle");
+    reticleInput.keyboardDirectionalAimEnabled = true;
+    ownedReticle.Update(reticleInput);
+    runner.Expect(
+        ownedReticle.State().currentScreenPosition.x > movementOwnedX,
+        "reusable reticle controller should still support explicitly owned keyboard aim");
+}
+
+void TestRailVehicleMovementAndPresentation(RegressionRunner& runner) {
+    std::string error;
+    RailVehicleDefinition definition = RailVehicleDefinition::MineCartDefaults();
+    RailVehicleMovementSystem vehicle;
+    runner.Expect(
+        vehicle.Initialize(definition, &error),
+        "mine-cart vehicle definition should validate and initialize");
+
+    RailPath rail;
+    rail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 3.0f, 60.0f}, 18.0f, 32.0f},
+        {{24.0f, 8.0f, 120.0f}, 18.0f, 28.0f}});
+    CourseAsset course{};
+    course.name = "Vehicle Regression Course";
+    CourseRuntime runtime;
+    runtime.Bind(&course);
+    vehicle.Reset(0.0f, 0.0f, &rail);
+
+    RailVehicleMovementInput input{};
+    input.deltaTime = 1.0f / 60.0f;
+    input.requestedSpeed = 32.0f;
+    input.courseRuntime = &runtime;
+    input.railPath = &rail;
+    for (int frame = 0; frame < 60; ++frame) vehicle.Update(input);
+    const RailVehicleRuntimeState checkpoint = vehicle.State();
+    runner.Expect(
+        checkpoint.distance > 1.0f && checkpoint.speed > 1.0f &&
+            checkpoint.speed <= checkpoint.safeSpeed + 0.001f &&
+            checkpoint.normalizedProgress > 0.0f &&
+            checkpoint.playerMountPosition.y > checkpoint.position.y - 0.001f &&
+            checkpoint.weaponMountPosition.z != checkpoint.position.z,
+        "vehicle movement should own clamped CourseRuntime progress, curve-safe speed and gameplay mounts");
+
+    RailPlayerMovementSystem mountedPlayerMovement;
+    RailPlayerVehicleMountSystem mountSystem;
+    RailPlayerMovementInput mountedMovementInput{};
+    mountedMovementInput.deltaTime = 1.0f / 60.0f;
+    mountedMovementInput.moveX = 1.0f;
+    mountedMovementInput.moveY = 1.0f;
+    mountedMovementInput.externalLateralDisplacement = 5.0f;
+    mountedMovementInput.externalVerticalDisplacement = 5.0f;
+    RailPlayerVehicleMountInput mountInput{};
+    mountInput.vehicleDefinition = &vehicle.Definition();
+    mountInput.vehicleState = &vehicle.State();
+    mountInput.playerMovement = &mountedPlayerMovement;
+    mountInput.movementInput = mountedMovementInput;
+    mountInput.occupantMounted = true;
+    const uint64_t parkedMovementRevision = mountedPlayerMovement.State().revision;
+    const RailPlayerVehicleMountFrame mountedFrame = mountSystem.Update(mountInput);
+    mountSystem.Update(mountInput);
+    runner.Expect(
+        vehicle.Definition().mountedMovementMode ==
+                RailVehicleMountedMovementMode::VehicleMounted &&
+            mountedFrame.state.playerMovementSuppressed &&
+            !mountedFrame.playerMovementUpdated &&
+            mountedPlayerMovement.State().revision == parkedMovementRevision &&
+            std::abs(mountedFrame.railLateralOffset -
+                     vehicle.Definition().mounts.player.x) < 0.001f &&
+            std::abs(mountedFrame.railVerticalOffset -
+                     (vehicle.Definition().bodyVerticalOffset +
+                      vehicle.Definition().mounts.player.y)) < 0.001f &&
+            std::abs(mountedFrame.playerWorldPosition.x -
+                     vehicle.State().playerMountPosition.x) < 0.001f &&
+            mountSystem.State().transitionIndex == 1,
+        "VehicleMounted mode should keep the vehicle mount authoritative and never tick free player movement");
+
+    RailVehicleDefinition freeOffsetDefinition = vehicle.Definition();
+    freeOffsetDefinition.mountedMovementMode =
+        RailVehicleMountedMovementMode::FreeOffset;
+    mountInput.vehicleDefinition = &freeOffsetDefinition;
+    const RailPlayerVehicleMountFrame freeOffsetFrame = mountSystem.Update(mountInput);
+    runner.Expect(
+        freeOffsetFrame.playerMovementUpdated &&
+            !freeOffsetFrame.state.playerMovementSuppressed &&
+            mountedPlayerMovement.State().revision > parkedMovementRevision &&
+            freeOffsetFrame.railLateralOffset >
+                freeOffsetDefinition.mounts.player.x &&
+            mountSystem.State().transitionIndex == 2,
+        "FreeOffset mode should resume the existing player movement system without replacing vehicle rail authority");
+
+    RailVehicleDefinition invalidMovementModeDefinition = vehicle.Definition();
+    invalidMovementModeDefinition.mountedMovementMode =
+        static_cast<RailVehicleMountedMovementMode>(255);
+    runner.Expect(
+        !invalidMovementModeDefinition.Validate(&error),
+        "vehicle definition validation should reject unknown mounted movement modes");
+
+    RailVehiclePresentationBridge presentation;
+    RailVehiclePresentationInput presentationInput{};
+    presentationInput.definition = &vehicle.Definition();
+    presentationInput.state = &vehicle.State();
+    presentationInput.deltaTime = 1.0f / 60.0f;
+    presentation.Update(presentationInput);
+    const float firstWheelRotation = presentation.Frame().wheelRotationRadians;
+    for (int frame = 0; frame < 12; ++frame) vehicle.Update(input);
+    presentationInput.state = &vehicle.State();
+    presentation.Update(presentationInput);
+    runner.Expect(
+        presentation.Frame().visible &&
+            presentation.Frame().rollingAudioVolume > 0.0f &&
+            presentation.Frame().rollingAudioPitch > 0.8f &&
+            std::abs(presentation.Frame().wheelRotationRadians - firstWheelRotation) > 0.001f &&
+            presentation.Frame().sourceVehicleRevision == vehicle.State().revision,
+        "vehicle presentation should derive wheel, suspension and audio output without mutating gameplay state");
+
+    RailVehicleActor actor;
+    RailVehicleActorInput actorInput{};
+    actorInput.vehicleDefinition = &vehicle.Definition();
+    actorInput.vehicleState = &vehicle.State();
+    actorInput.presentation = &presentation.Frame();
+    actor.Update(actorInput);
+    RailVehicleRenderer renderer;
+    RailVehicleRenderInput renderInput{};
+    renderInput.actor = &actor.Frame();
+    renderInput.cameraWorldPosition = actor.Frame().cameraMountPosition;
+    renderer.Update(renderInput);
+    runner.Expect(
+        actor.Frame().active && actor.Frame().visible &&
+            actor.Frame().actorId != 0 &&
+            actor.Frame().sourceVehicleRevision == vehicle.State().revision &&
+            renderer.Frame().visible &&
+            renderer.Frame().meshId == "rail_vehicle.mine_cart" &&
+            renderer.Frame().sourceActorRevision == actor.Frame().revision,
+        "vehicle actor and renderer should publish a culled production-mesh proxy from presentation state");
+
+    RailVehicleAudioBridge vehicleAudio;
+    RailVehicleAudioInput audioInput{};
+    audioInput.actor = &actor.Frame();
+    audioInput.presentation = &presentation.Frame();
+    audioInput.listenerPosition = actor.Frame().cameraMountPosition;
+    audioInput.listenerRight = actor.Frame().right;
+    audioInput.deltaTime = 0.25f;
+    vehicleAudio.Update(audioInput);
+    runner.Expect(
+        vehicleAudio.Frame().rolling &&
+            vehicleAudio.Frame().cueCount > 0 &&
+            vehicleAudio.Frame().cues[0].volume > 0.0f &&
+            vehicleAudio.Frame().sourceActorRevision == actor.Frame().revision,
+        "vehicle audio bridge should emit bounded spatial rolling cues without owning gameplay state");
+
+    const ModelData cartModel = BuildRailVehicleModelDataForSubmission();
+    runner.Expect(
+        !cartModel.vertices.empty() && !cartModel.indices.empty() &&
+            cartModel.materials.size() == 3 && cartModel.subMeshes.size() == 3 &&
+            ValidateModelDataMaterialLayout(cartModel) &&
+            ValidateModelGeometryOrientation(cartModel),
+        "packaged rail vehicle fallback should be validated multi-material production geometry");
+
+    input.emergencyBrake = true;
+    const RailVehicleMovementFrame emergencyFrame = vehicle.Update(input);
+    runner.Expect(
+        emergencyFrame.beganEmergencyBrakeThisFrame &&
+            emergencyFrame.state.acceleration < 0.0f &&
+            emergencyFrame.state.speed < checkpoint.speed + 8.0f,
+        "vehicle movement should expose a typed emergency-brake transition and bounded deceleration");
+
+    runner.Expect(
+        vehicle.RestoreState(checkpoint, &rail, &error) &&
+            std::abs(vehicle.State().distance - checkpoint.distance) < 0.001f &&
+            std::abs(vehicle.State().speed - checkpoint.speed) < 0.001f,
+        "vehicle runtime should restore deterministically from a retry checkpoint");
+
+    runtime.Reset(rail.Length() - 0.05f);
+    vehicle.Reset(rail.Length() - 0.05f, 20.0f, &rail);
+    input.emergencyBrake = false;
+    input.deltaTime = 0.1f;
+    const RailVehicleMovementFrame endFrame = vehicle.Update(input);
+    runner.Expect(
+        endFrame.reachedCourseEndThisFrame && endFrame.state.atCourseEnd &&
+            endFrame.state.stopped &&
+            std::abs(endFrame.state.distance - rail.Length()) < 0.001f,
+        "vehicle should stop at the clamped course end instead of looping");
 }
 
 void TestRailWorldRaycast(RegressionRunner& runner) {
@@ -18785,6 +19114,1022 @@ void TestWeaponDamageReception(RegressionRunner& runner) {
             invalid.rejectReason == DamageRejectReason::InvalidRequest &&
             receiver.ProcessedRequestCount() == 3,
         "invalid weapon hit requests should be rejected before entering idempotency history");
+}
+
+void TestEnemyCombatStateMachine(RegressionRunner& runner) {
+    CourseSpawnRuntime runtime;
+    runtime.MutableFireSafetySettings().enabled = false;
+
+    CourseEnemyActorDesc enemy{};
+    enemy.actorAssetId = "regression_commercial_drone";
+    enemy.sourcePlacementGuid = "regression-placement-enemy-combat";
+    enemy.waveId = "regression-wave-enemy-combat";
+    enemy.hitPoints = 20.0f;
+    enemy.firstShotDelay = 0.20f;
+    enemy.fireInterval = 0.80f;
+    enemy.lifetime = 8.0f;
+    enemy.behaviorDefinition = EnemyBehaviorDefinition::LegacyDirect();
+    runtime.SpawnEnemyActor(enemy);
+
+    const CourseEnemyActor& spawned = runtime.Enemies().front();
+    runner.Expect(
+        spawned.combatDefinition.commercialStateMachine &&
+            spawned.combatState.phase == EnemyCombatPhase::Spawning &&
+            !spawned.combatState.canBeTargeted &&
+            !spawned.combatState.canReceiveDamage &&
+            !spawned.combatState.canFire,
+        "production ActorAssets should enter the authoritative commercial spawn phase with closed combat gates");
+
+    runtime.Update(0.35f);
+    runner.Expect(
+        runtime.Enemies().front().combatState.phase == EnemyCombatPhase::Engaging &&
+            runtime.Enemies().front().combatState.canBeTargeted &&
+            !runtime.Enemies().front().combatState.canFire,
+        "spawn completion should expose the enemy for targeting while retaining an engagement grace window");
+
+    runtime.Update(0.19f);
+    runner.Expect(
+        runtime.Enemies().front().combatState.phase == EnemyCombatPhase::Telegraphing &&
+            runtime.Enemies().front().combatState.canTelegraph &&
+            runtime.Enemies().front().combatState.canFire,
+        "engagement completion should enter the telegraph phase and open the authoritative fire gate");
+
+    runtime.Update(0.46f);
+    runner.Expect(
+        runtime.Enemies().front().fireSequence == 1 &&
+            runtime.Enemies().front().bulletsEmittedThisFrame > 0,
+        "the existing projectile runtime should fire only after the combat state opens the telegraph gate");
+    runtime.Update(0.01f);
+    runner.Expect(
+        runtime.Enemies().front().combatState.phase == EnemyCombatPhase::Attacking &&
+            !runtime.Enemies().front().combatState.canFire,
+        "observed projectile emission should commit the state machine to its attack phase");
+
+    runtime.EnemyCombat().ConsumeEvents();
+    CourseCollisionSystem collision;
+    const uint32_t actorId = runtime.Enemies().front().actorId;
+    auto requestFor = [actorId](uint64_t shotId, float damage) {
+        WeaponHitRequest request{};
+        request.shotId = shotId;
+        request.targetActorId = actorId;
+        request.hitKind = RailAimHitKind::Enemy;
+        request.damageType = WeaponDamageType::Energy;
+        request.rayOrigin = {0.0f, 0.0f, 0.0f};
+        request.rayDirection = {0.0f, 0.0f, 1.0f};
+        request.hitPoint = {0.0f, 0.0f, 10.0f};
+        request.hitNormal = {0.0f, 0.0f, -1.0f};
+        request.hitDistance = 10.0f;
+        request.baseDamage = damage;
+        return request;
+    };
+
+    const DamageResult normal = collision.ApplyWeaponHit(
+        runtime, nullptr, requestFor(7101, 5.0f));
+    const std::vector<EnemyCombatEvent> hitEvents =
+        runtime.EnemyCombat().ConsumeEvents();
+    runner.Expect(
+        normal.damageApplied && !normal.destroyed &&
+            runtime.Enemies().front().combatState.phase == EnemyCombatPhase::HitReact &&
+            std::abs(runtime.Enemies().front().combatState.currentHitPoints - 15.0f) < 0.001f &&
+            std::any_of(hitEvents.begin(), hitEvents.end(), [](const EnemyCombatEvent& event) {
+                return event.kind == EnemyCombatEventKind::HitReacted &&
+                    event.feedbackKind == HitFeedbackKind::NormalHit &&
+                    event.shotId == 7101;
+            }),
+        "DamageResult and WeaponFeedback should drive one actor-ID hit reaction event from the authoritative HP state");
+
+    const DamageResult lethal = collision.ApplyWeaponHit(
+        runtime, nullptr, requestFor(7102, 50.0f));
+    const std::vector<EnemyCombatEvent> defeatEvents =
+        runtime.EnemyCombat().ConsumeEvents();
+    runner.Expect(
+        lethal.destroyed &&
+            runtime.Enemies().front().combatState.phase == EnemyCombatPhase::Dying &&
+            !runtime.Enemies().front().combatState.canBeTargeted &&
+            std::any_of(defeatEvents.begin(), defeatEvents.end(), [](const EnemyCombatEvent& event) {
+                return event.kind == EnemyCombatEventKind::Defeated &&
+                    event.feedbackKind == HitFeedbackKind::Destroyed &&
+                    event.placementGuid == "regression-placement-enemy-combat";
+            }),
+        "a lethal DamageResult should publish the placement-stable defeat event consumed by Wave runtime");
+
+    runtime.PruneDestroyedActors();
+    runner.Expect(
+        runtime.ActiveEnemyCount() == 1,
+        "defeated commercial enemies should remain present for their authored death presentation window");
+    runtime.Update(0.47f);
+    runner.Expect(
+        runtime.ActiveEnemyCount() == 0,
+        "death presentation completion should retire and prune the enemy deterministically");
+}
+
+void TestEnemyBehaviorSystem(RegressionRunner& runner) {
+    constexpr uint32_t kWidth = 1000;
+    constexpr uint32_t kHeight = 600;
+    RailPath rail;
+    rail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 180.0f}, 18.0f, 32.0f}});
+    CourseSpawnRuntime runtime;
+    runtime.MutableFireSafetySettings().enabled = false;
+    CourseEnemyActorDesc enemy{};
+    enemy.actorAssetId = "regression_interceptor";
+    enemy.sourcePlacementGuid = "behavior-placement";
+    enemy.waveId = "behavior-wave";
+    enemy.spawnDistance = 75.0f;
+    enemy.firstShotDelay = 0.02f;
+    enemy.fireInterval = 0.30f;
+    enemy.hitPoints = 30.0f;
+    enemy.combatDefinition = EnemyCombatDefinition::CommercialStandard();
+    enemy.combatDefinition.spawnDurationSeconds = 0.0f;
+    enemy.combatDefinition.engageDurationSeconds = 0.0f;
+    enemy.combatDefinition.telegraphLeadSeconds = 0.20f;
+    enemy.behaviorDefinition = EnemyBehaviorDefinition::Commercial(
+        EnemyBehaviorArchetype::Interceptor);
+    enemy.behaviorDefinition.definitionId = "regression_interceptor_behavior";
+    enemy.behaviorDefinition.entryDurationSeconds = 0.01f;
+    enemy.behaviorDefinition.positioningDurationSeconds = 0.01f;
+    enemy.behaviorDefinition.aimingDurationSeconds = 0.01f;
+    enemy.behaviorDefinition.attackLeadSeconds = 0.20f;
+    enemy.behaviorDefinition.attackCooldownSeconds = 0.30f;
+    runtime.SpawnEnemyActor(enemy);
+
+    runtime.Update(0.02f);
+    runtime.Update(0.02f);
+    runtime.Update(0.02f);
+    const CourseEnemyActor& requesting = runtime.Enemies().front();
+    const uint64_t intentSequence =
+        requesting.behaviorState.attackIntentSequence;
+    const std::vector<EnemyBehaviorEvent> requestEvents =
+        runtime.EnemyBehavior().ConsumeEvents();
+    runner.Expect(
+        requesting.behaviorDefinition.archetype ==
+            EnemyBehaviorArchetype::Interceptor &&
+            requesting.behaviorState.state ==
+                EnemyBehaviorState::RequestingAttack &&
+            requesting.behaviorState.attackIntentActive &&
+            intentSequence > 0 &&
+            runtime.EnemyBehavior().Frame().attackIntents.size() == 1 &&
+            runtime.EnemyBehavior().Frame().attackIntents.front().waveId ==
+                "behavior-wave" &&
+            std::any_of(
+                requestEvents.begin(), requestEvents.end(),
+                [](const EnemyBehaviorEvent& event) {
+                    return event.kind ==
+                        EnemyBehaviorEventKind::AttackRequested &&
+                        event.placementGuid == "behavior-placement";
+                }),
+        "commercial Behavior should resolve an archetype, move through positioning and publish a Wave-stable attack intent");
+
+    runtime.Update(0.21f);
+    runner.Expect(
+        runtime.Enemies().front().fireSequence == 0 &&
+            runtime.Enemies().front().behaviorState.attackTimeRemaining <= 0.0f &&
+            !runtime.Enemies().front().behaviorState.telegraphPresented,
+        "an elapsed commercial attack intent must fail closed until Telegraph presents that exact sequence");
+
+    const Matrix4x4 viewProjection = MakePerspectiveFovMatrix(
+        3.14159265358979323846f / 3.0f,
+        static_cast<float>(kWidth) / static_cast<float>(kHeight),
+        0.1f,
+        1000.0f);
+    EnemyAttackTelegraphFrameInput telegraphInput{};
+    telegraphInput.spawnRuntime = &runtime;
+    telegraphInput.railPath = &rail;
+    telegraphInput.viewProjection = &viewProjection;
+    telegraphInput.viewportWidth = kWidth;
+    telegraphInput.viewportHeight = kHeight;
+    telegraphInput.settings.requireWorldVisibility = false;
+    EnemyAttackTelegraphSystem telegraph;
+    telegraph.Update(telegraphInput);
+    runner.Expect(
+        telegraph.Frame().cues.size() == 1 &&
+            telegraph.Frame().cues.front().attackIntentSequence ==
+                intentSequence &&
+            telegraph.Frame().cues.front().attackTokenId != 0 &&
+            telegraph.Frame().cues.front().phase ==
+                EnemyAttackTelegraphPhase::Imminent,
+        "Telegraph should render only the Coordinator-reserved Behavior intent instead of inferring an independent attack timer");
+    const EnemyAttackTelegraphCue& cue = telegraph.Frame().cues.front();
+    runner.Expect(
+        runtime.MarkEnemyAttackTelegraphPresented(
+            cue.actorId, cue.attackIntentSequence),
+        "a visible Telegraph cue should acknowledge its matching Coordinator reservation and Behavior intent atomically");
+
+    runtime.Update(0.01f);
+    const CourseEnemyActor& committed = runtime.Enemies().front();
+    const std::vector<EnemyBehaviorEvent> commitEvents =
+        runtime.EnemyBehavior().ConsumeEvents();
+    runner.Expect(
+        committed.fireSequence == 1 &&
+            committed.bulletsEmittedThisFrame > 0 &&
+            committed.behaviorState.state == EnemyBehaviorState::Evading &&
+            !committed.behaviorState.attackIntentActive &&
+            committed.behaviorState.committedAttackSequence == intentSequence &&
+            std::any_of(
+                commitEvents.begin(), commitEvents.end(),
+                [](const EnemyBehaviorEvent& event) {
+                    return event.kind ==
+                        EnemyBehaviorEventKind::AttackCommitted;
+                }),
+        "acknowledged Behavior intent should commit exactly one attack and transition into evasion");
+
+    EnemyCombatPresentationBridge presentation;
+    EnemyCombatPresentationInput presentationInput{};
+    presentationInput.runtime = &runtime;
+    presentationInput.railPath = &rail;
+    presentation.Update(presentationInput);
+    const EnemyCombatActorPresentation* actorPresentation =
+        presentation.FindActor(committed.actorId);
+    runner.Expect(
+        actorPresentation != nullptr &&
+            actorPresentation->sourceBehaviorRevision ==
+                committed.behaviorState.revision &&
+            actorPresentation->sourceAttackRevision ==
+                committed.attackState.revision &&
+            actorPresentation->attackCommittedThisFrame &&
+            std::abs(actorPresentation->rotationOffset.z) > 0.0001f &&
+            std::abs(committed.desc.lateralOffset -
+                committed.behaviorState.authoredLateralOffset) > 0.0001f,
+        "Behavior movement should drive authoritative rail-local position and presentation-only bank without changing combat ownership");
+}
+
+void TestEnemyAttackCoordinationAndExecution(RegressionRunner& runner) {
+    constexpr uint32_t kWidth = 1000;
+    constexpr uint32_t kHeight = 600;
+    RailPath rail;
+    rail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 180.0f}, 18.0f, 32.0f}});
+    CourseSpawnRuntime runtime;
+    runtime.MutableFireSafetySettings().enabled = false;
+    auto& settings = runtime.EnemyAttacks().MutableSettings();
+    settings.maximumConcurrentAttackers = 1;
+    settings.maximumAttackersPerWave = 1;
+    settings.maximumAttackersPerSector = 1;
+    settings.maximumThreatBudget = 4.0f;
+    settings.tokenRecoverySeconds = 0.12f;
+
+    auto spawnCommercial = [&](const char* id,
+                               EnemyBehaviorArchetype archetype,
+                               float lateral) {
+        CourseEnemyActorDesc enemy{};
+        enemy.actorAssetId = id;
+        enemy.sourcePlacementGuid = std::string(id) + "-placement";
+        enemy.waveId = "coordinated-wave";
+        enemy.spawnDistance = 78.0f;
+        enemy.lateralOffset = lateral;
+        enemy.firstShotDelay = 0.02f;
+        enemy.fireInterval = 0.40f;
+        enemy.combatDefinition = EnemyCombatDefinition::CommercialStandard();
+        enemy.combatDefinition.spawnDurationSeconds = 0.0f;
+        enemy.combatDefinition.engageDurationSeconds = 0.0f;
+        enemy.combatDefinition.telegraphLeadSeconds = 0.12f;
+        enemy.behaviorDefinition = EnemyBehaviorDefinition::Commercial(archetype);
+        enemy.behaviorDefinition.definitionId = std::string(id) + "-behavior";
+        enemy.behaviorDefinition.entryDurationSeconds = 0.01f;
+        enemy.behaviorDefinition.positioningDurationSeconds = 0.01f;
+        enemy.behaviorDefinition.aimingDurationSeconds = 0.01f;
+        enemy.behaviorDefinition.attackLeadSeconds = 0.12f;
+        enemy.behaviorDefinition.evadeDurationSeconds = 1.0f;
+        enemy.behaviorDefinition.repositionDurationSeconds = 1.0f;
+        runtime.SpawnEnemyActor(std::move(enemy));
+    };
+    spawnCommercial("coordinator-assault", EnemyBehaviorArchetype::Assault, -3.0f);
+    spawnCommercial("coordinator-boss", EnemyBehaviorArchetype::Boss, 3.0f);
+    runtime.Update(0.02f);
+    runtime.Update(0.02f);
+    runtime.Update(0.02f);
+
+    const auto reservedCount = [](const CourseSpawnRuntime& value) {
+        return static_cast<uint32_t>(std::count_if(
+            value.Enemies().begin(), value.Enemies().end(),
+            [](const CourseEnemyActor& actor) {
+                return actor.attackState.tokenReserved;
+            }));
+    };
+    runner.Expect(
+        reservedCount(runtime) == 1 &&
+            runtime.EnemyAttacks().Frame().queuedAttacks == 1 &&
+            runtime.EnemyAttacks().Frame().grantedThisFrame == 1,
+        "Coordinator should admit one globally budgeted attacker and keep the other intent queued");
+
+    const CourseSpawnRuntimeCheckpoint checkpoint = runtime.CaptureCheckpoint();
+    CourseSpawnRuntime restored;
+    restored.MutableFireSafetySettings().enabled = false;
+    restored.EnemyAttacks().MutableSettings() = settings;
+    restored.RestoreCheckpoint(checkpoint, false);
+    runner.Expect(
+        reservedCount(restored) == 1 && restored.ActiveBulletCount() == 0,
+        "checkpoint restore should reconstruct the reserved attack token while clearing hostile projectiles");
+
+    restored.Update(0.13f);
+    runner.Expect(
+        std::all_of(restored.Enemies().begin(), restored.Enemies().end(),
+            [](const CourseEnemyActor& actor) {
+                return actor.fireSequence == 0;
+            }),
+        "an expired countdown must not bypass the exact Telegraph acknowledgement");
+
+    const Matrix4x4 viewProjection = MakePerspectiveFovMatrix(
+        3.14159265358979323846f / 3.0f,
+        static_cast<float>(kWidth) / static_cast<float>(kHeight),
+        0.1f,
+        1000.0f);
+    EnemyAttackTelegraphFrameInput telegraphInput{};
+    telegraphInput.spawnRuntime = &restored;
+    telegraphInput.railPath = &rail;
+    telegraphInput.viewProjection = &viewProjection;
+    telegraphInput.viewportWidth = kWidth;
+    telegraphInput.viewportHeight = kHeight;
+    telegraphInput.settings.requireWorldVisibility = false;
+    EnemyAttackTelegraphSystem telegraph;
+    telegraph.Update(telegraphInput);
+    runner.Expect(
+        telegraph.Frame().cues.size() == 1 &&
+            telegraph.Frame().cues.front().attackTokenId != 0,
+        "Telegraph should expose only the attack that owns the current Coordinator token");
+    const EnemyAttackTelegraphCue firstCue = telegraph.Frame().cues.front();
+    runner.Expect(
+        restored.MarkEnemyAttackTelegraphPresented(
+            firstCue.actorId, firstCue.attackIntentSequence),
+        "the reserved attack should accept its exact Telegraph acknowledgement");
+    restored.Update(0.01f);
+    const auto committedActor = std::find_if(
+        restored.Enemies().begin(), restored.Enemies().end(),
+        [](const CourseEnemyActor& actor) { return actor.fireSequence == 1; });
+    std::ostringstream executionDiagnostic;
+    executionDiagnostic <<
+        "Execution should atomically emit and commit exactly one admitted volley"
+        " committed=" << restored.EnemyAttackExecution().Frame().committedVolleys <<
+        " emitted=" << restored.EnemyAttackExecution().Frame().emittedProjectiles <<
+        " evaluated=" << restored.EnemyAttackExecution().Frame().evaluatedAttacks <<
+        " safetyBlocked=" << restored.EnemyAttackExecution().Frame().safetyBlockedAttacks <<
+        " bullets=" << restored.ActiveBulletCount() <<
+        " firedActors=" << std::count_if(
+            restored.Enemies().begin(), restored.Enemies().end(),
+            [](const CourseEnemyActor& actor) { return actor.fireSequence == 1; });
+    if (committedActor != restored.Enemies().end()) {
+        executionDiagnostic <<
+            " phase=" << ToString(committedActor->attackState.phase) <<
+            " targetLocked=" << committedActor->targetingState.solutionLocked <<
+            " targetIntent=" << committedActor->targetingState.attackIntentSequence <<
+            " targetToken=" << committedActor->targetingState.attackTokenId;
+    }
+    for (const CourseEnemyActor& actor : restored.Enemies()) {
+        executionDiagnostic <<
+            " [actor=" << actor.actorId <<
+            " phase=" << ToString(actor.attackState.phase) <<
+            " reserved=" << actor.attackState.tokenReserved <<
+            " telegraph=" << actor.attackState.telegraphPresented <<
+            " behaviorTelegraph=" << actor.behaviorState.telegraphPresented <<
+            " behaviorIntent=" << actor.behaviorState.attackIntentActive <<
+            " time=" << actor.behaviorState.attackTimeRemaining <<
+            " fireSafe=" << actor.fireSafetyAllowed <<
+            " targetLocked=" << actor.targetingState.solutionLocked <<
+            " targetIntent=" << actor.targetingState.attackIntentSequence <<
+            " attackIntent=" << actor.attackState.intentSequence <<
+            " targetToken=" << actor.targetingState.attackTokenId <<
+            " attackToken=" << actor.attackState.tokenId << ']';
+    }
+    runner.Expect(
+        restored.EnemyAttackExecution().Frame().committedVolleys == 1 &&
+            restored.EnemyAttackExecution().Frame().emittedProjectiles > 0 &&
+            std::count_if(restored.Enemies().begin(), restored.Enemies().end(),
+                [](const CourseEnemyActor& actor) {
+                    return actor.fireSequence == 1;
+                }) == 1,
+        executionDiagnostic.str());
+
+    restored.Update(0.13f);
+    const CourseEnemyActor* second = nullptr;
+    for (const CourseEnemyActor& actor : restored.Enemies()) {
+        if (actor.fireSequence == 0 && actor.attackState.tokenReserved) {
+            second = &actor;
+            break;
+        }
+    }
+    runner.Expect(
+        second != nullptr && reservedCount(restored) == 1,
+        "the queued enemy should receive the token only after the previous attack recovery releases it");
+    if (second != nullptr) {
+        const uint32_t secondId = second->actorId;
+        const uint64_t secondSequence = second->attackState.intentSequence;
+        runner.Expect(
+            restored.MarkEnemyAttackTelegraphPresented(secondId, secondSequence),
+            "the second admitted attack should enter the same Telegraph handshake");
+        restored.Update(0.13f);
+        const auto found = std::find_if(
+            restored.Enemies().begin(), restored.Enemies().end(),
+            [&](const CourseEnemyActor& actor) { return actor.actorId == secondId; });
+        runner.Expect(
+            found != restored.Enemies().end() && found->fireSequence == 1 &&
+                restored.EnemyAttackExecution().Frame().committedVolleys == 1,
+            "queued attacks should execute deterministically after admission without simultaneous unfair fire");
+    }
+}
+
+void TestEnemyTargetingAndProjectileRuntime(RegressionRunner& runner) {
+    std::string error;
+    EnemyProjectileDefinitionAsset predictive{};
+    EnemyProjectileDefinitionAsset homing{};
+    runner.Expect(
+        predictive.LoadFromFile(
+            "Resources/courses/projectiles/enemy_predictive.projectile",
+            &error) &&
+            predictive.trajectory == EnemyProjectileTrajectory::Predictive &&
+            predictive.Validate(&error) &&
+            homing.LoadFromFile(
+                "Resources/courses/projectiles/enemy_homing_soft.projectile",
+                &error) &&
+            homing.trajectory == EnemyProjectileTrajectory::Homing &&
+            homing.homingTurnRateRadians > 0.0f,
+        "enemy projectile assets should load validated trajectory, collision and presentation contracts");
+    EnemyProjectileDefinitionAsset invalidHoming = homing;
+    invalidHoming.homingTurnRateRadians = 0.0f;
+    runner.Expect(
+        !invalidHoming.Validate(&error),
+        "commercial Homing assets should fail validation without an authored turn cap");
+
+    CourseSpawnRuntime targetingRuntime;
+    CourseEnemyActorDesc enemy{};
+    enemy.actorAssetId = "targeting-regression-enemy";
+    enemy.sourcePlacementGuid = "targeting-regression-placement";
+    enemy.waveId = "targeting-regression-wave";
+    enemy.spawnDistance = 80.0f;
+    enemy.lateralOffset = -2.0f;
+    enemy.verticalOffset = 5.0f;
+    enemy.bulletCount = 1;
+    enemy.behaviorDefinition = EnemyBehaviorDefinition::Commercial(
+        EnemyBehaviorArchetype::Assault);
+    enemy.behaviorDefinition.definitionId = "targeting-regression-behavior";
+    enemy.projectileDefinitionId = predictive.id;
+    enemy.projectileDefinition = predictive;
+    targetingRuntime.SpawnEnemyActor(std::move(enemy));
+
+    EnemyTargetingSystem targeting;
+    EnemyTargetingFrameInput targetInput{};
+    targetInput.deltaTime = 0.10f;
+    targetInput.playerDistance = 0.0f;
+    targetInput.playerLateralOffset = 0.0f;
+    targetInput.playerVerticalOffset = 4.0f;
+    targeting.Update(targetingRuntime, targetInput);
+
+    CourseEnemyActor& targetingActor = targetingRuntime.MutableEnemies().front();
+    targetingActor.attackState.tokenReserved = true;
+    targetingActor.attackState.intentSequence = 17;
+    targetingActor.attackState.tokenId = 41;
+    targetingActor.attackState.deterministicSeed = 0x12345678ULL;
+    targetInput.playerLateralOffset = 2.0f;
+    targeting.Update(targetingRuntime, targetInput);
+    const EnemyTargetingRuntimeState locked = targetingActor.targetingState;
+    runner.Expect(
+        locked.solutionLocked && locked.attackIntentSequence == 17 &&
+            locked.attackTokenId == 41 && locked.predictedFlightSeconds > 0.0f &&
+            locked.targetLateralOffset > targetInput.playerLateralOffset &&
+            targeting.Frame().predictiveSolutions == 1,
+        "Targeting should freeze one velocity-led solution for the exact admitted attack token");
+
+    targetInput.playerLateralOffset = -18.0f;
+    targeting.Update(targetingRuntime, targetInput);
+    runner.Expect(
+        targetingActor.targetingState.revision == locked.revision &&
+            std::abs(targetingActor.targetingState.targetLateralOffset -
+                locked.targetLateralOffset) < 0.0001f,
+        "player movement after Telegraph lock must not rewrite a predictive target solution");
+
+    EnemyProjectileSystem projectileSystem;
+    std::vector<EnemyProjectileRuntimeState> projectiles;
+    const uint32_t emitted = projectileSystem.SpawnVolley(
+        targetingActor, projectiles);
+    runner.Expect(
+        emitted == 1 && projectiles.size() == 1 &&
+            projectiles.front().definitionId == predictive.id &&
+            projectiles.front().attackIntentSequence == locked.attackIntentSequence &&
+            projectiles.front().attackTokenId == locked.attackTokenId &&
+            std::abs(projectiles.front().lockedTargetLateralOffset -
+                locked.targetLateralOffset) < 0.0001f &&
+            projectiles.front().lateralSpeed > 0.0f,
+        "Projectile spawn should inherit the authoritative target, definition, intent, token and deterministic seed");
+
+    EnemyProjectileRuntimeState homingProjectile{};
+    homingProjectile.projectileId = 77;
+    homingProjectile.definitionId = homing.id;
+    homingProjectile.trajectory = EnemyProjectileTrajectory::Homing;
+    homingProjectile.distanceOffset = 60.0f;
+    homingProjectile.previousDistanceOffset = 60.0f;
+    homingProjectile.forwardSpeed = -homing.initialSpeed;
+    homingProjectile.maximumSpeed = homing.maximumSpeed;
+    homingProjectile.homingTurnRateRadians = homing.homingTurnRateRadians;
+    homingProjectile.radius = homing.radius;
+    homingProjectile.lifetime = homing.lifetime;
+    homingProjectile.initialized = true;
+    homingProjectile.active = true;
+    std::vector<EnemyProjectileRuntimeState> homingProjectiles{
+        homingProjectile};
+    EnemyProjectileFrameInput projectileInput{};
+    projectileInput.deltaTime = 0.10f;
+    projectileInput.playerLateralOffset = 30.0f;
+    projectileInput.playerVerticalOffset = 4.0f;
+    projectileSystem.Update(homingProjectiles, projectileInput);
+    runner.Expect(
+        homingProjectiles.front().lateralSpeed > 0.0f &&
+            homingProjectiles.front().forwardSpeed < 0.0f &&
+            projectileSystem.Frame().homingProjectiles == 1,
+        "Homing should bend toward the live player at a capped rate instead of snapping instantly");
+
+    CourseSpawnRuntime collisionRuntime;
+    EnemyProjectileRuntimeState fastProjectile{};
+    fastProjectile.projectileId = 99;
+    fastProjectile.definitionId = "ccd-regression";
+    fastProjectile.previousDistanceOffset = 12.0f;
+    fastProjectile.distanceOffset = -12.0f;
+    fastProjectile.previousLateralOffset = 0.0f;
+    fastProjectile.lateralOffset = 0.0f;
+    fastProjectile.previousVerticalOffset = 4.0f;
+    fastProjectile.verticalOffset = 4.0f;
+    fastProjectile.radius = 0.25f;
+    fastProjectile.damage = 9.0f;
+    fastProjectile.lifetime = 2.0f;
+    fastProjectile.initialized = true;
+    fastProjectile.active = true;
+    collisionRuntime.MutableBullets().push_back(fastProjectile);
+    CourseCollisionSystem collision;
+    CourseCollisionFrameInput collisionInput{};
+    collisionInput.deltaTime = 1.0f / 60.0f;
+    collisionInput.player.distance = 0.0f;
+    collisionInput.player.lateralOffset = 0.0f;
+    collisionInput.player.verticalOffset = 4.0f;
+    collisionInput.player.radius = 1.0f;
+    collisionInput.player.hitPoints = 100.0f;
+    const CourseCollisionFrameStats collisionStats =
+        collision.Update(collisionRuntime, collisionInput);
+    runner.Expect(
+        collisionStats.enemyBulletHits == 1 &&
+            std::abs(collisionStats.playerDamage - 9.0f) < 0.0001f &&
+            collisionRuntime.ActiveBulletCount() == 0,
+        "rail-local swept-sphere collision should consume a high-speed projectile that crosses the player between frames");
+}
+
+void TestPlayerHitboxAndNearMissAuthority(RegressionRunner& runner) {
+    std::string error;
+    PlayerHitboxDefinition definition =
+        PlayerHitboxDefinition::RailVehicleOccupantDefaults();
+    PlayerHitboxSystem hitbox;
+    runner.Expect(
+        definition.Validate(&error) && hitbox.Initialize(definition, &error),
+        "vehicle-mounted player hitbox definition should validate and initialize");
+
+    PlayerHitboxFrameInput frame{};
+    frame.distance = 20.0f;
+    frame.lateralOffset = -5.0f;
+    frame.verticalOffset = 4.0f;
+    hitbox.Update(frame);
+    frame.lateralOffset = 5.0f;
+    hitbox.Update(frame);
+    EnemyProjectileRuntimeState stationary{};
+    stationary.projectileId = 8801;
+    stationary.spawnDistance = 20.0f;
+    stationary.previousDistanceOffset = 0.0f;
+    stationary.distanceOffset = 0.0f;
+    stationary.previousLateralOffset = 0.0f;
+    stationary.lateralOffset = 0.0f;
+    stationary.previousVerticalOffset = 4.0f;
+    stationary.verticalOffset = 4.0f;
+    stationary.radius = 0.2f;
+    stationary.lifetime = 2.0f;
+    stationary.active = true;
+    const PlayerProjectileContact relativeMotion =
+        hitbox.EvaluateProjectile(stationary);
+    runner.Expect(
+        relativeMotion.kind == PlayerProjectileContactKind::Hit &&
+            relativeMotion.closestTime > 0.0f &&
+            relativeMotion.closestTime < 1.0f,
+        "hitbox CCD should detect a stationary projectile crossed by player movement between frames");
+
+    frame.lateralOffset = 0.0f;
+    frame.resetMotionHistory = true;
+    frame.dodgeActive = false;
+    hitbox.Update(frame);
+    EnemyProjectileRuntimeState edgeProjectile = stationary;
+    edgeProjectile.projectileId = 8802;
+    edgeProjectile.previousLateralOffset = 0.9f;
+    edgeProjectile.lateralOffset = 0.9f;
+    const PlayerProjectileContact normalContact =
+        hitbox.EvaluateProjectile(edgeProjectile);
+    frame.dodgeActive = true;
+    frame.invulnerable = true;
+    frame.resetMotionHistory = false;
+    hitbox.Update(frame);
+    const PlayerProjectileContact dodgeContact =
+        hitbox.EvaluateProjectile(edgeProjectile);
+    runner.Expect(
+        normalContact.kind == PlayerProjectileContactKind::Hit &&
+            dodgeContact.kind == PlayerProjectileContactKind::NearMiss &&
+            hitbox.State().hurtRadius < definition.hurtRadius &&
+            hitbox.State().invulnerable,
+        "active Dodge should shrink the authored hurt core while retaining the larger near-miss shell");
+
+    CourseSpawnRuntime runtime;
+    EnemyProjectileRuntimeState graze{};
+    graze.projectileId = 9901;
+    graze.ownerActorId = 33;
+    graze.definitionId = "regression_graze";
+    graze.trajectory = EnemyProjectileTrajectory::Predictive;
+    graze.previousLateralOffset = 2.0f;
+    graze.lateralOffset = 2.0f;
+    graze.previousVerticalOffset = 4.0f;
+    graze.verticalOffset = 4.0f;
+    graze.radius = 0.25f;
+    graze.damage = 15.0f;
+    graze.lifetime = 3.0f;
+    graze.active = true;
+    runtime.MutableBullets().push_back(graze);
+    CourseCollisionSystem collision;
+    CourseCollisionFrameInput collisionInput{};
+    collisionInput.deltaTime = 1.0f / 60.0f;
+    collisionInput.player.distance = 0.0f;
+    collisionInput.player.lateralOffset = 0.0f;
+    collisionInput.player.verticalOffset = 4.0f;
+    collisionInput.player.hitPoints = 100.0f;
+    const CourseCollisionFrameStats firstGraze =
+        collision.Update(runtime, collisionInput);
+    runner.Expect(
+        firstGraze.playerNearMisses == 1 &&
+            firstGraze.playerDamage == 0.0f &&
+            collision.PlayerNearMissResults().size() == 1 &&
+            collision.PlayerNearMissResults().front().request.projectileId == 9901 &&
+            runtime.ActiveBulletCount() == 1,
+        "near-miss shell should publish one authoritative detection result without consuming or damaging the projectile");
+    const CourseCollisionFrameStats duplicateGraze =
+        collision.Update(runtime, collisionInput);
+    runner.Expect(
+        duplicateGraze.playerNearMisses == 0 &&
+            collision.PlayerNearMissResults().empty() &&
+            collision.PlayerNearMiss().State().acceptedNearMisses == 1,
+        "the same Projectile ID should never score near-miss more than once");
+
+    runtime.MutableBullets().front().previousLateralOffset = 2.0f;
+    runtime.MutableBullets().front().lateralOffset = 0.0f;
+    const CourseCollisionFrameStats hitAfterGraze =
+        collision.Update(runtime, collisionInput);
+    runner.Expect(
+        hitAfterGraze.enemyBulletHits == 1 &&
+            std::abs(hitAfterGraze.playerDamage - 15.0f) < 0.001f &&
+            runtime.ActiveBulletCount() == 0,
+        "near-miss history must not prevent the same projectile from later reaching the hurt core and producing PlayerDamageResult");
+
+    collision.Reset();
+    runner.Expect(
+        !collision.PlayerHitbox().State().initialized &&
+            collision.PlayerNearMiss().State().processedProjectileIds.empty() &&
+            collision.PlayerNearMissResults().empty(),
+        "retry/reset should clear hitbox motion history and every processed near-miss Projectile ID");
+}
+
+void TestGrazeScoreAndThreatResponse(RegressionRunner& runner) {
+    GrazeScoreSystem scoring;
+    std::string error;
+    runner.Expect(
+        scoring.Initialize({}, &error),
+        "default graze score definition should initialize");
+
+    PlayerNearMissResult loose{};
+    loose.sequence = 1;
+    loose.accepted = true;
+    loose.request.projectileId = 1001;
+    loose.request.trajectory = EnemyProjectileTrajectory::Direct;
+    loose.request.closeness = 0.2f;
+    loose.request.railDistance = 20.0f;
+    loose.request.lateralOffset = -1.5f;
+    loose.request.verticalOffset = 4.0f;
+    PlayerNearMissResult dangerous = loose;
+    dangerous.sequence = 2;
+    dangerous.request.projectileId = 1002;
+    dangerous.request.trajectory = EnemyProjectileTrajectory::Homing;
+    dangerous.request.closeness = 0.92f;
+    dangerous.request.lateralOffset = 1.2f;
+    const std::array<PlayerNearMissResult, 2> nearMisses{loose, dangerous};
+
+    GrazeScoreFrameInput scoreInput{};
+    scoreInput.deltaTime = 1.0f / 60.0f;
+    scoreInput.nearMissResults = nearMisses;
+    scoreInput.gameplayActive = true;
+    scoring.Update(scoreInput);
+    const std::vector<GrazeScoreResult> scored = scoring.ResultsThisFrame();
+    runner.Expect(
+        scored.size() == 2 &&
+            scored[1].scoreAwarded > scored[0].scoreAwarded &&
+            scored[1].chainAfter == 2 &&
+            scoring.State().totalScore ==
+                static_cast<uint64_t>(scored[0].scoreAwarded) +
+                    scored[1].scoreAwarded &&
+            scoring.State().adrenalineNormalized > 0.0f,
+        "graze scoring should reward closeness, dangerous trajectories and an active chain from authoritative near-miss results");
+
+    scoring.Update(scoreInput);
+    runner.Expect(
+        scoring.ResultsThisFrame().empty() &&
+            scoring.State().acceptedGrazes == 2,
+        "the same near-miss result sequence should never award graze score twice");
+
+    EnemyProjectilePresentationFrame projectileFrame{};
+    EnemyProjectilePresentation projectile{};
+    projectile.projectileId = 2001;
+    projectile.distanceToPlayer = 2.0f;
+    projectile.forwardDistanceToPlayer = 2.0f;
+    projectile.threat = true;
+    projectileFrame.projectiles.push_back(projectile);
+    ThreatResponseDirector threat;
+    ThreatResponseFrameInput threatInput{};
+    threatInput.deltaTime = 0.2f;
+    threatInput.projectileFrame = &projectileFrame;
+    threatInput.grazeResults = scored;
+    threatInput.currentGrazeChain = scoring.State().chain;
+    threatInput.gameplayActive = true;
+    threat.Update(threatInput);
+    runner.Expect(
+        threat.Frame().band == ThreatResponseBand::Critical &&
+            threat.Frame().nearbyThreats == 1 &&
+            threat.Frame().scoreAwardedThisFrame > 0 &&
+            threat.Frame().cameraShake > 0.0f &&
+            threat.Frame().hapticHigh > 0.0f &&
+            std::any_of(
+                threat.Frame().cues.begin(),
+                threat.Frame().cues.end(),
+                [](const ThreatResponseCue& cue) {
+                    return cue.kind == ThreatResponseCueKind::Graze;
+                }),
+        "threat response should turn nearby projectiles and graze rewards into bounded presentation cues without changing gameplay state");
+
+    scoreInput.nearMissResults = {};
+    for (int i = 0; i < 12; ++i) {
+        scoreInput.deltaTime = 0.25f;
+        scoring.Update(scoreInput);
+    }
+    runner.Expect(
+        scoring.State().chain == 0 &&
+            scoring.State().adrenalineNormalized < scored.back().adrenalineAfter,
+        "graze chain and adrenaline should decay deterministically when the player stops grazing");
+}
+
+void TestEnemyProjectilePresentationPipeline(RegressionRunner& runner) {
+    RailPath rail;
+    rail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 120.0f}, 18.0f, 32.0f}});
+    CourseSpawnRuntime runtime;
+    EnemyProjectileRuntimeState projectile{};
+    projectile.projectileId = 7701;
+    projectile.ownerActorId = 42;
+    projectile.attackIntentSequence = 17;
+    projectile.attackTokenId = 29;
+    projectile.definitionId = "regression_homing_projectile";
+    projectile.trajectory = EnemyProjectileTrajectory::Homing;
+    projectile.spawnDistance = 20.0f;
+    projectile.distanceOffset = -5.0f;
+    projectile.previousDistanceOffset = -4.0f;
+    projectile.previousLateralOffset = 0.0f;
+    projectile.lateralOffset = 0.0f;
+    projectile.previousVerticalOffset = 4.0f;
+    projectile.verticalOffset = 4.0f;
+    projectile.radius = 0.3f;
+    projectile.lifetime = 3.0f;
+    projectile.age = 0.25f;
+    projectile.color = {1.0f, 0.2f, 0.1f, 1.0f};
+    projectile.trailEffectId = "regression_enemy_trail";
+    projectile.impactEffectId = "regression_enemy_impact";
+    projectile.initialized = true;
+    projectile.active = true;
+    runtime.MutableBullets().push_back(projectile);
+
+    EnemyProjectilePresentationBridge presentation;
+    EnemyProjectilePresentationInput presentationInput{};
+    presentationInput.runtime = &runtime;
+    presentationInput.railPath = &rail;
+    presentationInput.playerDistance = 10.0f;
+    presentationInput.playerVerticalOffset = 4.0f;
+    presentationInput.gameplayActive = true;
+    presentation.Update(presentationInput);
+    runner.Expect(
+        presentation.Frame().projectiles.size() == 1 &&
+            presentation.Frame().events.size() == 1 &&
+            presentation.Frame().events.front().kind ==
+                EnemyProjectilePresentationEventKind::Spawned &&
+            presentation.Frame().projectiles.front().projectileId == 7701 &&
+            presentation.Frame().projectiles.front().threat &&
+            presentation.Frame().projectiles.front().motionDirection.z < 0.0f,
+        "projectile presentation should preserve stable identity and convert rail-local motion into a readable world-space spawn proxy");
+
+    EnemyProjectileRenderer renderer;
+    EnemyProjectileRenderInput renderInput{};
+    renderInput.presentation = &presentation.Frame();
+    renderInput.cameraWorldPosition = {0.0f, 4.0f, 10.0f};
+    renderInput.cameraRight = {1.0f, 0.0f, 0.0f};
+    renderInput.cameraUp = {0.0f, 1.0f, 0.0f};
+    renderInput.elapsedTime = 0.25f;
+    renderer.Update(renderInput);
+    runner.Expect(
+        renderer.Frame().proxies.size() == 1 &&
+            renderer.Frame().proxies.front().trajectory ==
+                EnemyProjectileTrajectory::Homing &&
+            renderer.Frame().proxies.front().displayRadius >=
+                projectile.radius &&
+            renderer.Frame().proxies.front().coreColor.z >
+                projectile.color.z &&
+            renderer.Frame().proxies.front().trailStart.z >
+                renderer.Frame().proxies.front().worldPosition.z,
+        "projectile renderer should apply trajectory language, a minimum readable radius and motion-aligned trail without changing collision size");
+
+    EnemyProjectileAudioBridge audio;
+    EnemyProjectileAudioInput audioInput{};
+    audioInput.presentation = &presentation.Frame();
+    PlayerNearMissResult flyBy{};
+    flyBy.accepted = true;
+    flyBy.request.projectileId = 7701;
+    flyBy.request.trajectory = EnemyProjectileTrajectory::Homing;
+    flyBy.request.closeness = 0.8f;
+    const std::array<PlayerNearMissResult, 1> flyByResults{flyBy};
+    audioInput.nearMissResults = flyByResults;
+    audioInput.listenerPosition = renderInput.cameraWorldPosition;
+    audioInput.listenerRight = renderInput.cameraRight;
+    audioInput.gameplayActive = true;
+    audio.Update(audioInput);
+    runner.Expect(
+        std::any_of(
+            audio.Frame().cues.begin(),
+            audio.Frame().cues.end(),
+            [](const EnemyProjectileAudioCue& cue) {
+                return cue.kind == EnemyProjectileAudioCueKind::Launch;
+            }) &&
+            std::any_of(
+                audio.Frame().cues.begin(),
+                audio.Frame().cues.end(),
+                [](const EnemyProjectileAudioCue& cue) {
+                    return cue.kind == EnemyProjectileAudioCueKind::FlyBy;
+                }),
+        "projectile audio should emit bounded spatial launch and one-time fly-by cues from the presentation frame");
+
+    presentation.Update(presentationInput);
+    audioInput.presentation = &presentation.Frame();
+    audioInput.nearMissResults = {};
+    audio.Update(audioInput);
+    runner.Expect(
+        presentation.Frame().events.empty() && audio.Frame().cues.empty(),
+        "stable projectiles should not replay spawn or fly-by one-shots every frame");
+
+    runtime.MutableBullets().clear();
+    PlayerDamageResult hit{};
+    hit.accepted = true;
+    hit.lethal = false;
+    hit.request.kind = PlayerHitKind::EnemyProjectile;
+    hit.request.sourceActorId = 42;
+    hit.request.sourceProjectileId = 7701;
+    hit.request.railDistance = 10.0f;
+    hit.request.verticalOffset = 4.0f;
+    hit.request.impactEffectId = "regression_enemy_impact";
+    const std::array<PlayerDamageResult, 1> hits{hit};
+    presentationInput.playerDamageResults = hits;
+    presentation.Update(presentationInput);
+    runner.Expect(
+        presentation.Frame().projectiles.empty() &&
+            presentation.Frame().events.size() == 1 &&
+            presentation.Frame().events.front().kind ==
+                EnemyProjectilePresentationEventKind::Impacted &&
+            presentation.Frame().events.front().effectId ==
+                "regression_enemy_impact",
+        "accepted PlayerDamageResult should replace inferred disappearance with one authoritative projectile impact event");
+    audioInput.presentation = &presentation.Frame();
+    audio.Update(audioInput);
+    runner.Expect(
+        audio.Frame().cues.size() == 1 &&
+            audio.Frame().cues.front().kind ==
+                EnemyProjectileAudioCueKind::Impact,
+        "authoritative projectile impact should produce exactly one spatial impact cue");
+
+    presentation.Reset();
+    renderer.Reset();
+    audio.Reset();
+    runner.Expect(
+        presentation.Frame().projectiles.empty() &&
+            renderer.Frame().proxies.empty() &&
+            audio.Frame().cues.empty(),
+        "retry/reset should atomically discard projectile visual and audio history");
+}
+
+void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
+    RailPath rail;
+    rail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 160.0f}, 18.0f, 32.0f}});
+    CourseSpawnRuntime runtime;
+    runtime.MutableFireSafetySettings().enabled = false;
+    CourseEnemyActorDesc enemy{};
+    enemy.actorAssetId = "presentation_commercial_drone";
+    enemy.spawnDistance = 70.0f;
+    enemy.lateralOffset = 3.0f;
+    enemy.verticalOffset = 2.0f;
+    enemy.hitPoints = 20.0f;
+    enemy.firstShotDelay = 0.7f;
+    enemy.fireInterval = 1.2f;
+    runtime.SpawnEnemyActor(enemy);
+
+    EnemyCombatPresentationBridge bridge;
+    EnemyCombatPresentationInput input{};
+    input.runtime = &runtime;
+    input.railPath = &rail;
+    input.listenerPosition = {0.0f, 0.0f, 0.0f};
+    input.listenerRight = {1.0f, 0.0f, 0.0f};
+    input.gameplayActive = true;
+    std::vector<EnemyCombatEvent> events =
+        runtime.EnemyCombat().ConsumeEvents();
+    input.events = events;
+    bridge.Update(input);
+    const EnemyCombatActorPresentation* spawn =
+        bridge.FindActor(runtime.Enemies().front().actorId);
+    runner.Expect(
+        spawn != nullptr && spawn->visible &&
+            spawn->animation == EnemyCombatAnimationState::Spawn &&
+            spawn->materialColor.z > spawn->materialColor.x &&
+            bridge.Frame().audioCues.size() == 1 &&
+            bridge.Frame().audioCues.front().kind ==
+                EnemyCombatPresentationAudioCueKind::Spawn &&
+            bridge.Frame().vfxCommands.size() == 1 &&
+            std::string(bridge.Frame().vfxCommands.front().cueId) ==
+                "enemy_combat_spawn",
+        "enemy presentation should convert Spawned into a blue spawn material, procedural animation and bounded one-shot cues");
+
+    runtime.Update(0.35f);
+    runtime.Update(0.19f);
+    events = runtime.EnemyCombat().ConsumeEvents();
+    input.events = events;
+    bridge.Update(input);
+    const EnemyCombatActorPresentation* telegraph =
+        bridge.FindActor(runtime.Enemies().front().actorId);
+    runner.Expect(
+        telegraph != nullptr &&
+            telegraph->animation == EnemyCombatAnimationState::Telegraph &&
+            telegraph->materialColor.x > telegraph->materialColor.z &&
+            telegraph->scaleMultiplier >= 1.0f,
+        "telegraph combat state should produce a readable warm pulse without changing authoritative actor transforms");
+
+    CourseCollisionSystem collision;
+    const uint32_t actorId = runtime.Enemies().front().actorId;
+    auto hit = [actorId](uint64_t shotId, float damage) {
+        WeaponHitRequest request{};
+        request.shotId = shotId;
+        request.targetActorId = actorId;
+        request.hitKind = RailAimHitKind::Enemy;
+        request.damageType = WeaponDamageType::Energy;
+        request.rayDirection = {0.0f, 0.0f, 1.0f};
+        request.hitPoint = {3.0f, 2.0f, 70.0f};
+        request.hitNormal = {0.0f, 0.0f, -1.0f};
+        request.hitDistance = 70.0f;
+        request.baseDamage = damage;
+        return request;
+    };
+    collision.ApplyWeaponHit(runtime, nullptr, hit(7201, 5.0f));
+    events = runtime.EnemyCombat().ConsumeEvents();
+    input.events = events;
+    bridge.Update(input);
+    const EnemyCombatActorPresentation* reaction = bridge.FindActor(actorId);
+    runner.Expect(
+        reaction != nullptr &&
+            reaction->animation == EnemyCombatAnimationState::HitReact &&
+            reaction->flashStrength > 0.9f &&
+            reaction->materialColor.x > reaction->materialColor.y &&
+            bridge.Frame().audioCues.size() == 1 &&
+            bridge.Frame().audioCues.front().kind ==
+                EnemyCombatPresentationAudioCueKind::HitReact &&
+            bridge.Frame().vfxCommands.empty(),
+        "normal DamageResult should drive model hit animation, material flash and dedicated SFX while WeaponFeedback remains the sole contact-VFX owner");
+
+    collision.ApplyWeaponHit(runtime, nullptr, hit(7202, 50.0f));
+    events = runtime.EnemyCombat().ConsumeEvents();
+    input.events = events;
+    bridge.Update(input);
+    const EnemyCombatActorPresentation* death = bridge.FindActor(actorId);
+    runner.Expect(
+        death != nullptr &&
+            death->animation == EnemyCombatAnimationState::Death &&
+            bridge.Frame().audioCues.size() == 1 &&
+            bridge.Frame().audioCues.front().kind ==
+                EnemyCombatPresentationAudioCueKind::Death &&
+            bridge.Frame().vfxCommands.size() == 1 &&
+            std::string(bridge.Frame().vfxCommands.front().cueId) ==
+                "enemy_combat_death" &&
+            std::string(bridge.Frame().vfxCommands.front().effectName) ==
+                "hit_plane_burst",
+        "lethal DamageResult should produce one actor-centered death animation, destruction burst and spatial death cue");
+
+    input.gameplayActive = false;
+    input.events = events;
+    bridge.Update(input);
+    runner.Expect(
+        bridge.FindActor(actorId) != nullptr &&
+            bridge.Frame().audioCues.empty() &&
+            bridge.Frame().vfxCommands.empty(),
+        "paused presentation should retain model state but suppress one-shot audio and VFX dispatch");
 }
 
 void TestWeaponDamageFeedback(RegressionRunner& runner) {
@@ -20752,6 +22097,9 @@ void TestCourseRuntimeCookAndGameplayWaveBridge(RegressionRunner& runner) {
         asset.bulletPatternId = "cook_pattern";
         asset.hitPoints = 25.0f;
         asset.lifetime = 30.0f;
+        asset.behaviorDefinition = EnemyBehaviorDefinition::Commercial(
+            EnemyBehaviorArchetype::Flanker);
+        asset.behaviorDefinition.definitionId = "cook_actor_behavior";
         return true;
     };
     options.compiler.bulletPatternResolver = [](
@@ -20763,6 +22111,25 @@ void TestCourseRuntimeCookAndGameplayWaveBridge(RegressionRunner& runner) {
         asset.id = std::string(id);
         asset.firePattern = CourseEnemyFirePattern::Twin;
         asset.bulletCount = 2;
+        asset.projectileDefinitionId = "cook_projectile";
+        return true;
+    };
+    options.compiler.projectileDefinitionResolver = [](
+        std::string_view id,
+        EnemyProjectileDefinitionAsset& asset,
+        std::string& error) {
+        if (id != "cook_projectile") {
+            error = "unknown cook projectile";
+            return false;
+        }
+        asset = EnemyProjectileDefinitionAsset::LegacyDirect();
+        asset.id = std::string(id);
+        asset.displayName = "Cook Predictive Projectile";
+        asset.trajectory = EnemyProjectileTrajectory::Predictive;
+        asset.initialSpeed = 57.0f;
+        asset.maximumSpeed = 63.0f;
+        asset.predictionScale = 0.85f;
+        asset.impactEffectId = "cook_projectile_impact";
         return true;
     };
 
@@ -20772,7 +22139,7 @@ void TestCourseRuntimeCookAndGameplayWaveBridge(RegressionRunner& runner) {
             cooked.program.Validate() && cooked.program.sourceAssetHash != 0 &&
             cooked.program.sourceFingerprint != 0 &&
             cooked.program.waves.size() == 2 && cooked.program.actors.size() == 2 &&
-            cooked.program.dependencies.size() == 2,
+            cooked.program.dependencies.size() == 3,
         "runtime cook should emit one validated deterministic ProgramAsset and dependency table");
 
     std::string bytes;
@@ -20783,7 +22150,16 @@ void TestCourseRuntimeCookAndGameplayWaveBridge(RegressionRunner& runner) {
             loaded.LoadFromString(bytes, &error) &&
             loaded.IsSourceCurrent(ComputeCourseAssetSourceHash(course)) &&
             loaded.sourceFingerprint == cooked.program.sourceFingerprint &&
-            loaded.FindActor("cook-actor-second") != nullptr,
+            loaded.FindActor("cook-actor-second") != nullptr &&
+            loaded.FindActor("cook-actor-first") != nullptr &&
+            loaded.FindActor("cook-actor-first")
+                ->actor.behaviorDefinition.archetype ==
+                    EnemyBehaviorArchetype::Flanker &&
+            loaded.FindActor("cook-actor-first")
+                ->actor.projectileDefinition.trajectory ==
+                    EnemyProjectileTrajectory::Predictive &&
+            std::abs(loaded.FindActor("cook-actor-first")
+                ->actor.projectileDefinition.initialSpeed - 57.0f) < 0.0001f,
         "runtime ProgramAsset should round-trip and reject stale source identity");
     std::string corrupt = bytes;
     if (!corrupt.empty()) corrupt[0] = 'X';
@@ -20821,7 +22197,9 @@ void TestCourseRuntimeCookAndGameplayWaveBridge(RegressionRunner& runner) {
     runner.Expect(
         gameplay.Stats().activeWaves == 1 && runtime.ActiveEnemyCount() == 1 &&
             runtime.Enemies().front().desc.sourcePlacementGuid == "cook-actor-first" &&
-            !runtime.Enemies().front().desc.previewOnly,
+            !runtime.Enemies().front().desc.previewOnly &&
+            runtime.Enemies().front().behaviorDefinition.archetype ==
+                EnemyBehaviorArchetype::Flanker,
         "gameplay bridge should materialize the authored Actor at the cooked Wave trigger");
 
     const CourseGameplayWaveCheckpoint checkpoint = gameplay.CaptureCheckpoint();
@@ -23727,12 +25105,38 @@ int RunEditorCoreRegressionTests() {
          {"game session presentation and retry", [&]() {
               TestGameSessionPresentationAndRetry(runner);
           }},
+         {"player damage authority and presentation", [&]() {
+              TestPlayerDamageAuthorityAndPresentation(runner);
+          }},
          {"rail player movement and dodge", [&]() {
               TestRailPlayerMovementAndDodge(runner);
+          }},
+         {"rail vehicle movement and presentation", [&]() {
+              TestRailVehicleMovementAndPresentation(runner);
           }},
          {"rail world raycast", [&]() { TestRailWorldRaycast(runner); }},
          {"rail world shot routing", [&]() { TestRailWorldShotRouting(runner); }},
          {"weapon damage reception", [&]() { TestWeaponDamageReception(runner); }},
+         {"enemy combat state machine", [&]() { TestEnemyCombatStateMachine(runner); }},
+         {"enemy behavior system", [&]() { TestEnemyBehaviorSystem(runner); }},
+         {"enemy targeting and projectile runtime", [&]() {
+              TestEnemyTargetingAndProjectileRuntime(runner);
+          }},
+         {"player hitbox and near miss authority", [&]() {
+              TestPlayerHitboxAndNearMissAuthority(runner);
+          }},
+         {"graze score and threat response", [&]() {
+              TestGrazeScoreAndThreatResponse(runner);
+          }},
+         {"enemy projectile presentation pipeline", [&]() {
+              TestEnemyProjectilePresentationPipeline(runner);
+          }},
+         {"enemy attack coordination and execution", [&]() {
+              TestEnemyAttackCoordinationAndExecution(runner);
+          }},
+         {"enemy combat presentation bridge", [&]() {
+              TestEnemyCombatPresentationBridge(runner);
+          }},
          {"weapon damage feedback", [&]() { TestWeaponDamageFeedback(runner); }},
          {"weapon fire lifecycle", [&]() { TestWeaponFireLifecycle(runner); }},
          {"weapon definition assets and hot reload", [&]() { TestWeaponDefinitionAssetsAndHotReload(runner); }},

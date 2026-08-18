@@ -819,7 +819,8 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
             auto drawManagedModel = [&](const AppManagedModelResource& model,
                                         const D3D12_VERTEX_BUFFER_VIEW& vertexBuffer,
                                         const D3D12_INDEX_BUFFER_VIEW& indexBuffer,
-                                        D3D12_GPU_VIRTUAL_ADDRESS transformAddress) -> uint32_t {
+                                        D3D12_GPU_VIRTUAL_ADDRESS transformAddress,
+                                        D3D12_GPU_VIRTUAL_ADDRESS materialOverride = 0) -> uint32_t {
                 if (transformAddress == 0 || model.mesh.indexCount == 0 ||
                     !prepareMainPass()) {
                     return 0;
@@ -837,7 +838,9 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                         passContext.commandList,
                         vertexBuffer,
                         indexBuffer,
-                        material->constantBuffer->GetGPUVirtualAddress(),
+                        materialOverride != 0
+                            ? materialOverride
+                            : material->constantBuffer->GetGPUVirtualAddress(),
                         transformAddress,
                         material->albedoTextureGpu,
                         material->normalTextureGpu,
@@ -935,6 +938,20 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 }
             }
 
+            const AppModelObjectInstance& railVehicle =
+                ctx.scene->RailVehicleObject();
+            const AppManagedModelResource* railVehicleModel =
+                ctx.scene->FindManagedModel(railVehicle.modelIndex);
+            if (railVehicle.visible &&
+                railVehicleModel != nullptr &&
+                railVehicle.transformResource) {
+                drawManagedModel(
+                    *railVehicleModel,
+                    railVehicleModel->mesh.vbv,
+                    railVehicleModel->mesh.ibv,
+                    railVehicle.transformResource->GetGPUVirtualAddress());
+            }
+
             for (const CourseMeshRenderItem& item : ctx.scene->CourseMeshes().Items()) {
                 const AppManagedModelResource* model =
                     ctx.scene->FindManagedModel(item.modelIndex);
@@ -947,7 +964,10 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     *model,
                     model->mesh.vbv,
                     model->mesh.ibv,
-                    item.transformResource->GetGPUVirtualAddress());
+                    item.transformResource->GetGPUVirtualAddress(),
+                    item.useMaterialOverride && item.materialResource
+                        ? item.materialResource->GetGPUVirtualAddress()
+                        : 0);
             }
 
             if (ctx.productionScenePipeline != nullptr) {

@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <fstream>
+#include <span>
 #include <string>
 #include <vector>
 #include <d3d12.h>
@@ -35,10 +36,23 @@
 #include "course/GameSessionRetryCoordinator.h"
 #include "course/RailDodgeSystem.h"
 #include "course/RailPlayerMovementSystem.h"
+#include "course/RailPlayerVehicleMountSystem.h"
+#include "course/RailVehicleMovementSystem.h"
+#include "course/RailVehiclePresentationBridge.h"
+#include "course/RailVehicleActor.h"
+#include "course/RailVehicleRenderer.h"
+#include "course/RailVehicleAudioBridge.h"
 #include "course/EnemyAttackTelegraphSystem.h"
 #include "course/EnemyAttackTelegraphFeedbackBridge.h"
+#include "course/EnemyCombatPresentationBridge.h"
+#include "course/EnemyProjectilePresentationBridge.h"
+#include "course/EnemyProjectileRenderer.h"
+#include "course/EnemyProjectileAudioBridge.h"
+#include "course/GrazeScoreSystem.h"
+#include "course/ThreatResponseDirector.h"
 #include "course/EncounterDirector.h"
 #include "course/PlayerCombatFeelSystem.h"
+#include "course/PlayerDamagePresentationBridge.h"
 #include "course/RailAimAssistPresetRegistry.h"
 #include "course/RailCameraDirector.h"
 #include "course/RailLockOnSystem.h"
@@ -224,7 +238,21 @@ private:
         bool gameplayActive);
     void StopRailEnemyAttackFeedback();
     void DispatchGameSessionPresentation(const AppGamepadFrame& gamepad);
+    void DispatchPlayerDamagePresentation();
+    void DispatchThreatResponse();
     void StopGameSessionPresentation();
+    void DispatchRailVehicleAudio(float deltaTime);
+    void DispatchEnemyCombatPresentation(
+        std::span<const EnemyCombatEvent> events,
+        float deltaTime,
+        bool gameplayActive);
+    void DispatchEnemyProjectilePresentation(
+        float deltaTime,
+        bool gameplayActive,
+        const Vector3& cameraPosition,
+        const Vector3& cameraRight,
+        const Vector3& cameraUp);
+    void ResetEnemyProjectilePresentation(bool resetGrazeState = true);
     bool WasKeyPressed(int virtualKey);
 
     DebugCamera& debugCamera_;
@@ -273,8 +301,19 @@ private:
     GameSessionPresentationSettings railShooterSessionPresentationSettings_{};
     GameSessionRetryCoordinator railShooterRetryCoordinator_{};
     RailPlayerMovementSystem railShooterPlayerMovement_{};
+    RailPlayerVehicleMountSystem railShooterPlayerVehicleMount_{};
     RailDodgeSystem railShooterPlayerDodge_{};
+    RailVehicleMovementSystem railShooterVehicleMovement_{};
+    RailVehiclePresentationBridge railShooterVehiclePresentation_{};
+    RailVehicleActor railShooterVehicleActor_{};
+    RailVehicleRenderer railShooterVehicleRenderer_{};
+    RailVehicleAudioBridge railShooterVehicleAudioBridge_{};
+    RailVehicleAudioSettings railShooterVehicleAudioSettings_{};
     PlayerCombatFeelSystem railShooterCombatFeelSystem_;
+    PlayerDamagePresentationBridge railPlayerDamagePresentationBridge_{};
+    GrazeScoreSystem railGrazeScoreSystem_{};
+    ThreatResponseDirector railThreatResponseDirector_{};
+    ThreatResponseSettings railThreatResponseSettings_{};
     CourseEventDispatcher railShooterEventDispatcher_;
     EncounterDirector railShooterEncounterDirector_;
     RailCameraDirector railShooterCameraDirector_;
@@ -287,6 +326,15 @@ private:
     EnemyAttackTelegraphSettings railEnemyAttackTelegraphSettings_{};
     EnemyAttackTelegraphFeedbackBridge railEnemyAttackTelegraphFeedbackBridge_{};
     EnemyAttackTelegraphFeedbackSettings railEnemyAttackTelegraphFeedbackSettings_{};
+    EnemyCombatPresentationBridge railEnemyCombatPresentationBridge_{};
+    EnemyCombatPresentationSettings railEnemyCombatPresentationSettings_{};
+    EnemyProjectilePresentationBridge railEnemyProjectilePresentationBridge_{};
+    EnemyProjectilePresentationSettings railEnemyProjectilePresentationSettings_{};
+    EnemyProjectileRenderer railEnemyProjectileRenderer_{};
+    EnemyProjectileRendererSettings railEnemyProjectileRendererSettings_{};
+    EnemyProjectileAudioBridge railEnemyProjectileAudioBridge_{};
+    EnemyProjectileAudioSettings railEnemyProjectileAudioSettings_{};
+    float railEnemyProjectilePresentationTime_ = 0.0f;
     audio::SoundHandle railTelegraphAcquiredSound_{};
     audio::SoundHandle railTelegraphImminentSound_{};
     audio::SoundHandle railTelegraphFiredSound_{};
@@ -296,6 +344,22 @@ private:
     audio::SoundHandle railSessionVictorySound_{};
     audio::SoundHandle railSessionDefeatSound_{};
     audio::SoundHandle railSessionRetrySound_{};
+    audio::SoundHandle railVehicleRollingSound_{};
+    audio::SoundHandle railVehicleJointSound_{};
+    audio::SoundHandle railVehicleBrakeSound_{};
+    audio::SoundHandle railVehicleStopSound_{};
+    audio::SoundHandle railEnemySpawnSound_{};
+    audio::SoundHandle railEnemyEngageSound_{};
+    audio::SoundHandle railEnemyAttackSound_{};
+    audio::SoundHandle railEnemyHitReactSound_{};
+    audio::SoundHandle railEnemyDeathSound_{};
+    audio::SoundHandle railEnemyProjectileLaunchSound_{};
+    audio::SoundHandle railEnemyProjectileFlyBySound_{};
+    audio::SoundHandle railEnemyProjectileImpactSound_{};
+    audio::SoundHandle railGrazeSound_{};
+    audio::SoundHandle railGrazeChainSound_{};
+    audio::SoundHandle railThreatCriticalSound_{};
+    audio::SoundHandle railThreatClearSound_{};
     uint32_t railTelegraphVibrationController_ = UINT32_MAX;
     uint32_t railSessionVibrationController_ = UINT32_MAX;
     RailLockOnSystem railShooterLockOnSystem_;

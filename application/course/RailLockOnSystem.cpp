@@ -37,6 +37,9 @@ void RailLockOnSystem::Update(const RailLockOnFrameInput& input) {
     reticleInput.aimRayMaxDistance = input.aimRayMaxDistance;
     reticleInput.gamepadConnected = input.gamepadConnected;
     reticleInput.gamepadAim = input.gamepadAim;
+    reticleInput.keyboardDirectionalAimEnabled =
+        input.keyboardDirectionalAimEnabled;
+    reticleInput.shiftLockEnabled = input.shiftLockEnabled;
     reticleInput.aimFrictionScale = aimAssist_.Frame().inputFrictionScale;
     reticleInput.settings = settings_;
     reticle_.Update(reticleInput);

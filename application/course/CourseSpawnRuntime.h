@@ -6,6 +6,13 @@
 
 #include "../diagnostics/DebugDrawSystem.h"
 #include "../terrain/RailPath.h"
+#include "EnemyAttackCoordinator.h"
+#include "EnemyAttackExecutionSystem.h"
+#include "EnemyCombatSystem.h"
+#include "EnemyBehaviorSystem.h"
+#include "EnemyProjectileDefinitionAsset.h"
+#include "EnemyProjectileSystem.h"
+#include "EnemyTargetingSystem.h"
 #include "utils/math/Vector.h"
 
 class EffectRuntime;
@@ -31,6 +38,8 @@ struct CourseEnemyFireSafetyFrameInput {
     bool cameraStableForAiming = true;
     bool cameraHardTransition = false;
     float playerDistance = 0.0f;
+    float playerLateralOffset = 0.0f;
+    float playerVerticalOffset = 4.0f;
     float deltaTime = 0.016f;
     std::string cameraReason = "stable";
 };
@@ -53,6 +62,7 @@ struct CourseEnemyActorDesc {
     std::string actorAssetId;
     std::string meshId = "ball";
     std::string bulletPatternId = "single_red";
+    std::string projectileDefinitionId;
     std::string role = "drone";
     float spawnDistance = 0.0f;
     float distanceOffset = 0.0f;
@@ -76,6 +86,11 @@ struct CourseEnemyActorDesc {
     Vector4 color{1.0f, 0.25f, 0.18f, 1.0f};
     Vector3 localRotation{};
     Vector3 localScale{1.0f, 1.0f, 1.0f};
+    // Empty definitionId selects commercial defaults for production
+    // ActorAssets and legacy-compatible timing for anonymous/event actors.
+    EnemyCombatDefinition combatDefinition{};
+    EnemyBehaviorDefinition behaviorDefinition{};
+    EnemyProjectileDefinitionAsset projectileDefinition{};
     bool previewOnly = false;
     bool suppressFire = false;
 };
@@ -114,6 +129,12 @@ struct CourseVfxCueDesc {
 
 struct CourseEnemyActor {
     CourseEnemyActorDesc desc;
+    EnemyCombatDefinition combatDefinition{};
+    EnemyCombatRuntimeState combatState{};
+    EnemyBehaviorDefinition behaviorDefinition{};
+    EnemyBehaviorRuntimeState behaviorState{};
+    EnemyAttackRuntimeState attackState{};
+    EnemyTargetingRuntimeState targetingState{};
     float age = 0.0f;
     float fireTimer = 0.0f;
     float fireVisibleTime = 0.0f;
@@ -122,23 +143,6 @@ struct CourseEnemyActor {
     bool fireSafetyAllowed = false;
     std::string fireSafetyReason = "not evaluated";
     uint32_t actorId = 0;
-};
-
-struct CourseBulletActor {
-    uint32_t ownerActorId = 0;
-    std::string sourceRole;
-    float spawnDistance = 0.0f;
-    float distanceOffset = 0.0f;
-    float lateralOffset = 0.0f;
-    float verticalOffset = 0.0f;
-    float forwardSpeed = -48.0f;
-    float lateralSpeed = 0.0f;
-    float verticalSpeed = 0.0f;
-    float radius = 0.34f;
-    float lifetime = 4.0f;
-    float age = 0.0f;
-    float damage = 8.0f;
-    Vector4 color{1.0f, 0.18f, 0.08f, 1.0f};
 };
 
 struct CourseObstacleActor {
@@ -196,8 +200,31 @@ public:
     const CourseEnemyFireSafetySettings& FireSafetySettings() const { return fireSafetySettings_; }
     CourseEnemyFireSafetySettings& MutableFireSafetySettings() { return fireSafetySettings_; }
     const CourseEnemyFireSafetyStats& LastFireSafetyStats() const { return fireSafetyStats_; }
+    const EnemyCombatSystem& EnemyCombat() const noexcept { return enemyCombatSystem_; }
+    EnemyCombatSystem& EnemyCombat() noexcept { return enemyCombatSystem_; }
+    const EnemyBehaviorSystem& EnemyBehavior() const noexcept { return enemyBehaviorSystem_; }
+    EnemyBehaviorSystem& EnemyBehavior() noexcept { return enemyBehaviorSystem_; }
+    const EnemyAttackCoordinator& EnemyAttacks() const noexcept {
+        return enemyAttackCoordinator_;
+    }
+    EnemyAttackCoordinator& EnemyAttacks() noexcept {
+        return enemyAttackCoordinator_;
+    }
+    const EnemyAttackExecutionSystem& EnemyAttackExecution() const noexcept {
+        return enemyAttackExecutionSystem_;
+    }
+    const EnemyTargetingSystem& EnemyTargeting() const noexcept {
+        return enemyTargetingSystem_;
+    }
+    const EnemyProjectileSystem& EnemyProjectiles() const noexcept {
+        return enemyProjectileSystem_;
+    }
+    bool MarkEnemyAttackTelegraphPresented(
+        uint32_t actorId,
+        uint64_t attackIntentSequence);
 
 private:
+    friend class EnemyAttackExecutionSystem;
     bool CanEnemyFire(CourseEnemyActor& enemy, const CourseEnemyFireSafetyFrameInput& safetyInput, float dt);
     uint32_t EmitEnemyBullets(const CourseEnemyActor& enemy);
 
@@ -207,5 +234,11 @@ private:
     std::vector<CourseVfxCue> vfxCues_;
     CourseEnemyFireSafetySettings fireSafetySettings_{};
     CourseEnemyFireSafetyStats fireSafetyStats_{};
+    EnemyCombatSystem enemyCombatSystem_{};
+    EnemyBehaviorSystem enemyBehaviorSystem_{};
+    EnemyAttackCoordinator enemyAttackCoordinator_{};
+    EnemyAttackExecutionSystem enemyAttackExecutionSystem_{};
+    EnemyTargetingSystem enemyTargetingSystem_{};
+    EnemyProjectileSystem enemyProjectileSystem_{};
     uint32_t nextActorId_ = 1;
 };

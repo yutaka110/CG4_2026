@@ -11,6 +11,7 @@
 #include "../../course/CourseAsset.h"
 #include "../../course/CourseRuntimeProgramAsset.h"
 #include "../../course/CourseSpawnRuntime.h"
+#include "../../course/EnemyProjectileDefinitionAsset.h"
 
 namespace editor {
 
@@ -31,6 +32,7 @@ struct CourseWaveRuntimeDiagnostic final {
 struct CourseWaveRuntimeCompileOptions final {
     std::string actorAssetDirectory = "Resources/courses/actors";
     std::string bulletPatternDirectory = "Resources/courses/bullet_patterns";
+    std::string projectileDefinitionDirectory = "Resources/courses/projectiles";
     bool allowFallbackActorAssets = false;
     bool compileDisabledObjects = false;
     std::function<bool(
@@ -41,6 +43,10 @@ struct CourseWaveRuntimeCompileOptions final {
         std::string_view,
         BulletPatternAsset&,
         std::string&)> bulletPatternResolver;
+    std::function<bool(
+        std::string_view,
+        EnemyProjectileDefinitionAsset&,
+        std::string&)> projectileDefinitionResolver;
 };
 
 using CompiledCourseWaveActor = CourseRuntimeActorRecord;
@@ -74,6 +80,11 @@ private:
         std::string_view id,
         const CourseWaveRuntimeCompileOptions& options,
         BulletPatternAsset& asset,
+        std::string& errorMessage);
+    static bool ResolveProjectileDefinition(
+        std::string_view id,
+        const CourseWaveRuntimeCompileOptions& options,
+        EnemyProjectileDefinitionAsset& asset,
         std::string& errorMessage);
 };
 

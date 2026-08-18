@@ -44,12 +44,18 @@ struct EnemyAttackTelegraphSettings {
 struct EnemyAttackTelegraphCue {
     uint32_t actorId = 0;
     uint64_t fireSequence = 0;
+    uint64_t attackIntentSequence = 0;
+    uint64_t attackTokenId = 0;
     CourseEnemyFirePattern attackPattern = CourseEnemyFirePattern::Single;
     EnemyAttackTelegraphPhase phase = EnemyAttackTelegraphPhase::None;
     Vector3 worldPosition{};
     Vector2 screenPosition{};
     Vector2 directionFromCenter{};
     float timeToFire = 0.0f;
+    float targetRailDistance = 0.0f;
+    float targetLateralOffset = 0.0f;
+    float targetVerticalOffset = 0.0f;
+    float predictedFlightSeconds = 0.0f;
     float urgency = 0.0f;
     float severity = 0.0f;
     float priority = 0.0f;
@@ -60,6 +66,7 @@ struct EnemyAttackTelegraphCue {
     bool occluded = false;
     bool visibilityTested = false;
     bool newlyPresented = false;
+    bool hasLockedTarget = false;
 };
 
 struct EnemyAttackTelegraphEvent {
@@ -106,9 +113,10 @@ struct EnemyAttackTelegraphFrameInput {
     EnemyAttackTelegraphSettings settings{};
 };
 
-// Builds the authoritative player-facing warning frame from CourseSpawnRuntime
-// attack timers. Presentation, audio, and haptics consume the same ordered cue
-// and event lists instead of independently guessing when an enemy will fire.
+// Builds the authoritative player-facing warning frame from Behavior attack
+// intents. Presentation, audio and haptics consume this ordered frame, while
+// Coordinator and Behavior both require the exact presented reservation before
+// the commercial execution boundary may fire.
 class EnemyAttackTelegraphSystem {
 public:
     void Reset();
@@ -135,4 +143,3 @@ private:
 const char* ToEnemyAttackTelegraphPhaseString(EnemyAttackTelegraphPhase phase);
 const char* ToEnemyAttackTelegraphEventKindString(
     EnemyAttackTelegraphEventKind kind);
-

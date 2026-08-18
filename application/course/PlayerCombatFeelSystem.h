@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <string>
 
 #include "CourseCollisionSystem.h"
+#include "GrazeScoreSystem.h"
 
 class CourseSpawnRuntime;
 
@@ -27,6 +29,8 @@ struct PlayerCombatFeelStats {
     uint32_t lastLockScore = 0;
     uint32_t lastLockTokenCount = 0;
     uint32_t lastLockHitCount = 0;
+    uint32_t nearMissCount = 0;
+    uint32_t nearMissScore = 0;
     float comboTimer = 0.0f;
     float hitFlash = 0.0f;
     float damageFlash = 0.0f;
@@ -44,6 +48,10 @@ public:
     void Reset();
     CourseCollisionWeaponState BuildWeaponState(const PlayerCombatFeelFrameInput& input);
     void ApplyCollisionStats(const CourseCollisionFrameStats& stats);
+    void ApplyPlayerDamageResults(
+        std::span<const PlayerDamageResult> results);
+    void ApplyGrazeScoreResults(
+        std::span<const GrazeScoreResult> results);
     void ApplyLockOnRelease(uint32_t tokenCount, uint32_t hitCount, uint32_t maxLockCount);
     void Update(float deltaTime);
 

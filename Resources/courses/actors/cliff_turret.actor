@@ -1,3 +1,4 @@
 actor|cliff_turret|Cliff Crossfire Turret|animated_cube|1.8|90|12|1.0|0.18|0.12|1.0|spread_crossfire
 combat|0.58|0.30|52|spread_crossfire
 movement|0
+behavior|turret|0.18|0.18|0.34|0.68|1.05|0.12|0.22|0|0|0|true

@@ -48,7 +48,7 @@ bool BulletPatternAsset::LoadFromFile(const std::string& path, std::string* erro
         }
 
         if (parts[0] == "pattern") {
-            if (parts.size() < 13) {
+            if (parts.size() < 14) {
                 if (errorMessage != nullptr) {
                     *errorMessage = "Invalid bullet pattern row at line " + std::to_string(lineNumber);
                 }
@@ -67,6 +67,15 @@ bool BulletPatternAsset::LoadFromFile(const std::string& path, std::string* erro
             loaded.color.y = ParseFloatOr(parts, 11, loaded.color.y);
             loaded.color.z = ParseFloatOr(parts, 12, loaded.color.z);
             loaded.color.w = ParseFloatOr(parts, 13, loaded.color.w);
+        } else if (parts[0] == "projectile") {
+            if (parts.size() < 2 || parts[1].empty()) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid projectile reference at line " +
+                        std::to_string(lineNumber);
+                }
+                return false;
+            }
+            loaded.projectileDefinitionId = parts[1];
         } else if (errorMessage != nullptr) {
             *errorMessage = "Unknown bullet pattern row at line " + std::to_string(lineNumber) + ": " + parts[0];
             return false;

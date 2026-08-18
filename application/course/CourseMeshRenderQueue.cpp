@@ -2,6 +2,7 @@
 
 #include "CourseSpawnRuntime.h"
 #include "DebrisCompositionSystem.h"
+#include "EnemyCombatPresentationBridge.h"
 #include "utils/dx12/BufferHelper.h"
 
 #include <algorithm>
@@ -122,6 +123,24 @@ bool CourseMeshRenderQueue::Initialize(
         item.transformData->WVP = MakeIdentity4x4();
         item.transformData->World = MakeIdentity4x4();
         item.transformData->WorldInverseTranspose = MakeIdentity4x4();
+        item.materialResource = CreateBufferResource(device, sizeof(Material));
+        if (item.materialResource == nullptr) {
+            return false;
+        }
+        item.materialResource->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&item.materialData));
+        if (item.materialData == nullptr) {
+            return false;
+        }
+        *item.materialData = {};
+        item.materialData->color = {1.0f, 1.0f, 1.0f, 1.0f};
+        item.materialData->enableLighting = true;
+        item.materialData->shininess = 5.0f;
+        item.materialData->environmentCoefficient = 0.16f;
+        item.materialData->specularMode = 1;
+        item.materialData->uvTransform = MakeIdentity4x4();
         item.visible = false;
     }
 
@@ -133,6 +152,7 @@ void CourseMeshRenderQueue::Reset() {
     for (CourseMeshRenderItem& item : items_) {
         item.visible = false;
         item.sourceActorId = 0;
+        item.useMaterialOverride = false;
         item.name.clear();
         item.meshId.clear();
         item.terrainLayer = CourseTerrainLayer::HeroLandmark;
@@ -148,7 +168,8 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
     const RailPath& railPath,
     std::span<const CourseMeshModelBinding> models,
     const Matrix4x4& viewMatrix,
-    const Matrix4x4& projMatrix) {
+    const Matrix4x4& projMatrix,
+    const EnemyCombatPresentationBridge* enemyPresentation) {
     Reset();
     if (railPath.Length() <= 0.0f || models.empty()) {
         return;
@@ -158,7 +179,12 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
 
     // Gameplay targets are submitted before scenery and decorative debris so
     // a saturated fixed-capacity queue can never make enemies disappear.
-    AddEnemyInstances(runtime, railPath, models, viewProjection);
+    AddEnemyInstances(
+        runtime,
+        railPath,
+        models,
+        viewProjection,
+        enemyPresentation);
 
     if (course != nullptr) {
         for (const CourseTerrainPlacement& placement : course->terrainPlacements) {
@@ -275,8 +301,13 @@ void CourseMeshRenderQueue::AddEnemyInstances(
     const CourseSpawnRuntime& runtime,
     const RailPath& railPath,
     std::span<const CourseMeshModelBinding> models,
-    const Matrix4x4& viewProjection) {
+    const Matrix4x4& viewProjection,
+    const EnemyCombatPresentationBridge* enemyPresentation) {
     for (const CourseEnemyActor& enemy : runtime.Enemies()) {
+        if (enemy.combatState.initialized &&
+            enemy.combatState.phase == EnemyCombatPhase::Retired) {
+            continue;
+        }
         if (!IsCourseMeshRenderEligible(
                 CourseMeshRenderKind::Enemy,
                 enemy.desc.meshId)) {
@@ -310,24 +341,62 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             continue;
         }
 
-        const Vector3 center = ResolveRailLocal(
+        const EnemyCombatActorPresentation* presentation =
+            enemyPresentation != nullptr
+            ? enemyPresentation->FindActor(enemy.actorId)
+            : nullptr;
+        if (presentation != nullptr && !presentation->visible) {
+            item->visible = false;
+            continue;
+        }
+
+        Vector3 center = ResolveRailLocal(
             railPath,
             enemy.desc.spawnDistance,
             enemy.desc.distanceOffset,
             enemy.desc.lateralOffset,
             enemy.desc.verticalOffset);
-        const float scale = (std::max)(0.1f, enemy.desc.radius);
+        if (presentation != nullptr) {
+            center = Add(center, Scale(sample.tangent, presentation->forwardOffset));
+            center = Add(center, Scale(sample.right, presentation->lateralOffset));
+            center = Add(center, Scale(sample.up, presentation->verticalOffset));
+        }
+        const float presentationScale = enemy.combatState.initialized
+            ? (std::max)(0.0f, enemy.combatState.presentationScale)
+            : 1.0f;
+        const float bridgeScale = presentation != nullptr
+            ? (std::max)(0.0f, presentation->scaleMultiplier)
+            : 1.0f;
+        const float baseScale = (std::max)(0.01f,
+            enemy.desc.radius * presentationScale * bridgeScale);
+        Vector3 rotation = Add(
+            RotationFromRailTangent(sample.tangent),
+            enemy.desc.localRotation);
+        if (presentation != nullptr) {
+            rotation = Add(rotation, presentation->rotationOffset);
+        }
+        if (item->materialData != nullptr) {
+            const float alpha = enemy.combatState.initialized
+                ? enemy.combatState.presentationAlpha
+                : 1.0f;
+            item->materialData->color = presentation != nullptr
+                ? presentation->materialColor
+                : Vector4{1.0f, 1.0f, 1.0f, alpha};
+            item->materialData->shininess = presentation != nullptr &&
+                presentation->flashStrength > 0.01f
+                ? 18.0f
+                : 5.0f;
+            item->useMaterialOverride = true;
+        }
         WriteItemTransform(
             *item,
             model.rootLocal,
             {
-                scale * (std::max)(0.01f, enemy.desc.localScale.x),
-                scale * (std::max)(0.01f, enemy.desc.localScale.y),
-                scale * (std::max)(0.01f, enemy.desc.localScale.z),
+                baseScale * (std::max)(0.01f, enemy.desc.localScale.x),
+                baseScale * (std::max)(0.01f, enemy.desc.localScale.y),
+                baseScale * (std::max)(0.01f, enemy.desc.localScale.z),
             },
-            Add(
-                RotationFromRailTangent(sample.tangent),
-                enemy.desc.localRotation),
+            rotation,
             center,
             viewProjection);
     }

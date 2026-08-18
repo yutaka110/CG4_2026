@@ -17,6 +17,7 @@
 #include "AppRuntimeConfig.h"
 #include "AppRuntimeUtils.h"
 #include "ModelLoaderAssimp.h"
+#include "course/RailVehicleRenderer.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -1117,6 +1118,65 @@ namespace {
         return model;
     }
 
+    ModelData BuildRailVehicleModelData() {
+        ModelData model;
+        constexpr const char* kWhiteAlbedo = "Resources/human/white.png";
+        model.materials = {
+            {"painted_body", kWhiteAlbedo, {}, {0.12f, 0.34f, 0.42f, 1.0f}},
+            {"iron_running_gear", kWhiteAlbedo, {}, {0.055f, 0.065f, 0.075f, 1.0f}},
+            {"safety_trim", kWhiteAlbedo, {}, {0.95f, 0.48f, 0.08f, 1.0f}},
+        };
+        model.material = model.materials.front();
+
+        auto appendPart = [&](const char* name, uint32_t materialIndex, auto appendGeometry) {
+            const uint32_t indexStart = static_cast<uint32_t>(model.indices.size());
+            appendGeometry();
+            model.subMeshes.push_back({
+                name,
+                indexStart,
+                static_cast<uint32_t>(model.indices.size()) - indexStart,
+                materialIndex,
+            });
+        };
+        appendPart("cart_body", 0, [&]() {
+            AppendBox(model, {-2.15f, -0.30f, -3.15f}, {2.15f, 0.38f, 3.15f});
+            AppendBox(model, {-2.25f, 0.38f, -3.20f}, {-1.78f, 1.82f, 3.20f});
+            AppendBox(model, {1.78f, 0.38f, -3.20f}, {2.25f, 1.82f, 3.20f});
+            AppendBox(model, {-1.78f, 0.38f, -3.20f}, {1.78f, 1.25f, -2.75f});
+            AppendBox(model, {-1.78f, 0.38f, 2.75f}, {1.78f, 1.25f, 3.20f});
+        });
+        appendPart("running_gear", 1, [&]() {
+            AppendBox(model, {-2.52f, -0.95f, -2.35f}, {-1.82f, -0.28f, -1.55f});
+            AppendBox(model, {1.82f, -0.95f, -2.35f}, {2.52f, -0.28f, -1.55f});
+            AppendBox(model, {-2.52f, -0.95f, 1.55f}, {-1.82f, -0.28f, 2.35f});
+            AppendBox(model, {1.82f, -0.95f, 1.55f}, {2.52f, -0.28f, 2.35f});
+            AppendBox(model, {-1.45f, -0.68f, -3.48f}, {1.45f, -0.20f, -3.08f});
+            AppendBox(model, {-1.45f, -0.68f, 3.08f}, {1.45f, -0.20f, 3.48f});
+        });
+        appendPart("safety_trim", 2, [&]() {
+            AppendBox(model, {-2.31f, 1.55f, -3.26f}, {-1.72f, 1.88f, 3.26f});
+            AppendBox(model, {1.72f, 1.55f, -3.26f}, {2.31f, 1.88f, 3.26f});
+            AppendBox(model, {-1.72f, 1.18f, -3.26f}, {1.72f, 1.48f, -2.68f});
+        });
+        model.rootNode.name = "rail_vehicle_mine_cart_root";
+        model.rootNode.transform = {
+            {1.0f, 1.0f, 1.0f},
+            {0.0f, 0.0f, 0.0f, 1.0f},
+            {0.0f, 0.0f, 0.0f},
+        };
+        model.rootNode.localMatrix = MakeIdentity4x4();
+        EnsureModelDataMaterialLayout(model);
+        const ModelGeometryOrientationStats orientation =
+            RepairModelGeometryOrientation(model);
+        if (!ValidateModelDataMaterialLayout(model) ||
+            !ValidateModelGeometryOrientation(model) ||
+            orientation.degenerateTriangleCount != 0) {
+            OutputDebugStringA(
+                "[AppSceneResources] Rail vehicle CPU geometry validation failed.\n");
+        }
+        return model;
+    }
+
     std::vector<OrbitRibbonVertex> BuildOrbitRibbonVertices() {
         auto makeVertex = [](float t, float side, float ribbonIndex) {
             OrbitRibbonVertex vertex{};
@@ -1735,6 +1795,10 @@ namespace {
 
 ModelData BuildTrainingSwordModelDataForSubmission() {
     return BuildTrainingSwordModelData();
+}
+
+ModelData BuildRailVehicleModelDataForSubmission() {
+    return BuildRailVehicleModelData();
 }
 
 bool AppSceneResources::Initialize(
@@ -2891,6 +2955,30 @@ bool AppSceneResources::Initialize(
         "MultiMaterial.obj",
         "default");
 
+    railVehicleModelIndex = UINT32_MAX;
+    ModelData railVehicleData = BuildRailVehicleModelDataForSubmission();
+    GpuMeshResource railVehicleMesh = CreateGpuMeshResource(
+        device,
+        uploadCommandList,
+        railVehicleData,
+        initialUploadResources_);
+    const D3D12_GPU_DESCRIPTOR_HANDLE railVehicleTexture =
+        findManagedTextureGpu("default");
+    if (railVehicleMesh.indexCount > 0 && railVehicleTexture.ptr != 0) {
+        railVehicleModelIndex = static_cast<uint32_t>(vfxModelLibrary.size());
+        vfxModelLibrary.push_back({
+            "rail_vehicle.mine_cart",
+            "<procedural>",
+            "rail_vehicle.mine_cart",
+            std::move(railVehicleData),
+            railVehicleMesh,
+            railVehicleTexture,
+            true,
+        });
+    } else {
+        OutputDebugStringA("[AppSceneResources] Rail vehicle resource creation failed.\n");
+    }
+
     trainingSwordModelIndex = UINT32_MAX;
     ModelData trainingSwordData = BuildTrainingSwordModelDataForSubmission();
     GpuMeshResource trainingSwordMesh = CreateGpuMeshResource(
@@ -2958,6 +3046,20 @@ bool AppSceneResources::Initialize(
     weaponAttachmentObject.transformData->WVP = MakeIdentity4x4();
     weaponAttachmentObject.transformData->World = MakeIdentity4x4();
     weaponAttachmentObject.transformData->WorldInverseTranspose = MakeIdentity4x4();
+
+    railVehicleObject = {};
+    railVehicleObject.name = "rail_vehicle_actor";
+    railVehicleObject.modelIndex = railVehicleModelIndex;
+    railVehicleObject.visible = false;
+    railVehicleObject.transformResource =
+        CreateBufferResource(device, sizeof(TransformationMatrix));
+    railVehicleObject.transformResource->Map(
+        0,
+        nullptr,
+        reinterpret_cast<void**>(&railVehicleObject.transformData));
+    railVehicleObject.transformData->WVP = MakeIdentity4x4();
+    railVehicleObject.transformData->World = MakeIdentity4x4();
+    railVehicleObject.transformData->WorldInverseTranspose = MakeIdentity4x4();
 
     // =========================================================
     // Skinned model instances
@@ -3402,7 +3504,8 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
     float currentDistance,
     const RailPath& railPath,
     const Matrix4x4& viewMatrix,
-    const Matrix4x4& projMatrix) {
+    const Matrix4x4& projMatrix,
+    const EnemyCombatPresentationBridge* enemyPresentation) {
     std::vector<CourseMeshModelBinding> bindings;
     bindings.reserve(vfxModelLibrary.size());
     for (const AppManagedModelResource& model : vfxModelLibrary) {
@@ -3423,7 +3526,45 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
         railPath,
         bindings,
         viewMatrix,
-        projMatrix);
+        projMatrix,
+        enemyPresentation);
+}
+
+void AppSceneResources::SyncRailVehicleRenderFrame(
+    const RailVehicleRenderFrame& frame,
+    const Matrix4x4& viewMatrix,
+    const Matrix4x4& projMatrix) {
+    railVehicleObject.visible = false;
+    if (!frame.visible || railVehicleObject.transformData == nullptr) return;
+
+    auto resolveModelIndex = [&](const std::string& name) -> uint32_t {
+        for (uint32_t index = 0; index < vfxModelLibrary.size(); ++index) {
+            const AppManagedModelResource& model = vfxModelLibrary[index];
+            if (model.loaded && model.name == name) return index;
+        }
+        return UINT32_MAX;
+    };
+    uint32_t modelIndex = resolveModelIndex(frame.meshId);
+    if (modelIndex == UINT32_MAX) {
+        modelIndex = resolveModelIndex(frame.fallbackMeshId);
+    }
+    if (modelIndex == UINT32_MAX &&
+        FindManagedModel(railVehicleModelIndex) != nullptr) {
+        modelIndex = railVehicleModelIndex;
+    }
+    const AppManagedModelResource* model = FindManagedModel(modelIndex);
+    if (model == nullptr || model->mesh.indexCount == 0) return;
+
+    railVehicleObject.modelIndex = modelIndex;
+    railVehicleObject.visible = true;
+    Matrix4x4 world = Multiply(
+        model->model.rootNode.localMatrix,
+        frame.worldMatrix);
+    railVehicleObject.transformData->World = world;
+    railVehicleObject.transformData->WVP =
+        Multiply(world, Multiply(viewMatrix, projMatrix));
+    railVehicleObject.transformData->WorldInverseTranspose =
+        Transpose(Inverse(world));
 }
 
 void AppSceneResources::UpdateTransforms(

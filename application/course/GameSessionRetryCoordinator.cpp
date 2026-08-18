@@ -18,7 +18,9 @@ bool GameSessionRetryCoordinator::Bind(
         binding.waveRuntime == nullptr || binding.spawnRuntime == nullptr ||
         binding.collisionSystem == nullptr || binding.sectionCheckpoints == nullptr ||
         binding.course == nullptr || binding.playerMovement == nullptr ||
-        binding.playerDodge == nullptr || !binding.session->IsInitialized()) {
+        binding.playerDodge == nullptr || binding.railVehicle == nullptr ||
+        binding.railPath == nullptr || binding.grazeScore == nullptr ||
+        !binding.session->IsInitialized()) {
         SetError(errorMessage, "Retry coordinator requires every runtime boundary and an initialized session.");
         return false;
     }
@@ -65,6 +67,11 @@ bool GameSessionRetryCoordinator::CaptureCheckpoint(
     captured.playerMovement = binding_.playerMovement->State();
     captured.playerDodge = binding_.playerDodge->State();
     captured.hasPlayerRuntime = true;
+    captured.railVehicle = binding_.railVehicle->State();
+    captured.hasRailVehicleRuntime = true;
+    captured.grazeScore = binding_.grazeScore->State();
+    captured.nearMiss = binding_.collisionSystem->PlayerNearMiss().State();
+    captured.hasGrazeScoreRuntime = true;
     checkpoint_ = std::move(captured);
     if (errorMessage != nullptr) errorMessage->clear();
     return true;
@@ -119,6 +126,25 @@ GameSessionRetryResult GameSessionRetryCoordinator::Retry(
     }
 
     binding_.courseRuntime->Reset(checkpoint_.courseDistance);
+    if (checkpoint_.hasRailVehicleRuntime &&
+        !binding_.railVehicle->RestoreState(
+            checkpoint_.railVehicle,
+            binding_.railPath,
+            &validationError)) {
+        lastResult_.status = GameSessionRetryStatus::VehicleRuntimeMismatch;
+        lastResult_.message = validationError;
+        SetError(errorMessage, lastResult_.message);
+        return lastResult_;
+    }
+    if (checkpoint_.hasGrazeScoreRuntime &&
+        !binding_.grazeScore->RestoreState(
+            checkpoint_.grazeScore,
+            &validationError)) {
+        lastResult_.status = GameSessionRetryStatus::GrazeRuntimeMismatch;
+        lastResult_.message = validationError;
+        SetError(errorMessage, lastResult_.message);
+        return lastResult_;
+    }
     binding_.spawnRuntime->RestoreCheckpoint(checkpoint_.spawn, false);
     if (checkpoint_.hasWaveCheckpoint &&
         !binding_.waveRuntime->RestoreCheckpoint(checkpoint_.wave, &validationError)) {
@@ -130,8 +156,18 @@ GameSessionRetryResult GameSessionRetryCoordinator::Retry(
         return lastResult_;
     }
     binding_.collisionSystem->Reset();
+    if (checkpoint_.hasGrazeScoreRuntime &&
+        !binding_.collisionSystem->PlayerNearMiss().RestoreState(
+            checkpoint_.nearMiss,
+            &validationError)) {
+        lastResult_.status = GameSessionRetryStatus::GrazeRuntimeMismatch;
+        lastResult_.message = validationError;
+        SetError(errorMessage, lastResult_.message);
+        return lastResult_;
+    }
     binding_.collisionSystem->SynchronizePlayerHitPoints(
-        binding_.session->State().playerHealth);
+        binding_.session->State().playerHealth,
+        binding_.session->State().maximumPlayerHealth);
     binding_.sectionCheckpoints->Reset(binding_.course, checkpoint_.courseDistance);
 
     lastResult_.status = GameSessionRetryStatus::Succeeded;
@@ -155,7 +191,8 @@ bool GameSessionRetryCoordinator::IsBound() const noexcept {
         binding_.waveRuntime != nullptr && binding_.spawnRuntime != nullptr &&
         binding_.collisionSystem != nullptr && binding_.sectionCheckpoints != nullptr &&
         binding_.course != nullptr && binding_.playerMovement != nullptr &&
-        binding_.playerDodge != nullptr;
+        binding_.playerDodge != nullptr && binding_.railVehicle != nullptr &&
+        binding_.railPath != nullptr && binding_.grazeScore != nullptr;
 }
 
 bool GameSessionRetryCoordinator::CanRetry() const noexcept {
@@ -192,6 +229,8 @@ const char* ToString(GameSessionRetryStatus status) {
     case GameSessionRetryStatus::StaleRun: return "StaleRun";
     case GameSessionRetryStatus::WaveMismatch: return "WaveMismatch";
     case GameSessionRetryStatus::PlayerRuntimeMismatch: return "PlayerRuntimeMismatch";
+    case GameSessionRetryStatus::VehicleRuntimeMismatch: return "VehicleRuntimeMismatch";
+    case GameSessionRetryStatus::GrazeRuntimeMismatch: return "GrazeRuntimeMismatch";
     }
     return "Unknown";
 }

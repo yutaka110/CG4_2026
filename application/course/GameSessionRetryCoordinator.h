@@ -8,8 +8,10 @@
 #include "CourseGameplayWaveRuntimeBridge.h"
 #include "CourseSpawnRuntime.h"
 #include "GameSessionSystem.h"
+#include "GrazeScoreSystem.h"
 #include "RailDodgeSystem.h"
 #include "RailPlayerMovementSystem.h"
+#include "RailVehicleMovementSystem.h"
 #include "SectionCheckpointSystem.h"
 
 struct GameSessionRetryCoordinatorBinding final {
@@ -22,6 +24,9 @@ struct GameSessionRetryCoordinatorBinding final {
     const CourseAsset* course = nullptr;
     RailPlayerMovementSystem* playerMovement = nullptr;
     RailDodgeSystem* playerDodge = nullptr;
+    RailVehicleMovementSystem* railVehicle = nullptr;
+    const RailPath* railPath = nullptr;
+    GrazeScoreSystem* grazeScore = nullptr;
 };
 
 struct GameSessionRetryCheckpoint final {
@@ -36,6 +41,11 @@ struct GameSessionRetryCheckpoint final {
     RailPlayerMovementRuntimeState playerMovement;
     RailDodgeRuntimeState playerDodge;
     bool hasPlayerRuntime = false;
+    RailVehicleRuntimeState railVehicle;
+    bool hasRailVehicleRuntime = false;
+    GrazeScoreRuntimeState grazeScore;
+    PlayerNearMissRuntimeState nearMiss;
+    bool hasGrazeScoreRuntime = false;
 };
 
 enum class GameSessionRetryStatus : uint8_t {
@@ -47,6 +57,8 @@ enum class GameSessionRetryStatus : uint8_t {
     StaleRun,
     WaveMismatch,
     PlayerRuntimeMismatch,
+    VehicleRuntimeMismatch,
+    GrazeRuntimeMismatch,
 };
 
 struct GameSessionRetryResult final {

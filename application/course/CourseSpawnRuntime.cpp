@@ -57,6 +57,12 @@ void CourseSpawnRuntime::Reset() {
     obstacles_.clear();
     vfxCues_.clear();
     fireSafetyStats_ = {};
+    enemyCombatSystem_.Reset();
+    enemyBehaviorSystem_.Reset();
+    enemyAttackCoordinator_.Reset();
+    enemyAttackExecutionSystem_.Reset();
+    enemyTargetingSystem_.Reset();
+    enemyProjectileSystem_.Reset();
     nextActorId_ = 1;
 }
 
@@ -79,6 +85,14 @@ void CourseSpawnRuntime::RestoreCheckpoint(
     obstacles_ = checkpoint.obstacles;
     vfxCues_.clear();
     fireSafetyStats_ = {};
+    enemyCombatSystem_.Reset();
+    enemyBehaviorSystem_.Reset();
+    enemyAttackCoordinator_.Reset();
+    enemyAttackCoordinator_.RebuildFromRuntime(*this);
+    enemyAttackExecutionSystem_.Reset();
+    enemyTargetingSystem_.Reset();
+    enemyProjectileSystem_.Reset();
+    enemyProjectileSystem_.RebuildFromProjectiles(bullets_);
     nextActorId_ = (std::max)(1u, checkpoint.nextActorId);
 }
 
@@ -92,14 +106,28 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     const float dt = (std::max)(0.0f, deltaTime);
     fireSafetyStats_ = {};
 
+    EnemyCombatFrameInput combatInput{};
+    combatInput.deltaTime = dt;
+    combatInput.playerDistance = safetyInput.playerDistance;
+    enemyCombatSystem_.Update(*this, combatInput);
+    EnemyBehaviorFrameInput behaviorInput{};
+    behaviorInput.deltaTime = dt;
+    behaviorInput.playerDistance = safetyInput.playerDistance;
+    enemyBehaviorSystem_.Update(*this, behaviorInput);
+
     for (CourseEnemyActor& enemy : enemies_) {
         ++fireSafetyStats_.activeEnemies;
         enemy.bulletsEmittedThisFrame = 0;
         enemy.age += dt;
-        enemy.desc.distanceOffset += enemy.desc.forwardSpeed * dt;
-        enemy.fireTimer -= dt;
+        const bool behaviorDriven = enemy.behaviorState.initialized &&
+            enemy.behaviorDefinition.commercialBehavior;
+        if (!behaviorDriven) {
+            enemy.desc.distanceOffset += enemy.desc.forwardSpeed * dt;
+            enemy.fireTimer -= dt;
+        }
         const bool canFire = CanEnemyFire(enemy, safetyInput, dt);
-        while (enemy.fireTimer <= 0.0f && enemy.age < enemy.desc.lifetime) {
+        while (!behaviorDriven && enemy.fireTimer <= 0.0f &&
+               enemy.age < enemy.desc.lifetime) {
             if (!canFire) {
                 enemy.fireTimer = (std::max)(enemy.fireTimer, fireSafetySettings_.blockedRetryDelay);
                 break;
@@ -114,12 +142,24 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
         }
     }
 
-    for (CourseBulletActor& bullet : bullets_) {
-        bullet.age += dt;
-        bullet.distanceOffset += bullet.forwardSpeed * dt;
-        bullet.lateralOffset += bullet.lateralSpeed * dt;
-        bullet.verticalOffset += bullet.verticalSpeed * dt;
-    }
+    enemyAttackCoordinator_.Update(*this, enemyBehaviorSystem_.Frame(), dt);
+    EnemyTargetingFrameInput targetingInput{};
+    targetingInput.deltaTime = dt;
+    targetingInput.playerDistance = safetyInput.playerDistance;
+    targetingInput.playerLateralOffset = safetyInput.playerLateralOffset;
+    targetingInput.playerVerticalOffset = safetyInput.playerVerticalOffset;
+    enemyTargetingSystem_.Update(*this, targetingInput);
+    enemyAttackExecutionSystem_.Update(
+        *this, enemyAttackCoordinator_, enemyBehaviorSystem_);
+    fireSafetyStats_.bulletsEmitted +=
+        enemyAttackExecutionSystem_.Frame().emittedProjectiles;
+
+    EnemyProjectileFrameInput projectileInput{};
+    projectileInput.deltaTime = dt;
+    projectileInput.playerDistance = safetyInput.playerDistance;
+    projectileInput.playerLateralOffset = safetyInput.playerLateralOffset;
+    projectileInput.playerVerticalOffset = safetyInput.playerVerticalOffset;
+    enemyProjectileSystem_.Update(bullets_, projectileInput);
 
     for (CourseObstacleActor& obstacle : obstacles_) {
         obstacle.age += dt;
@@ -137,9 +177,24 @@ bool CourseSpawnRuntime::CanEnemyFire(
     CourseEnemyActor& enemy,
     const CourseEnemyFireSafetyFrameInput& safetyInput,
     float dt) {
-    if (enemy.desc.suppressFire) {
+    if (enemy.desc.suppressFire ||
+        (enemy.combatState.initialized && !enemy.combatState.canFire)) {
         enemy.fireSafetyAllowed = false;
-        enemy.fireSafetyReason = "actor fire suppressed";
+        enemy.fireSafetyReason = enemy.desc.suppressFire
+            ? "actor fire suppressed"
+            : "combat phase: " + std::string(ToString(enemy.combatState.phase));
+        fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;
+        return false;
+    }
+    if (enemy.behaviorState.initialized &&
+        enemy.behaviorDefinition.commercialBehavior &&
+        !enemyBehaviorSystem_.CanCommitAttack(enemy)) {
+        enemy.fireSafetyAllowed = false;
+        enemy.fireSafetyReason = enemy.behaviorState.attackIntentActive
+            ? enemy.behaviorState.telegraphPresented
+                ? "behavior attack countdown"
+                : "behavior waiting for telegraph presentation"
+            : "behavior has no attack intent";
         fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;
         return false;
     }
@@ -205,7 +260,13 @@ void CourseSpawnRuntime::PruneDestroyedActors() {
             enemies_.begin(),
             enemies_.end(),
             [](const CourseEnemyActor& enemy) {
-                return enemy.age >= enemy.desc.lifetime || enemy.desc.hitPoints <= 0.0f;
+                if (enemy.age >= enemy.desc.lifetime) {
+                    return true;
+                }
+                if (!enemy.combatState.initialized) {
+                    return enemy.desc.hitPoints <= 0.0f;
+                }
+                return enemy.combatState.phase == EnemyCombatPhase::Retired;
             }),
         enemies_.end());
     bullets_.erase(
@@ -213,7 +274,7 @@ void CourseSpawnRuntime::PruneDestroyedActors() {
             bullets_.begin(),
             bullets_.end(),
             [](const CourseBulletActor& bullet) {
-                return bullet.age >= bullet.lifetime;
+                return !bullet.active || bullet.age >= bullet.lifetime;
             }),
         bullets_.end());
     obstacles_.erase(
@@ -272,7 +333,41 @@ void CourseSpawnRuntime::SpawnEnemyActor(CourseEnemyActorDesc desc) {
     actor.desc = std::move(desc);
     actor.fireTimer = actor.desc.firstShotDelay;
     actor.actorId = nextActorId_++;
+    enemyCombatSystem_.InitializeActor(actor);
+    enemyBehaviorSystem_.InitializeActor(actor);
+    if (actor.desc.projectileDefinition.id.empty()) {
+        actor.desc.projectileDefinition =
+            EnemyProjectileDefinitionAsset::LegacyDirect();
+        actor.desc.projectileDefinition.id = actor.desc.projectileDefinitionId.empty()
+            ? "runtime_" + actor.desc.bulletPatternId
+            : actor.desc.projectileDefinitionId;
+        actor.desc.projectileDefinition.displayName =
+            actor.desc.projectileDefinition.id;
+        actor.desc.projectileDefinition.trajectory =
+            actor.behaviorDefinition.commercialBehavior
+                ? EnemyProjectileTrajectory::Predictive
+                : EnemyProjectileTrajectory::Direct;
+        actor.desc.projectileDefinition.initialSpeed = actor.desc.bulletSpeed;
+        actor.desc.projectileDefinition.maximumSpeed = actor.desc.bulletSpeed;
+        actor.desc.projectileDefinition.radius = actor.desc.bulletRadius;
+        actor.desc.projectileDefinition.lifetime = actor.desc.bulletLifetime;
+        actor.desc.projectileDefinition.damage = actor.desc.bulletDamage;
+        actor.desc.projectileDefinition.color = actor.desc.bulletColor;
+    }
+    actor.desc.projectileDefinitionId = actor.desc.projectileDefinition.id;
+    enemyAttackCoordinator_.InitializeActor(actor);
     enemies_.push_back(std::move(actor));
+}
+
+bool CourseSpawnRuntime::MarkEnemyAttackTelegraphPresented(
+    uint32_t actorId,
+    uint64_t attackIntentSequence) {
+    if (!enemyAttackCoordinator_.MarkTelegraphPresented(
+            *this, actorId, attackIntentSequence)) {
+        return false;
+    }
+    return enemyBehaviorSystem_.MarkTelegraphPresented(
+        *this, actorId, attackIntentSequence);
 }
 
 void CourseSpawnRuntime::SpawnObstacle(CourseObstacleActorDesc desc) {
@@ -330,28 +425,7 @@ void CourseSpawnRuntime::SubmitPendingVfx(EffectRuntime& effectRuntime, const Ra
 }
 
 uint32_t CourseSpawnRuntime::EmitEnemyBullets(const CourseEnemyActor& enemy) {
-    const int bulletCount = (std::max)(1, enemy.desc.bulletCount);
-    const float center = static_cast<float>(bulletCount - 1) * 0.5f;
-
-    for (int i = 0; i < bulletCount; ++i) {
-        const float lane = static_cast<float>(i) - center;
-        CourseBulletActor bullet{};
-        bullet.ownerActorId = enemy.actorId;
-        bullet.sourceRole = enemy.desc.role;
-        bullet.spawnDistance = enemy.desc.spawnDistance;
-        bullet.distanceOffset = enemy.desc.distanceOffset - enemy.desc.radius * 1.5f;
-        bullet.lateralOffset = enemy.desc.lateralOffset + lane * enemy.desc.radius * 0.7f;
-        bullet.verticalOffset = enemy.desc.verticalOffset;
-        bullet.forwardSpeed = -enemy.desc.bulletSpeed;
-        bullet.lateralSpeed = lane * enemy.desc.bulletLateralSpreadSpeed;
-        bullet.verticalSpeed = std::abs(lane) * enemy.desc.bulletVerticalSpreadSpeed;
-        bullet.radius = enemy.desc.bulletRadius;
-        bullet.lifetime = enemy.desc.bulletLifetime;
-        bullet.damage = enemy.desc.bulletDamage;
-        bullet.color = enemy.desc.bulletColor;
-        bullets_.push_back(std::move(bullet));
-    }
-    return static_cast<uint32_t>(bulletCount);
+    return enemyProjectileSystem_.SpawnVolley(enemy, bullets_);
 }
 
 void CourseSpawnRuntime::AppendDebugDraw(
@@ -373,19 +447,6 @@ void CourseSpawnRuntime::AppendDebugDraw(
         debugDraw.AddPoint(center, enemy.desc.radius, color);
         debugDraw.AddCircle(center, sample.right, sample.up, enemy.desc.radius * 1.35f, color, 20);
         debugDraw.AddLine(center, Add(center, Scale(sample.tangent, -enemy.desc.radius * 2.0f)), color);
-    }
-
-    for (const CourseBulletActor& bullet : bullets_) {
-        const RailPathSample sample = railPath.Evaluate(bullet.spawnDistance + bullet.distanceOffset);
-        const Vector3 center = ResolveRailLocal(
-            railPath,
-            bullet.spawnDistance,
-            bullet.distanceOffset,
-            bullet.lateralOffset,
-            bullet.verticalOffset);
-        const Vector4 color = FadeColor(bullet.color, bullet.age, bullet.lifetime, 0.35f);
-        debugDraw.AddPoint(center, bullet.radius, color);
-        debugDraw.AddCircle(center, sample.right, sample.up, bullet.radius * 2.0f, color, 12);
     }
 
     for (const CourseObstacleActor& obstacle : obstacles_) {

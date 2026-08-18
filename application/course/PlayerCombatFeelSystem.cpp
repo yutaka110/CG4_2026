@@ -74,12 +74,37 @@ void PlayerCombatFeelSystem::ApplyCollisionStats(const CourseCollisionFrameStats
         stats_.cameraShake = (std::max)(stats_.cameraShake, 0.25f + 0.05f * static_cast<float>(hitCount));
     }
 
-    if (stats.playerDamage > 0.0f) {
+}
+
+void PlayerCombatFeelSystem::ApplyPlayerDamageResults(
+    std::span<const PlayerDamageResult> results) {
+    for (const PlayerDamageResult& result : results) {
+        if (!result.accepted || result.appliedDamage <= 0.0f) continue;
         stats_.combo = 0;
         stats_.comboTimer = 0.0f;
         stats_.damageFlash = 1.0f;
-        stats_.hitStopTime = (std::max)(stats_.hitStopTime, 0.06f);
-        stats_.cameraShake = (std::max)(stats_.cameraShake, 0.75f);
+        stats_.hitStopTime = (std::max)(
+            stats_.hitStopTime,
+            result.lethal ? 0.10f : 0.06f);
+        stats_.cameraShake = (std::max)(
+            stats_.cameraShake,
+            result.lethal ? 1.0f : 0.75f);
+    }
+}
+
+void PlayerCombatFeelSystem::ApplyGrazeScoreResults(
+    std::span<const GrazeScoreResult> results) {
+    for (const GrazeScoreResult& result : results) {
+        if (!result.accepted) continue;
+        ++stats_.nearMissCount;
+        stats_.nearMissScore += result.scoreAwarded;
+        stats_.score += result.scoreAwarded;
+        stats_.combo = result.chainAfter;
+        stats_.maxCombo = (std::max)(stats_.maxCombo, stats_.combo);
+        stats_.comboTimer = (std::max)(stats_.comboTimer, 2.5f);
+        stats_.cameraShake = (std::max)(
+            stats_.cameraShake,
+            0.06f + result.closeness * 0.08f);
     }
 }
 
@@ -143,6 +168,11 @@ bool PlayerCombatFeelSystem::TryResolveLockOn(
     bool found = false;
 
     for (const CourseEnemyActor& enemy : input.spawnRuntime->Enemies()) {
+        if (enemy.desc.hitPoints <= 0.0f ||
+            (enemy.combatState.initialized &&
+             !enemy.combatState.canBeTargeted)) {
+            continue;
+        }
         const float distance = EnemyDistance(enemy);
         const float forward = distance - input.playerDistance;
         if (forward < kForwardMin || forward > forwardMax) {

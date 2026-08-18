@@ -140,8 +140,20 @@ void RailReticleController::Update(const RailReticleFrameInput& input) {
         hasPointerSample = true;
     }
 
-    const float xAxis = AxisValue(KeyDown('A') || KeyDown(VK_LEFT), KeyDown('D') || KeyDown(VK_RIGHT));
-    const float yAxis = AxisValue(KeyDown('W') || KeyDown(VK_UP), KeyDown('S') || KeyDown(VK_DOWN));
+    const float xAxis = !input.keyboardDirectionalAimEnabled
+        ? 0.0f
+        : (input.hasKeyboardAimOverride
+            ? (std::clamp)(input.keyboardAimOverride.x, -1.0f, 1.0f)
+            : AxisValue(
+                KeyDown('A') || KeyDown(VK_LEFT),
+                KeyDown('D') || KeyDown(VK_RIGHT)));
+    const float yAxis = !input.keyboardDirectionalAimEnabled
+        ? 0.0f
+        : (input.hasKeyboardAimOverride
+            ? (std::clamp)(input.keyboardAimOverride.y, -1.0f, 1.0f)
+            : AxisValue(
+                KeyDown('W') || KeyDown(VK_UP),
+                KeyDown('S') || KeyDown(VK_DOWN)));
     const float axisLength = std::sqrt(xAxis * xAxis + yAxis * yAxis);
     Vector2 mouseDelta{};
     bool initialPointerSample = false;
@@ -169,7 +181,9 @@ void RailReticleController::Update(const RailReticleFrameInput& input) {
 
     const bool currentLockHeld = input.hasLockHeldOverride
         ? input.lockHeldOverride
-        : (KeyDown(VK_LSHIFT) || KeyDown(VK_RSHIFT) || KeyDown(VK_RBUTTON));
+        : ((input.shiftLockEnabled &&
+            (KeyDown(VK_LSHIFT) || KeyDown(VK_RSHIFT))) ||
+           KeyDown(VK_RBUTTON));
     const float frictionScale = currentLockHeld
         ? 1.0f
         : (std::clamp)(input.aimFrictionScale, 0.15f, 1.0f);

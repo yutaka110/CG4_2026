@@ -43,28 +43,8 @@ float ActorDistance(const CourseEnemyActor& enemy) {
     return enemy.desc.spawnDistance + enemy.desc.distanceOffset;
 }
 
-float BulletDistance(const CourseBulletActor& bullet) {
-    return bullet.spawnDistance + bullet.distanceOffset;
-}
-
 float ObstacleDistance(const CourseObstacleActor& obstacle) {
     return obstacle.desc.spawnDistance + obstacle.desc.distanceOffset;
-}
-
-bool SphereOverlapRailLocal(
-    float aDistance,
-    float aLateral,
-    float aVertical,
-    float aRadius,
-    float bDistance,
-    float bLateral,
-    float bVertical,
-    float bRadius) {
-    const float dd = aDistance - bDistance;
-    const float dl = aLateral - bLateral;
-    const float dv = aVertical - bVertical;
-    const float radius = aRadius + bRadius;
-    return dd * dd + dl * dl + dv * dv <= radius * radius;
 }
 
 bool PlayerOverlapsObstacle(
@@ -90,29 +70,6 @@ bool PlayerOverlapsTerrainPlacement(
         Abs(player.verticalOffset - placement.verticalOffset) <= placement.scale.y + player.radius;
 }
 
-void SpawnImpactCue(
-    CourseSpawnRuntime& runtime,
-    const char* id,
-    const char* effectName,
-    float distance,
-    float lateral,
-    float vertical,
-    float radius,
-    const Vector4& color,
-    float lifetime = 1.2f) {
-    CourseVfxCueDesc cue{};
-    cue.id = id;
-    cue.effectName = effectName;
-    cue.spawnDistance = distance;
-    cue.distanceOffset = 0.0f;
-    cue.lateralOffset = lateral;
-    cue.verticalOffset = vertical;
-    cue.radius = radius;
-    cue.lifetime = lifetime;
-    cue.color = color;
-    runtime.SpawnVfxCue(std::move(cue));
-}
-
 } // namespace
 
 CourseCollisionSystem::CourseCollisionSystem() {
@@ -121,6 +78,11 @@ CourseCollisionSystem::CourseCollisionSystem() {
 
 void CourseCollisionSystem::Reset() {
     player_ = {};
+    playerDamageSystem_.Reset(
+        player_.maximumHitPoints,
+        player_.hitPoints);
+    playerHitboxSystem_.Reset();
+    playerNearMissSystem_.Reset();
     weapon_ = {};
     lastFrameStats_ = {};
     lastShotDistance_ = 0.0f;
@@ -143,10 +105,14 @@ void CourseCollisionSystem::Reset() {
     damageReceiver_.Reset();
 }
 
-void CourseCollisionSystem::SynchronizePlayerHitPoints(float hitPoints) {
-    if (std::isfinite(hitPoints)) {
-        player_.hitPoints = (std::max)(0.0f, hitPoints);
-    }
+void CourseCollisionSystem::SynchronizePlayerHitPoints(
+    float hitPoints,
+    float maximumHitPoints) {
+    playerDamageSystem_.SynchronizeHealth(hitPoints, maximumHitPoints);
+    player_.hitPoints = playerDamageSystem_.State().hitPoints;
+    player_.maximumHitPoints = playerDamageSystem_.State().maximumHitPoints;
+    player_.invulnerabilityTime =
+        playerDamageSystem_.State().invulnerabilityRemainingSeconds;
 }
 
 bool CourseCollisionSystem::LoadWeaponDefinitions(
@@ -170,6 +136,12 @@ DamageResult CourseCollisionSystem::ApplyWeaponHit(
     lastDamageResult_ = damageReceiver_.Apply(runtime, course, request);
     lastWeaponFeedbackResult_ =
         weaponFeedbackSystem_.Submit(runtime, request, lastDamageResult_);
+    runtime.EnemyCombat().SubmitDamageResult(
+        runtime,
+        lastDamageResult_,
+        lastWeaponFeedbackResult_.accepted
+            ? &lastWeaponFeedbackResult_.event
+            : nullptr);
     return lastDamageResult_;
 }
 
@@ -186,16 +158,28 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     lastFrameStats_ = {};
     lastShotVisible_ = false;
 
-    player_.distance = input.player.distance;
-    player_.lateralOffset = input.player.lateralOffset;
-    player_.verticalOffset = input.player.verticalOffset;
-    player_.radius = (std::max)(0.1f, input.player.radius);
-    if (player_.hitPoints <= 0.0f && input.player.hitPoints > 0.0f) {
-        player_.hitPoints = input.player.hitPoints;
-    }
-    player_.invulnerabilityTime = (std::max)(
-        (std::max)(0.0f, player_.invulnerabilityTime - dt),
-        (std::max)(0.0f, input.player.invulnerabilityTime));
+    PlayerHitboxFrameInput hitboxInput{};
+    hitboxInput.distance = input.player.distance;
+    hitboxInput.lateralOffset = input.player.lateralOffset;
+    hitboxInput.verticalOffset = input.player.verticalOffset;
+    hitboxInput.dodgeActive = input.player.dodgeActive ||
+        input.player.invulnerabilityTime > 0.0f;
+    hitboxInput.invulnerable = input.player.invulnerabilityTime > 0.0f;
+    const PlayerHitboxRuntimeState& hitbox =
+        playerHitboxSystem_.Update(hitboxInput);
+    playerNearMissSystem_.Update(dt);
+    player_.distance = hitbox.distance;
+    player_.lateralOffset = hitbox.lateralOffset;
+    player_.verticalOffset = hitbox.verticalOffset;
+    player_.radius = hitbox.hurtRadius;
+    playerDamageSystem_.SynchronizeHealth(
+        input.player.hitPoints,
+        input.player.maximumHitPoints);
+    playerDamageSystem_.Update(dt, input.player.invulnerabilityTime);
+    player_.hitPoints = playerDamageSystem_.State().hitPoints;
+    player_.maximumHitPoints = playerDamageSystem_.State().maximumHitPoints;
+    player_.invulnerabilityTime =
+        playerDamageSystem_.State().invulnerabilityRemainingSeconds;
 
     weapon_.enabled = input.weapon.enabled;
     weapon_.triggerHeld = input.weapon.triggerHeld;
@@ -229,80 +213,117 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     }
 
     for (CourseBulletActor& bullet : runtime.MutableBullets()) {
-        if (bullet.age >= bullet.lifetime || player_.invulnerabilityTime > 0.0f) {
+        if (!bullet.active || bullet.age >= bullet.lifetime) {
             continue;
         }
-        if (!SphereOverlapRailLocal(
-                player_.distance,
-                player_.lateralOffset,
-                player_.verticalOffset,
-                player_.radius,
-                BulletDistance(bullet),
-                bullet.lateralOffset,
-                bullet.verticalOffset,
-                bullet.radius)) {
+        const PlayerProjectileContact contact =
+            playerHitboxSystem_.EvaluateProjectile(bullet);
+        if (contact.kind == PlayerProjectileContactKind::None) {
+            continue;
+        }
+        if (contact.kind == PlayerProjectileContactKind::NearMiss) {
+            PlayerNearMissRequest nearMiss{};
+            nearMiss.projectileId = bullet.projectileId;
+            nearMiss.sourceActorId = bullet.ownerActorId;
+            nearMiss.attackIntentSequence = bullet.attackIntentSequence;
+            nearMiss.attackTokenId = bullet.attackTokenId;
+            nearMiss.trajectory = bullet.trajectory;
+            nearMiss.sourceId = bullet.definitionId.empty()
+                ? bullet.sourceRole
+                : bullet.definitionId;
+            nearMiss.closeness = contact.nearMissCloseness;
+            nearMiss.surfaceSeparation = contact.surfaceSeparation;
+            nearMiss.railDistance = contact.closestRailDistance;
+            nearMiss.lateralOffset = contact.closestLateralOffset;
+            nearMiss.verticalOffset = contact.closestVerticalOffset;
+            const PlayerNearMissResult result =
+                playerNearMissSystem_.Submit(nearMiss);
+            if (result.accepted) {
+                ++lastFrameStats_.playerNearMisses;
+            }
             continue;
         }
 
-        bullet.age = bullet.lifetime;
-        player_.hitPoints = (std::max)(0.0f, player_.hitPoints - bullet.damage);
-        player_.invulnerabilityTime = 0.65f;
+        PlayerHitRequest request{};
+        request.kind = PlayerHitKind::EnemyProjectile;
+        request.sourceActorId = bullet.ownerActorId;
+        request.sourceProjectileId = bullet.projectileId;
+        request.attackIntentSequence = bullet.attackIntentSequence;
+        request.attackTokenId = bullet.attackTokenId;
+        request.sourceId = bullet.definitionId.empty()
+            ? bullet.sourceRole
+            : bullet.definitionId;
+        request.impactEffectId = bullet.impactEffectId;
+        request.rawDamage = bullet.damage;
+        request.postHitInvulnerabilitySeconds = 0.65f;
+        request.railDistance = hitbox.distance;
+        request.lateralOffset = hitbox.lateralOffset;
+        request.verticalOffset = hitbox.verticalOffset;
+        const PlayerDamageResult result = SubmitPlayerHit(request);
+        if (result.projectileConsumed) {
+            bullet.age = bullet.lifetime;
+            bullet.active = false;
+            bullet.hitConsumed = true;
+        }
+        if (!result.accepted) {
+            ++lastFrameStats_.playerHitsRejected;
+            continue;
+        }
         lastFrameStats_.enemyBulletHits++;
-        lastFrameStats_.playerDamage += bullet.damage;
-        SpawnImpactCue(
-            runtime,
-            "player_bullet_hit",
-            "ice_impact",
-            player_.distance,
-            player_.lateralOffset,
-            player_.verticalOffset,
-            1.6f,
-            {0.6f, 0.9f, 1.0f, 1.0f});
+        lastFrameStats_.playerDamage += result.appliedDamage;
     }
 
     for (const CourseObstacleActor& obstacle : runtime.Obstacles()) {
-        if (player_.invulnerabilityTime > 0.0f || !PlayerOverlapsObstacle(player_, obstacle)) {
+        if (!PlayerOverlapsObstacle(player_, obstacle)) {
             continue;
         }
 
         constexpr float kObstacleContactDamage = 24.0f;
-        player_.hitPoints = (std::max)(0.0f, player_.hitPoints - kObstacleContactDamage);
-        player_.invulnerabilityTime = 0.80f;
+        PlayerHitRequest request{};
+        request.kind = PlayerHitKind::ObstacleContact;
+        request.sourceActorId = obstacle.actorId;
+        request.sourceId = obstacle.desc.id;
+        request.impactEffectId = "hit_ring";
+        request.rawDamage = kObstacleContactDamage;
+        request.postHitInvulnerabilitySeconds = 0.80f;
+        request.railDistance = player_.distance;
+        request.lateralOffset = player_.lateralOffset;
+        request.verticalOffset = player_.verticalOffset;
+        const PlayerDamageResult result = SubmitPlayerHit(request);
+        if (!result.accepted) {
+            ++lastFrameStats_.playerHitsRejected;
+            break;
+        }
         lastFrameStats_.obstacleHits++;
-        lastFrameStats_.playerDamage += kObstacleContactDamage;
-        SpawnImpactCue(
-            runtime,
-            "player_obstacle_hit",
-            "hit_ring",
-            player_.distance,
-            player_.lateralOffset,
-            player_.verticalOffset,
-            2.0f,
-            {1.0f, 0.62f, 0.12f, 1.0f});
+        lastFrameStats_.playerDamage += result.appliedDamage;
         break;
     }
 
     if (input.course != nullptr) {
         for (const CourseTerrainPlacement& placement : input.course->terrainPlacements) {
-            if (player_.invulnerabilityTime > 0.0f ||
-                !PlayerOverlapsTerrainPlacement(player_, placement)) {
+            if (!PlayerOverlapsTerrainPlacement(player_, placement)) {
                 continue;
             }
 
             constexpr float kTerrainContactDamage = 20.0f;
-            player_.hitPoints = (std::max)(0.0f, player_.hitPoints - kTerrainContactDamage);
-            player_.invulnerabilityTime = 0.80f;
+            PlayerHitRequest request{};
+            request.kind = PlayerHitKind::TerrainContact;
+            request.sourceId = placement.editorGuid.empty()
+                ? placement.id
+                : placement.editorGuid;
+            request.impactEffectId = "hit_ring";
+            request.rawDamage = kTerrainContactDamage;
+            request.postHitInvulnerabilitySeconds = 0.80f;
+            request.railDistance = player_.distance;
+            request.lateralOffset = player_.lateralOffset;
+            request.verticalOffset = player_.verticalOffset;
+            const PlayerDamageResult result = SubmitPlayerHit(request);
+            if (!result.accepted) {
+                ++lastFrameStats_.playerHitsRejected;
+                break;
+            }
             lastFrameStats_.obstacleHits++;
-            lastFrameStats_.playerDamage += kTerrainContactDamage;
-            SpawnImpactCue(
-                runtime,
-                "player_terrain_hit",
-                "hit_ring",
-                player_.distance,
-                player_.lateralOffset,
-                player_.verticalOffset,
-                2.0f,
-                {1.0f, 0.54f, 0.18f, 1.0f});
+            lastFrameStats_.playerDamage += result.appliedDamage;
             break;
         }
     }
@@ -326,6 +347,16 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     runtime.PruneDestroyedActors();
     LogFrameStats(lastFrameStats_);
     return lastFrameStats_;
+}
+
+PlayerDamageResult CourseCollisionSystem::SubmitPlayerHit(
+    const PlayerHitRequest& request) {
+    const PlayerDamageResult result = playerDamageSystem_.Submit(request);
+    player_.hitPoints = playerDamageSystem_.State().hitPoints;
+    player_.maximumHitPoints = playerDamageSystem_.State().maximumHitPoints;
+    player_.invulnerabilityTime =
+        playerDamageSystem_.State().invulnerabilityRemainingSeconds;
+    return result;
 }
 
 void CourseCollisionSystem::FirePlayerShot(
@@ -414,22 +445,38 @@ void CourseCollisionSystem::AppendDebugDraw(
         return;
     }
 
-    const RailPathSample playerSample = railPath.Evaluate(player_.distance);
+    const PlayerHitboxRuntimeState& hitbox = playerHitboxSystem_.State();
+    if (!hitbox.initialized) return;
+    const RailPathSample playerSample = railPath.Evaluate(hitbox.distance);
     const Vector3 playerCenter{
-        playerSample.position.x + playerSample.right.x * player_.lateralOffset + playerSample.up.x * player_.verticalOffset,
-        playerSample.position.y + playerSample.right.y * player_.lateralOffset + playerSample.up.y * player_.verticalOffset,
-        playerSample.position.z + playerSample.right.z * player_.lateralOffset + playerSample.up.z * player_.verticalOffset,
+        playerSample.position.x + playerSample.right.x * hitbox.lateralOffset + playerSample.up.x * hitbox.verticalOffset,
+        playerSample.position.y + playerSample.right.y * hitbox.lateralOffset + playerSample.up.y * hitbox.verticalOffset,
+        playerSample.position.z + playerSample.right.z * hitbox.lateralOffset + playerSample.up.z * hitbox.verticalOffset,
     };
     const Vector4 playerColor =
         player_.invulnerabilityTime > 0.0f ?
             Vector4{1.0f, 0.35f, 0.15f, 1.0f} :
             Vector4{0.2f, 1.0f, 0.75f, 1.0f};
-    debugDraw.AddCircle(playerCenter, playerSample.right, playerSample.up, player_.radius, playerColor, 24);
+    debugDraw.AddCircle(
+        playerCenter,
+        playerSample.right,
+        playerSample.up,
+        hitbox.nearMissOuterRadius,
+        {0.18f, 0.62f, 1.0f, 0.28f},
+        32);
+    debugDraw.AddCircle(
+        playerCenter,
+        playerSample.right,
+        playerSample.up,
+        hitbox.hurtRadius,
+        playerColor,
+        24);
 }
 
 void CourseCollisionSystem::LogFrameStats(const CourseCollisionFrameStats& stats) const {
     if (stats.enemyBulletHits == 0 &&
         stats.obstacleHits == 0 &&
+        stats.playerNearMisses == 0 &&
         stats.playerShotWorldHits == 0 &&
         stats.playerShotStaleHits == 0 &&
         stats.playerShotEnemyHits == 0 &&
@@ -441,6 +488,7 @@ void CourseCollisionSystem::LogFrameStats(const CourseCollisionFrameStats& stats
     line << "[CourseCollision] playerHp=" << player_.hitPoints
          << " damage=" << stats.playerDamage
          << " enemyBulletHits=" << stats.enemyBulletHits
+         << " nearMisses=" << stats.playerNearMisses
          << " obstacleHits=" << stats.obstacleHits
          << " shots=" << stats.playerShotsFired
          << " worldShotHits=" << stats.playerShotWorldHits

@@ -25,6 +25,7 @@ CourseRuntimeProgramDiagnosticSeverity ConvertSeverity(
 bool IsReleaseFatalDiagnostic(std::string_view code) {
     return code == "actor.asset_fallback" ||
         code == "actor.pattern_fallback" ||
+        code == "actor.projectile_fallback" ||
         code == "actor.wave_unassigned" ||
         code == "actor.wave_disabled";
 }
@@ -185,6 +186,16 @@ void CourseRuntimeCookPipeline::BuildDependencyTable(
             add({CourseRuntimeDependencyKind::BulletPattern,
                 record.actor.bulletPatternId, patternPath.generic_string(),
                 HashFileIfPresent(patternPath)});
+        }
+        if (!record.actor.projectileDefinitionId.empty()) {
+            const std::filesystem::path projectilePath =
+                std::filesystem::path(
+                    options.compiler.projectileDefinitionDirectory) /
+                (record.actor.projectileDefinitionId + ".projectile");
+            add({CourseRuntimeDependencyKind::EnemyProjectile,
+                record.actor.projectileDefinitionId,
+                projectilePath.generic_string(),
+                HashFileIfPresent(projectilePath)});
         }
     }
     program.dependencies.clear();

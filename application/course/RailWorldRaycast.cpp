@@ -360,7 +360,9 @@ RailAimHit RailWorldRaycast::Query(const RailWorldRaycastInput& input) {
 
     if (input.spawnRuntime != nullptr) {
         for (const CourseEnemyActor& enemy : input.spawnRuntime->Enemies()) {
-            if (enemy.desc.hitPoints <= 0.0f) {
+            if (enemy.desc.hitPoints <= 0.0f ||
+                (enemy.combatState.initialized &&
+                 !enemy.combatState.canBeTargeted)) {
                 continue;
             }
             const float railDistance = enemy.desc.spawnDistance + enemy.desc.distanceOffset;

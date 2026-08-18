@@ -1,0 +1,2 @@
+# projectile|id|displayName|trajectory|speed|accel|maxSpeed|turnRate|predictionScale|maxPredictionSeconds|arcGravity|radius|lifetime|damage|r|g|b|a|trail|impact
+projectile|enemy_direct_readable|Readable Direct Shot|direct|42|0|42|0|0|0|0|0.30|4.6|6|1.0|0.42|0.12|1.0|enemy_projectile_trail|ice_impact

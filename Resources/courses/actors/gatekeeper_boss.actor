@@ -1,3 +1,4 @@
 actor|gatekeeper_boss|Gatekeeper Mid Boss|animated_cube|7.5|520|16|1.0|0.08|0.26|1.0|boss_arc_gatekeeper
 combat|0.72|0.45|58|boss_arc_gatekeeper
 movement|-2
+behavior|boss|0.52|0.42|0.38|0.76|0.92|0.34|0.48|3.4|1.8|0.28|true

@@ -9,6 +9,7 @@
 #include "CourseActorAsset.h"
 #include "CourseSpawnRuntime.h"
 #include "EnemyWaveAsset.h"
+#include "EnemyProjectileDefinitionAsset.h"
 #include "ObstacleAsset.h"
 
 class CourseEventDispatcher {
@@ -30,6 +31,8 @@ private:
     const EnemyWaveAsset* LoadEnemyWave(const std::string& id);
     const CourseActorAsset* LoadActorAsset(const std::string& id);
     const BulletPatternAsset* LoadBulletPatternAsset(const std::string& id);
+    const EnemyProjectileDefinitionAsset* LoadProjectileDefinitionAsset(
+        const std::string& id);
     const ObstacleAsset* LoadObstacleAsset(const std::string& id);
     void ApplyActorAsset(CourseEnemyActorDesc& desc, const CourseActorAsset& asset);
     void ApplyBulletPatternAsset(CourseEnemyActorDesc& desc, const BulletPatternAsset& asset);
@@ -46,5 +49,7 @@ private:
     std::unordered_map<std::string, EnemyWaveAsset> enemyWaveCache_;
     std::unordered_map<std::string, CourseActorAsset> actorAssetCache_;
     std::unordered_map<std::string, BulletPatternAsset> bulletPatternAssetCache_;
+    std::unordered_map<std::string, EnemyProjectileDefinitionAsset>
+        projectileDefinitionAssetCache_;
     std::unordered_map<std::string, ObstacleAsset> obstacleAssetCache_;
 };

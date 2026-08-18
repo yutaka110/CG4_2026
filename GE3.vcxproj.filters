@@ -1028,6 +1028,45 @@
     <ClCompile Include="application\course\EncounterDirector.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\EnemyCombatSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyCombatPresentationBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyBehaviorSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyAttackCoordinator.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyAttackExecutionSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyProjectileDefinitionAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyProjectileSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyProjectilePresentationBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyProjectileRenderer.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyProjectileAudioBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\GrazeScoreSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\ThreatResponseDirector.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyTargetingSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\EnemyAttackTelegraphSystem.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
@@ -1046,10 +1085,40 @@
     <ClCompile Include="application\course\GameSessionRetryCoordinator.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\PlayerDamageSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\PlayerDamagePresentationBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\PlayerHitboxSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\PlayerNearMissSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\RailPlayerMovementSystem.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\RailPlayerVehicleMountSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\RailDodgeSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleMovementSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehiclePresentationBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleActor.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleRenderer.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleAudioBridge.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\ObstacleAsset.cpp">
@@ -1561,6 +1630,45 @@
     <ClInclude Include="application\course\EncounterDirector.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\EnemyCombatSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyCombatPresentationBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyBehaviorSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyAttackCoordinator.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyAttackExecutionSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyProjectileDefinitionAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyProjectileSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyProjectilePresentationBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyProjectileRenderer.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyProjectileAudioBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\GrazeScoreSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\ThreatResponseDirector.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyTargetingSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\EnemyAttackTelegraphSystem.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
@@ -1579,10 +1687,40 @@
     <ClInclude Include="application\course\GameSessionRetryCoordinator.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\PlayerDamageSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\PlayerDamagePresentationBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\PlayerHitboxSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\PlayerNearMissSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\RailPlayerMovementSystem.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\RailPlayerVehicleMountSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\RailDodgeSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleMovementSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehiclePresentationBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleActor.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleRenderer.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleAudioBridge.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\ObstacleAsset.h">
