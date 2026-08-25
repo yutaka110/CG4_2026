@@ -1,0 +1,3 @@
+# pattern|id|displayName|type|bulletCount|lateralSpreadSpeed|verticalSpreadSpeed|bulletRadius|bulletLifetime|damage|r|g|b|a
+pattern|assault_magenta_single|Assault Magenta Single|single|1|0|0|0.45|5.2|6|1.0|0.10|0.88|1.0
+projectile|enemy_assault_magenta_slow

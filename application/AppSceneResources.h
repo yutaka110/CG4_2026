@@ -11,6 +11,7 @@
 #include "AppRuntimeState.h"
 #include "AnimationClip.h"
 #include "course/CourseMeshRenderQueue.h"
+#include "course/CourseRailTrackRenderer.h"
 #include "diagnostics/DebugDrawSystem.h"
 #include "Skeleton.h"
 #include "terrain/TerrainMaterialLibrary.h"
@@ -21,6 +22,7 @@
 #include "ModelLoaderAssimp.h"
 
 struct RailVehicleRenderFrame;
+struct RailVehicleOccupantActorFrame;
 class EnemyCombatPresentationBridge;
 struct SphereMeshData {
     Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource;
@@ -269,7 +271,13 @@ public:
     const AppModelObjectInstance& RailVehicleObject() const noexcept {
         return railVehicleObject;
     }
+    const AppModelObjectInstance& RailVehicleOccupantObject() const noexcept {
+        return railVehicleOccupantObject;
+    }
     const CourseMeshRenderQueue& CourseMeshes() const { return courseMeshRenderQueue; }
+    const CourseRailTrackRenderer& CourseRailTrackMeshes() const {
+        return courseRailTrackRenderer;
+    }
     void SyncCourseMeshRenderQueue(
         const CourseSpawnRuntime& courseRuntime,
         const CourseAsset* course,
@@ -280,6 +288,16 @@ public:
         const EnemyCombatPresentationBridge* enemyPresentation = nullptr);
     void SyncRailVehicleRenderFrame(
         const RailVehicleRenderFrame& frame,
+        const Matrix4x4& viewMatrix,
+        const Matrix4x4& projMatrix);
+    void SyncCourseRailTrackRenderer(
+        const CourseRailTrackMeshBakeResult& baked,
+        float currentDistance,
+        const RailVehicleWheelContactPresentationFrame* wheels,
+        const Matrix4x4& viewMatrix,
+        const Matrix4x4& projMatrix);
+    void SyncRailVehicleOccupantActorFrame(
+        const RailVehicleOccupantActorFrame& frame,
         const Matrix4x4& viewMatrix,
         const Matrix4x4& projMatrix);
 
@@ -381,7 +399,9 @@ public:
     uint32_t railVehicleModelIndex = UINT32_MAX;
     AppModelObjectInstance weaponAttachmentObject{};
     AppModelObjectInstance railVehicleObject{};
+    AppModelObjectInstance railVehicleOccupantObject{};
     CourseMeshRenderQueue courseMeshRenderQueue;
+    CourseRailTrackRenderer courseRailTrackRenderer;
 
     // Sphere
     SphereMeshData sphere{};

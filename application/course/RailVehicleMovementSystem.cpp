@@ -118,6 +118,8 @@ void RailVehicleMovementSystem::Reset(
         ? (std::clamp)(speed, 0.0f, definition_.maximumSpeed)
         : 0.0f;
     state_.safeSpeed = definition_.maximumSpeed;
+    state_.impactSpeedMultiplier = 1.0f;
+    state_.impactSlowdownRemainingSeconds = 0.0f;
     state_.hitPoints = definition_.maximumHitPoints;
     state_.stopped = state_.speed <= 0.001f;
     if (railPath != nullptr && railPath->Length() > 0.0f) {
@@ -136,8 +138,15 @@ bool RailVehicleMovementSystem::RestoreState(
     std::string* errorMessage) {
     if (!restored.initialized || restored.vehicleId != definition_.vehicleId ||
         !Finite(restored.distance) || !Finite(restored.speed) ||
-        !Finite(restored.hitPoints) || restored.distance < 0.0f ||
+        !Finite(restored.hitPoints) ||
+        !Finite(restored.impactSpeedMultiplier) ||
+        !Finite(restored.impactSlowdownRemainingSeconds) ||
+        restored.distance < 0.0f ||
         restored.speed < 0.0f || restored.speed > definition_.maximumSpeed + 0.001f ||
+        restored.impactSpeedMultiplier <= 0.0f ||
+        restored.impactSpeedMultiplier > 1.0f ||
+        restored.impactSlowdownRemainingSeconds < 0.0f ||
+        restored.impactSlowdownRemainingSeconds > 5.0f ||
         restored.hitPoints < 0.0f ||
         restored.hitPoints > definition_.maximumHitPoints + 0.001f) {
         SetError(errorMessage, "Rail vehicle checkpoint does not match the active definition.");
@@ -153,6 +162,39 @@ bool RailVehicleMovementSystem::RestoreState(
     frame_ = {};
     frame_.state = state_;
     if (errorMessage != nullptr) errorMessage->clear();
+    return true;
+}
+
+void RailVehicleMovementSystem::SynchronizeHitPoints(float hitPoints) {
+    if (!state_.initialized || !Finite(hitPoints)) return;
+    const float clamped = (std::clamp)(
+        hitPoints, 0.0f, definition_.maximumHitPoints);
+    if (std::abs(state_.hitPoints - clamped) <= 0.0001f) return;
+    state_.hitPoints = clamped;
+    ++state_.revision;
+    frame_.state = state_;
+}
+
+bool RailVehicleMovementSystem::ApplyImpactSlowdown(
+    float speedMultiplier,
+    float durationSeconds,
+    uint64_t resultSequence) {
+    if (!state_.initialized || resultSequence == 0 ||
+        resultSequence <= state_.lastImpactSlowdownSequence ||
+        !Finite(speedMultiplier) || !Finite(durationSeconds) ||
+        speedMultiplier <= 0.0f || speedMultiplier > 1.0f ||
+        durationSeconds <= 0.0f || durationSeconds > 5.0f) {
+        return false;
+    }
+    state_.impactSpeedMultiplier = state_.impactSlowdownRemainingSeconds > 0.0f
+        ? (std::min)(state_.impactSpeedMultiplier, speedMultiplier)
+        : speedMultiplier;
+    state_.impactSlowdownRemainingSeconds = (std::max)(
+        state_.impactSlowdownRemainingSeconds, durationSeconds);
+    state_.lastImpactSlowdownSequence = resultSequence;
+    ++state_.revision;
+    frame_.state = state_;
+    frame_.impactSlowdownActive = true;
     return true;
 }
 
@@ -186,14 +228,47 @@ const RailVehicleMovementFrame& RailVehicleMovementSystem::Update(
     float targetSpeed = input.movementEnabled
         ? (std::min)(state_.requestedSpeed, state_.safeSpeed)
         : 0.0f;
+    const bool impactSlowdownActive =
+        state_.impactSlowdownRemainingSeconds > 0.0f;
+    if (impactSlowdownActive) {
+        targetSpeed *= state_.impactSpeedMultiplier;
+    }
     if (input.emergencyBrake) targetSpeed = 0.0f;
     const float previousSpeed = state_.speed;
+    const float accelerationLimit = input.motionEnvelopeActive &&
+        Finite(input.accelerationLimit) && input.accelerationLimit > 0.0f
+        ? input.accelerationLimit : definition_.acceleration;
+    const float brakingLimit = input.motionEnvelopeActive &&
+        Finite(input.brakingLimit) && input.brakingLimit > 0.0f
+        ? input.brakingLimit : definition_.serviceBrakeDeceleration;
     const float rate = targetSpeed > state_.speed
-        ? definition_.acceleration
+        ? accelerationLimit
         : (input.emergencyBrake
             ? definition_.emergencyBrakeDeceleration
-            : definition_.serviceBrakeDeceleration);
-    state_.speed = Approach(state_.speed, targetSpeed, rate * deltaTime);
+            : brakingLimit);
+    if (input.motionEnvelopeActive && !input.emergencyBrake &&
+        Finite(input.jerkLimit) && input.jerkLimit > 0.0f &&
+        deltaTime > 0.0f) {
+        const float desiredAcceleration = targetSpeed > state_.speed
+            ? rate : (targetSpeed < state_.speed ? -rate : 0.0f);
+        const float constrainedAcceleration = Approach(
+            state_.acceleration,
+            desiredAcceleration,
+            input.jerkLimit * deltaTime);
+        const float candidate = (std::clamp)(
+            state_.speed + constrainedAcceleration * deltaTime,
+            0.0f,
+            definition_.maximumSpeed);
+        if (targetSpeed > state_.speed + 0.0001f) {
+            state_.speed = (std::clamp)(candidate, state_.speed, targetSpeed);
+        } else if (targetSpeed < state_.speed - 0.0001f) {
+            state_.speed = (std::clamp)(candidate, targetSpeed, state_.speed);
+        } else {
+            state_.speed = targetSpeed;
+        }
+    } else {
+        state_.speed = Approach(state_.speed, targetSpeed, rate * deltaTime);
+    }
     state_.acceleration = deltaTime > 0.000001f
         ? (state_.speed - previousSpeed) / deltaTime
         : 0.0f;
@@ -216,12 +291,18 @@ const RailVehicleMovementFrame& RailVehicleMovementSystem::Update(
         state_.acceleration = 0.0f;
     }
     state_.stopped = state_.speed <= 0.001f;
+    state_.impactSlowdownRemainingSeconds = (std::max)(
+        0.0f, state_.impactSlowdownRemainingSeconds - deltaTime);
+    if (state_.impactSlowdownRemainingSeconds <= 0.0f) {
+        state_.impactSpeedMultiplier = 1.0f;
+    }
     EvaluatePose(railPath);
     ++state_.frameIndex;
     ++state_.revision;
 
     frame_.reachedCourseEndThisFrame = state_.atCourseEnd && !wasAtEnd;
     frame_.beganEmergencyBrakeThisFrame = beganEmergencyBrake;
+    frame_.impactSlowdownActive = impactSlowdownActive;
     frame_.state = state_;
     return frame_;
 }

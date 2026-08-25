@@ -38,7 +38,7 @@ void RailVehicleRenderer::Update(const RailVehicleRenderInput& input) {
         -actor.forward.y, -1.0f, 1.0f));
     const Vector3 rotation{
         railPitch + actor.visualPitchDegrees * kDegreesToRadians,
-        yaw,
+        yaw + actor.visualYawDegrees * kDegreesToRadians,
         -actor.visualBankDegrees * kDegreesToRadians,
     };
 

@@ -1,0 +1,5 @@
+# Right-side stationary three-lane denial unit.
+actor|visibility_turret|Visibility Turret|animated_cube|1.80|82|14|1.0|0.24|0.14|1.0|turret_readable_spread
+combat|1.80|0.36|38|turret_readable_spread
+movement|0
+behavior|turret|0.18|0.18|0.34|0.90|1.80|0.12|0.22|0|0|0|true

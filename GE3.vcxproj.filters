@@ -737,6 +737,21 @@
     <ClCompile Include="application\editor\course\CourseSequencerWaveTrackBridge.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
+    <ClCompile Include="application\editor\course\CourseRideSequencerTrackBridge.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\RailRideSpeedBeatAuthoring.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseRideProfileDetailsPanel.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseCameraShotDetailsPanel.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\RailRideTuningTelemetryPanel.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
     <ClCompile Include="application\editor\course\CoursePreviewSimulationSystem.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
@@ -1046,6 +1061,9 @@
     <ClCompile Include="application\course\EnemyProjectileDefinitionAsset.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\EnemyProjectileVisualDefinitionAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\EnemyProjectileSystem.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
@@ -1053,6 +1071,9 @@
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\EnemyProjectileRenderer.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyProjectileVfxRenderer.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\EnemyProjectileAudioBridge.cpp">
@@ -1068,6 +1089,9 @@
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\EnemyAttackTelegraphSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyAttackLaneTelegraphRenderer.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\EnemyAttackTelegraphFeedbackBridge.cpp">
@@ -1112,6 +1136,48 @@
     <ClCompile Include="application\course\RailVehiclePresentationBridge.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\RailVehicleRideDynamicsSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleTrackContactPoseSolver.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseRailTrackDefinitionAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseRailTrackMeshBakePipeline.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseRailTrackRenderer.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleWheelContactPresentationBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailShooterHudDefinitionAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailShooterHudRuntimeModel.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailShooterHudPresentationBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailShooterHudRenderer.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseRailRideEventDefinition.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailTrackFeedbackDirector.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseRailRideEventAuthoring.cpp">
+      <Filter>ソース ファイル\application\editor\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleCameraInertiaBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\RailVehicleActor.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
@@ -1119,6 +1185,48 @@
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\RailVehicleAudioBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleMountedEvasionSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleOccupantClearanceSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleEvasionConstraintResolver.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleHitboxProfile.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleBodyCollisionSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleDamageCoordinator.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleCollisionFeedbackBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleControlDefinitionAsset.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleControlPresetRegistry.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleCombatMountBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleCameraMountBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleMountedEvasionPresentationBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleOccupantActor.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleEvasionFeedbackBridge.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\ObstacleAsset.cpp">
@@ -1155,6 +1263,21 @@
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\RailSpeedDirector.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailRideDirector.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailRideMotionEnvelope.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailRideTuningTelemetry.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\CourseRideProfileDefinition.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailRideSpeedBeatDefinition.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\RailTargetRegistry.cpp">
@@ -1648,6 +1771,9 @@
     <ClInclude Include="application\course\EnemyProjectileDefinitionAsset.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\EnemyProjectileVisualDefinitionAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\EnemyProjectileSystem.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
@@ -1655,6 +1781,9 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\EnemyProjectileRenderer.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyProjectileVfxRenderer.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\EnemyProjectileAudioBridge.h">
@@ -1670,6 +1799,9 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\EnemyAttackTelegraphSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyAttackLaneTelegraphRenderer.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\EnemyAttackTelegraphFeedbackBridge.h">
@@ -1714,6 +1846,48 @@
     <ClInclude Include="application\course\RailVehiclePresentationBridge.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\RailVehicleRideDynamicsSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleTrackContactPoseSolver.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseRailTrackDefinitionAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseRailTrackMeshBakePipeline.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseRailTrackRenderer.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleWheelContactPresentationBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailShooterHudDefinitionAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailShooterHudRuntimeModel.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailShooterHudPresentationBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailShooterHudRenderer.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseRailRideEventDefinition.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailTrackFeedbackDirector.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseRailRideEventAuthoring.h">
+      <Filter>ヘッダー ファイル\application\editor\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleCameraInertiaBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\RailVehicleActor.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
@@ -1721,6 +1895,48 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailVehicleAudioBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleMountedEvasionSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleOccupantClearanceSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleEvasionConstraintResolver.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleHitboxProfile.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleBodyCollisionSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleDamageCoordinator.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleCollisionFeedbackBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleControlDefinitionAsset.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleControlPresetRegistry.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleCombatMountBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleCameraMountBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleMountedEvasionPresentationBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleOccupantActor.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleEvasionFeedbackBridge.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\ObstacleAsset.h">
@@ -1760,6 +1976,24 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailSpeedDirector.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailRideDirector.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailRideMotionEnvelope.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailRideTuningTelemetry.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailWorldScale.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\CourseRideProfileDefinition.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailRideSpeedBeatDefinition.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailTargetRegistry.h">
@@ -2462,6 +2696,21 @@
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\course\CourseSequencerWaveTrackBridge.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseRideSequencerTrackBridge.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\RailRideSpeedBeatAuthoring.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseRideProfileDetailsPanel.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseCameraShotDetailsPanel.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\RailRideTuningTelemetryPanel.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\course\CoursePreviewSimulationSystem.h">

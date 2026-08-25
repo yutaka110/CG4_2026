@@ -317,6 +317,8 @@ void EnemyAttackTelegraphSystem::Update(
         cue.worldPosition = EnemyWorldPosition(enemy, *input.railPath);
         cue.timeToFire = timeToFire;
         cue.projectileCount = (std::max)(1, enemy.desc.bulletCount);
+        cue.projectileTrajectory =
+            enemy.desc.projectileDefinition.trajectory;
         cue.phase = firedFlash
             ? EnemyAttackTelegraphPhase::Fired
             : (timeToFire <= imminentSeconds

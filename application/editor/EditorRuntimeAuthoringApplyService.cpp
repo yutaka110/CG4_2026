@@ -81,6 +81,42 @@ uint64_t CourseSignature(const CourseAsset& course) {
         hash = HashString(hash, section.name);
         hash = HashString(hash, section.category);
     }
+    hash = HashValue(hash, course.rideProfiles.size());
+    for (const CourseRideProfileDefinition& profile : course.rideProfiles) {
+        hash = HashString(hash, profile.editorGuid);
+        hash = HashString(hash, profile.displayName);
+        hash = HashValue(hash, profile.startDistance);
+        hash = HashValue(hash, profile.endDistance);
+        hash = HashValue(hash, profile.speedMode);
+        hash = HashValue(hash, profile.speedMultiplier);
+        hash = HashValue(hash, profile.targetSpeedOverride);
+        hash = HashValue(hash, profile.turnAnticipationDistance);
+        hash = HashValue(hash, profile.visualBankScale);
+        hash = HashValue(hash, profile.maximumVisualBankDegrees);
+        hash = HashValue(hash, profile.blendInDistance);
+        hash = HashValue(hash, profile.blendOutDistance);
+        hash = HashString(hash, profile.cameraShotId);
+        hash = HashValue(hash, profile.enabled);
+        hash = HashValue(hash, profile.editorVisible);
+        hash = HashValue(hash, profile.editorLocked);
+    }
+    hash = HashValue(hash, course.rideSpeedBeats.size());
+    for (const RailRideSpeedBeatDefinition& beat : course.rideSpeedBeats) {
+        hash = HashString(hash, beat.editorGuid);
+        hash = HashString(hash, beat.displayName);
+        hash = HashValue(hash, beat.startDistance);
+        hash = HashValue(hash, beat.endDistance);
+        hash = HashValue(hash, beat.type);
+        hash = HashValue(hash, beat.speedMultiplier);
+        hash = HashValue(hash, beat.targetSpeedOverride);
+        hash = HashValue(hash, beat.accelerationScale);
+        hash = HashValue(hash, beat.brakingScale);
+        hash = HashValue(hash, beat.maximumJerk);
+        hash = HashValue(hash, beat.blendInDistance);
+        hash = HashValue(hash, beat.blendOutDistance);
+        hash = HashValue(hash, beat.priority);
+        hash = HashValue(hash, beat.enabled);
+    }
     hash = HashValue(hash, course.events.size());
     for (const CourseEventMarker& event : course.events) {
         hash = HashValue(hash, event.distance);

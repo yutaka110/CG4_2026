@@ -58,6 +58,8 @@ struct RailVehicleRuntimeState final {
     float requestedSpeed = 0.0f;
     float safeSpeed = 0.0f;
     float acceleration = 0.0f;
+    float impactSpeedMultiplier = 1.0f;
+    float impactSlowdownRemainingSeconds = 0.0f;
     float hitPoints = 0.0f;
     float normalizedProgress = 0.0f;
     float curvature = 0.0f;
@@ -77,6 +79,7 @@ struct RailVehicleRuntimeState final {
     bool atCourseEnd = false;
     bool stopped = true;
     uint64_t frameIndex = 0;
+    uint64_t lastImpactSlowdownSequence = 0;
     uint64_t revision = 0;
 };
 
@@ -85,6 +88,10 @@ struct RailVehicleMovementInput final {
     float requestedSpeed = 0.0f;
     bool movementEnabled = true;
     bool emergencyBrake = false;
+    bool motionEnvelopeActive = false;
+    float accelerationLimit = 0.0f;
+    float brakingLimit = 0.0f;
+    float jerkLimit = 0.0f;
     CourseRuntime* courseRuntime = nullptr;
     const RailPath* railPath = nullptr;
 };
@@ -95,6 +102,7 @@ struct RailVehicleMovementFrame final {
     float traveledDistance = 0.0f;
     bool reachedCourseEndThisFrame = false;
     bool beganEmergencyBrakeThisFrame = false;
+    bool impactSlowdownActive = false;
 };
 
 class RailVehicleMovementSystem final {
@@ -112,6 +120,11 @@ public:
         const RailVehicleRuntimeState& state,
         const RailPath* railPath = nullptr,
         std::string* errorMessage = nullptr);
+    void SynchronizeHitPoints(float hitPoints);
+    bool ApplyImpactSlowdown(
+        float speedMultiplier,
+        float durationSeconds,
+        uint64_t resultSequence);
     const RailVehicleMovementFrame& Update(const RailVehicleMovementInput& input);
 
     const RailVehicleDefinition& Definition() const noexcept { return definition_; }

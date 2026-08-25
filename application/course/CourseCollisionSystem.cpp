@@ -273,46 +273,19 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         lastFrameStats_.playerDamage += result.appliedDamage;
     }
 
-    for (const CourseObstacleActor& obstacle : runtime.Obstacles()) {
-        if (!PlayerOverlapsObstacle(player_, obstacle)) {
-            continue;
-        }
-
-        constexpr float kObstacleContactDamage = 24.0f;
-        PlayerHitRequest request{};
-        request.kind = PlayerHitKind::ObstacleContact;
-        request.sourceActorId = obstacle.actorId;
-        request.sourceId = obstacle.desc.id;
-        request.impactEffectId = "hit_ring";
-        request.rawDamage = kObstacleContactDamage;
-        request.postHitInvulnerabilitySeconds = 0.80f;
-        request.railDistance = player_.distance;
-        request.lateralOffset = player_.lateralOffset;
-        request.verticalOffset = player_.verticalOffset;
-        const PlayerDamageResult result = SubmitPlayerHit(request);
-        if (!result.accepted) {
-            ++lastFrameStats_.playerHitsRejected;
-            break;
-        }
-        lastFrameStats_.obstacleHits++;
-        lastFrameStats_.playerDamage += result.appliedDamage;
-        break;
-    }
-
-    if (input.course != nullptr) {
-        for (const CourseTerrainPlacement& placement : input.course->terrainPlacements) {
-            if (!PlayerOverlapsTerrainPlacement(player_, placement)) {
+    if (!input.externalBodyCollisionAuthority) {
+        for (const CourseObstacleActor& obstacle : runtime.Obstacles()) {
+            if (!PlayerOverlapsObstacle(player_, obstacle)) {
                 continue;
             }
 
-            constexpr float kTerrainContactDamage = 20.0f;
+            constexpr float kObstacleContactDamage = 24.0f;
             PlayerHitRequest request{};
-            request.kind = PlayerHitKind::TerrainContact;
-            request.sourceId = placement.editorGuid.empty()
-                ? placement.id
-                : placement.editorGuid;
+            request.kind = PlayerHitKind::ObstacleContact;
+            request.sourceActorId = obstacle.actorId;
+            request.sourceId = obstacle.desc.id;
             request.impactEffectId = "hit_ring";
-            request.rawDamage = kTerrainContactDamage;
+            request.rawDamage = kObstacleContactDamage;
             request.postHitInvulnerabilitySeconds = 0.80f;
             request.railDistance = player_.distance;
             request.lateralOffset = player_.lateralOffset;
@@ -325,6 +298,35 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
             lastFrameStats_.obstacleHits++;
             lastFrameStats_.playerDamage += result.appliedDamage;
             break;
+        }
+
+        if (input.course != nullptr) {
+            for (const CourseTerrainPlacement& placement : input.course->terrainPlacements) {
+                if (!PlayerOverlapsTerrainPlacement(player_, placement)) {
+                    continue;
+                }
+
+                constexpr float kTerrainContactDamage = 20.0f;
+                PlayerHitRequest request{};
+                request.kind = PlayerHitKind::TerrainContact;
+                request.sourceId = placement.editorGuid.empty()
+                    ? placement.id
+                    : placement.editorGuid;
+                request.impactEffectId = "hit_ring";
+                request.rawDamage = kTerrainContactDamage;
+                request.postHitInvulnerabilitySeconds = 0.80f;
+                request.railDistance = player_.distance;
+                request.lateralOffset = player_.lateralOffset;
+                request.verticalOffset = player_.verticalOffset;
+                const PlayerDamageResult result = SubmitPlayerHit(request);
+                if (!result.accepted) {
+                    ++lastFrameStats_.playerHitsRejected;
+                    break;
+                }
+                lastFrameStats_.obstacleHits++;
+                lastFrameStats_.playerDamage += result.appliedDamage;
+                break;
+            }
         }
     }
 
@@ -356,6 +358,18 @@ PlayerDamageResult CourseCollisionSystem::SubmitPlayerHit(
     player_.maximumHitPoints = playerDamageSystem_.State().maximumHitPoints;
     player_.invulnerabilityTime =
         playerDamageSystem_.State().invulnerabilityRemainingSeconds;
+    return result;
+}
+
+PlayerDamageResult CourseCollisionSystem::ApplyPlayerHit(
+    const PlayerHitRequest& request) {
+    const PlayerDamageResult result = SubmitPlayerHit(request);
+    if (result.accepted) {
+        ++lastFrameStats_.obstacleHits;
+        lastFrameStats_.playerDamage += result.appliedDamage;
+    } else {
+        ++lastFrameStats_.playerHitsRejected;
+    }
     return result;
 }
 

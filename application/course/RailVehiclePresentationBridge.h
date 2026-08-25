@@ -3,6 +3,8 @@
 #include <cstdint>
 
 #include "RailVehicleMovementSystem.h"
+#include "RailVehicleRideDynamicsSystem.h"
+#include "RailVehicleTrackContactPoseSolver.h"
 
 struct RailVehiclePresentationSettings final {
     bool enabled = true;
@@ -27,6 +29,7 @@ struct RailVehiclePresentationFrame final {
     float wheelRotationRadians = 0.0f;
     float visualBankDegrees = 0.0f;
     float visualPitchDegrees = 0.0f;
+    float visualYawDegrees = 0.0f;
     float suspensionOffset = 0.0f;
     float speedNormalized = 0.0f;
     float rollingAudioVolume = 0.0f;
@@ -44,6 +47,13 @@ struct RailVehiclePresentationInput final {
     const RailVehicleRuntimeState* state = nullptr;
     float deltaTime = 0.0f;
     RailVehiclePresentationSettings settings{};
+    bool rideProfileActive = false;
+    float rideProfileBlend = 0.0f;
+    float rideAnticipatedSignedCurvature = 0.0f;
+    float rideVisualBankScale = 1.0f;
+    float rideMaximumVisualBankDegrees = 18.0f;
+    const RailVehicleRideDynamicsFrame* rideDynamics = nullptr;
+    const RailVehicleTrackContactPoseFrame* trackContactPose = nullptr;
 };
 
 class RailVehiclePresentationBridge final {
@@ -61,4 +71,3 @@ private:
     bool jointInitialized_ = false;
     uint64_t revision_ = 0;
 };
-

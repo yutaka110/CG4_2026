@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
+#include <sstream>
 #include <type_traits>
 #include <utility>
 
@@ -82,6 +84,74 @@ void CourseSequencerTrackProvider::Bind(CourseAsset* course) {
     if (course_ != nullptr) EnsureCourseWorldObjectGuids(*course_, course_->name);
 }
 
+bool CourseSequencerTrackProvider::IsCameraShotHandle(
+    const EditorSequencerKeyHandle& handle) const {
+    return handle.providerId == ProviderId() && handle.trackId == kCameraTrack &&
+        StartsWith(handle.keyId, "shot:");
+}
+
+std::string CourseSequencerTrackProvider::CameraShotId(
+    const EditorSequencerKeyHandle& handle) const {
+    return IsCameraShotHandle(handle)
+        ? AfterPrefix(handle.keyId, "shot:") : std::string{};
+}
+
+std::string CourseSequencerTrackProvider::EncodeCameraShot(
+    const CourseCinematicCameraShot& shot) {
+    std::ostringstream stream;
+    stream.precision(9);
+    stream << "camera-shot-v1 " << std::quoted(shot.id) << ' '
+        << std::quoted(shot.mode) << ' ' << std::quoted(shot.presetId) << ' '
+        << std::quoted(shot.blendAssetId) << ' ' << shot.startDistance << ' '
+        << shot.endDistance << ' ' << shot.blendInDistance << ' '
+        << shot.blendOutDistance << ' ' << shot.weightScale << ' '
+        << shot.backDistanceOffset << ' ' << shot.verticalOffset << ' '
+        << shot.lateralOffset << ' ' << shot.lookAheadOffset << ' '
+        << shot.lookUpOffset << ' ' << shot.lookForwardOffset << ' '
+        << shot.fovOffset << ' ' << shot.rollOffset << ' ' << shot.shakeAmount;
+    return stream.str();
+}
+
+bool CourseSequencerTrackProvider::DecodeCameraShot(
+    std::string_view payload,
+    CourseCinematicCameraShot& shot,
+    std::string& errorMessage) {
+    std::istringstream stream{std::string(payload)};
+    std::string version;
+    if (!(stream >> version) || version != "camera-shot-v1" ||
+        !(stream >> std::quoted(shot.id) >> std::quoted(shot.mode) >>
+            std::quoted(shot.presetId) >> std::quoted(shot.blendAssetId) >>
+            shot.startDistance >> shot.endDistance >> shot.blendInDistance >>
+            shot.blendOutDistance >> shot.weightScale >> shot.backDistanceOffset >>
+            shot.verticalOffset >> shot.lateralOffset >> shot.lookAheadOffset >>
+            shot.lookUpOffset >> shot.lookForwardOffset >> shot.fovOffset >>
+            shot.rollOffset >> shot.shakeAmount)) {
+        errorMessage = "Malformed Course Camera Shot Sequencer payload.";
+        return false;
+    }
+    if (shot.id.empty() || !std::isfinite(shot.startDistance) ||
+        !std::isfinite(shot.endDistance) || shot.endDistance <= shot.startDistance ||
+        !std::isfinite(shot.blendInDistance) || shot.blendInDistance < 0.0f ||
+        !std::isfinite(shot.blendOutDistance) || shot.blendOutDistance < 0.0f ||
+        !std::isfinite(shot.weightScale) || shot.weightScale < 0.0f) {
+        errorMessage = "Course Camera Shot payload contains an invalid range.";
+        return false;
+    }
+    errorMessage.clear();
+    return true;
+}
+
+EditorSequencerKeyState CourseSequencerTrackProvider::BuildCameraShotState(
+    const CourseCinematicCameraShot& shot) const {
+    EditorSequencerKeyState state = MakeState(
+        kCameraTrack, "shot:" + shot.id,
+        shot.id.empty() ? "Camera Shot" : shot.id,
+        shot.startDistance,
+        (std::max)(0.0f, shot.endDistance - shot.startDistance));
+    state.payload = EncodeCameraShot(shot);
+    return state;
+}
+
 std::vector<EditorSequencerTrack> CourseSequencerTrackProvider::BuildTracks() const {
     std::vector<EditorSequencerTrack> tracks{
         {kEventTrack, "Course Events", EditorSequencerTrackKind::Event, 0xff5ad2ffu},
@@ -117,11 +187,7 @@ std::vector<EditorSequencerTrack> CourseSequencerTrackProvider::BuildTracks() co
             "Camera Key", value.distance, 0.0, value.editorLocked));
     }
     for (const CourseCinematicCameraShot& value : course_->cinematicCameraShots) {
-        track(kCameraTrack).keys.push_back(MakeState(
-            kCameraTrack, "shot:" + value.id,
-            value.id.empty() ? "Camera Shot" : value.id,
-            value.startDistance,
-            (std::max)(0.0f, value.endDistance - value.startDistance)));
+        track(kCameraTrack).keys.push_back(BuildCameraShotState(value));
     }
     for (const CourseLightingPreset& value : course_->lightingPresets) {
         track(kLightingTrack).keys.push_back(MakeState(
@@ -184,8 +250,7 @@ bool CourseSequencerTrackProvider::CaptureKey(
         if (const CourseCinematicCameraShot* value = FindConst(course_->cinematicCameraShots, [&](const auto& item) {
                 return item.id == AfterPrefix(id, "shot:");
             })) {
-            state = MakeState(kCameraTrack, handle.keyId, value->id,
-                value->startDistance, value->endDistance - value->startDistance);
+            state = BuildCameraShotState(*value);
             return true;
         }
     } else if (StartsWith(id, "lighting:")) {
@@ -328,9 +393,14 @@ bool CourseSequencerTrackProvider::SetKeyTime(
         }
     } else if (StartsWith(id, "shot:")) {
         if (auto* value = FindMutable(course_->cinematicCameraShots, [&](const auto& item) { return item.id == AfterPrefix(id, "shot:"); })) {
-            const float duration = value->endDistance - value->startDistance;
-            value->startDistance = static_cast<float>(state.time);
-            value->endDistance = value->startDistance + duration;
+            CourseCinematicCameraShot restored = *value;
+            if (StartsWith(state.payload, "camera-shot-v1") &&
+                !DecodeCameraShot(state.payload, restored, errorMessage)) return false;
+            restored.id = AfterPrefix(id, "shot:");
+            restored.startDistance = static_cast<float>((std::max)(0.0, state.time));
+            restored.endDistance = restored.startDistance +
+                static_cast<float>((std::max)(0.001, state.duration));
+            *value = std::move(restored);
             return true;
         }
     } else if (StartsWith(id, "lighting:")) {

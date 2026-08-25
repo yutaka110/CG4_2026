@@ -17,6 +17,7 @@
 #include "AppRuntimeConfig.h"
 #include "AppRuntimeUtils.h"
 #include "ModelLoaderAssimp.h"
+#include "course/RailVehicleOccupantActor.h"
 #include "course/RailVehicleRenderer.h"
 
 using Microsoft::WRL::ComPtr;
@@ -1146,10 +1147,9 @@ namespace {
             AppendBox(model, {-1.78f, 0.38f, 2.75f}, {1.78f, 1.25f, 3.20f});
         });
         appendPart("running_gear", 1, [&]() {
-            AppendBox(model, {-2.52f, -0.95f, -2.35f}, {-1.82f, -0.28f, -1.55f});
-            AppendBox(model, {1.82f, -0.95f, -2.35f}, {2.52f, -0.28f, -1.55f});
-            AppendBox(model, {-2.52f, -0.95f, 1.55f}, {-1.82f, -0.28f, 2.35f});
-            AppendBox(model, {1.82f, -0.95f, 1.55f}, {2.52f, -0.28f, 2.35f});
+            // Four wheel meshes are intentionally not baked into the body.
+            // RailVehicleWheelContactPresentationBridge owns their individual
+            // rail-contact transforms and rotation.
             AppendBox(model, {-1.45f, -0.68f, -3.48f}, {1.45f, -0.20f, -3.08f});
             AppendBox(model, {-1.45f, -0.68f, 3.08f}, {1.45f, -0.20f, 3.48f});
         });
@@ -1174,6 +1174,72 @@ namespace {
             OutputDebugStringA(
                 "[AppSceneResources] Rail vehicle CPU geometry validation failed.\n");
         }
+        return model;
+    }
+
+    ModelData BuildCourseRailTrackUnitModelData() {
+        ModelData model;
+        constexpr const char* kWhiteAlbedo = "Resources/human/white.png";
+        model.materials = {
+            {"track_metal", kWhiteAlbedo, {}, {1.0f, 1.0f, 1.0f, 1.0f}},
+        };
+        model.material = model.materials.front();
+        AppendBox(model, {-0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, 0.5f});
+        model.subMeshes.push_back({
+            "track_unit", 0u, static_cast<uint32_t>(model.indices.size()), 0u});
+        model.rootNode.name = "course_rail_track_unit_root";
+        model.rootNode.transform = {
+            {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}};
+        model.rootNode.localMatrix = MakeIdentity4x4();
+        EnsureModelDataMaterialLayout(model);
+        RepairModelGeometryOrientation(model);
+        return model;
+    }
+
+    ModelData BuildCourseRailWheelProxyModelData() {
+        ModelData model;
+        constexpr const char* kWhiteAlbedo = "Resources/human/white.png";
+        model.materials = {
+            {"wheel_iron", kWhiteAlbedo, {}, {1.0f, 1.0f, 1.0f, 1.0f}},
+        };
+        model.material = model.materials.front();
+        constexpr uint32_t kSides = 16;
+        constexpr float kPi = 3.14159265358979323846f;
+        for (uint32_t side = 0; side < kSides; ++side) {
+            const float angle0 = 2.0f*kPi*static_cast<float>(side)/kSides;
+            const float angle1 = 2.0f*kPi*static_cast<float>(side+1u)/kSides;
+            const float y0 = std::cos(angle0)*0.5f;
+            const float z0 = std::sin(angle0)*0.5f;
+            const float y1 = std::cos(angle1)*0.5f;
+            const float z1 = std::sin(angle1)*0.5f;
+            const uint32_t base = static_cast<uint32_t>(model.vertices.size());
+            model.vertices.push_back({{-0.5f,y0,z0,1.0f},{0.0f,0.0f},{0.0f,y0*2.0f,z0*2.0f}});
+            model.vertices.push_back({{ 0.5f,y0,z0,1.0f},{1.0f,0.0f},{0.0f,y0*2.0f,z0*2.0f}});
+            model.vertices.push_back({{ 0.5f,y1,z1,1.0f},{1.0f,1.0f},{0.0f,y1*2.0f,z1*2.0f}});
+            model.vertices.push_back({{-0.5f,y1,z1,1.0f},{0.0f,1.0f},{0.0f,y1*2.0f,z1*2.0f}});
+            model.indices.insert(model.indices.end(), {
+                base+0u, base+1u, base+2u, base+0u, base+2u, base+3u});
+            for (uint32_t cap = 0; cap < 2; ++cap) {
+                const float x = cap == 0 ? -0.5f : 0.5f;
+                const float normalX = cap == 0 ? -1.0f : 1.0f;
+                const uint32_t capBase = static_cast<uint32_t>(model.vertices.size());
+                model.vertices.push_back({{x,0.0f,0.0f,1.0f},{0.5f,0.5f},{normalX,0.0f,0.0f}});
+                model.vertices.push_back({{x,y0,z0,1.0f},{y0+0.5f,z0+0.5f},{normalX,0.0f,0.0f}});
+                model.vertices.push_back({{x,y1,z1,1.0f},{y1+0.5f,z1+0.5f},{normalX,0.0f,0.0f}});
+                if (cap == 0)
+                    model.indices.insert(model.indices.end(), {capBase,capBase+2u,capBase+1u});
+                else
+                    model.indices.insert(model.indices.end(), {capBase,capBase+1u,capBase+2u});
+            }
+        }
+        model.subMeshes.push_back({
+            "wheel_proxy", 0u, static_cast<uint32_t>(model.indices.size()), 0u});
+        model.rootNode.name = "course_rail_wheel_proxy_root";
+        model.rootNode.transform = {
+            {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}};
+        model.rootNode.localMatrix = MakeIdentity4x4();
+        EnsureModelDataMaterialLayout(model);
+        RepairModelGeometryOrientation(model);
         return model;
     }
 
@@ -2979,6 +3045,24 @@ bool AppSceneResources::Initialize(
         OutputDebugStringA("[AppSceneResources] Rail vehicle resource creation failed.\n");
     }
 
+    const auto registerProceduralModel = [&] (
+        const char* name, ModelData modelData) {
+        GpuMeshResource mesh = CreateGpuMeshResource(
+            device, uploadCommandList, modelData, initialUploadResources_);
+        const D3D12_GPU_DESCRIPTOR_HANDLE texture = findManagedTextureGpu("default");
+        if (mesh.indexCount == 0 || texture.ptr == 0) {
+            OutputDebugStringA(("[AppSceneResources] Procedural model failed: " +
+                std::string(name) + "\n").c_str());
+            return;
+        }
+        vfxModelLibrary.push_back({
+            name, "<procedural>", name, std::move(modelData), mesh, texture, true});
+    };
+    registerProceduralModel(
+        "course_rail.track_unit", BuildCourseRailTrackUnitModelData());
+    registerProceduralModel(
+        "course_rail.wheel_proxy", BuildCourseRailWheelProxyModelData());
+
     trainingSwordModelIndex = UINT32_MAX;
     ModelData trainingSwordData = BuildTrainingSwordModelDataForSubmission();
     GpuMeshResource trainingSwordMesh = CreateGpuMeshResource(
@@ -3060,6 +3144,21 @@ bool AppSceneResources::Initialize(
     railVehicleObject.transformData->WVP = MakeIdentity4x4();
     railVehicleObject.transformData->World = MakeIdentity4x4();
     railVehicleObject.transformData->WorldInverseTranspose = MakeIdentity4x4();
+
+    railVehicleOccupantObject = {};
+    railVehicleOccupantObject.name = "rail_vehicle_occupant_actor";
+    railVehicleOccupantObject.modelIndex = UINT32_MAX;
+    railVehicleOccupantObject.visible = false;
+    railVehicleOccupantObject.transformResource =
+        CreateBufferResource(device, sizeof(TransformationMatrix));
+    railVehicleOccupantObject.transformResource->Map(
+        0,
+        nullptr,
+        reinterpret_cast<void**>(&railVehicleOccupantObject.transformData));
+    railVehicleOccupantObject.transformData->WVP = MakeIdentity4x4();
+    railVehicleOccupantObject.transformData->World = MakeIdentity4x4();
+    railVehicleOccupantObject.transformData->WorldInverseTranspose =
+        MakeIdentity4x4();
 
     // =========================================================
     // Skinned model instances
@@ -3157,6 +3256,10 @@ bool AppSceneResources::Initialize(
     }
     if (!courseMeshRenderQueue.Initialize(device, 256)) {
         OutputDebugStringA("[AppSceneResources] CourseMeshRenderQueue initialization failed.\n");
+        return false;
+    }
+    if (!courseRailTrackRenderer.Initialize(device, 516)) {
+        OutputDebugStringA("[AppSceneResources] CourseRailTrackRenderer initialization failed.\n");
         return false;
     }
 
@@ -3564,6 +3667,59 @@ void AppSceneResources::SyncRailVehicleRenderFrame(
     railVehicleObject.transformData->WVP =
         Multiply(world, Multiply(viewMatrix, projMatrix));
     railVehicleObject.transformData->WorldInverseTranspose =
+        Transpose(Inverse(world));
+}
+
+void AppSceneResources::SyncCourseRailTrackRenderer(
+    const CourseRailTrackMeshBakeResult& baked,
+    float currentDistance,
+    const RailVehicleWheelContactPresentationFrame* wheels,
+    const Matrix4x4& viewMatrix,
+    const Matrix4x4& projMatrix) {
+    std::vector<CourseMeshModelBinding> bindings;
+    bindings.reserve(vfxModelLibrary.size());
+    for (const AppManagedModelResource& model : vfxModelLibrary) {
+        bindings.push_back({
+            model.name,
+            model.model.rootNode.localMatrix,
+            model.loaded && model.mesh.indexCount > 0 && model.textureGpu.ptr != 0});
+    }
+    courseRailTrackRenderer.Sync(
+        baked, currentDistance, wheels, bindings, viewMatrix, projMatrix);
+}
+
+void AppSceneResources::SyncRailVehicleOccupantActorFrame(
+    const RailVehicleOccupantActorFrame& frame,
+    const Matrix4x4& viewMatrix,
+    const Matrix4x4& projMatrix) {
+    railVehicleOccupantObject.visible = false;
+    if (!frame.visible || railVehicleOccupantObject.transformData == nullptr) {
+        return;
+    }
+
+    const auto resolveModelIndex = [&](const std::string& name) -> uint32_t {
+        for (uint32_t index = 0; index < vfxModelLibrary.size(); ++index) {
+            const AppManagedModelResource& model = vfxModelLibrary[index];
+            if (model.loaded && model.name == name) return index;
+        }
+        return UINT32_MAX;
+    };
+    uint32_t modelIndex = resolveModelIndex(frame.meshId);
+    if (modelIndex == UINT32_MAX) {
+        modelIndex = resolveModelIndex(frame.fallbackMeshId);
+    }
+    const AppManagedModelResource* model = FindManagedModel(modelIndex);
+    if (model == nullptr || model->mesh.indexCount == 0) return;
+
+    railVehicleOccupantObject.modelIndex = modelIndex;
+    railVehicleOccupantObject.visible = true;
+    Matrix4x4 world = Multiply(
+        model->model.rootNode.localMatrix,
+        frame.worldMatrix);
+    railVehicleOccupantObject.transformData->World = world;
+    railVehicleOccupantObject.transformData->WVP =
+        Multiply(world, Multiply(viewMatrix, projMatrix));
+    railVehicleOccupantObject.transformData->WorldInverseTranspose =
         Transpose(Inverse(world));
 }
 

@@ -183,6 +183,77 @@ CourseValidationReport ValidateCourseAsset(
         previousSectionEnd = (std::max)(previousSectionEnd, section.endDistance);
     }
 
+    std::unordered_set<std::string> rideProfileGuids;
+    for (size_t index = 0; index < course.rideProfiles.size(); ++index) {
+        const CourseRideProfileDefinition& profile = course.rideProfiles[index];
+        const std::string subject = "ride_profile[" + std::to_string(index) + "]";
+        std::string profileError;
+        if (!profile.Validate(&profileError)) {
+            AddIssue(report, CourseValidationSeverity::Error, subject, profileError, profile.startDistance);
+        }
+        if (!rideProfileGuids.insert(profile.editorGuid).second) {
+            AddIssue(report, CourseValidationSeverity::Error, subject,
+                "Ride profile editor GUID is duplicated.", profile.startDistance);
+        }
+        if (railLength > 0.0f && profile.endDistance > railLength + 0.01f) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject,
+                "Ride profile extends beyond rail length.", profile.endDistance);
+        }
+        if (!profile.cameraShotId.empty()) {
+            const bool found = std::any_of(
+                course.cinematicCameraShots.begin(), course.cinematicCameraShots.end(),
+                [&profile](const CourseCinematicCameraShot& shot) {
+                    return shot.id == profile.cameraShotId;
+                });
+            if (!found) {
+                AddIssue(report, CourseValidationSeverity::Error, subject,
+                    "Ride profile references a missing cinematic camera shot: " +
+                        profile.cameraShotId,
+                    profile.startDistance);
+            }
+        }
+    }
+
+    std::unordered_set<std::string> speedBeatGuids;
+    for (size_t index = 0; index < course.rideSpeedBeats.size(); ++index) {
+        const RailRideSpeedBeatDefinition& beat = course.rideSpeedBeats[index];
+        const std::string subject = "ride_speed_beat[" + std::to_string(index) + "]";
+        std::string beatError;
+        if (!beat.Validate(&beatError)) {
+            AddIssue(report, CourseValidationSeverity::Error, subject, beatError, beat.startDistance);
+        }
+        if (!speedBeatGuids.insert(beat.editorGuid).second) {
+            AddIssue(report, CourseValidationSeverity::Error, subject,
+                "Speed Beat editor GUID is duplicated.", beat.startDistance);
+        }
+        if (railLength > 0.0f && beat.endDistance > railLength + 0.01f) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject,
+                "Speed Beat extends beyond rail length.", beat.endDistance);
+        }
+    }
+
+    std::unordered_set<std::string> railRideEventGuids;
+    for (size_t index = 0; index < course.railRideEvents.size(); ++index) {
+        const CourseRailRideEventDefinition& event = course.railRideEvents[index];
+        const std::string subject =
+            "rail_ride_event[" + std::to_string(index) + "]";
+        std::string eventError;
+        if (!event.Validate(&eventError)) {
+            AddIssue(report, CourseValidationSeverity::Error, subject,
+                eventError, event.startDistance);
+        }
+        if (!railRideEventGuids.insert(event.editorGuid).second) {
+            AddIssue(report, CourseValidationSeverity::Error, subject,
+                "Rail Ride Event editor GUID is duplicated.",
+                event.startDistance);
+        }
+        if (railLength > 0.0f && event.endDistance > railLength + 0.01f) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject,
+                "Rail Ride Event extends beyond rail length.",
+                event.endDistance);
+        }
+    }
+
     uint32_t gameplayTerrainCount = 0;
     uint32_t heroTerrainCount = 0;
     uint32_t vistaTerrainCount = 0;

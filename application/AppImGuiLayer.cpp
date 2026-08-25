@@ -2072,9 +2072,15 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     }
     editorCourseSequencerProvider_.Bind(editableCourse);
     editorCourseWaveSequencerBridge_.Bind(context.courseWaveEditorController);
+    editorCourseRideSequencerBridge_.Bind(editableCourse);
+    editorRailRideSpeedBeatAuthoring_.Bind(editableCourse);
+    editorCourseRailRideEventAuthoring_.Bind(editableCourse);
     editorSequencer_.BeginFrame();
     editorSequencer_.RegisterProvider(editorCourseSequencerProvider_);
     editorSequencer_.RegisterProvider(editorCourseWaveSequencerBridge_);
+    editorSequencer_.RegisterProvider(editorCourseRideSequencerBridge_);
+    editorSequencer_.RegisterProvider(editorRailRideSpeedBeatAuthoring_);
+    editorSequencer_.RegisterProvider(editorCourseRailRideEventAuthoring_);
     editorSequencer_.SetTransactionStack(&editorTransactions);
     editorSequencer_.SetSequenceRange(0.0, context.courseRailLength);
     editorSequencer_.SetPreviewPositionCallback(
@@ -4544,6 +4550,30 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             editor::EditorPanelHostArea::RightInspector,
             panelVisible("editor.details"),
             [&]() {
+                if (courseCameraShotDetailsPanel_.HandlesSelection(
+                        &editorSequencer_, &editorCourseSequencerProvider_)) {
+                    courseCameraShotDetailsPanel_.Draw(
+                        editor::CourseCameraShotDetailsPanelContext{
+                            editableCourse,
+                            &editorCourseSequencerProvider_,
+                            &editorSequencer_,
+                            context.courseRailLength,
+                            editorCommandContext.canMutateAuthoring &&
+                                app::kRuntimeAuthoringEnabled});
+                    return;
+                }
+                if (courseRideProfileDetailsPanel_.HandlesSelection(
+                        &editorSequencer_, &editorCourseRideSequencerBridge_)) {
+                    courseRideProfileDetailsPanel_.Draw(
+                        editor::CourseRideProfileDetailsPanelContext{
+                            editableCourse,
+                            &editorCourseRideSequencerBridge_,
+                            &editorSequencer_,
+                            context.courseRailLength,
+                            editorCommandContext.canMutateAuthoring &&
+                                app::kRuntimeAuthoringEnabled});
+                    return;
+                }
                 if (editorSelection_.Empty() &&
                     context.courseWaveEditorController != nullptr &&
                     context.courseWaveEditorController->State().bound) {
@@ -5182,6 +5212,17 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                     editor::DrawCourseOverviewMapPanel(
                         courseOverviewMapController_, courseMapPanelContext);
                 }
+            }});
+    registerPanel(
+        editor::EditorPanelDescriptor{
+            "course.rideTuningTelemetry",
+            "Ride Tuning Telemetry",
+            "Course",
+            editor::EditorPanelHostArea::BottomDock,
+            panelVisible("course.rideTuningTelemetry"),
+            [&]() {
+                railRideTuningTelemetryPanel_.Draw(
+                    context.railRideTuningTelemetry);
             }});
     registerPanel(
         editor::EditorPanelDescriptor{

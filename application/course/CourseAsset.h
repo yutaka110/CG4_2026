@@ -2,11 +2,15 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "../terrain/RailPath.h"
 #include "../terrain/TerrainEditLayer.h"
 #include "RailAnchor.h"
+#include "CourseRideProfileDefinition.h"
+#include "RailRideSpeedBeatDefinition.h"
+#include "CourseRailRideEventDefinition.h"
 #include "utils/math/Vector.h"
 
 struct CourseCameraKey {
@@ -268,10 +272,16 @@ struct CourseCinematicShotSet {
 
 struct CourseAsset {
     std::string name = "Untitled Course";
+    // Course-level reference to the immutable rail presentation asset. RailPath
+    // control points remain the geometry source of truth.
+    std::string railTrackAssetId = "mine_cart_standard";
     std::vector<RailPathControlPoint> railPoints;
     std::vector<CourseRailAnchorBinding> railAnchors;
     std::vector<CourseCameraKey> cameraKeys;
     std::vector<CourseSection> sections;
+    std::vector<CourseRideProfileDefinition> rideProfiles;
+    std::vector<RailRideSpeedBeatDefinition> rideSpeedBeats;
+    std::vector<CourseRailRideEventDefinition> railRideEvents;
     std::vector<CourseEventMarker> events;
     std::vector<CourseWaveDefinition> waveDefinitions;
     std::vector<CourseEnemyPlacement> enemyPlacements;
@@ -294,10 +304,14 @@ struct CourseAsset {
     void ApplyToRailPath(RailPath& railPath) const;
     CourseCameraKey EvaluateCamera(float distance) const;
     CourseLightingPreset EvaluateLightingPreset(float distance) const;
-    CourseCameraShotState EvaluateCinematicCameraShot(float distance) const;
+    CourseCameraShotState EvaluateCinematicCameraShot(
+        float distance,
+        std::string_view preferredShotId = {}) const;
     CourseTerrainMaterialPreset EvaluateTerrainMaterialPreset(float distance) const;
     const CourseCinematicShotSet* FindCinematicShotSet(float distance) const;
     const CourseSection* FindSection(float distance) const;
+    const CourseRideProfileDefinition* FindRideProfile(float distance) const;
+    const RailRideSpeedBeatDefinition* FindRideSpeedBeat(float distance) const;
     bool IsValid() const { return railPoints.size() >= 2; }
 };
 

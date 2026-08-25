@@ -82,6 +82,18 @@ void RailVehicleActor::Update(const RailVehicleActorInput& input) {
     frame_.damageVfxMountPosition = state.damageVfxMountPosition;
     frame_.visualBankDegrees = presentation.visualBankDegrees;
     frame_.visualPitchDegrees = presentation.visualPitchDegrees;
+    frame_.visualYawDegrees = presentation.visualYawDegrees;
+    if (input.collisionFeedback != nullptr) {
+        const RailVehicleCollisionFeedbackFrame& collision =
+            *input.collisionFeedback;
+        frame_.position.x += collision.bodyTranslationWorld.x;
+        frame_.position.y += collision.bodyTranslationWorld.y;
+        frame_.position.z += collision.bodyTranslationWorld.z;
+        frame_.visualBankDegrees += collision.bodyBankDegrees;
+        frame_.visualPitchDegrees += collision.bodyPitchDegrees;
+        frame_.visualYawDegrees += collision.bodyYawDegrees;
+        frame_.sourceCollisionFeedbackRevision = collision.revision;
+    }
     frame_.wheelRotationRadians = presentation.wheelRotationRadians;
     frame_.healthNormalized = (std::clamp)(
         state.hitPoints / (std::max)(0.001f, vehicleDefinition.maximumHitPoints),

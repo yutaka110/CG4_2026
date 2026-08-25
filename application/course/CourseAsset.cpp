@@ -354,6 +354,31 @@ void SortCourseData(CourseAsset& asset) {
             return a.startDistance < b.startDistance;
         });
     std::sort(
+        asset.rideProfiles.begin(),
+        asset.rideProfiles.end(),
+        [](const CourseRideProfileDefinition& a, const CourseRideProfileDefinition& b) {
+            if (a.startDistance != b.startDistance) return a.startDistance < b.startDistance;
+            return a.editorGuid < b.editorGuid;
+        });
+    std::sort(
+        asset.rideSpeedBeats.begin(),
+        asset.rideSpeedBeats.end(),
+        [](const RailRideSpeedBeatDefinition& a, const RailRideSpeedBeatDefinition& b) {
+            if (a.startDistance != b.startDistance) return a.startDistance < b.startDistance;
+            if (a.priority != b.priority) return a.priority > b.priority;
+            return a.editorGuid < b.editorGuid;
+        });
+    std::sort(
+        asset.railRideEvents.begin(),
+        asset.railRideEvents.end(),
+        [](const CourseRailRideEventDefinition& a,
+           const CourseRailRideEventDefinition& b) {
+            if (a.startDistance != b.startDistance)
+                return a.startDistance < b.startDistance;
+            if (a.priority != b.priority) return a.priority > b.priority;
+            return a.editorGuid < b.editorGuid;
+        });
+    std::sort(
         asset.events.begin(),
         asset.events.end(),
         [](const CourseEventMarker& a, const CourseEventMarker& b) {
@@ -625,6 +650,15 @@ bool CourseAsset::LoadFromString(const std::string& text, std::string* errorMess
             if (parts.size() >= 2 && !parts[1].empty()) {
                 loaded.name = parts[1];
             }
+        } else if (kind == "rail_track") {
+            if (parts.size() != 2 || parts[1].empty()) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid rail_track row at line " +
+                        std::to_string(lineNumber);
+                }
+                return false;
+            }
+            loaded.railTrackAssetId = parts[1];
         } else if (kind == "rail") {
             if (parts.size() < 6) {
                 if (errorMessage != nullptr) {
@@ -701,6 +735,129 @@ bool CourseAsset::LoadFromString(const std::string& text, std::string* errorMess
             section.name = parts[3];
             section.category = parts[4];
             loaded.sections.push_back(section);
+        } else if (kind == "ride_profile") {
+            if (parts.size() < 17) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid ride_profile row at line " +
+                        std::to_string(lineNumber);
+                }
+                return false;
+            }
+            CourseRideProfileDefinition profile{};
+            profile.editorGuid = parts[1];
+            profile.startDistance = ParseFloatOr(parts, 2, 0.0f);
+            profile.endDistance = ParseFloatOr(parts, 3, profile.startDistance);
+            profile.displayName = parts[4];
+            profile.speedMode = ParseCourseRideSpeedMode(parts[5]);
+            profile.speedMultiplier = ParseFloatOr(parts, 6, 1.0f);
+            profile.targetSpeedOverride = ParseFloatOr(parts, 7, -1.0f);
+            // Schema v8 rows end at index 16. Schema v9 appends motion
+            // envelope fields before the presentation fields.
+            const bool hasMotionEnvelope = parts.size() >= 22;
+            std::size_t index = 8;
+            if (hasMotionEnvelope) {
+                profile.accelerationScale = ParseFloatOr(parts, index++, 1.0f);
+                profile.brakingScale = ParseFloatOr(parts, index++, 1.0f);
+                profile.maximumJerk = ParseFloatOr(parts, index++, 120.0f);
+                profile.cornerEntryLookAheadDistance = ParseFloatOr(parts, index++, 48.0f);
+                profile.cornerSpeedScale = ParseFloatOr(parts, index++, 1.0f);
+            }
+            profile.turnAnticipationDistance = ParseFloatOr(parts, index++, 24.0f);
+            profile.visualBankScale = ParseFloatOr(parts, index++, 1.0f);
+            profile.maximumVisualBankDegrees = ParseFloatOr(parts, index++, 18.0f);
+            profile.blendInDistance = ParseFloatOr(parts, index++, 16.0f);
+            profile.blendOutDistance = ParseFloatOr(parts, index++, 16.0f);
+            profile.cameraShotId = parts[index] == "-" ? std::string{} : parts[index];
+            ++index;
+            profile.enabled = parts[index++] != "0";
+            profile.editorVisible = parts[index++] != "0";
+            profile.editorLocked = parts[index] == "1";
+            std::string profileError;
+            if (!profile.Validate(&profileError)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid ride_profile at line " +
+                        std::to_string(lineNumber) + ": " + profileError;
+                }
+                return false;
+            }
+            loaded.rideProfiles.push_back(std::move(profile));
+        } else if (kind == "ride_speed_beat") {
+            if (parts.size() < 17) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid ride_speed_beat row at line " +
+                        std::to_string(lineNumber);
+                }
+                return false;
+            }
+            RailRideSpeedBeatDefinition beat{};
+            beat.editorGuid = parts[1];
+            beat.startDistance = ParseFloatOr(parts, 2, 0.0f);
+            beat.endDistance = ParseFloatOr(parts, 3, beat.startDistance);
+            beat.displayName = parts[4];
+            beat.type = ParseRailRideSpeedBeatType(parts[5]);
+            beat.speedMultiplier = ParseFloatOr(parts, 6, 1.0f);
+            beat.targetSpeedOverride = ParseFloatOr(parts, 7, -1.0f);
+            beat.accelerationScale = ParseFloatOr(parts, 8, 1.0f);
+            beat.brakingScale = ParseFloatOr(parts, 9, 1.0f);
+            beat.maximumJerk = ParseFloatOr(parts, 10, 120.0f);
+            beat.blendInDistance = ParseFloatOr(parts, 11, 8.0f);
+            beat.blendOutDistance = ParseFloatOr(parts, 12, 8.0f);
+            beat.priority = static_cast<int>(ParseFloatOr(parts, 13, 0.0f));
+            beat.enabled = parts[14] != "0";
+            beat.editorVisible = parts[15] != "0";
+            beat.editorLocked = parts[16] == "1";
+            std::string beatError;
+            if (!beat.Validate(&beatError)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid ride_speed_beat at line " +
+                        std::to_string(lineNumber) + ": " + beatError;
+                }
+                return false;
+            }
+            loaded.rideSpeedBeats.push_back(std::move(beat));
+        } else if (kind == "rail_ride_event") {
+            if (parts.size() < 26) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid rail_ride_event row at line " +
+                        std::to_string(lineNumber);
+                }
+                return false;
+            }
+            CourseRailRideEventDefinition event{};
+            event.editorGuid = parts[1];
+            event.startDistance = ParseFloatOr(parts, 2, 0.0f);
+            event.endDistance = ParseFloatOr(parts, 3, event.startDistance);
+            event.displayName = parts[4];
+            event.type = ParseCourseRailRideEventType(parts[5]);
+            event.bankMode = ParseCourseRailRideBankMode(parts[6]);
+            event.bankDegrees = ParseFloatOr(parts, 7, 0.0f);
+            event.rumbleAmplitude = ParseFloatOr(parts, 8, 0.35f);
+            event.rumbleFrequencyHz = ParseFloatOr(parts, 9, 12.0f);
+            event.suspensionAmplitude = ParseFloatOr(parts, 10, 0.08f);
+            event.cameraShake = ParseFloatOr(parts, 11, 0.055f);
+            event.cameraFovKick = ParseFloatOr(parts, 12, 0.0f);
+            event.cameraRollKickDegrees = ParseFloatOr(parts, 13, 0.0f);
+            event.hapticLow = ParseFloatOr(parts, 14, 0.18f);
+            event.hapticHigh = ParseFloatOr(parts, 15, 0.12f);
+            event.speedInfluence = ParseFloatOr(parts, 16, 0.65f);
+            event.blendInDistance = ParseFloatOr(parts, 17, 0.0f);
+            event.blendOutDistance = ParseFloatOr(parts, 18, 0.0f);
+            event.priority = static_cast<int>(ParseFloatOr(parts, 19, 0.0f));
+            event.audioCueId = parts[20] == "-" ? std::string{} : parts[20];
+            event.vfxCueId = parts[21] == "-" ? std::string{} : parts[21];
+            event.triggerOncePerRun = parts[22] != "0";
+            event.enabled = parts[23] != "0";
+            event.editorVisible = parts[24] != "0";
+            event.editorLocked = parts[25] == "1";
+            std::string eventError;
+            if (!event.Validate(&eventError)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid rail_ride_event at line " +
+                        std::to_string(lineNumber) + ": " + eventError;
+                }
+                return false;
+            }
+            loaded.railRideEvents.push_back(std::move(event));
         } else if (kind == "event") {
             if (parts.size() < 4) {
                 if (errorMessage != nullptr) {
@@ -1058,6 +1215,15 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
     CourseAsset saved = *this;
     saved.SortForRuntime();
     if (!saved.terrainEditLayer.Validate(errorMessage)) return false;
+    for (const CourseRideProfileDefinition& profile : saved.rideProfiles) {
+        if (!profile.Validate(errorMessage)) return false;
+    }
+    for (const RailRideSpeedBeatDefinition& beat : saved.rideSpeedBeats) {
+        if (!beat.Validate(errorMessage)) return false;
+    }
+    for (const CourseRailRideEventDefinition& event : saved.railRideEvents) {
+        if (!event.Validate(errorMessage)) return false;
+    }
 
     const bool hasPersistentEditorWorldIdentity =
         std::all_of(saved.cameraKeys.begin(), saved.cameraKeys.end(),
@@ -1078,20 +1244,41 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
             [](const CourseWaveDefinition& value) {
                 return !value.editorGuid.empty();
             });
+    const bool hasPersistentRideProfileIdentity =
+        std::all_of(saved.rideProfiles.begin(), saved.rideProfiles.end(),
+            [](const CourseRideProfileDefinition& value) {
+                return !value.editorGuid.empty();
+            });
+    const bool hasPersistentSpeedBeatIdentity =
+        std::all_of(saved.rideSpeedBeats.begin(), saved.rideSpeedBeats.end(),
+            [](const RailRideSpeedBeatDefinition& value) {
+                return !value.editorGuid.empty();
+            });
+    const bool hasPersistentRailRideEventIdentity =
+        std::all_of(saved.railRideEvents.begin(), saved.railRideEvents.end(),
+            [](const CourseRailRideEventDefinition& value) {
+                return !value.editorGuid.empty();
+            });
 
     std::ostringstream file;
 
     file << "# Rail shooter course DSL\n";
     file << "# editor-schema:"
          << (hasPersistentEditorWorldIdentity && hasPersistentRailIdentity &&
-                hasPersistentWaveIdentity ? 7
+                hasPersistentWaveIdentity && hasPersistentRideProfileIdentity &&
+                hasPersistentSpeedBeatIdentity &&
+                hasPersistentRailRideEventIdentity ? 12
              : (hasPersistentEditorWorldIdentity ? 3 : 1)) << "\n";
     file << "# row format:\n";
     file << "# course|name\n";
+    file << "# rail_track|assetId\n";
     file << "# rail|x|y|z|corridorRadius|speed|editorGuid|tangentMode|inX|inY|inZ|outX|outY|outZ\n";
     file << "# rail_anchor|ownerGuid|segmentGuid|normalizedT|lateralOffset|verticalOffset|forwardOffset\n";
     file << "# camera|distance|backDistance|verticalOffset|lateralOffset|lookAheadDistance|lookUpOffset|lookForwardOffset|fovDeg|rollDeg|editorGuid|editorVisible|editorLocked\n";
     file << "# section|start|end|name|category\n";
+    file << "# ride_profile|editorGuid|start|end|displayName|speedMode|speedMultiplier|targetSpeedOverride|accelerationScale|brakingScale|maximumJerk|cornerEntryLookAheadDistance|cornerSpeedScale|turnAnticipationDistance|visualBankScale|maximumVisualBankDegrees|blendIn|blendOut|cameraShotId|enabled|editorVisible|editorLocked\n";
+    file << "# ride_speed_beat|editorGuid|start|end|displayName|type|speedMultiplier|targetSpeedOverride|accelerationScale|brakingScale|maximumJerk|blendIn|blendOut|priority|enabled|editorVisible|editorLocked\n";
+    file << "# rail_ride_event|editorGuid|start|end|displayName|type|bankMode|bankDegrees|rumbleAmplitude|rumbleFrequencyHz|suspensionAmplitude|cameraShake|cameraFovKick|cameraRollKickDegrees|hapticLow|hapticHigh|speedInfluence|blendIn|blendOut|priority|audioCueId|vfxCueId|triggerOncePerRun|enabled|editorVisible|editorLocked\n";
     file << "# terrain|distance|layer|id|meshId|lateralOffset|verticalOffset|forwardOffset|scaleX|scaleY|scaleZ|pitchDeg|yawDeg|rollDeg|collisionMode|renderPriority|cullBehind|cullAhead|editorGuid|editorVisible|editorLocked\n";
     file << "# terrain_brush|strokeGuid|stampGuid|operation|distance|angleRad|radius|surfaceRadius|strength|hardness|materialLayer\n";
     file << "# rock_cluster|distance|id|meshId|anchor|type|count|minScale|maxScale|spreadX|spreadY|spreadZ|clearLaneRadius|cullBehind|cullAhead|rotX|rotY|rotZ|instanceOverrides|editorGuid|editorVisible|editorLocked\n";
@@ -1107,6 +1294,7 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
 
     file << std::fixed << std::setprecision(3);
     file << "course|" << saved.name << "\n\n";
+    file << "rail_track|" << saved.railTrackAssetId << "\n\n";
 
     file << "# Main camera/terrain rail. Distances are arc-length evaluated by RailPath.\n";
     for (const RailPathControlPoint& point : saved.railPoints) {
@@ -1162,6 +1350,83 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
              << section.endDistance << '|'
              << section.name << '|'
              << section.category << "\n";
+    }
+
+    file << "\n# Authored ride intent: speed policy, turn anticipation, banking, and camera shot.\n";
+    for (const CourseRideProfileDefinition& profile : saved.rideProfiles) {
+        file << "ride_profile|"
+             << profile.editorGuid << '|'
+             << profile.startDistance << '|'
+             << profile.endDistance << '|'
+             << profile.displayName << '|'
+             << ToCourseRideSpeedModeString(profile.speedMode) << '|'
+             << profile.speedMultiplier << '|'
+             << profile.targetSpeedOverride << '|'
+             << profile.accelerationScale << '|'
+             << profile.brakingScale << '|'
+             << profile.maximumJerk << '|'
+             << profile.cornerEntryLookAheadDistance << '|'
+             << profile.cornerSpeedScale << '|'
+             << profile.turnAnticipationDistance << '|'
+             << profile.visualBankScale << '|'
+             << profile.maximumVisualBankDegrees << '|'
+             << profile.blendInDistance << '|'
+             << profile.blendOutDistance << '|'
+             << (profile.cameraShotId.empty() ? "-" : profile.cameraShotId) << '|'
+             << (profile.enabled ? 1 : 0) << '|'
+             << (profile.editorVisible ? 1 : 0) << '|'
+             << (profile.editorLocked ? 1 : 0) << "\n";
+    }
+
+    file << "\n# Distance-authored speed rhythm layered over the active Ride Profile.\n";
+    for (const RailRideSpeedBeatDefinition& beat : saved.rideSpeedBeats) {
+        file << "ride_speed_beat|"
+             << beat.editorGuid << '|'
+             << beat.startDistance << '|'
+             << beat.endDistance << '|'
+             << beat.displayName << '|'
+             << ToRailRideSpeedBeatTypeString(beat.type) << '|'
+             << beat.speedMultiplier << '|'
+             << beat.targetSpeedOverride << '|'
+             << beat.accelerationScale << '|'
+             << beat.brakingScale << '|'
+             << beat.maximumJerk << '|'
+             << beat.blendInDistance << '|'
+             << beat.blendOutDistance << '|'
+             << beat.priority << '|'
+             << (beat.enabled ? 1 : 0) << '|'
+             << (beat.editorVisible ? 1 : 0) << '|'
+             << (beat.editorLocked ? 1 : 0) << "\n";
+    }
+
+    file << "\n# Local authored track feel layered over curve-derived Ride Profile dynamics.\n";
+    for (const CourseRailRideEventDefinition& event : saved.railRideEvents) {
+        file << "rail_ride_event|"
+             << event.editorGuid << '|'
+             << event.startDistance << '|'
+             << event.endDistance << '|'
+             << event.displayName << '|'
+             << ToCourseRailRideEventTypeString(event.type) << '|'
+             << ToCourseRailRideBankModeString(event.bankMode) << '|'
+             << event.bankDegrees << '|'
+             << event.rumbleAmplitude << '|'
+             << event.rumbleFrequencyHz << '|'
+             << event.suspensionAmplitude << '|'
+             << event.cameraShake << '|'
+             << event.cameraFovKick << '|'
+             << event.cameraRollKickDegrees << '|'
+             << event.hapticLow << '|'
+             << event.hapticHigh << '|'
+             << event.speedInfluence << '|'
+             << event.blendInDistance << '|'
+             << event.blendOutDistance << '|'
+             << event.priority << '|'
+             << (event.audioCueId.empty() ? "-" : event.audioCueId) << '|'
+             << (event.vfxCueId.empty() ? "-" : event.vfxCueId) << '|'
+             << (event.triggerOncePerRun ? 1 : 0) << '|'
+             << (event.enabled ? 1 : 0) << '|'
+             << (event.editorVisible ? 1 : 0) << '|'
+             << (event.editorLocked ? 1 : 0) << "\n";
     }
 
     file << "\n# Layered course terrain: gameplay collision, hero landmarks, and vista background.\n";
@@ -1421,6 +1686,9 @@ void CourseAsset::BuildFallbackCanyon(float corridorRadius) {
     railAnchors.clear();
     cameraKeys.clear();
     sections.clear();
+    rideProfiles.clear();
+    rideSpeedBeats.clear();
+    railRideEvents.clear();
     events.clear();
     waveDefinitions.clear();
     enemyPlacements.clear();
@@ -1502,9 +1770,12 @@ CourseLightingPreset CourseAsset::EvaluateLightingPreset(float distance) const {
     return current;
 }
 
-CourseCameraShotState CourseAsset::EvaluateCinematicCameraShot(float distance) const {
+CourseCameraShotState CourseAsset::EvaluateCinematicCameraShot(
+    float distance,
+    std::string_view preferredShotId) const {
     CourseCameraShotState result{};
     for (const CourseCinematicCameraShot& shot : cinematicCameraShots) {
+        if (!preferredShotId.empty() && shot.id != preferredShotId) continue;
         const CourseCameraBlendAsset* blendAsset = FindCameraBlendAsset(*this, shot.blendAssetId);
         const CourseCinematicCameraShot resolvedShot = ResolveCameraShot(*this, shot);
         const float weight = EvaluateShotWeight(resolvedShot, blendAsset, distance);
@@ -1588,6 +1859,34 @@ std::vector<CourseEventMarker> CourseRuntime::Advance(float deltaTime, const Rai
     return AdvanceInternal(deltaTime, railPath, nullptr, true);
 }
 
+const CourseRideProfileDefinition* CourseAsset::FindRideProfile(float distance) const {
+    const CourseRideProfileDefinition* best = nullptr;
+    for (const CourseRideProfileDefinition& profile : rideProfiles) {
+        if (!profile.enabled || distance < profile.startDistance || distance > profile.endDistance) {
+            continue;
+        }
+        if (best == nullptr ||
+            (profile.endDistance - profile.startDistance) <
+                (best->endDistance - best->startDistance)) {
+            best = &profile;
+        }
+    }
+    return best;
+}
+
+const RailRideSpeedBeatDefinition* CourseAsset::FindRideSpeedBeat(float distance) const {
+    const RailRideSpeedBeatDefinition* best = nullptr;
+    for (const RailRideSpeedBeatDefinition& beat : rideSpeedBeats) {
+        if (!beat.enabled || distance < beat.startDistance || distance > beat.endDistance) continue;
+        if (best == nullptr || beat.priority > best->priority ||
+            (beat.priority == best->priority &&
+                (beat.endDistance-beat.startDistance) < (best->endDistance-best->startDistance))) {
+            best = &beat;
+        }
+    }
+    return best;
+}
+
 std::vector<CourseEventMarker> CourseRuntime::Advance(
     float deltaTime,
     const RailPath& railPath,
@@ -1614,8 +1913,12 @@ std::vector<CourseEventMarker> CourseRuntime::AdvanceInternal(
 
     const float previousDistance = distance_;
     const RailPathSample sample = railPath.Evaluate(distance_);
-    const float requestedSpeed = speedOverride != nullptr ? *speedOverride : sample.speed;
-    const float speed = (std::max)(12.0f, requestedSpeed);
+    // An explicit speed is authoritative (RailVehicleMovementSystem owns its
+    // integration). The legacy minimum only applies to rail-authored playback
+    // that did not provide a vehicle speed override.
+    const float speed = speedOverride != nullptr
+        ? (std::isfinite(*speedOverride) ? (std::max)(0.0f, *speedOverride) : 0.0f)
+        : (std::max)(12.0f, sample.speed);
     distance_ += speed * (std::max)(0.0f, deltaTime);
     if (distance_ > railPath.Length()) {
         if (loopAtEnd) {

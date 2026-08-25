@@ -41,12 +41,21 @@ void RailVehiclePresentationBridge::Update(
         : 0.0f;
     const float maximumSpeed = (std::max)(1.0f, definition.maximumSpeed);
     const float speedNormalized = (std::clamp)(state.speed / maximumSpeed, 0.0f, 1.0f);
+    const float rideBlend = input.rideProfileActive
+        ? (std::clamp)(input.rideProfileBlend, 0.0f, 1.0f) : 0.0f;
+    const float bankCurvature = state.signedCurvature +
+        (input.rideAnticipatedSignedCurvature - state.signedCurvature) * rideBlend;
+    const float bankScale = 1.0f +
+        ((std::max)(0.0f, input.rideVisualBankScale) - 1.0f) * rideBlend;
+    const float maximumBankDegrees = settings.maximumVisualBankDegrees +
+        ((std::max)(0.0f, input.rideMaximumVisualBankDegrees) -
+            settings.maximumVisualBankDegrees) * rideBlend;
     const float lateralAcceleration =
-        state.signedCurvature * state.speed * state.speed;
+        bankCurvature * state.speed * state.speed * bankScale;
     const float bankTarget = (std::clamp)(
         -std::atan2(lateralAcceleration, 9.81f) * 180.0f / kPi,
-        -settings.maximumVisualBankDegrees,
-        settings.maximumVisualBankDegrees);
+        -maximumBankDegrees,
+        maximumBankDegrees);
     const float gradePitch = std::asin((std::clamp)(state.grade, -1.0f, 1.0f)) *
         180.0f / kPi;
     const float accelerationPitch =
@@ -56,10 +65,18 @@ void RailVehiclePresentationBridge::Update(
         gradePitch + accelerationPitch,
         -settings.maximumVisualPitchDegrees,
         settings.maximumVisualPitchDegrees);
-    const float response = 1.0f - std::exp(
-        -(std::max)(0.01f, settings.smoothingResponse) * deltaTime);
-    smoothedBankDegrees_ += (bankTarget - smoothedBankDegrees_) * response;
-    smoothedPitchDegrees_ += (pitchTarget - smoothedPitchDegrees_) * response;
+    const RailVehicleRideDynamicsFrame* dynamics =
+        input.rideDynamics != nullptr && input.rideDynamics->valid
+        ? input.rideDynamics : nullptr;
+    if (dynamics != nullptr) {
+        smoothedBankDegrees_ = dynamics->visualBankDegrees;
+        smoothedPitchDegrees_ = dynamics->visualPitchDegrees;
+    } else {
+        const float response = 1.0f - std::exp(
+            -(std::max)(0.01f, settings.smoothingResponse) * deltaTime);
+        smoothedBankDegrees_ += (bankTarget - smoothedBankDegrees_) * response;
+        smoothedPitchDegrees_ += (pitchTarget - smoothedPitchDegrees_) * response;
+    }
 
     const float wheelRadius = (std::max)(0.01f, settings.wheelRadius);
     const float jointSpacing = (std::max)(0.05f, settings.railJointSpacing);
@@ -70,17 +87,26 @@ void RailVehiclePresentationBridge::Update(
     jointInitialized_ = true;
     const float jointPhase = std::fmod(state.distance, jointSpacing) / jointSpacing;
     const float jointPulse = std::exp(-jointPhase * 24.0f);
-    const float suspension =
-        settings.suspensionAmplitude * speedNormalized * jointPulse;
+    const float suspension = dynamics != nullptr
+        ? dynamics->suspensionOffset
+        : settings.suspensionAmplitude * speedNormalized * jointPulse;
+    const RailVehicleTrackContactPoseFrame* contact =
+        input.trackContactPose != nullptr && input.trackContactPose->valid &&
+        input.trackContactPose->sourceVehicleRevision == state.revision
+        ? input.trackContactPose : nullptr;
 
     frame_.visible = true;
-    frame_.forward = state.forward;
-    frame_.up = state.up;
-    frame_.right = state.right;
-    frame_.visualPosition = Add(state.position, Scale(state.up, suspension));
+    frame_.forward = contact != nullptr ? contact->forward : state.forward;
+    frame_.up = contact != nullptr ? contact->up : state.up;
+    frame_.right = contact != nullptr ? contact->right : state.right;
+    const Vector3 basePosition = contact != nullptr
+        ? contact->visualPosition : state.position;
+    frame_.visualPosition = Add(basePosition, Scale(frame_.up, suspension));
     frame_.wheelRotationRadians = std::fmod(state.distance / wheelRadius, 2.0f * kPi);
     frame_.visualBankDegrees = smoothedBankDegrees_;
     frame_.visualPitchDegrees = smoothedPitchDegrees_;
+    frame_.visualYawDegrees = dynamics != nullptr
+        ? dynamics->visualYawDegrees : 0.0f;
     frame_.suspensionOffset = suspension;
     frame_.speedNormalized = speedNormalized;
     frame_.rollingAudioVolume = speedNormalized;
@@ -98,4 +124,3 @@ void RailVehiclePresentationBridge::Update(
     frame_.sourceVehicleRevision = state.revision;
     frame_.revision = ++revision_;
 }
-

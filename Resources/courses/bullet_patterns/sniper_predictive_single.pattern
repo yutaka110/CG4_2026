@@ -1,0 +1,3 @@
+# pattern|id|displayName|type|bulletCount|lateralSpreadSpeed|verticalSpreadSpeed|bulletRadius|bulletLifetime|damage|r|g|b|a
+pattern|sniper_predictive_single|Sniper Predictive Single|single|1|0|0|0.34|4.0|12|1.0|0.72|0.08|1.0
+projectile|enemy_sniper_predictive

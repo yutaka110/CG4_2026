@@ -28,6 +28,10 @@ enum class CourseMeshRenderKind {
     GameplayTerrain,
     HeroLandmark,
     VistaBackground,
+    TrackRail,
+    TrackSleeper,
+    TrackSupport,
+    VehicleWheel,
 };
 
 // ball and animated_cube are intentionally rejected for authored scenery,

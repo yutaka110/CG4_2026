@@ -20,6 +20,7 @@ bool GameSessionRetryCoordinator::Bind(
         binding.course == nullptr || binding.playerMovement == nullptr ||
         binding.playerDodge == nullptr || binding.railVehicle == nullptr ||
         binding.railPath == nullptr || binding.grazeScore == nullptr ||
+        binding.mountedEvasion == nullptr ||
         !binding.session->IsInitialized()) {
         SetError(errorMessage, "Retry coordinator requires every runtime boundary and an initialized session.");
         return false;
@@ -72,6 +73,12 @@ bool GameSessionRetryCoordinator::CaptureCheckpoint(
     captured.grazeScore = binding_.grazeScore->State();
     captured.nearMiss = binding_.collisionSystem->PlayerNearMiss().State();
     captured.hasGrazeScoreRuntime = true;
+    captured.mountedEvasion = binding_.mountedEvasion->State();
+    captured.hasMountedEvasionRuntime = true;
+    if (binding_.vehicleDamageCoordinator != nullptr) {
+        captured.vehicleDamage = binding_.vehicleDamageCoordinator->State();
+        captured.hasVehicleDamageRuntime = true;
+    }
     checkpoint_ = std::move(captured);
     if (errorMessage != nullptr) errorMessage->clear();
     return true;
@@ -145,6 +152,29 @@ GameSessionRetryResult GameSessionRetryCoordinator::Retry(
         SetError(errorMessage, lastResult_.message);
         return lastResult_;
     }
+    if (checkpoint_.hasMountedEvasionRuntime &&
+        !binding_.mountedEvasion->RestoreState(
+            checkpoint_.mountedEvasion,
+            &validationError)) {
+        lastResult_.status =
+            GameSessionRetryStatus::MountedEvasionRuntimeMismatch;
+        lastResult_.message = validationError;
+        SetError(errorMessage, lastResult_.message);
+        return lastResult_;
+    }
+    if (checkpoint_.hasVehicleDamageRuntime &&
+        (binding_.vehicleDamageCoordinator == nullptr ||
+         !binding_.vehicleDamageCoordinator->RestoreState(
+             checkpoint_.vehicleDamage,
+             &validationError))) {
+        lastResult_.status =
+            GameSessionRetryStatus::VehicleDamageRuntimeMismatch;
+        lastResult_.message = validationError.empty()
+            ? "Vehicle damage coordinator is unavailable."
+            : validationError;
+        SetError(errorMessage, lastResult_.message);
+        return lastResult_;
+    }
     binding_.spawnRuntime->RestoreCheckpoint(checkpoint_.spawn, false);
     if (checkpoint_.hasWaveCheckpoint &&
         !binding_.waveRuntime->RestoreCheckpoint(checkpoint_.wave, &validationError)) {
@@ -192,7 +222,8 @@ bool GameSessionRetryCoordinator::IsBound() const noexcept {
         binding_.collisionSystem != nullptr && binding_.sectionCheckpoints != nullptr &&
         binding_.course != nullptr && binding_.playerMovement != nullptr &&
         binding_.playerDodge != nullptr && binding_.railVehicle != nullptr &&
-        binding_.railPath != nullptr && binding_.grazeScore != nullptr;
+        binding_.railPath != nullptr && binding_.grazeScore != nullptr &&
+        binding_.mountedEvasion != nullptr;
 }
 
 bool GameSessionRetryCoordinator::CanRetry() const noexcept {
@@ -231,6 +262,10 @@ const char* ToString(GameSessionRetryStatus status) {
     case GameSessionRetryStatus::PlayerRuntimeMismatch: return "PlayerRuntimeMismatch";
     case GameSessionRetryStatus::VehicleRuntimeMismatch: return "VehicleRuntimeMismatch";
     case GameSessionRetryStatus::GrazeRuntimeMismatch: return "GrazeRuntimeMismatch";
+    case GameSessionRetryStatus::MountedEvasionRuntimeMismatch:
+        return "MountedEvasionRuntimeMismatch";
+    case GameSessionRetryStatus::VehicleDamageRuntimeMismatch:
+        return "VehicleDamageRuntimeMismatch";
     }
     return "Unknown";
 }

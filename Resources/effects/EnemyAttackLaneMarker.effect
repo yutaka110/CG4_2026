@@ -1,0 +1,23 @@
+name = enemy_attack_lane_marker
+lifetime = 30.0
+blend = additive
+layer = additive
+renderQueue = 3310
+color = 1.0,1.0,1.0,1.0
+size = 1.0,1.0,1.0
+
+component = ring
+name = hostile_attack_lane_ring
+technique = RingMesh
+texture = gradationLine
+duration = 30.0
+renderQueue = 3310
+color = 1.0,1.0,1.0,0.78
+size = 1.0,1.0,1.0
+ring.divide = 48
+ring.outerRadius = 1.0
+ring.innerRadius = 0.66
+ring.emissive = 6.0
+ring.uvScrollSpeed = 1.8
+ring.expansion = 0.0
+ring.fadeOut = 0.0

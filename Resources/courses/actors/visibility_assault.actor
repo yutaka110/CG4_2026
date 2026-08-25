@@ -1,0 +1,5 @@
+# Center-lane readability baseline.
+actor|visibility_assault|Visibility Assault|ball|1.25|32|12|1.0|0.16|0.86|1.0|assault_magenta_single
+combat|1.20|0.30|32|assault_magenta_single
+movement|2.0
+behavior|assault|0.34|0.30|0.24|0.80|1.20|0.26|0.34|1.8|0.65|0.72|true

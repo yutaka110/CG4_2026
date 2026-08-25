@@ -79,7 +79,7 @@ bool EditorCourseDocumentProvider::Serialize(
         return false;
     }
     // LoadFromString supplies a default camera when a legacy/minimal Course has
-    // none. Persist that default here so schema-v7 validation never observes a
+    // none. Persist that default here so current-schema validation never observes a
     // synthesized camera without a stable editor identity after round-trip.
     if (course_->cameraKeys.empty()) course_->cameraKeys.push_back({});
     EnsureCourseWorldObjectGuids(*course_, id.assetGuid);
@@ -198,7 +198,10 @@ bool EditorCourseDocumentProvider::Migrate(
     }
     if (source.schemaVersion != 1 && source.schemaVersion != 2 &&
         source.schemaVersion != 3 && source.schemaVersion != 4 &&
-        source.schemaVersion != 5 && source.schemaVersion != 6) {
+        source.schemaVersion != 5 && source.schemaVersion != 6 &&
+        source.schemaVersion != 7 && source.schemaVersion != 8 &&
+        source.schemaVersion != 9 && source.schemaVersion != 10 &&
+        source.schemaVersion != 11) {
         if (errorMessage != nullptr) *errorMessage = "No Course schema migration path is registered.";
         return false;
     }
@@ -236,7 +239,7 @@ bool EditorCourseDocumentProvider::Migrate(
             " rail control points, and " + std::to_string(enemyAssigned) +
             " enemy placements; created " +
             std::to_string(waveUpgrade.createdWaveDefinitions) +
-            " schema-v7 wave definitions and remapped " +
+            " schema-v12 Course data (including wave definitions, ride motion envelopes and Rail Ride Events) and remapped " +
             std::to_string(waveUpgrade.remappedEnemyReferences) +
             " enemy wave references.");
     }

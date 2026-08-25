@@ -1,10 +1,17 @@
 # Rail shooter course DSL
-# editor-schema:3
+# editor-schema:12
+# World scale: 1 authored world unit = 0.40 meter. Vehicle, tunnel, enemy,
+# collision and speed values share this convention; never rescale one domain
+# independently because their authored relative proportions are intentional.
 # row format:
 # course|name
-# rail|x|y|z|corridorRadius|speed
+# rail_track|assetId
+# rail|x|y|z|corridorRadius|speed|editorGuid|tangentMode|inX|inY|inZ|outX|outY|outZ
 # camera|distance|backDistance|verticalOffset|lateralOffset|lookAheadDistance|lookUpOffset|lookForwardOffset|fovDeg|rollDeg|editorGuid|editorVisible|editorLocked
 # section|start|end|name|category
+# ride_profile|editorGuid|start|end|displayName|speedMode|speedMultiplier|targetSpeedOverride|accelerationScale|brakingScale|maximumJerk|cornerEntryLookAheadDistance|cornerSpeedScale|turnAnticipationDistance|visualBankScale|maximumVisualBankDegrees|blendIn|blendOut|cameraShotId|enabled|editorVisible|editorLocked
+# ride_speed_beat|editorGuid|start|end|displayName|type|speedMultiplier|targetSpeedOverride|accelerationScale|brakingScale|maximumJerk|blendIn|blendOut|priority|enabled|editorVisible|editorLocked
+# rail_ride_event|editorGuid|start|end|displayName|type|bankMode|bankDegrees|rumbleAmplitude|rumbleFrequencyHz|suspensionAmplitude|cameraShake|cameraFovKick|cameraRollKickDegrees|hapticLow|hapticHigh|speedInfluence|blendIn|blendOut|priority|audioCueId|vfxCueId|triggerOncePerRun|enabled|editorVisible|editorLocked
 # terrain|distance|layer|id|meshId|lateralOffset|verticalOffset|forwardOffset|scaleX|scaleY|scaleZ|pitchDeg|yawDeg|rollDeg|collisionMode|renderPriority|cullBehind|cullAhead|editorGuid|editorVisible|editorLocked
 # terrain_brush|strokeGuid|stampGuid|operation|distance|angleRad|radius|surfaceRadius|strength|hardness|materialLayer
 # rock_cluster|distance|id|meshId|anchor|type|count|minScale|maxScale|spreadX|spreadY|spreadZ|clearLaneRadius|cullBehind|cullAhead|rotX|rotY|rotZ|instanceOverrides|editorGuid|editorVisible|editorLocked
@@ -14,30 +21,34 @@
 # camera_shot|start|end|id|mode|blendIn|blendOut|backOffset|upOffset|sideOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake|presetId|blendAssetId|weightScale
 # terrain_material|distance|id|blendDistance|baseR|baseG|baseB|brightness|noise|strata|breakup|specular|rim|backlight|floorShadow|detailNormal|microDetail|cavityAo|skyFill
 # cinematic_shot_set|start|end|id|label|heroLandmarksCsv|vistaLandmarksCsv|lightingId|cameraShotId|terrainMaterialId|fogMood|compositionNotes
+# wave|editorGuid|displayName|triggerRailDistance|prewarmDistance|timeoutSeconds|completionCondition|executionPolicy|nextWaveGuid|triggerEventId|enabled|editorVisible|editorLocked
+# enemy_placement|editorGuid|actorAssetId|bulletPatternOverrideId|waveGroupGuid|segmentGuid|normalizedT|lateralOffset|verticalOffset|forwardOffset|pitchDeg|yawDeg|rollDeg|scaleX|scaleY|scaleZ|activationLeadDistance|enabled|editorVisible|editorLocked
 # event|distance|type|id|payload|editorGuid|editorVisible|editorLocked
 
 course|Canyon Assault Route 01
 
+rail_track|mine_cart_standard
+
 # Main camera/terrain rail. Distances are arc-length evaluated by RailPath.
-rail|-18.000|4.000|-120.000|20.000|12.000
-rail|-8.000|7.000|-40.000|18.000|12.000
-rail|20.000|12.000|45.000|16.000|13.000
-rail|5.000|5.000|130.000|15.000|13.000
-rail|-34.000|16.000|220.000|17.000|14.000
-rail|-6.000|28.000|320.000|21.000|15.000
-rail|40.000|18.000|430.000|18.000|16.000
-rail|18.000|8.000|540.000|16.000|16.000
-rail|-22.000|14.000|650.000|19.000|17.000
-rail|0.000|18.000|760.000|22.000|18.000
-rail|36.000|26.000|910.000|20.000|18.000
-rail|-18.000|10.000|1060.000|14.000|19.000
-rail|-54.000|8.000|1210.000|15.000|18.000
-rail|-10.000|34.000|1390.000|24.000|16.000
-rail|48.000|20.000|1560.000|21.000|17.000
-rail|8.000|12.000|1740.000|16.000|22.000
-rail|-26.000|18.000|1940.000|18.000|24.000
-rail|18.000|30.000|2160.000|24.000|18.000
-rail|0.000|22.000|2380.000|28.000|14.000
+rail|-18.000|4.000|-120.000|20.000|12.000|canyon-rail-p00|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-8.000|7.000|-40.000|18.000|12.000|canyon-rail-p01|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|20.000|12.000|45.000|16.000|13.000|canyon-rail-p02|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|5.000|5.000|130.000|15.000|13.000|canyon-rail-p03|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-34.000|16.000|220.000|17.000|14.000|canyon-rail-p04|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-6.000|28.000|320.000|21.000|15.000|canyon-rail-p05|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|40.000|18.000|430.000|18.000|16.000|canyon-rail-p06|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|18.000|8.000|540.000|16.000|16.000|canyon-rail-p07|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-22.000|14.000|650.000|19.000|17.000|canyon-rail-p08|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|0.000|18.000|760.000|22.000|18.000|canyon-rail-p09|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|36.000|26.000|910.000|20.000|18.000|canyon-rail-p10|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-18.000|10.000|1060.000|14.000|19.000|canyon-rail-p11|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-54.000|8.000|1210.000|15.000|18.000|canyon-rail-p12|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-10.000|34.000|1390.000|24.000|16.000|canyon-rail-p13|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|48.000|20.000|1560.000|21.000|17.000|canyon-rail-p14|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|8.000|12.000|1740.000|16.000|22.000|canyon-rail-p15|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-26.000|18.000|1940.000|18.000|24.000|canyon-rail-p16|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|18.000|30.000|2160.000|24.000|18.000|canyon-rail-p17|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|0.000|22.000|2380.000|28.000|14.000|canyon-rail-p18|0|0.000|0.000|0.000|0.000|0.000|0.000
 
 # Camera keys define the cinematic rail rig.
 camera|0.000|24.000|7.000|0.000|64.000|2.000|8.000|54.000|0.000|7fce5ae5378e24cb05ee19ede15a779b|1|0
@@ -45,8 +56,9 @@ camera|120.000|22.000|6.000|0.000|60.000|2.000|10.000|52.000|0.000|6f1e600a26299
 camera|240.000|20.000|6.000|-2.000|58.000|2.000|10.000|50.000|-3.000|9281a8c28b4d367ddc1cd98c5faed60d|1|0
 camera|420.000|18.000|5.000|4.000|54.000|1.000|12.000|49.000|4.000|cd6fdacb7583235a1c689ca662bb7cea|1|0
 camera|610.000|17.000|5.000|-4.000|56.000|1.000|12.000|51.000|-5.000|3e44fbc6cb7049088b3902cd16916598|1|0
-camera|720.000|14.000|3.000|0.000|44.000|0.000|14.000|58.000|0.000|583b3602f15b04ef4fc2629f36de2cff|1|0
-camera|980.000|26.000|9.000|-5.000|78.000|5.000|18.000|62.000|-7.000|1e58c1f3868f14aa61ce0c31e2b6caba|1|0
+camera|720.000|11.500|2.800|0.000|46.000|0.000|14.000|61.000|0.000|583b3602f15b04ef4fc2629f36de2cff|1|0
+camera|930.000|12.500|3.200|0.000|50.000|1.000|14.000|63.000|-2.000|bc68fcafc2974fd1816ab42084a75b3e|1|0
+camera|980.000|20.000|7.000|-5.000|72.000|4.000|18.000|62.000|-7.000|1e58c1f3868f14aa61ce0c31e2b6caba|1|0
 camera|1280.000|24.000|7.000|4.000|64.000|3.000|10.000|50.000|5.000|83ff51a13afd34db4cc8d454443513ab|1|0
 camera|1680.000|16.000|4.000|0.000|48.000|1.000|16.000|66.000|0.000|5f3d7917922ffbc67b6336a1ae9b4416|1|0
 camera|2100.000|30.000|11.000|0.000|86.000|6.000|20.000|56.000|0.000|dbb02ede85ed9fa3f7d5ec68a258e7f3|1|0
@@ -60,6 +72,26 @@ section|980.000|1280.000|Falling Spire|Setpiece
 section|1280.000|1680.000|Mid Boss Gatekeeper|Boss
 section|1680.000|2100.000|Escape Run|High Speed
 section|2100.000|2380.000|Final Gate|Finale
+
+# Ride profiles are the authored source of truth for speed intent, turn feel and camera-shot selection.
+ride_profile|ride-intro|0.000|180.000|Intro Ride|Cruise|1.000|-1.000|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|24.000|30.000|intro_arch_reveal|1|1|0
+ride_profile|ride-first-contact|180.000|420.000|First Contact Ride|Combat|1.000|-1.000|1.000|1.000|120.000|48.000|1.000|26.000|1.000|17.000|24.000|30.000|first_contact_readable_lane|1|1|0
+ride_profile|ride-crossfire|420.000|720.000|Crossfire Ride|Combat|1.000|-1.000|1.000|1.000|120.000|48.000|1.000|34.000|1.150|20.000|28.000|36.000|crossfire_wall_scrape|1|1|0
+ride_profile|ride-tunnel|720.000|980.000|Tunnel Ride|Tunnel|1.000|-1.000|1.000|1.000|120.000|48.000|1.000|40.000|0.900|14.000|26.000|34.000|tunnel_dive_compression|1|1|0
+ride_profile|ride-spire|980.000|1280.000|Falling Spire Ride|Setpiece|1.000|-1.000|1.000|1.000|120.000|48.000|1.000|44.000|1.200|22.000|30.000|42.000|falling_spire_reveal|1|1|0
+ride_profile|ride-boss|1280.000|1680.000|Gatekeeper Ride|Boss|1.000|-1.000|1.000|1.000|120.000|48.000|1.000|28.000|0.950|16.000|34.000|44.000|gatekeeper_shadow_pass|1|1|0
+ride_profile|ride-escape|1680.000|2100.000|Escape Ride|HighSpeed|1.000|-1.000|1.000|1.000|120.000|48.000|1.000|58.000|1.250|24.000|28.000|46.000|escape_speed_widen|1|1|0
+ride_profile|ride-finale|2100.000|2380.000|Final Gate Ride|Cinematic|1.000|-1.000|1.000|1.000|120.000|48.000|1.000|36.000|0.800|12.000|34.000|48.000|final_gate_silhouette_hold|1|1|0
+
+# Authored speed rhythm. RailVehicleMovementSystem remains the only integrator.
+ride_speed_beat|speed-beat-intro-approach|20.000|95.000|Intro Approach|approach|0.900|-1.000|0.850|1.000|72.000|12.000|16.000|0|1|1|0
+ride_speed_beat|speed-beat-intro-release|120.000|180.000|Arch Release|release_boost|1.140|-1.000|1.200|1.000|84.000|10.000|18.000|0|1|1|0
+ride_speed_beat|speed-beat-first-contact-hold|205.000|350.000|First Contact Hold|combat_hold|0.900|-1.000|0.900|1.150|66.000|18.000|22.000|0|1|1|0
+ride_speed_beat|speed-beat-crossfire-release|370.000|445.000|Crossfire Release|release_boost|1.160|-1.000|1.250|1.000|82.000|16.000|20.000|0|1|1|0
+ride_speed_beat|speed-beat-tunnel-brake|675.000|755.000|Tunnel Entry Brake|corner_brake|0.820|-1.000|0.800|1.300|58.000|18.000|24.000|1|1|1|0
+ride_speed_beat|speed-beat-tunnel-exit|925.000|1015.000|Tunnel Exit Boost|exit_boost|1.180|-1.000|1.300|1.000|86.000|18.000|26.000|0|1|1|0
+ride_speed_beat|speed-beat-boss-approach|1190.000|1295.000|Gatekeeper Approach|setpiece_hold|0.860|-1.000|0.850|1.200|64.000|22.000|28.000|1|1|1|0
+ride_speed_beat|speed-beat-escape-release|1640.000|1745.000|Escape Release|exit_boost|1.200|-1.000|1.350|1.000|92.000|20.000|30.000|1|1|1|0
 
 # Layered course terrain: gameplay collision, hero landmarks, and vista background.
 terrain|15.000|hero_landmark|intro_left_silhouette_wall|curved_canyon_wall|-48.000|11.000|72.000|9.000|26.000|30.000|0.000|16.000|-7.000|none|12|80.000|260.000|2d6369e9ab380c5bc13a6d34986319ab|1|0
@@ -183,5 +215,25 @@ event|1690.000|setpiece|escape_alarm|speed ramp and rear explosions|c7dbea0a2885
 event|1870.000|enemy_wave|pursuit_swarm|fast weak enemies from behind|d69579ac7230cacdea241b8cb57e387d|1|0
 event|2110.000|setpiece|final_gate_open|large gate reveal|9f32f86777b146964ac100a9d2754966|1|0
 event|2320.000|checkpoint|stage_clear|score tally and next route preload|0ae54da591050c37557f393356b400a7|1|0
+
+# First-class encounter wave authored in the Course Map Editor for the First Contact section.
+wave|wave-first-contact-editor-test|First Contact Editor Test|205.000000|80.000000|30.000000|all_enemies_defeated|parallel|-|-|1|1|0
+
+# Persistent Tutorial Scout formation anchored to the First Contact rail segment.
+enemy_placement|enemy-first-contact-left|drone_scout|single_tutorial|wave-first-contact-editor-test|fc31fb48fc6acd3521ce104ec4cb0ae5|0.420000|-7.000000|4.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|80.000000|1|1|0
+enemy_placement|enemy-first-contact-center|drone_scout|single_tutorial|wave-first-contact-editor-test|fc31fb48fc6acd3521ce104ec4cb0ae5|0.520000|0.000000|6.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|80.000000|1|1|0
+enemy_placement|enemy-first-contact-right|drone_scout|single_tutorial|wave-first-contact-editor-test|fc31fb48fc6acd3521ce104ec4cb0ae5|0.620000|7.000000|4.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|80.000000|1|1|0
+
+# Four-role projectile readability encounter. Distance gates preserve the authored order while the cart continues moving.
+wave|wave-threat-sequence-01-assault|Threat Sequence 01 Assault|1940.000000|90.000000|12.000000|reach_rail_distance|sequential|wave-threat-sequence-02-sniper|-|1|1|0
+wave|wave-threat-sequence-02-sniper|Threat Sequence 02 Sniper|2030.000000|90.000000|12.000000|reach_rail_distance|sequential|wave-threat-sequence-03-turret|-|1|1|0
+wave|wave-threat-sequence-03-turret|Threat Sequence 03 Turret|2120.000000|90.000000|12.000000|reach_rail_distance|sequential|wave-threat-sequence-04-interceptor|-|1|1|0
+wave|wave-threat-sequence-04-interceptor|Threat Sequence 04 Interceptor|2210.000000|90.000000|12.000000|all_enemies_defeated|sequential|-|-|1|1|0
+
+# One authored role per Wave: center direct, left prediction, right spread, then a high pursuit missile.
+enemy_placement|enemy-threat-sequence-assault|visibility_assault|assault_magenta_single|wave-threat-sequence-01-assault|b79beff9030eed6369a964a8630c6113|0.300000|0.000000|5.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|90.000000|1|1|0
+enemy_placement|enemy-threat-sequence-sniper|visibility_sniper|sniper_predictive_single|wave-threat-sequence-02-sniper|b79beff9030eed6369a964a8630c6113|0.720000|-12.000000|7.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|90.000000|1|1|0
+enemy_placement|enemy-threat-sequence-turret|visibility_turret|turret_readable_spread|wave-threat-sequence-03-turret|92061074edb690457cff0be6571d15f5|0.180000|16.000000|3.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|90.000000|1|1|0
+enemy_placement|enemy-threat-sequence-interceptor|visibility_interceptor|interceptor_homing_single|wave-threat-sequence-04-interceptor|92061074edb690457cff0be6571d15f5|0.620000|4.000000|9.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|90.000000|1|1|0
 
 # Non-destructive procedural Terrain sculpt and paint strokes.

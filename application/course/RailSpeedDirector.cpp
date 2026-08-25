@@ -16,13 +16,37 @@ bool ContainsInsensitive(std::string value, const char* token) {
     return value.find(needle) != std::string::npos;
 }
 
-float Approach(float current, float target, float maxDelta) {
-    if (current < target) {
-        return (std::min)(current + maxDelta, target);
-    }
-    return (std::max)(current - maxDelta, target);
+bool FiniteInRange(float value, float minimum, float maximum) {
+    return std::isfinite(value) && value >= minimum && value <= maximum;
 }
 } // namespace
+
+bool RailSpeedDirectorSettings::Validate(std::string* errorMessage) const {
+    const auto reject = [errorMessage](const char* message) {
+        if (errorMessage != nullptr) *errorMessage = message;
+        return false;
+    };
+    if (!FiniteInRange(minSpeed, 0.0f, 1000.0f) ||
+        !FiniteInRange(maxSpeed, minSpeed, 1000.0f)) {
+        return reject("Rail speed policy min/max speed is invalid.");
+    }
+    const float multipliers[]{
+        cruiseMultiplier, combatMultiplier, highSpeedMultiplier,
+        tunnelMultiplier, bossMultiplier, setpieceMultiplier,
+        cinematicMultiplier, recoveryMultiplier};
+    for (float multiplier : multipliers) {
+        if (!FiniteInRange(multiplier, 0.0f, 4.0f)) {
+            return reject("Rail speed policy zone multiplier is invalid.");
+        }
+    }
+    if (!FiniteInRange(eventSlowMultiplier, 0.0f, 1.0f) ||
+        !FiniteInRange(eventBoostMultiplier, 1.0f, 4.0f) ||
+        !FiniteInRange(eventBlendDuration, 0.01f, 30.0f)) {
+        return reject("Rail speed policy event response is invalid.");
+    }
+    if (errorMessage != nullptr) errorMessage->clear();
+    return true;
+}
 
 const char* ToRailSpeedZoneModeString(RailSpeedZoneMode mode) {
     switch (mode) {
@@ -46,13 +70,28 @@ const char* ToRailSpeedZoneModeString(RailSpeedZoneMode mode) {
     return "Cruise";
 }
 
-void RailSpeedDirector::Reset(float speed) {
-    smoothedSpeed_ = (std::max)(0.0f, speed);
-    hasSmoothedSpeed_ = speed > 0.0f;
+bool RailSpeedDirector::Configure(
+    const RailSpeedDirectorSettings& settings,
+    bool preservePolicyState,
+    std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    settings_ = settings;
+    if (preservePolicyState) {
+        eventSlowTimer_ = (std::min)(eventSlowTimer_, settings_.eventBlendDuration);
+        eventBoostTimer_ = (std::min)(eventBoostTimer_, settings_.eventBlendDuration);
+        lastFrame_.enabled = settings_.enabled;
+    } else {
+        Reset();
+    }
+    if (errorMessage != nullptr) errorMessage->clear();
+    return true;
+}
+
+void RailSpeedDirector::Reset() {
     eventSlowTimer_ = 0.0f;
     eventBoostTimer_ = 0.0f;
     lastFrame_ = {};
-    lastFrame_.smoothedSpeed = smoothedSpeed_;
+    lastFrame_.enabled = settings_.enabled;
 }
 
 void RailSpeedDirector::NotifyCourseEvents(const std::vector<CourseEventMarker>& events) {
@@ -88,7 +127,7 @@ RailSpeedDirectorFrame RailSpeedDirector::Evaluate(const RailSpeedDirectorFrameI
     const float dt = (std::max)(0.0f, input.deltaTime);
     const RailPathSample sample = input.railPath->Evaluate(input.distance);
     frame.baseSpeed = (std::max)(settings_.minSpeed, sample.speed);
-    frame.mode = ResolveMode(input.section);
+    frame.mode = ResolveMode(input.rideProfile, input.section);
     frame.modeName = ToRailSpeedZoneModeString(frame.mode);
     frame.zoneMultiplier = settings_.enabled ? MultiplierForMode(frame.mode) : 1.0f;
 
@@ -104,27 +143,35 @@ RailSpeedDirectorFrame RailSpeedDirector::Evaluate(const RailSpeedDirectorFrameI
     const float boostMultiplier = 1.0f + (settings_.eventBoostMultiplier - 1.0f) * boostWeight;
     frame.eventMultiplier = slowMultiplier * boostMultiplier;
 
-    frame.targetSpeed = (std::clamp)(
+    frame.requestedSpeed = (std::clamp)(
         frame.baseSpeed * frame.zoneMultiplier * frame.eventMultiplier,
         settings_.minSpeed,
         settings_.maxSpeed);
-    if (!hasSmoothedSpeed_) {
-        smoothedSpeed_ = frame.targetSpeed;
-        hasSmoothedSpeed_ = true;
-    } else {
-        const float rate = frame.targetSpeed >= smoothedSpeed_
-            ? settings_.acceleration
-            : settings_.deceleration;
-        smoothedSpeed_ = Approach(smoothedSpeed_, frame.targetSpeed, (std::max)(0.0f, rate) * dt);
-    }
-    frame.smoothedSpeed = settings_.enabled ? smoothedSpeed_ : frame.baseSpeed;
-    frame.reason = settings_.enabled ? "zone/event director" : "rail speed passthrough";
+    frame.reason = settings_.enabled
+        ? "zone/event speed request"
+        : "rail speed request passthrough";
 
     lastFrame_ = frame;
     return frame;
 }
 
-RailSpeedZoneMode RailSpeedDirector::ResolveMode(const CourseSection* section) const {
+RailSpeedZoneMode RailSpeedDirector::ResolveMode(
+    const CourseRideProfileDefinition* rideProfile,
+    const CourseSection* section) const {
+    if (rideProfile != nullptr && rideProfile->enabled &&
+        rideProfile->speedMode != CourseRideSpeedMode::Inherit) {
+        switch (rideProfile->speedMode) {
+        case CourseRideSpeedMode::Cruise: return RailSpeedZoneMode::Cruise;
+        case CourseRideSpeedMode::Combat: return RailSpeedZoneMode::Combat;
+        case CourseRideSpeedMode::HighSpeed: return RailSpeedZoneMode::HighSpeed;
+        case CourseRideSpeedMode::Tunnel: return RailSpeedZoneMode::Tunnel;
+        case CourseRideSpeedMode::Boss: return RailSpeedZoneMode::Boss;
+        case CourseRideSpeedMode::Setpiece: return RailSpeedZoneMode::Setpiece;
+        case CourseRideSpeedMode::Cinematic: return RailSpeedZoneMode::Cinematic;
+        case CourseRideSpeedMode::Recovery: return RailSpeedZoneMode::Recovery;
+        case CourseRideSpeedMode::Inherit: break;
+        }
+    }
     if (section == nullptr) {
         return RailSpeedZoneMode::Cruise;
     }

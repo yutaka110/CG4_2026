@@ -123,6 +123,15 @@ public:
     bool CopySelection(std::string& errorMessage);
     bool PasteAt(double position, std::string& errorMessage);
     std::size_t ClipboardCount() const { return clipboard_.size(); }
+    bool CaptureKeyState(
+        const EditorSequencerKeyHandle& handle,
+        EditorSequencerKeyState& state,
+        std::string& errorMessage) const;
+    bool CommitKeyStateChange(
+        std::string_view label,
+        const EditorSequencerKeyState& before,
+        const EditorSequencerKeyState& after,
+        std::string& errorMessage);
 
     EditorUndoResult ApplyFromCommand(
         const std::vector<EditorSequencerKeyMutation>& mutations,

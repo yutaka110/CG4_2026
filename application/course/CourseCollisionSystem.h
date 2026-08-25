@@ -52,6 +52,10 @@ struct CourseCollisionFrameInput {
     const RailAimState* worldAim = nullptr;
     CourseCollisionPlayerState player;
     CourseCollisionWeaponState weapon;
+    // Mounted vehicle body collision is resolved by
+    // RailVehicleBodyCollisionSystem. Suppress the legacy occupant-sphere
+    // obstacle/terrain loops so one contact can never subtract HP twice.
+    bool externalBodyCollisionAuthority = false;
 };
 
 struct CourseCollisionFrameStats {
@@ -138,6 +142,7 @@ public:
         CourseSpawnRuntime& runtime,
         const CourseAsset* course,
         const WeaponHitRequest& request);
+    PlayerDamageResult ApplyPlayerHit(const PlayerHitRequest& request);
 
 private:
     void FirePlayerShot(

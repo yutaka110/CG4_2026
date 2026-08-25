@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "CourseAsset.h"
@@ -175,6 +176,24 @@ struct RailCameraDirectorFrameInput {
     uint32_t viewportWidth = 0;
     uint32_t viewportHeight = 0;
     float nearClipDistance = 0.10f;
+    bool mountedCameraActive = false;
+    Vector3 mountedCameraAnchor{};
+    Vector3 mountedCameraOffset{};
+    Vector3 mountedTargetOffset{};
+    float mountedCameraBlend = 0.0f;
+    float mountedMaximumCorrection = 0.0f;
+    float mountedRollOffsetRadians = 0.0f;
+    // Low-frequency inertia is included in the stable gameplay camera. The
+    // presentation offsets are added only after gameplay aim is captured.
+    bool cameraInertiaActive = false;
+    Vector3 cameraInertiaGameplayPositionOffset{};
+    Vector3 cameraInertiaGameplayTargetOffset{};
+    Vector3 cameraInertiaPresentationPositionOffset{};
+    Vector3 cameraInertiaPresentationTargetOffset{};
+    float cameraInertiaRollOffsetRadians = 0.0f;
+    float cameraInertiaFovOffsetRadians = 0.0f;
+    std::string preferredCinematicShotId;
+    float preferredCinematicShotWeight = 0.0f;
 };
 
 struct RailCameraDirectorFrame {
@@ -322,6 +341,8 @@ private:
         CourseCameraKey& rig,
         const CourseAsset* course,
         float distance,
+        std::string_view preferredShotId,
+        float preferredShotWeight,
         std::string& mode,
         RailCameraDirectorFrame& frame) const;
     void ApplyEventDirecting(CourseCameraKey& rig, float deltaTime, std::string& mode);

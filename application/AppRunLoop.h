@@ -34,19 +34,42 @@
 #include "course/GameSessionSystem.h"
 #include "course/GameSessionPresentationBridge.h"
 #include "course/GameSessionRetryCoordinator.h"
+#include "course/RailShooterHudDefinitionAsset.h"
+#include "course/RailShooterHudRuntimeModel.h"
+#include "course/RailShooterHudPresentationBridge.h"
+#include "course/RailShooterHudRenderer.h"
 #include "course/RailDodgeSystem.h"
 #include "course/RailPlayerMovementSystem.h"
 #include "course/RailPlayerVehicleMountSystem.h"
 #include "course/RailVehicleMovementSystem.h"
 #include "course/RailVehiclePresentationBridge.h"
+#include "course/RailVehicleRideDynamicsSystem.h"
+#include "course/RailVehicleTrackContactPoseSolver.h"
+#include "course/CourseRailTrackDefinitionAsset.h"
+#include "course/CourseRailTrackMeshBakePipeline.h"
+#include "course/RailVehicleWheelContactPresentationBridge.h"
+#include "course/RailVehicleCameraInertiaBridge.h"
 #include "course/RailVehicleActor.h"
 #include "course/RailVehicleRenderer.h"
 #include "course/RailVehicleAudioBridge.h"
+#include "course/RailVehicleMountedEvasionSystem.h"
+#include "course/RailVehicleOccupantClearanceSystem.h"
+#include "course/RailVehicleEvasionConstraintResolver.h"
+#include "course/RailVehicleCombatMountBridge.h"
+#include "course/RailVehicleCameraMountBridge.h"
+#include "course/RailVehicleMountedEvasionPresentationBridge.h"
+#include "course/RailVehicleOccupantActor.h"
+#include "course/RailVehicleEvasionFeedbackBridge.h"
+#include "course/RailVehicleControlPresetRegistry.h"
+#include "course/RailVehicleBodyCollisionSystem.h"
+#include "course/RailVehicleDamageCoordinator.h"
+#include "course/RailVehicleCollisionFeedbackBridge.h"
 #include "course/EnemyAttackTelegraphSystem.h"
+#include "course/EnemyAttackLaneTelegraphRenderer.h"
 #include "course/EnemyAttackTelegraphFeedbackBridge.h"
 #include "course/EnemyCombatPresentationBridge.h"
 #include "course/EnemyProjectilePresentationBridge.h"
-#include "course/EnemyProjectileRenderer.h"
+#include "course/EnemyProjectileVfxRenderer.h"
 #include "course/EnemyProjectileAudioBridge.h"
 #include "course/GrazeScoreSystem.h"
 #include "course/ThreatResponseDirector.h"
@@ -57,6 +80,10 @@
 #include "course/RailCameraDirector.h"
 #include "course/RailLockOnSystem.h"
 #include "course/RailSpeedDirector.h"
+#include "course/RailRideDirector.h"
+#include "course/RailRideMotionEnvelope.h"
+#include "course/RailRideTuningTelemetry.h"
+#include "course/RailTrackFeedbackDirector.h"
 #include "course/SectionCheckpointSystem.h"
 #include "terrain/RailPath.h"
 #include "terrain/TerrainChunkManager.h"
@@ -242,6 +269,12 @@ private:
     void DispatchThreatResponse();
     void StopGameSessionPresentation();
     void DispatchRailVehicleAudio(float deltaTime);
+    void DispatchRailTrackFeedback();
+    void DispatchRailVehicleEvasionFeedback();
+    void DispatchRailVehicleCollisionFeedback();
+    bool ApplyRailVehicleControlPreset(
+        bool preserveRuntimeState,
+        std::string* errorMessage = nullptr);
     void DispatchEnemyCombatPresentation(
         std::span<const EnemyCombatEvent> events,
         float deltaTime,
@@ -300,15 +333,57 @@ private:
     GameSessionPresentationBridge railShooterSessionPresentation_{};
     GameSessionPresentationSettings railShooterSessionPresentationSettings_{};
     GameSessionRetryCoordinator railShooterRetryCoordinator_{};
+    RailShooterHudDefinitionAsset railShooterHudDefinition_ =
+        RailShooterHudDefinitionAsset::Defaults();
+    RailShooterHudRuntimeModel railShooterHudRuntimeModel_{};
+    RailShooterHudPresentationBridge railShooterHudPresentation_{};
+    RailShooterHudRenderer railShooterHudRenderer_{};
+    std::string railShooterHudLoadStatus_;
     RailPlayerMovementSystem railShooterPlayerMovement_{};
     RailPlayerVehicleMountSystem railShooterPlayerVehicleMount_{};
     RailDodgeSystem railShooterPlayerDodge_{};
     RailVehicleMovementSystem railShooterVehicleMovement_{};
+    RailVehicleControlPresetRegistry railVehicleControlPresetRegistry_{};
+    std::string railVehicleControlPresetId_ =
+        RailVehicleControlPresetRegistry::kMineCartStandardPresetId;
+    std::string railVehicleControlAppliedPresetId_;
+    uint64_t railVehicleControlAppliedRevision_ = 0;
     RailVehiclePresentationBridge railShooterVehiclePresentation_{};
+    RailVehiclePresentationSettings railShooterVehiclePresentationSettings_{};
+    RailVehicleRideDynamicsSystem railShooterVehicleRideDynamics_{};
+    RailVehicleRideDynamicsSettings railShooterVehicleRideDynamicsSettings_{};
+    RailVehicleTrackContactPoseSolver railShooterTrackContactPose_{};
+    RailVehicleTrackContactPoseSettings railShooterTrackContactPoseSettings_{};
+    CourseRailTrackDefinitionAsset railShooterTrackDefinition_ =
+        CourseRailTrackDefinitionAsset::MineCartDefaults();
+    CourseRailTrackMeshBakePipeline railShooterTrackMeshBake_{};
+    RailVehicleWheelContactPresentationBridge
+        railShooterWheelContactPresentation_{};
+    std::string railShooterTrackLoadStatus_;
+    RailVehicleCameraInertiaBridge railShooterCameraInertia_{};
+    RailVehicleCameraInertiaSettings railShooterCameraInertiaSettings_{};
     RailVehicleActor railShooterVehicleActor_{};
     RailVehicleRenderer railShooterVehicleRenderer_{};
     RailVehicleAudioBridge railShooterVehicleAudioBridge_{};
     RailVehicleAudioSettings railShooterVehicleAudioSettings_{};
+    RailVehicleMountedEvasionSystem railShooterMountedEvasion_{};
+    RailVehicleBodyCollisionSystem railShooterVehicleBodyCollision_{};
+    RailVehicleDamageCoordinator railShooterVehicleDamageCoordinator_{};
+    RailVehicleCollisionFeedbackBridge
+        railShooterVehicleCollisionFeedback_{};
+    RailVehicleCollisionFeedbackSettings
+        railShooterVehicleCollisionFeedbackSettings_{};
+    RailVehicleOccupantClearanceSystem railShooterOccupantClearance_{};
+    RailVehicleEvasionConstraintResolver railShooterEvasionConstraintResolver_{};
+    RailVehicleCombatMountBridge railShooterCombatMountBridge_{};
+    RailVehicleCameraMountBridge railShooterCameraMountBridge_{};
+    RailVehicleMountedEvasionPresentationBridge
+        railShooterMountedEvasionPresentation_{};
+    RailVehicleMountedEvasionPresentationSettings
+        railShooterMountedEvasionPresentationSettings_{};
+    RailVehicleOccupantActor railShooterOccupantActor_{};
+    RailVehicleEvasionFeedbackBridge railShooterEvasionFeedback_{};
+    RailVehicleEvasionFeedbackSettings railShooterEvasionFeedbackSettings_{};
     PlayerCombatFeelSystem railShooterCombatFeelSystem_;
     PlayerDamagePresentationBridge railPlayerDamagePresentationBridge_{};
     GrazeScoreSystem railGrazeScoreSystem_{};
@@ -318,20 +393,28 @@ private:
     EncounterDirector railShooterEncounterDirector_;
     RailCameraDirector railShooterCameraDirector_;
     RailSpeedDirector railShooterSpeedDirector_;
+    RailRideDirector railShooterRideDirector_;
+    RailRideMotionEnvelope railShooterRideMotionEnvelope_{};
+    RailRideTuningTelemetry railShooterRideTuningTelemetry_{};
+    RailTrackFeedbackDirector railShooterTrackFeedbackDirector_{};
+    RailTrackFeedbackDirectorSettings railShooterTrackFeedbackSettings_{};
     CourseSpawnRuntime railShooterSpawnRuntime_;
     CourseRuntimeProgramAsset railShooterRuntimeProgram_{};
     editor::CourseRuntimeCookPipeline railShooterRuntimeCookPipeline_{};
     CourseGameplayWaveRuntimeBridge railShooterGameplayWaveBridge_{};
     EnemyAttackTelegraphSystem railEnemyAttackTelegraphSystem_;
     EnemyAttackTelegraphSettings railEnemyAttackTelegraphSettings_{};
+    EnemyAttackLaneTelegraphRenderer railEnemyAttackLaneTelegraphRenderer_{};
+    EnemyAttackLaneTelegraphRendererSettings
+        railEnemyAttackLaneTelegraphRendererSettings_{};
     EnemyAttackTelegraphFeedbackBridge railEnemyAttackTelegraphFeedbackBridge_{};
     EnemyAttackTelegraphFeedbackSettings railEnemyAttackTelegraphFeedbackSettings_{};
     EnemyCombatPresentationBridge railEnemyCombatPresentationBridge_{};
     EnemyCombatPresentationSettings railEnemyCombatPresentationSettings_{};
     EnemyProjectilePresentationBridge railEnemyProjectilePresentationBridge_{};
     EnemyProjectilePresentationSettings railEnemyProjectilePresentationSettings_{};
-    EnemyProjectileRenderer railEnemyProjectileRenderer_{};
-    EnemyProjectileRendererSettings railEnemyProjectileRendererSettings_{};
+    EnemyProjectileVfxRenderer railEnemyProjectileVfxRenderer_{};
+    EnemyProjectileVfxRendererSettings railEnemyProjectileVfxRendererSettings_{};
     EnemyProjectileAudioBridge railEnemyProjectileAudioBridge_{};
     EnemyProjectileAudioSettings railEnemyProjectileAudioSettings_{};
     float railEnemyProjectilePresentationTime_ = 0.0f;
@@ -348,6 +431,10 @@ private:
     audio::SoundHandle railVehicleJointSound_{};
     audio::SoundHandle railVehicleBrakeSound_{};
     audio::SoundHandle railVehicleStopSound_{};
+    audio::SoundHandle railVehicleCollisionSound_{};
+    audio::SoundHandle railVehicleEvasionStartSound_{};
+    audio::SoundHandle railVehicleEvasionRecoverSound_{};
+    audio::SoundHandle railVehicleEvasionReadySound_{};
     audio::SoundHandle railEnemySpawnSound_{};
     audio::SoundHandle railEnemyEngageSound_{};
     audio::SoundHandle railEnemyAttackSound_{};
@@ -506,8 +593,8 @@ private:
         std::string speedMode;
         std::string speedReason;
         float baseSpeed = 0.0f;
-        float targetSpeed = 0.0f;
-        float smoothedSpeed = 0.0f;
+        float requestedSpeed = 0.0f;
+        float actualVehicleSpeed = 0.0f;
         float zoneMultiplier = 1.0f;
         float eventMultiplier = 1.0f;
         std::string cameraMode;

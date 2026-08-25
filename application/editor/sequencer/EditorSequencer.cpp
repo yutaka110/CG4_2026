@@ -259,6 +259,48 @@ bool EditorSequencerService::CopySelection(std::string& errorMessage) {
     return CaptureSelection(clipboard_, false, errorMessage);
 }
 
+bool EditorSequencerService::CaptureKeyState(
+    const EditorSequencerKeyHandle& handle,
+    EditorSequencerKeyState& state,
+    std::string& errorMessage) const {
+    IEditorSequencerTrackProvider* provider = FindProvider(handle.providerId);
+    if (provider == nullptr) {
+        errorMessage = "Sequencer provider is unavailable: " + handle.providerId;
+        return false;
+    }
+    return provider->CaptureKey(handle, state, errorMessage);
+}
+
+bool EditorSequencerService::CommitKeyStateChange(
+    std::string_view label,
+    const EditorSequencerKeyState& before,
+    const EditorSequencerKeyState& after,
+    std::string& errorMessage) {
+    if (interactiveActive_) {
+        errorMessage = "Finish the active Sequencer drag before editing key details.";
+        return false;
+    }
+    if (!before.handle.Valid() || !after.handle.Valid() ||
+        !before.handle.SameKey(after.handle)) {
+        errorMessage = "Sequencer key state change has mismatched handles.";
+        return false;
+    }
+    std::vector<EditorSequencerKeyMutation> mutations{{before, after}};
+    if (!ApplyMutations(
+            mutations, EditorTransactionApplyMode::Redo, false, errorMessage)) {
+        return false;
+    }
+    const auto rollback = mutations;
+    if (!PushMutationCommand(label, std::move(mutations), errorMessage)) {
+        std::string rollbackError;
+        ApplyMutations(
+            rollback, EditorTransactionApplyMode::Undo, false, rollbackError);
+        return false;
+    }
+    if (mutationCallback_) mutationCallback_(label);
+    return true;
+}
+
 bool EditorSequencerService::PasteAt(double position, std::string& errorMessage) {
     if (clipboard_.empty()) {
         errorMessage = "Sequencer clipboard is empty.";

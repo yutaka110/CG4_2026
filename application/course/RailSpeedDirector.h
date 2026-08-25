@@ -29,17 +29,18 @@ struct RailSpeedDirectorSettings {
     float setpieceMultiplier = 0.84f;
     float cinematicMultiplier = 0.72f;
     float recoveryMultiplier = 1.04f;
-    float acceleration = 18.0f;
-    float deceleration = 30.0f;
     float eventSlowMultiplier = 0.76f;
     float eventBoostMultiplier = 1.12f;
     float eventBlendDuration = 1.10f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct RailSpeedDirectorFrameInput {
     const CourseAsset* course = nullptr;
     const RailPath* railPath = nullptr;
     const CourseSection* section = nullptr;
+    const CourseRideProfileDefinition* rideProfile = nullptr;
     float distance = 0.0f;
     float deltaTime = 0.016f;
 };
@@ -47,8 +48,9 @@ struct RailSpeedDirectorFrameInput {
 struct RailSpeedDirectorFrame {
     float distance = 0.0f;
     float baseSpeed = 0.0f;
-    float targetSpeed = 0.0f;
-    float smoothedSpeed = 0.0f;
+    // Policy output only. RailVehicleMovementSystem is the sole owner of
+    // acceleration, braking, curve limiting and physical distance advance.
+    float requestedSpeed = 0.0f;
     float zoneMultiplier = 1.0f;
     float eventMultiplier = 1.0f;
     RailSpeedZoneMode mode = RailSpeedZoneMode::Cruise;
@@ -60,7 +62,11 @@ struct RailSpeedDirectorFrame {
 
 class RailSpeedDirector {
 public:
-    void Reset(float speed = 0.0f);
+    bool Configure(
+        const RailSpeedDirectorSettings& settings,
+        bool preservePolicyState = false,
+        std::string* errorMessage = nullptr);
+    void Reset();
     void NotifyCourseEvents(const std::vector<CourseEventMarker>& events);
     RailSpeedDirectorFrame Evaluate(const RailSpeedDirectorFrameInput& input);
 
@@ -69,13 +75,13 @@ public:
     const RailSpeedDirectorFrame& LastFrame() const { return lastFrame_; }
 
 private:
-    RailSpeedZoneMode ResolveMode(const CourseSection* section) const;
+    RailSpeedZoneMode ResolveMode(
+        const CourseRideProfileDefinition* rideProfile,
+        const CourseSection* section) const;
     float MultiplierForMode(RailSpeedZoneMode mode) const;
 
     RailSpeedDirectorSettings settings_{};
     RailSpeedDirectorFrame lastFrame_{};
-    float smoothedSpeed_ = 0.0f;
-    bool hasSmoothedSpeed_ = false;
     float eventSlowTimer_ = 0.0f;
     float eventBoostTimer_ = 0.0f;
 };

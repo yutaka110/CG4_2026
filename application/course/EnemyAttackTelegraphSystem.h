@@ -67,6 +67,8 @@ struct EnemyAttackTelegraphCue {
     bool visibilityTested = false;
     bool newlyPresented = false;
     bool hasLockedTarget = false;
+    EnemyProjectileTrajectory projectileTrajectory =
+        EnemyProjectileTrajectory::Direct;
 };
 
 struct EnemyAttackTelegraphEvent {

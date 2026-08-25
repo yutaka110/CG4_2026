@@ -1,0 +1,25 @@
+name = enemy_projectile_core
+lifetime = 30.0
+blend = additive
+layer = additive
+renderQueue = 3360
+color = 1.0,1.0,1.0,1.0
+size = 1.0,1.0,1.0
+
+component = particle
+name = hostile_projectile_white_core
+technique = ParticleAdditive
+texture = circle2
+duration = 30.0
+renderQueue = 3360
+color = 1.0,1.0,1.0,1.0
+size = 1.0,1.0,1.0
+particle.emissive = 10.0
+particle.spawnCount = 0
+particle.spawnFrequency = 0.045
+particle.spawnRadius = 0.0
+particle.randomRotation = 0.0
+particle.scaleYMin = 0.92
+particle.scaleYMax = 1.08
+particle.depthFadeSoftness = 0.0
+particle.edgeSoftness = 0.48

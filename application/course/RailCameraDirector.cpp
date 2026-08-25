@@ -535,7 +535,14 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
     CourseCameraKey targetRig = input.course->EvaluateCamera(input.distance);
     frame.mode = "Default";
     ApplySectionDirecting(targetRig, input.section, frame.mode);
-    ApplyCinematicShotDirecting(targetRig, input.course, input.distance, frame.mode, frame);
+    ApplyCinematicShotDirecting(
+        targetRig,
+        input.course,
+        input.distance,
+        input.preferredCinematicShotId,
+        input.preferredCinematicShotWeight,
+        frame.mode,
+        frame);
     ApplyEventDirecting(targetRig, input.deltaTime, frame.mode);
     ApplyEncounterFramingRules(targetRig, input, frame.mode, frame);
     ApplyAimFocusStabilization(targetRig, input, frame.mode, frame);
@@ -551,6 +558,35 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
     frame.target = Add(
         Add(lookSample.position, Scale(lookSample.up, frame.rig.lookUpOffset)),
         Scale(lookSample.tangent, frame.rig.lookForwardOffset));
+    if (input.mountedCameraActive) {
+        const Vector3 desiredMountPosition = Add(
+            input.mountedCameraAnchor,
+            input.mountedCameraOffset);
+        Vector3 correction = Subtract(desiredMountPosition, frame.position);
+        const float correctionLength = Length(correction);
+        const float maximumCorrection = (std::max)(
+            0.0f, input.mountedMaximumCorrection);
+        if (maximumCorrection > 0.0f &&
+            correctionLength > maximumCorrection) {
+            correction = Scale(
+                correction,
+                maximumCorrection / correctionLength);
+        }
+        frame.position = Add(
+            frame.position,
+            Scale(correction, (std::clamp)(
+                input.mountedCameraBlend, 0.0f, 1.0f)));
+        frame.target = Add(frame.target, input.mountedTargetOffset);
+        frame.rig.roll += input.mountedRollOffsetRadians;
+    }
+    if (input.cameraInertiaActive) {
+        frame.position = Add(frame.position, input.cameraInertiaGameplayPositionOffset);
+        frame.target = Add(frame.target, input.cameraInertiaGameplayTargetOffset);
+        frame.rig.roll += input.cameraInertiaRollOffsetRadians;
+        frame.rig.fovY = (std::clamp)(
+            frame.rig.fovY + input.cameraInertiaFovOffsetRadians,
+            Degrees(36.0f), Degrees(78.0f));
+    }
     frame.baseTarget = frame.target;
     UpdateLookAtTarget(frame, input, cameraSample);
     ApplyCompositionSafety(frame, input, cameraSample, frame.mode);
@@ -567,6 +603,11 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
         cameraSample.up,
         frame.gameplayForward,
         frame.rig.roll);
+
+    if (input.cameraInertiaActive) {
+        frame.position = Add(frame.position, input.cameraInertiaPresentationPositionOffset);
+        frame.target = Add(frame.target, input.cameraInertiaPresentationTargetOffset);
+    }
 
     const float cameraShakeScale = 1.0f - aimFocusBlend_ * aimFocusSettings_.shakeSuppression;
     if (shakeTime_ > 0.0f && shakeAmplitude_ > 0.0f) {
@@ -1699,19 +1740,28 @@ void RailCameraDirector::ApplyCinematicShotDirecting(
     CourseCameraKey& rig,
     const CourseAsset* course,
     float distance,
+    std::string_view preferredShotId,
+    float preferredShotWeight,
     std::string& mode,
     RailCameraDirectorFrame& frame) const {
     if (course == nullptr) {
         return;
     }
 
-    const CourseCameraShotState shotState = course->EvaluateCinematicCameraShot(distance);
+    CourseCameraShotState shotState = course->EvaluateCinematicCameraShot(
+        distance, preferredShotId);
+    if (shotState.weight <= 0.0f && !preferredShotId.empty()) {
+        shotState = course->EvaluateCinematicCameraShot(distance);
+    }
     if (shotState.weight <= 0.0f) {
         return;
     }
 
     const CourseCinematicCameraShot& shot = shotState.shot;
-    const float w = (std::clamp)(shotState.weight, 0.0f, 1.0f);
+    float w = (std::clamp)(shotState.weight, 0.0f, 1.0f);
+    if (!preferredShotId.empty() && shot.id == preferredShotId) {
+        w = (std::min)(w, (std::clamp)(preferredShotWeight, 0.0f, 1.0f));
+    }
     frame.cinematicShotWeight = w;
     frame.cinematicShotId = shot.id.empty() ? "-" : shot.id;
     frame.cinematicShotPresetId = shotState.presetId.empty() ? "-" : shotState.presetId;

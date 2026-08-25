@@ -1,4 +1,4 @@
 document=course:3238c262ad101d3f37027db2de8ebb2f
-sourceSchema=3
-targetSchema=7
-note=Assigned persistent editor GUIDs to 0 Course world objects and 19 rail control points, and 0 enemy placements; created 0 schema-v7 wave definitions and remapped 0 enemy wave references.
+sourceSchema=8
+targetSchema=9
+note=Assigned persistent editor GUIDs to 0 Course world objects and 19 rail control points, and 0 enemy placements; created 0 schema-v9 Course data (including wave definitions and ride motion envelopes) and remapped 0 enemy wave references.

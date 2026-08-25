@@ -30,6 +30,11 @@ public:
         EditorTransactionApplyMode mode,
         std::string& errorMessage) override;
 
+    bool IsCameraShotHandle(const EditorSequencerKeyHandle& handle) const;
+    std::string CameraShotId(const EditorSequencerKeyHandle& handle) const;
+    EditorSequencerKeyState BuildCameraShotState(
+        const CourseCinematicCameraShot& shot) const;
+
 private:
     using CloneTemplate = std::variant<
         CourseEventMarker,
@@ -50,6 +55,11 @@ private:
         const EditorSequencerKeyState& state,
         std::string& errorMessage);
     std::string NextCloneToken();
+    static std::string EncodeCameraShot(const CourseCinematicCameraShot& shot);
+    static bool DecodeCameraShot(
+        std::string_view payload,
+        CourseCinematicCameraShot& shot,
+        std::string& errorMessage);
 
     CourseAsset* course_ = nullptr;
     uint64_t cloneSerial_ = 0;

@@ -2,6 +2,7 @@
 
 #include "EditorScene.h"
 #include "../../level/BlenderLevelJsonLoader.h"
+#include "../../course/RailWorldScale.h"
 
 #include <cstddef>
 #include <filesystem>
@@ -42,7 +43,8 @@ enum class EditorBlenderSceneImportErrorCode {
 
 struct EditorBlenderSceneImportOptions {
     std::string destinationParentGuid;
-    double worldUnitsPerMeter = 1.0;
+    double worldUnitsPerMeter =
+        static_cast<double>(RailWorldScale::kWorldUnitsPerMeter);
     bool requireExactlyOnePlayerSpawn = true;
     bool removeMissingSourceObjects = true;
     bool updateEntityNames = true;

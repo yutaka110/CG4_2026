@@ -952,12 +952,43 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     railVehicle.transformResource->GetGPUVirtualAddress());
             }
 
+            const AppModelObjectInstance& railVehicleOccupant =
+                ctx.scene->RailVehicleOccupantObject();
+            const AppManagedModelResource* railVehicleOccupantModel =
+                ctx.scene->FindManagedModel(railVehicleOccupant.modelIndex);
+            if (railVehicleOccupant.visible &&
+                railVehicleOccupantModel != nullptr &&
+                railVehicleOccupant.transformResource) {
+                drawManagedModel(
+                    *railVehicleOccupantModel,
+                    railVehicleOccupantModel->mesh.vbv,
+                    railVehicleOccupantModel->mesh.ibv,
+                    railVehicleOccupant.transformResource->GetGPUVirtualAddress());
+            }
+
             for (const CourseMeshRenderItem& item : ctx.scene->CourseMeshes().Items()) {
                 const AppManagedModelResource* model =
                     ctx.scene->FindManagedModel(item.modelIndex);
                 if (!item.visible ||
                     model == nullptr ||
                     !item.transformResource) {
+                    continue;
+                }
+                drawManagedModel(
+                    *model,
+                    model->mesh.vbv,
+                    model->mesh.ibv,
+                    item.transformResource->GetGPUVirtualAddress(),
+                    item.useMaterialOverride && item.materialResource
+                        ? item.materialResource->GetGPUVirtualAddress()
+                        : 0);
+            }
+
+            for (const CourseMeshRenderItem& item :
+                 ctx.scene->CourseRailTrackMeshes().Items()) {
+                const AppManagedModelResource* model =
+                    ctx.scene->FindManagedModel(item.modelIndex);
+                if (!item.visible || model == nullptr || !item.transformResource) {
                     continue;
                 }
                 drawManagedModel(

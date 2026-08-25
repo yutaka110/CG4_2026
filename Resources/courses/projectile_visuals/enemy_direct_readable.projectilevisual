@@ -1,0 +1,2 @@
+# visual|id|projectileDefinitionId|style|coreEffect|haloEffect|coreRGBA|haloRGBA|trailRGBA|coreScale|haloScale|minAngular|maxWorld|threatScale|pulseAmp|pulseHz|trailLength|trailWidth|enabled
+visual|visual_direct_magenta|enemy_direct_readable|bolt|enemy_projectile_core|enemy_projectile_halo|1.0|1.0|1.0|1.0|1.0|0.06|0.72|0.90|1.0|0.04|0.56|0.68|1.65|2.45|0.0048|4.5|1.18|0.10|2.1|9.0|0.48|true

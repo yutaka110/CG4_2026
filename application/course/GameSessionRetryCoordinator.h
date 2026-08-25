@@ -12,6 +12,8 @@
 #include "RailDodgeSystem.h"
 #include "RailPlayerMovementSystem.h"
 #include "RailVehicleMovementSystem.h"
+#include "RailVehicleMountedEvasionSystem.h"
+#include "RailVehicleDamageCoordinator.h"
 #include "SectionCheckpointSystem.h"
 
 struct GameSessionRetryCoordinatorBinding final {
@@ -27,6 +29,8 @@ struct GameSessionRetryCoordinatorBinding final {
     RailVehicleMovementSystem* railVehicle = nullptr;
     const RailPath* railPath = nullptr;
     GrazeScoreSystem* grazeScore = nullptr;
+    RailVehicleMountedEvasionSystem* mountedEvasion = nullptr;
+    RailVehicleDamageCoordinator* vehicleDamageCoordinator = nullptr;
 };
 
 struct GameSessionRetryCheckpoint final {
@@ -46,6 +50,10 @@ struct GameSessionRetryCheckpoint final {
     GrazeScoreRuntimeState grazeScore;
     PlayerNearMissRuntimeState nearMiss;
     bool hasGrazeScoreRuntime = false;
+    RailVehicleMountedEvasionRuntimeState mountedEvasion;
+    bool hasMountedEvasionRuntime = false;
+    RailVehicleDamageRuntimeState vehicleDamage;
+    bool hasVehicleDamageRuntime = false;
 };
 
 enum class GameSessionRetryStatus : uint8_t {
@@ -59,6 +67,8 @@ enum class GameSessionRetryStatus : uint8_t {
     PlayerRuntimeMismatch,
     VehicleRuntimeMismatch,
     GrazeRuntimeMismatch,
+    MountedEvasionRuntimeMismatch,
+    VehicleDamageRuntimeMismatch,
 };
 
 struct GameSessionRetryResult final {

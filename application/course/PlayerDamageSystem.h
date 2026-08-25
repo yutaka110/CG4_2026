@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "utils/math/Vector.h"
+
 enum class PlayerHitKind : uint8_t {
     EnemyProjectile,
     ObstacleContact,
@@ -34,6 +36,9 @@ struct PlayerHitRequest final {
     float railDistance = 0.0f;
     float lateralOffset = 0.0f;
     float verticalOffset = 4.0f;
+    Vector3 impactWorldPosition{};
+    Vector3 impactNormalWorld{0.0f, 1.0f, 0.0f};
+    bool hasWorldImpact = false;
 };
 
 struct PlayerDamageResult final {

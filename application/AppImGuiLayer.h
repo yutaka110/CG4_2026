@@ -90,6 +90,12 @@ class CourseRailViewportRenderer;
 #include "editor/course/CourseRailSketchTool.h"
 #include "editor/course/CourseRailStrokePreviewRenderer.h"
 #include "editor/course/CourseSequencerWaveTrackBridge.h"
+#include "editor/course/CourseRideSequencerTrackBridge.h"
+#include "editor/course/RailRideSpeedBeatAuthoring.h"
+#include "editor/course/CourseRailRideEventAuthoring.h"
+#include "editor/course/CourseRideProfileDetailsPanel.h"
+#include "editor/course/CourseCameraShotDetailsPanel.h"
+#include "editor/course/RailRideTuningTelemetryPanel.h"
 #include "editor/course/CourseEnemyTransformGizmo.h"
 #include "editor/course/CourseEnemyViewportEditTool.h"
 #include "editor/course/CourseRailViewportEditTool.h"
@@ -190,6 +196,7 @@ class CourseSpawnRuntime;
 class CourseGameplayWaveRuntimeBridge;
 class PlayerCombatFeelSystem;
 class SectionCheckpointSystem;
+class RailRideTuningTelemetry;
 struct CourseAsset;
 
 struct AppImGuiFrameContext {
@@ -232,6 +239,7 @@ struct AppImGuiFrameContext {
     float courseDistance = 0.0f;
     float courseSpeed = 0.0f;
     float courseRailLength = 0.0f;
+    RailRideTuningTelemetry* railRideTuningTelemetry = nullptr;
     std::function<bool(std::string*)> onSaveCourse;
     std::function<void()> onApplyCourse;
     std::function<void()> onReloadCourse;
@@ -563,6 +571,12 @@ private:
     editor::CourseRailDetailsPanel courseRailDetailsPanel_{};
     editor::CourseSequencerTrackProvider editorCourseSequencerProvider_{};
     editor::CourseSequencerWaveTrackBridge editorCourseWaveSequencerBridge_{};
+    editor::CourseRideSequencerTrackBridge editorCourseRideSequencerBridge_{};
+    editor::RailRideSpeedBeatAuthoring editorRailRideSpeedBeatAuthoring_{};
+    editor::CourseRailRideEventAuthoring editorCourseRailRideEventAuthoring_{};
+    editor::CourseRideProfileDetailsPanel courseRideProfileDetailsPanel_{};
+    editor::CourseCameraShotDetailsPanel courseCameraShotDetailsPanel_{};
+    editor::RailRideTuningTelemetryPanel railRideTuningTelemetryPanel_{};
     editor::EditorSequencerService editorSequencer_{};
     editor::EditorToolRegistry editorToolRegistry_{};
     editor::EditorTransactionStack editorTransactions_{};

@@ -82,6 +82,9 @@
 #include "course/CourseWavePickingService.h"
 #include "course/CourseWaveViewportRenderer.h"
 #include "course/CourseSequencerWaveTrackBridge.h"
+#include "course/CourseRideSequencerTrackBridge.h"
+#include "course/RailRideSpeedBeatAuthoring.h"
+#include "course/CourseRailRideEventAuthoring.h"
 #include "course/CoursePreviewSimulationSystem.h"
 #include "course/CourseOverviewMapController.h"
 #include "course/CourseOverviewMapProjection.h"
@@ -259,19 +262,51 @@
 #include "../course/RailPlayerVehicleMountSystem.h"
 #include "../course/RailVehicleMovementSystem.h"
 #include "../course/RailVehiclePresentationBridge.h"
+#include "../course/RailVehicleRideDynamicsSystem.h"
+#include "../course/RailVehicleTrackContactPoseSolver.h"
+#include "../course/CourseRailTrackDefinitionAsset.h"
+#include "../course/CourseRailTrackMeshBakePipeline.h"
+#include "../course/RailVehicleWheelContactPresentationBridge.h"
+#include "../course/RailShooterHudDefinitionAsset.h"
+#include "../course/RailShooterHudRuntimeModel.h"
+#include "../course/RailShooterHudPresentationBridge.h"
+#include "../course/RailShooterHudRenderer.h"
+#include "../course/RailVehicleCameraInertiaBridge.h"
+#include "../course/RailRideDirector.h"
+#include "../course/RailRideMotionEnvelope.h"
+#include "../course/RailRideTuningTelemetry.h"
+#include "../course/RailWorldScale.h"
+#include "../course/RailSpeedDirector.h"
 #include "../course/RailVehicleActor.h"
 #include "../course/RailVehicleRenderer.h"
 #include "../course/RailVehicleAudioBridge.h"
+#include "../course/RailVehicleMountedEvasionSystem.h"
+#include "../course/RailVehicleOccupantClearanceSystem.h"
+#include "../course/RailVehicleEvasionConstraintResolver.h"
+#include "../course/RailVehicleCombatMountBridge.h"
+#include "../course/RailVehicleCameraMountBridge.h"
+#include "../course/RailVehicleMountedEvasionPresentationBridge.h"
+#include "../course/RailVehicleOccupantActor.h"
+#include "../course/RailVehicleEvasionFeedbackBridge.h"
+#include "../course/RailVehicleControlDefinitionAsset.h"
+#include "../course/RailVehicleControlPresetRegistry.h"
+#include "../course/RailVehicleHitboxProfile.h"
+#include "../course/RailVehicleBodyCollisionSystem.h"
+#include "../course/RailVehicleDamageCoordinator.h"
+#include "../course/RailVehicleCollisionFeedbackBridge.h"
 #include "../course/EnemyCombatSystem.h"
 #include "../course/EnemyCombatPresentationBridge.h"
 #include "../course/EnemyProjectilePresentationBridge.h"
 #include "../course/EnemyProjectileRenderer.h"
+#include "../course/EnemyProjectileVfxRenderer.h"
+#include "../course/EnemyProjectileVisualDefinitionAsset.h"
 #include "../course/EnemyProjectileAudioBridge.h"
 #include "../course/GrazeScoreSystem.h"
 #include "../course/ThreatResponseDirector.h"
 #include "../course/EnemyBehaviorSystem.h"
 #include "../course/EnemyAttackTelegraphFeedbackBridge.h"
 #include "../course/EnemyAttackTelegraphSystem.h"
+#include "../course/EnemyAttackLaneTelegraphRenderer.h"
 #include "../course/PlayerCombatFeelSystem.h"
 #include "../course/PlayerDamagePresentationBridge.h"
 #include "../course/PlayerHitboxSystem.h"
@@ -4769,6 +4804,13 @@ void TestCourseSequencerTrackProvider(RegressionRunner& runner) {
     CourseCameraKey camera;
     camera.distance = 90.0f;
     course.cameraKeys.push_back(camera);
+    CourseCinematicCameraShot cameraShot{};
+    cameraShot.startDistance = 80.0f;
+    cameraShot.endDistance = 120.0f;
+    cameraShot.id = "shot_details";
+    cameraShot.mode = "Setpiece";
+    cameraShot.weightScale = 0.8f;
+    course.cinematicCameraShots.push_back(cameraShot);
     CourseLightingPreset lighting;
     lighting.distance = 110.0f;
     lighting.id = "lighting_key";
@@ -4780,6 +4822,22 @@ void TestCourseSequencerTrackProvider(RegressionRunner& runner) {
 
     CourseSequencerTrackProvider provider;
     provider.Bind(&course);
+    CourseCinematicCameraShot editedShot = cameraShot;
+    editedShot.lateralOffset = 4.5f;
+    editedShot.fovOffset = 0.12f;
+    editedShot.shakeAmount = 0.35f;
+    EditorSequencerKeyMutation shotMutation{};
+    shotMutation.before = provider.BuildCameraShotState(cameraShot);
+    shotMutation.after = provider.BuildCameraShotState(editedShot);
+    std::string shotError;
+    runner.Expect(
+        provider.ApplyMutations(
+            {shotMutation}, EditorTransactionApplyMode::Redo, shotError) &&
+            std::abs(course.cinematicCameraShots.front().lateralOffset - 4.5f) < 0.001f &&
+            provider.ApplyMutations(
+                {shotMutation}, EditorTransactionApplyMode::Undo, shotError) &&
+            std::abs(course.cinematicCameraShots.front().lateralOffset) < 0.001f,
+        "camera shot Details payload should restore every authored field through Sequencer mutations");
     EditorTransactionStack transactions;
     EditorSequencerService sequencer;
     sequencer.BeginFrame();
@@ -4860,6 +4918,471 @@ void TestCourseSequencerTrackProvider(RegressionRunner& runner) {
             std::abs(sequencer.PreviewPosition() - 145.0) < 0.001,
         "Sequencer scrub should synchronize the runtime preview callback");
     runner.Expect(mutationCount >= 4, "Sequencer commit/undo/redo should publish mutation notifications");
+}
+
+void TestCourseRideProfileDirectorAndSequencer(RegressionRunner& runner) {
+    CourseAsset course{};
+    course.name = "Ride Profile Regression";
+    RailPathControlPoint a{};
+    a.position = {0.0f, 0.0f, 0.0f};
+    a.speed = 30.0f;
+    a.editorGuid = "rail-a";
+    RailPathControlPoint b{};
+    b.position = {20.0f, 0.0f, 40.0f};
+    b.speed = 30.0f;
+    b.editorGuid = "rail-b";
+    RailPathControlPoint c{};
+    c.position = {50.0f, 0.0f, 60.0f};
+    c.speed = 30.0f;
+    c.editorGuid = "rail-c";
+    course.railPoints = {a, b, c};
+    course.cameraKeys.push_back({});
+    course.cameraKeys.front().editorGuid = "camera-a";
+    course.sections.push_back({0.0f, 80.0f, "Misleading Boss Name", "Boss"});
+    CourseCinematicCameraShot shot{};
+    shot.startDistance = 5.0f;
+    shot.endDistance = 70.0f;
+    shot.id = "ride-shot";
+    course.cinematicCameraShots.push_back(shot);
+    CourseRideProfileDefinition profile{};
+    profile.editorGuid = "ride-guid";
+    profile.displayName = "High Speed Turn";
+    profile.startDistance = 5.0f;
+    profile.endDistance = 70.0f;
+    profile.speedMode = CourseRideSpeedMode::HighSpeed;
+    profile.speedMultiplier = 1.2f;
+    profile.targetSpeedOverride = -1.0f;
+    profile.accelerationScale = 0.55f;
+    profile.brakingScale = 1.35f;
+    profile.maximumJerk = 48.0f;
+    profile.cornerEntryLookAheadDistance = 44.0f;
+    profile.cornerSpeedScale = 0.82f;
+    profile.turnAnticipationDistance = 28.0f;
+    profile.visualBankScale = 1.25f;
+    profile.maximumVisualBankDegrees = 24.0f;
+    profile.blendInDistance = 5.0f;
+    profile.blendOutDistance = 5.0f;
+    profile.cameraShotId = shot.id;
+    course.rideProfiles.push_back(profile);
+    RailRideSpeedBeatDefinition speedBeat{};
+    speedBeat.editorGuid = "speed-beat-guid";
+    speedBeat.displayName = "Corner Brake Beat";
+    speedBeat.startDistance = 25.0f;
+    speedBeat.endDistance = 40.0f;
+    speedBeat.type = RailRideSpeedBeatType::CornerBrake;
+    speedBeat.speedMultiplier = 0.75f;
+    speedBeat.accelerationScale = 0.8f;
+    speedBeat.brakingScale = 1.2f;
+    speedBeat.maximumJerk = 36.0f;
+    speedBeat.blendInDistance = 0.0f;
+    speedBeat.blendOutDistance = 0.0f;
+    course.rideSpeedBeats.push_back(speedBeat);
+    CourseRailRideEventDefinition bankEvent{};
+    bankEvent.editorGuid = "rail-ride-bank-guid";
+    bankEvent.displayName = "Authored Right Bank";
+    bankEvent.startDistance = 20.0f;
+    bankEvent.endDistance = 45.0f;
+    bankEvent.type = CourseRailRideEventType::BankOverride;
+    bankEvent.bankMode = CourseRailRideBankMode::Override;
+    bankEvent.bankDegrees = 22.0f;
+    bankEvent.blendInDistance = 2.0f;
+    bankEvent.blendOutDistance = 2.0f;
+    bankEvent.priority = 10;
+    bankEvent.audioCueId.clear();
+    course.railRideEvents.push_back(bankEvent);
+    CourseRailRideEventDefinition landingEvent{};
+    landingEvent.editorGuid = "rail-ride-landing-guid";
+    landingEvent.displayName = "Bridge Landing";
+    landingEvent.startDistance = 50.0f;
+    landingEvent.endDistance = 50.35f;
+    landingEvent.type = CourseRailRideEventType::Landing;
+    landingEvent.suspensionAmplitude = 0.65f;
+    landingEvent.cameraShake = 0.72f;
+    landingEvent.hapticLow = 0.75f;
+    landingEvent.hapticHigh = 0.42f;
+    landingEvent.audioCueId = "landing";
+    landingEvent.vfxCueId = "rail_sparks";
+    landingEvent.triggerOncePerRun = true;
+    course.railRideEvents.push_back(landingEvent);
+    course.SortForRuntime();
+
+    std::string text;
+    std::string error;
+    CourseAsset loaded{};
+    runner.Expect(
+        course.SaveToString(&text, &error) &&
+            text.find("# editor-schema:12") != std::string::npos &&
+            text.find("ride_profile|ride-guid") != std::string::npos &&
+            text.find("ride_speed_beat|speed-beat-guid") != std::string::npos &&
+            text.find("rail_ride_event|rail-ride-bank-guid") != std::string::npos &&
+            loaded.LoadFromString(text, &error) && loaded.rideProfiles.size() == 1 &&
+            loaded.rideSpeedBeats.size() == 1 &&
+            loaded.railRideEvents.size() == 2 &&
+            loaded.rideProfiles.front().cameraShotId == "ride-shot" &&
+            std::abs(loaded.rideProfiles.front().accelerationScale - 0.55f) < 0.001f &&
+            std::abs(loaded.rideProfiles.front().maximumJerk - 48.0f) < 0.001f,
+        "Ride Profile, Speed Beat and Rail Ride Events should round-trip as schema-v12 CourseAsset data");
+
+    RailPath rail;
+    loaded.ApplyToRailPath(rail);
+    RailSpeedDirector speedDirector;
+    RailSpeedDirectorFrameInput speedInput{};
+    speedInput.course = &loaded;
+    speedInput.railPath = &rail;
+    speedInput.section = loaded.FindSection(32.0f);
+    speedInput.rideProfile = loaded.FindRideProfile(32.0f);
+    speedInput.distance = 32.0f;
+    const RailSpeedDirectorFrame speedFrame = speedDirector.Evaluate(speedInput);
+    runner.Expect(
+        speedFrame.mode == RailSpeedZoneMode::HighSpeed,
+        "typed ride speed mode should override legacy section-name inference");
+
+    RailRideDirector rideDirector;
+    RailRideDirectorInput rideInput{};
+    rideInput.course = &loaded;
+    rideInput.railPath = &rail;
+    rideInput.distance = 32.0f;
+    rideInput.baseRequestedSpeed = 20.0f;
+    const RailRideDirectorFrame& ride = rideDirector.Evaluate(rideInput);
+    runner.Expect(
+        ride.active && ride.speedBeatActive &&
+            std::abs(ride.requestedSpeed - 18.0f) < 0.01f &&
+            ride.speedBeatGuid == "speed-beat-guid" &&
+            ride.cameraShotId == "ride-shot" && ride.cameraShotWeight > 0.99f &&
+            std::abs(ride.anticipatedSignedCurvature) > 0.00001f,
+        "ride director should output speed policy, anticipated turn and camera intent without integration");
+
+    RailVehicleDefinition envelopeVehicle = RailVehicleDefinition::MineCartDefaults();
+    RailVehicleRuntimeState envelopeState{};
+    envelopeState.initialized = true;
+    envelopeState.vehicleId = envelopeVehicle.vehicleId;
+    envelopeState.distance = rideInput.distance;
+    RailRideMotionEnvelope envelope;
+    RailRideMotionEnvelopeInput envelopeInput{};
+    envelopeInput.vehicleDefinition = &envelopeVehicle;
+    envelopeInput.vehicleState = &envelopeState;
+    envelopeInput.ride = &ride;
+    envelopeInput.railPath = &rail;
+    const RailRideMotionEnvelopeFrame& envelopeFrame = envelope.Evaluate(envelopeInput);
+    runner.Expect(
+        envelopeFrame.active &&
+            std::abs(envelopeFrame.accelerationLimit -
+                envelopeVehicle.acceleration * 0.44f) < 0.01f &&
+            std::abs(envelopeFrame.brakingLimit -
+                envelopeVehicle.serviceBrakeDeceleration * 1.62f) < 0.01f &&
+            std::abs(envelopeFrame.jerkLimit - 36.0f) < 0.1f &&
+            envelopeFrame.requestedSpeed <= ride.requestedSpeed + 0.001f,
+        "ride motion envelope should constrain policy without integrating vehicle speed");
+
+    CourseRideSequencerTrackBridge bridge;
+    bridge.Bind(&loaded);
+    EditorSequencerService sequencer;
+    EditorTransactionStack transactions;
+    sequencer.BeginFrame();
+    sequencer.RegisterProvider(bridge);
+    sequencer.SetTransactionStack(&transactions);
+    sequencer.SetSequenceRange(0.0, rail.Length());
+    const std::vector<EditorSequencerTrack> tracks = sequencer.BuildTracks();
+    runner.Expect(
+        tracks.size() == 1 && tracks.front().id == "course.ride-profiles" &&
+            tracks.front().keys.size() == 1 &&
+            std::abs(tracks.front().keys.front().duration - 65.0) < 0.001,
+        "ride Sequencer bridge should expose profile intervals as persistent keys");
+    sequencer.SetSnapEnabled(false);
+    sequencer.Select(tracks.front().keys.front().handle, false, false);
+    const float originalStart = loaded.rideProfiles.front().startDistance;
+    runner.Expect(
+        sequencer.BeginInteractiveEdit(error) &&
+            sequencer.PreviewInteractiveMove(5.0, error) &&
+            sequencer.CommitInteractiveEdit("Move Ride Profile", error) &&
+            std::abs(loaded.rideProfiles.front().startDistance - (originalStart + 5.0f)) < 0.001f,
+        "ride Sequencer move should mutate the CourseAsset in one transaction");
+    const CourseRideProfileDefinition beforeDetails = loaded.rideProfiles.front();
+    CourseRideProfileDefinition afterDetails = beforeDetails;
+    afterDetails.displayName = "Authored High Speed Turn";
+    afterDetails.visualBankScale = 1.6f;
+    afterDetails.maximumVisualBankDegrees = 30.0f;
+    const EditorSequencerKeyState beforeDetailsState =
+        bridge.BuildProfileState(beforeDetails);
+    const EditorSequencerKeyState afterDetailsState =
+        bridge.BuildProfileState(afterDetails);
+    runner.Expect(
+        sequencer.CommitKeyStateChange(
+            "Edit Ride Profile Details",
+            beforeDetailsState,
+            afterDetailsState,
+            error) &&
+            loaded.rideProfiles.front().displayName ==
+                "Authored High Speed Turn" &&
+            std::abs(loaded.rideProfiles.front().visualBankScale - 1.6f) < 0.001f,
+        "ride Details edits should persist the complete profile through one Sequencer transaction");
+    EditorExecutionContext execution;
+    EditorError executionError{};
+    runner.Expect(
+        execution.Register(sequencer, &executionError) &&
+            transactions.Undo(execution, &executionError) &&
+            loaded.rideProfiles.front().displayName == beforeDetails.displayName &&
+            transactions.Undo(execution, &executionError) &&
+            std::abs(loaded.rideProfiles.front().startDistance - originalStart) < 0.001f &&
+            transactions.Redo(execution, &executionError) &&
+            transactions.Redo(execution, &executionError) &&
+            loaded.rideProfiles.front().displayName ==
+                "Authored High Speed Turn",
+        "ride timeline and Details edits should share generic Undo and Redo");
+
+    RailRideSpeedBeatAuthoring beatAuthoring;
+    beatAuthoring.Bind(&loaded);
+    EditorSequencerService beatSequencer;
+    EditorTransactionStack beatTransactions;
+    beatSequencer.BeginFrame();
+    beatSequencer.RegisterProvider(beatAuthoring);
+    beatSequencer.SetTransactionStack(&beatTransactions);
+    beatSequencer.SetSequenceRange(0.0, rail.Length());
+    beatSequencer.SetSnapEnabled(false);
+    const auto beatTracks = beatSequencer.BuildTracks();
+    runner.Expect(beatTracks.size()==1 && beatTracks.front().keys.size()==1,
+        "Speed Beat authoring should expose persistent distance intervals");
+    beatSequencer.Select(beatTracks.front().keys.front().handle,false,false);
+    const float originalBeatStart=loaded.rideSpeedBeats.front().startDistance;
+    runner.Expect(beatSequencer.BeginInteractiveEdit(error) &&
+        beatSequencer.PreviewInteractiveMove(3.0,error) &&
+        beatSequencer.CommitInteractiveEdit("Move Speed Beat",error) &&
+        std::abs(loaded.rideSpeedBeats.front().startDistance-originalBeatStart-3.0f)<0.001f,
+        "Speed Beat move should commit through generic Sequencer transactions");
+    EditorExecutionContext beatExecution;
+    runner.Expect(beatExecution.Register(beatSequencer,&executionError) &&
+        beatTransactions.Undo(beatExecution,&executionError) &&
+        std::abs(loaded.rideSpeedBeats.front().startDistance-originalBeatStart)<0.001f,
+        "Speed Beat edits should support atomic Undo");
+
+    CourseRailRideEventAuthoring rideEventAuthoring;
+    rideEventAuthoring.Bind(&loaded);
+    EditorSequencerService rideEventSequencer;
+    EditorTransactionStack rideEventTransactions;
+    rideEventSequencer.BeginFrame();
+    rideEventSequencer.RegisterProvider(rideEventAuthoring);
+    rideEventSequencer.SetTransactionStack(&rideEventTransactions);
+    rideEventSequencer.SetSequenceRange(0.0, rail.Length());
+    rideEventSequencer.SetSnapEnabled(false);
+    const auto rideEventTracks = rideEventSequencer.BuildTracks();
+    runner.Expect(
+        rideEventTracks.size() == 1 &&
+            rideEventTracks.front().id == "course.rail-ride-events" &&
+            rideEventTracks.front().keys.size() == 2,
+        "Rail Ride Event authoring should expose schema-v12 distance intervals in Sequencer");
+    rideEventSequencer.Select(
+        rideEventTracks.front().keys.front().handle, false, false);
+    const float originalRideEventStart = loaded.railRideEvents.front().startDistance;
+    runner.Expect(
+        rideEventSequencer.BeginInteractiveEdit(error) &&
+            rideEventSequencer.PreviewInteractiveMove(2.0, error) &&
+            rideEventSequencer.CommitInteractiveEdit("Move Rail Ride Event", error) &&
+            std::abs(loaded.railRideEvents.front().startDistance -
+                originalRideEventStart - 2.0f) < 0.001f,
+        "Rail Ride Event move should preserve its complete payload in one transaction");
+    EditorExecutionContext rideEventExecution;
+    runner.Expect(
+        rideEventExecution.Register(rideEventSequencer, &executionError) &&
+            rideEventTransactions.Undo(rideEventExecution, &executionError) &&
+            std::abs(loaded.railRideEvents.front().startDistance -
+                originalRideEventStart) < 0.001f,
+        "Rail Ride Event authoring should support atomic Undo");
+    EditorSequencerKeyState createdRideEvent{};
+    EditorSequencerKeyState absentRideEvent{};
+    runner.Expect(
+        rideEventAuthoring.BuildNewEventState(
+            60.0,
+            CourseRailRideEventType::Rumble,
+            createdRideEvent,
+            error),
+        "Rail Ride Event authoring should build validated type-specific defaults");
+    absentRideEvent.handle = createdRideEvent.handle;
+    runner.Expect(
+        rideEventSequencer.CommitKeyStateChange(
+            "Add Rail Ride Event",
+            absentRideEvent,
+            createdRideEvent,
+            error) && loaded.railRideEvents.size() == 3 &&
+            rideEventTransactions.Undo(rideEventExecution, &executionError) &&
+            loaded.railRideEvents.size() == 2,
+        "Rail Ride Event creation should use the same atomic Sequencer transaction path");
+
+    RailTrackFeedbackDirector trackFeedbackDirector;
+    RailTrackFeedbackInput feedbackInput{};
+    feedbackInput.course = &loaded;
+    feedbackInput.previousDistance = 18.0f;
+    feedbackInput.distance = 30.0f;
+    feedbackInput.speed = 34.0f;
+    feedbackInput.maximumSpeed = 68.0f;
+    feedbackInput.deltaTime = 1.0f / 60.0f;
+    const RailTrackFeedbackFrame bankFeedback =
+        trackFeedbackDirector.Update(feedbackInput);
+    runner.Expect(
+        bankFeedback.valid && bankFeedback.active &&
+            bankFeedback.bankOverrideActive &&
+            std::abs(bankFeedback.bankOverrideDegrees - 22.0f) < 0.001f &&
+            bankFeedback.bankOverrideBlend > 0.99f,
+        "Track Feedback Director should resolve the highest-priority authored bank without changing rail movement");
+    feedbackInput.previousDistance = 49.0f;
+    feedbackInput.distance = 55.0f;
+    const RailTrackFeedbackFrame landingFeedback =
+        trackFeedbackDirector.Update(feedbackInput);
+    runner.Expect(
+        landingFeedback.cueCount == 1 &&
+            landingFeedback.cues[0].eventGuid == "rail-ride-landing-guid" &&
+            landingFeedback.cues[0].audioCueId == "landing" &&
+            landingFeedback.cues[0].vfxCueId == "rail_sparks" &&
+            landingFeedback.suspensionOffset > 0.1f &&
+            landingFeedback.cameraShake > 0.1f &&
+            landingFeedback.hapticLow > 0.1f,
+        "Track Feedback Director should detect a skipped-over point and emit bounded body, camera, audio, VFX and haptic feedback");
+    feedbackInput.settings.distanceDiscontinuityThreshold = 10.0f;
+    feedbackInput.previousDistance = 0.0f;
+    feedbackInput.distance = 70.0f;
+    const RailTrackFeedbackFrame discontinuity =
+        trackFeedbackDirector.Update(feedbackInput);
+    runner.Expect(
+        discontinuity.historyResetThisFrame && discontinuity.cueCount == 0,
+        "Track Feedback Director should suppress mass event firing after retry or distance teleport");
+
+    RailVehicleDefinition vehicleDefinition =
+        RailVehicleDefinition::MineCartDefaults();
+    RailVehicleRuntimeState vehicleState{};
+    vehicleState.initialized = true;
+    vehicleState.vehicleId = vehicleDefinition.vehicleId;
+    vehicleState.distance = 24.0f;
+    vehicleState.speed = 38.0f;
+    vehicleState.acceleration = 10.0f;
+    vehicleState.grade = 0.04f;
+    vehicleState.signedCurvature = 0.0f;
+    vehicleState.revision = 7;
+    RailRideDirectorFrame dynamicsRide{};
+    dynamicsRide.active = true;
+    dynamicsRide.profileBlend = 1.0f;
+    dynamicsRide.anticipatedSignedCurvature = 0.022f;
+    dynamicsRide.visualBankScale = 1.4f;
+    dynamicsRide.maximumVisualBankDegrees = 28.0f;
+    dynamicsRide.revision = 9;
+    RailVehicleRideDynamicsSystem dynamics;
+    RailVehicleRideDynamicsInput dynamicsInput{};
+    dynamicsInput.definition = &vehicleDefinition;
+    dynamicsInput.state = &vehicleState;
+    dynamicsInput.ride = &dynamicsRide;
+    dynamicsInput.trackFeedback = &bankFeedback;
+    dynamicsInput.deltaTime = 1.0f / 60.0f;
+    const RailVehicleRideDynamicsFrame firstDynamics =
+        dynamics.Update(dynamicsInput);
+    const float firstBank = firstDynamics.visualBankDegrees;
+    dynamicsInput.trackFeedback = nullptr;
+    dynamicsRide.anticipatedSignedCurvature = -0.018f;
+    ++dynamicsRide.revision;
+    ++vehicleState.revision;
+    const RailVehicleRideDynamicsFrame secondDynamics =
+        dynamics.Update(dynamicsInput);
+    runner.Expect(
+        firstDynamics.valid && firstDynamics.historyResetThisFrame &&
+            std::abs(firstDynamics.targetBankDegrees - 22.0f) < 0.01f &&
+            std::abs(firstDynamics.targetYawDegrees) > 0.01f &&
+            secondDynamics.valid && !secondDynamics.historyResetThisFrame &&
+            std::abs(secondDynamics.visualBankDegrees -
+                     secondDynamics.targetBankDegrees) > 0.01f &&
+            vehicleState.distance == 24.0f && vehicleState.revision == 8,
+        "ride dynamics should pre-bank with damped inertia without mutating authoritative state");
+    vehicleState.distance += 30.0f;
+    ++vehicleState.revision;
+    const RailVehicleRideDynamicsFrame discontinuityDynamics =
+        dynamics.Update(dynamicsInput);
+    runner.Expect(
+        discontinuityDynamics.historyResetThisFrame &&
+            std::abs(discontinuityDynamics.visualBankDegrees -
+                     discontinuityDynamics.targetBankDegrees) < 0.001f &&
+            std::abs(firstBank) > 0.1f,
+        "ride dynamics should reset spring history after teleport or checkpoint discontinuity");
+
+    vehicleState.distance = 24.0f;
+    vehicleState.position = rail.Evaluate(vehicleState.distance).position;
+    ++vehicleState.revision;
+    RailVehicleTrackContactPoseSolver contactSolver;
+    RailVehicleTrackContactPoseInput contactInput{};
+    contactInput.definition=&vehicleDefinition;
+    contactInput.state=&vehicleState;
+    contactInput.railPath=&rail;
+    const RailVehicleTrackContactPoseFrame& contact=contactSolver.Solve(contactInput);
+    const auto contactDistance=[](Vector3 left,Vector3 right){
+        const float x=right.x-left.x;
+        const float y=right.y-left.y;
+        const float z=right.z-left.z;
+        return std::sqrt(x*x+y*y+z*z);
+    };
+    const Vector3 pivotDelta{
+        contact.visualPosition.x-contact.contactCentroid.x,
+        contact.visualPosition.y-contact.contactCentroid.y,
+        contact.visualPosition.z-contact.contactCentroid.z};
+    const float pivotHeight=pivotDelta.x*contact.up.x+
+        pivotDelta.y*contact.up.y+pivotDelta.z*contact.up.z;
+    runner.Expect(contact.valid && contact.frontDistance>contact.rearDistance &&
+        contact.contactCount==4 && contact.allWheelsSupported &&
+        std::abs(contactDistance(contact.rearLeftContact,contact.rearRightContact)-
+            contactInput.settings.trackGauge)<0.001f &&
+        std::abs(contactDistance(contact.frontLeftContact,contact.frontRightContact)-
+            contactInput.settings.trackGauge)<0.001f &&
+        std::abs(pivotHeight-
+            (contactInput.settings.bodyPivotHeightAboveContacts+
+             contactInput.settings.contactClearance))<0.001f &&
+        contact.sourceVehicleRevision==vehicleState.revision && vehicleState.distance==24.0f,
+        "four-wheel pose should fit both rail heads and ground the visual pivot without mutating vehicle authority");
+    RailVehicleRuntimeState endState=vehicleState;
+    endState.distance=rail.Length();
+    ++endState.revision;
+    contactInput.state=&endState;
+    const RailVehicleTrackContactPoseFrame endContact=contactSolver.Solve(contactInput);
+    runner.Expect(endContact.valid && endContact.clampedAtRailEnd &&
+        contactDistance(endContact.frontContact,loaded.railPoints.back().position)<0.1f,
+        "four-wheel pose should hold the final rail head instead of wrapping front contacts to the course start");
+    contactInput.state=&vehicleState;
+
+    RailVehicleCameraInertiaBridge inertia;
+    RailVehicleCameraInertiaInput inertiaInput{};
+    inertiaInput.definition=&vehicleDefinition;
+    inertiaInput.state=&vehicleState;
+    inertiaInput.trackContact=&contact;
+    inertiaInput.rideDynamics=&discontinuityDynamics;
+    inertiaInput.ride=&ride;
+    inertiaInput.deltaTime=1.0f/60.0f;
+    RailVehicleCameraInertiaFrame inertiaFrame{};
+    for (int index=0;index<12;++index) inertiaFrame=inertia.Update(inertiaInput);
+    runner.Expect(inertiaFrame.active &&
+        std::abs(inertiaFrame.fovOffsetRadians)>0.0001f &&
+        inertiaFrame.sourceVehicleRevision==vehicleState.revision,
+        "camera inertia should provide bounded low-frequency gameplay offsets");
+
+    RailCameraDirector inertiaDirector;
+    RailCameraDirectorFrameInput inertiaCameraInput{};
+    inertiaCameraInput.course=&loaded;
+    inertiaCameraInput.railPath=&rail;
+    inertiaCameraInput.distance=24.0f;
+    inertiaCameraInput.deltaTime=1.0f/60.0f;
+    inertiaCameraInput.cameraInertiaActive=true;
+    inertiaCameraInput.cameraInertiaGameplayPositionOffset={0.5f,0.0f,0.0f};
+    inertiaCameraInput.cameraInertiaPresentationPositionOffset={0.0f,0.75f,0.0f};
+    const RailCameraDirectorFrame inertiaCamera=inertiaDirector.Evaluate(inertiaCameraInput);
+    runner.Expect(std::abs(inertiaCamera.position.y-inertiaCamera.gameplayPosition.y)>0.5f,
+        "presentation camera vibration must be applied after stable gameplay aim capture");
+
+    RailCameraDirectorFrame telemetryCamera{};
+    telemetryCamera.cinematicShotWeight = 0.75f;
+    telemetryCamera.stabilityScore = 0.9f;
+    RailRideTuningTelemetry telemetry{64};
+    telemetry.Record(
+        ride, envelopeFrame, vehicleState, discontinuityDynamics, telemetryCamera);
+    runner.Expect(
+        telemetry.Samples().size() == 1 &&
+            telemetry.Samples().back().profileName == ride.profileName &&
+            telemetry.Samples().back().speedBeatName == ride.speedBeatName &&
+            telemetry.Samples().back().speedBeatActive == ride.speedBeatActive &&
+            std::abs(telemetry.Samples().back().cornerSafeSpeed -
+                envelopeFrame.cornerSafeSpeed) < 0.001f,
+        "ride telemetry should capture director, envelope, dynamics and camera values together");
 }
 
 void TestPrefabFoundation(RegressionRunner& runner) {
@@ -7682,8 +8205,8 @@ void TestEditorWorldModel(RegressionRunner& runner) {
     EditorDocumentContent serialized{};
     runner.Expect(
         documentProvider.Serialize(courseDocument, &serialized, &error) &&
-            serialized.schemaVersion == 7,
-        "Course schema v7 should serialize persistent world, rail, enemy, and wave GUIDs");
+            serialized.schemaVersion == 12,
+        "Course schema v8 should serialize persistent world, rail, enemy, wave, and ride data");
     CourseAsset reloaded{};
     documentProvider.Bind(&reloaded);
     const bool reloadedSuccessfully =
@@ -7726,7 +8249,7 @@ void TestEditorWorldModel(RegressionRunner& runner) {
     runner.Expect(
         documentProvider.Migrate(
             legacyContent, &migrated, &migration, &error) &&
-            migration.migrated && migrated.schemaVersion == 7 &&
+            migration.migrated && migrated.schemaVersion == 12 &&
             documentProvider.Validate(migrated).Succeeded(),
         "Course schema v1 migration should assign GUIDs and Outliner state defaults");
 
@@ -8007,8 +8530,8 @@ void TestWorldOutlinerMutations(RegressionRunner& runner) {
     documentProvider.Bind(&course);
     EditorDocumentContent content{};
     runner.Expect(documentProvider.Serialize(document, &content, &error) &&
-            content.schemaVersion == 7,
-        "Outliner visibility and lock state should serialize as Course schema v7");
+            content.schemaVersion == 12,
+        "Outliner visibility and lock state should serialize as Course schema v8");
     CourseAsset loaded{};
     documentProvider.Bind(&loaded);
     runner.Expect(documentProvider.Deserialize(document, content, &error) &&
@@ -8221,9 +8744,15 @@ void TestBlenderSceneImportReimport(RegressionRunner& runner) {
         "Blender Scene import regression Mesh Asset should register");
 
     EditorBlenderSceneImportService service(&assets);
+    runner.Expect(
+        std::abs(EditorBlenderSceneImportOptions{}.worldUnitsPerMeter -
+                 RailWorldScale::kWorldUnitsPerMeter) < 0.000001,
+        "Blender Scene import should default to the authoritative rail-world physical scale");
+    EditorBlenderSceneImportOptions legacyFixtureUnits{};
+    legacyFixtureUnits.worldUnitsPerMeter = 1.0;
     EditorScene scene;
     const EditorBlenderSceneImportResult imported = service.Import(
-        source, samplePath, scene);
+        source, samplePath, scene, legacyFixtureUnits);
     runner.Expect(
         imported.succeeded && !imported.reimported &&
             imported.createdObjectCount == 2 &&
@@ -8339,7 +8868,7 @@ void TestBlenderSceneImportReimport(RegressionRunner& runner) {
     const uint64_t beforeRepeatedImportRevision = scene.revision;
     const std::size_t beforeRepeatedImportEntities = scene.entities.size();
     const EditorBlenderSceneImportResult repeatedImport =
-        service.Import(source, samplePath, scene);
+        service.Import(source, samplePath, scene, legacyFixtureUnits);
     runner.Expect(
         !repeatedImport.succeeded &&
             repeatedImport.errorCode ==
@@ -8371,7 +8900,7 @@ void TestBlenderSceneImportReimport(RegressionRunner& runner) {
 
     const uint64_t beforeReimportRevision = scene.revision;
     const EditorBlenderSceneImportResult reimported =
-        service.Reimport(changed, samplePath, scene);
+        service.Reimport(changed, samplePath, scene, legacyFixtureUnits);
     player = findImportedObject("22222222222222222222222222222222");
     enemy = findImportedObject("33333333333333333333333333333333");
     const EditorSceneEntity* marker =
@@ -8415,7 +8944,7 @@ void TestBlenderSceneImportReimport(RegressionRunner& runner) {
     const uint64_t beforeInvalidRevision = scene.revision;
     const std::size_t beforeInvalidEntities = scene.entities.size();
     const EditorBlenderSceneImportResult invalid =
-        service.Reimport(noPlayer, samplePath, scene);
+        service.Reimport(noPlayer, samplePath, scene, legacyFixtureUnits);
     runner.Expect(
         !invalid.succeeded &&
             invalid.errorCode ==
@@ -8426,7 +8955,7 @@ void TestBlenderSceneImportReimport(RegressionRunner& runner) {
 
     EditorScene freshScene;
     const EditorBlenderSceneImportResult missingSource =
-        service.Reimport(changed, samplePath, freshScene);
+        service.Reimport(changed, samplePath, freshScene, legacyFixtureUnits);
     runner.Expect(
         !missingSource.succeeded &&
             missingSource.errorCode ==
@@ -8436,7 +8965,7 @@ void TestBlenderSceneImportReimport(RegressionRunner& runner) {
 
     EditorScene fileImportedScene;
     const EditorBlenderSceneImportResult fileImported =
-        service.ImportFile(samplePath, fileImportedScene);
+        service.ImportFile(samplePath, fileImportedScene, legacyFixtureUnits);
     runner.Expect(
         fileImported.succeeded &&
             fileImportedScene.entities.size() == 3,
@@ -18294,11 +18823,14 @@ void TestGameSessionPresentationAndRetry(RegressionRunner& runner) {
         {{0.0f, 0.0f, 100.0f}, 18.0f, 30.0f}});
     RailVehicleMovementSystem railVehicle;
     railVehicle.Reset(20.0f, 12.0f, &retryRail);
+    GrazeScoreSystem retryGrazeScore;
+    RailVehicleMountedEvasionSystem retryMountedEvasion;
     GameSessionRetryCoordinator coordinator;
     runner.Expect(
         coordinator.Bind(
             {&session, &courseRuntime, &waveRuntime, &spawn, &collision, &sections,
-             &course, &playerMovement, &playerDodge, &railVehicle, &retryRail},
+             &course, &playerMovement, &playerDodge, &railVehicle, &retryRail,
+             &retryGrazeScore, &retryMountedEvasion},
             &error) &&
             coordinator.CaptureCheckpoint(20.0f, "retry_section", &error),
         "retry coordinator should atomically capture Session, Spawn and Wave state");
@@ -18343,6 +18875,8 @@ void TestGameSessionPresentationAndRetry(RegressionRunner& runner) {
             collision.PlayerNearMiss().State().processedProjectileIds.empty() &&
             std::abs(playerMovement.State().lateralOffset) < 0.001f &&
             playerDodge.State().phase == RailDodgePhase::Ready &&
+            retryMountedEvasion.State().phase ==
+                RailVehicleMountedEvasionPhase::Ready &&
             std::abs(railVehicle.State().distance - 20.0f) < 0.001f &&
             std::abs(railVehicle.State().speed - 12.0f) < 0.001f,
         "retry should restore Course/Wave/Spawn/player/vehicle/collision state and clear hostile projectiles as one recovery transaction");
@@ -18572,6 +19106,18 @@ void TestRailPlayerMovementAndDodge(RegressionRunner& runner) {
 
 void TestRailVehicleMovementAndPresentation(RegressionRunner& runner) {
     std::string error;
+    constexpr float cartWidthWorldUnits = 5.04f;
+    constexpr float tunnelWidthWorldUnits = 32.0f;
+    runner.Expect(
+        std::abs(RailWorldScale::ToMeters(cartWidthWorldUnits) - 2.016f) <
+                0.0001f &&
+            std::abs(RailWorldScale::ToMeters(tunnelWidthWorldUnits) - 12.8f) <
+                0.0001f &&
+            std::abs(
+                RailWorldScale::ToMeters(tunnelWidthWorldUnits) /
+                    RailWorldScale::ToMeters(cartWidthWorldUnits) -
+                tunnelWidthWorldUnits / cartWidthWorldUnits) < 0.0001f,
+        "rail world-scale conversion should normalize physical dimensions without changing vehicle/tunnel proportions");
     RailVehicleDefinition definition = RailVehicleDefinition::MineCartDefaults();
     RailVehicleMovementSystem vehicle;
     runner.Expect(
@@ -18594,7 +19140,14 @@ void TestRailVehicleMovementAndPresentation(RegressionRunner& runner) {
     input.requestedSpeed = 32.0f;
     input.courseRuntime = &runtime;
     input.railPath = &rail;
-    for (int frame = 0; frame < 60; ++frame) vehicle.Update(input);
+    const RailVehicleMovementFrame firstMovementFrame = vehicle.Update(input);
+    runner.Expect(
+        std::abs(firstMovementFrame.state.speed -
+                 definition.acceleration * input.deltaTime) < 0.001f &&
+            std::abs(firstMovementFrame.traveledDistance -
+                     firstMovementFrame.state.speed * input.deltaTime) < 0.001f,
+        "vehicle movement must be the sole acceleration and explicit CourseRuntime distance authority");
+    for (int frame = 1; frame < 60; ++frame) vehicle.Update(input);
     const RailVehicleRuntimeState checkpoint = vehicle.State();
     runner.Expect(
         checkpoint.distance > 1.0f && checkpoint.speed > 1.0f &&
@@ -18743,6 +19296,920 @@ void TestRailVehicleMovementAndPresentation(RegressionRunner& runner) {
             endFrame.state.stopped &&
             std::abs(endFrame.state.distance - rail.Length()) < 0.001f,
         "vehicle should stop at the clamped course end instead of looping");
+}
+
+void TestCourseRailTrackBakeAndWheelPresentation(RegressionRunner& runner) {
+    std::string error;
+    CourseRailTrackDefinitionAsset track;
+    runner.Expect(
+        track.LoadFromFile(
+            std::filesystem::path{"Resources/rail_tracks/mine_cart_standard.railtrack"},
+            &error) && track.Validate(&error) &&
+            track.assetId == "mine_cart_standard" &&
+            std::abs(track.trackGauge-3.8f) < 0.001f,
+        "course-selected rail track asset should load a validated immutable gauge and render budget");
+
+    CourseAsset sourceCourse{};
+    sourceCourse.name = "Track Persistence Regression";
+    sourceCourse.railTrackAssetId = track.assetId;
+    sourceCourse.railPoints = {
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 1.0f, 80.0f}, 18.0f, 32.0f}};
+    sourceCourse.railPoints[0].editorGuid = "track-regression-p0";
+    sourceCourse.railPoints[1].editorGuid = "track-regression-p1";
+    std::string serialized;
+    CourseAsset loadedCourse{};
+    runner.Expect(
+        sourceCourse.SaveToString(&serialized, &error) &&
+            serialized.find("# editor-schema:12") != std::string::npos &&
+            serialized.find("rail_track|mine_cart_standard") != std::string::npos &&
+            loadedCourse.LoadFromString(serialized, &error) &&
+            loadedCourse.railTrackAssetId == track.assetId,
+        "Course schema 11 should persist its track asset reference without embedding runtime bake state");
+
+    RailPath rail;
+    loadedCourse.ApplyToRailPath(rail);
+    CourseRailTrackMeshBakePipeline bake;
+    runner.Expect(
+        bake.Bake(track, rail, &error) && bake.Result().valid &&
+            bake.Result().railSegmentCount > 2 &&
+            bake.Result().sleeperCount > 2 &&
+            bake.Result().supportCount > 0 &&
+            bake.Result().sourceFingerprint != 0,
+        "track bake should generate immutable dual rails, sleepers and bounded supports once per Course apply");
+    const auto findPart = [&](CourseRailTrackMeshPart part) {
+        return std::find_if(
+            bake.Result().instances.begin(), bake.Result().instances.end(),
+            [part](const CourseRailTrackBakedInstance& item) {
+                return item.part == part;
+            });
+    };
+    const auto leftRail = findPart(CourseRailTrackMeshPart::LeftRail);
+    const auto rightRail = findPart(CourseRailTrackMeshPart::RightRail);
+    const float bakedGauge = leftRail != bake.Result().instances.end() &&
+        rightRail != bake.Result().instances.end()
+        ? std::abs(rightRail->worldMatrix.m[3][0]-leftRail->worldMatrix.m[3][0])
+        : 0.0f;
+    runner.Expect(
+        std::abs(bakedGauge-track.trackGauge) < 0.01f,
+        "baked left/right rail heads should use the same gauge consumed by four-wheel contact");
+
+    RailVehicleDefinition vehicleDefinition = RailVehicleDefinition::MineCartDefaults();
+    RailVehicleRuntimeState vehicleState{};
+    vehicleState.initialized = true;
+    vehicleState.distance = 20.0f;
+    vehicleState.forward = rail.Evaluate(vehicleState.distance).tangent;
+    vehicleState.up = rail.Evaluate(vehicleState.distance).up;
+    vehicleState.right = rail.Evaluate(vehicleState.distance).right;
+    vehicleState.revision = 17;
+    RailVehicleTrackContactPoseSettings contactSettings{};
+    contactSettings.trackGauge = track.trackGauge;
+    contactSettings.railHeadVerticalOffset = track.railHeadVerticalOffset;
+    RailVehicleTrackContactPoseSolver contactSolver;
+    RailVehicleTrackContactPoseInput contactInput{};
+    contactInput.definition = &vehicleDefinition;
+    contactInput.state = &vehicleState;
+    contactInput.railPath = &rail;
+    contactInput.settings = contactSettings;
+    const RailVehicleTrackContactPoseFrame& contacts =
+        contactSolver.Solve(contactInput);
+    RailVehiclePresentationFrame vehiclePresentation{};
+    vehiclePresentation.visible = true;
+    vehiclePresentation.wheelRotationRadians = 1.25f;
+    vehiclePresentation.revision = 23;
+    RailVehicleWheelContactPresentationBridge wheelBridge;
+    RailVehicleWheelContactPresentationInput wheelInput{};
+    wheelInput.contacts = &contacts;
+    wheelInput.vehiclePresentation = &vehiclePresentation;
+    wheelInput.settings.wheelRadius = 0.62f;
+    wheelInput.settings.wheelWidth = track.wheelWidth;
+    wheelInput.settings.wheelMeshId = track.wheelProxyMeshId;
+    wheelInput.settings.color = track.wheelColor;
+    wheelBridge.Update(wheelInput);
+    runner.Expect(
+        contacts.valid && contacts.contactCount == 4 &&
+            wheelBridge.Frame().valid &&
+            wheelBridge.Frame().visibleWheelCount == 4 &&
+            wheelBridge.Frame().sourceTrackContactRevision == contacts.revision &&
+            std::abs(
+                wheelBridge.Frame().wheels[0].axleCenter.y-
+                wheelBridge.Frame().wheels[0].railContact.y-0.62f) < 0.02f,
+        "wheel contact presentation should place four rotating render proxies on the shared rail-head contacts without mutating movement");
+}
+
+void TestRailShooterHudPipeline(RegressionRunner& runner) {
+    std::string error;
+    RailShooterHudDefinitionAsset definition;
+    runner.Expect(
+        definition.LoadFromFile(
+            std::filesystem::path{"Resources/hud/rail_shooter_default.railhud"},
+            &error) && definition.Validate(&error) &&
+            definition.assetId == "rail_shooter_default" &&
+            definition.maximumDrawCommands >= 24,
+        "rail shooter HUD definition should load as a validated, bounded layout asset");
+
+    GameSessionRuntimeState session{};
+    session.phase = GameSessionPhase::Playing;
+    session.gameplaySimulationEnabled = true;
+    session.revision = 7;
+    session.playerHealth = 24.0f;
+    session.maximumPlayerHealth = 100.0f;
+    session.courseDistance = 250.0f;
+    session.courseLength = 1000.0f;
+    session.score = 12400;
+    session.combo = 5;
+    session.retriesRemaining = 2;
+    session.completedMandatoryWaves = 1;
+    session.totalMandatoryWaves = 4;
+
+    RailVehicleDefinition vehicleDefinition =
+        RailVehicleDefinition::MineCartDefaults();
+    RailVehicleRuntimeState vehicle{};
+    vehicle.initialized = true;
+    vehicle.hitPoints = 48.0f;
+    vehicle.speed = 34.0f;
+    vehicle.normalizedProgress = 0.25f;
+    vehicle.revision = 9;
+
+    WeaponDefinition weaponDefinition{};
+    weaponDefinition.weaponId = RailWeaponIds::PulseCannon;
+    weaponDefinition.magazineCapacity = 20;
+    weaponDefinition.initialReserveAmmo = 80;
+    weaponDefinition.heatCapacity = 100.0f;
+    weaponDefinition.shotInterval = 0.1f;
+    weaponDefinition.reloadDuration = 1.2f;
+    WeaponRuntimeState weapon{};
+    weapon.weaponId = RailWeaponIds::PulseCannon;
+    weapon.ammoInMagazine = 6;
+    weapon.reserveAmmo = 45;
+    weapon.heat = 72.0f;
+
+    CourseGameplayWaveRuntimeStats waves{};
+    waves.bound = true;
+    waves.activeWaves = 1;
+    waves.completedWaves = 1;
+    waves.activeActors = 3;
+    waves.defeatedActors = 8;
+    GrazeScoreRuntimeState graze{};
+    graze.chain = 4;
+    graze.adrenalineNormalized = 0.62f;
+    graze.revision = 11;
+    ThreatResponseFrame threat{};
+    threat.band = ThreatResponseBand::Critical;
+    threat.threatNormalized = 0.88f;
+    threat.nearbyThreats = 2;
+    threat.revision = 13;
+
+    RailShooterHudRuntimeModel runtimeModel;
+    RailShooterHudRuntimeInput runtimeInput{};
+    runtimeInput.gameplayVisible = true;
+    runtimeInput.session = &session;
+    runtimeInput.vehicleDefinition = &vehicleDefinition;
+    runtimeInput.vehicle = &vehicle;
+    runtimeInput.primaryWeaponDefinition = &weaponDefinition;
+    runtimeInput.primaryWeapon = &weapon;
+    runtimeInput.waves = &waves;
+    runtimeInput.graze = &graze;
+    runtimeInput.threat = &threat;
+    runtimeInput.lockCount = 3;
+    runtimeInput.maximumLocks = 8;
+    runtimeModel.Update(runtimeInput);
+    const RailShooterHudRuntimeFrame& runtime = runtimeModel.Frame();
+    runner.Expect(
+        runtime.visible && runtime.gameplayActive &&
+            std::abs(runtime.playerHealthNormalized - 0.24f) < 0.001f &&
+            std::abs(runtime.speedNormalized - 0.5f) < 0.001f &&
+            runtime.primaryWeapon.available &&
+            runtime.primaryWeapon.ammoInMagazine == 6 &&
+            runtime.activeEnemies == 3 && runtime.lockCount == 3,
+        "HUD runtime model should collect one coherent read-only snapshot from gameplay authorities");
+
+    GameSessionPresentationFrame sessionPresentation{};
+    sessionPresentation.hud.visible = true;
+    sessionPresentation.hud.showBanner = true;
+    sessionPresentation.hud.bannerAlpha = 0.8f;
+    sessionPresentation.hud.headline = "CHECKPOINT";
+    sessionPresentation.hud.detail = "SECTOR 2";
+    sessionPresentation.hud.bannerColor = {0.2f, 0.9f, 1.0f, 1.0f};
+    RailShooterHudPresentationBridge presentationBridge;
+    presentationBridge.Update({
+        &definition,
+        &runtime,
+        &sessionPresentation,
+        1.0f / 60.0f});
+    const RailShooterHudPresentationFrame& presentation =
+        presentationBridge.Frame();
+    runner.Expect(
+        presentation.visible && presentation.playerHealthCritical &&
+            presentation.vehicleIntegrityCritical &&
+            presentation.threatWarning &&
+            presentation.threatText.find("CRITICAL") != std::string::npos &&
+            presentation.waveText == "WAVE 1/4" &&
+            presentation.weaponText.find("6/45") != std::string::npos &&
+            presentation.showBanner,
+        "HUD presentation bridge should own smoothing, warnings and display-ready text without changing gameplay state");
+
+    RailShooterHudRenderer renderer;
+    renderer.Update({&definition, &presentation, 1920, 1080});
+    const RailShooterHudRenderFrame& renderFrame = renderer.Frame();
+    const auto containsText = [&renderFrame](std::string_view fragment) {
+        return std::any_of(
+            renderFrame.commands.begin(),
+            renderFrame.commands.end(),
+            [fragment](const RailShooterHudDrawCommand& command) {
+                return command.kind == RailShooterHudDrawCommandKind::Text &&
+                    command.text.find(fragment) != std::string::npos;
+            });
+    };
+    const bool hasRectangle = std::any_of(
+        renderFrame.commands.begin(),
+        renderFrame.commands.end(),
+        [](const RailShooterHudDrawCommand& command) {
+            return command.kind == RailShooterHudDrawCommandKind::Rectangle;
+        });
+    runner.Expect(
+        renderFrame.visible && hasRectangle && containsText("HP") &&
+            containsText("WAVE") && containsText("THREAT CRITICAL") &&
+            containsText("CHECKPOINT") &&
+            renderFrame.commands.size() <= definition.maximumDrawCommands,
+        "HUD renderer should emit a resolution-aware bounded command frame containing all priority combat information");
+
+    runtimeModel.Reset();
+    presentationBridge.Reset();
+    renderer.Reset();
+    runner.Expect(
+        !runtimeModel.Frame().visible &&
+            !presentationBridge.Frame().visible &&
+            !renderer.Frame().visible && renderer.Frame().commands.empty(),
+        "HUD pipeline reset should clear stale gameplay and draw state for retry or course reload");
+}
+
+void TestRailVehicleMountedEvasionAndMountBridges(RegressionRunner& runner) {
+    std::string error;
+    RailPath rail;
+    rail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 100.0f}, 18.0f, 32.0f}});
+
+    RailVehicleMovementSystem vehicle;
+    runner.Expect(
+        vehicle.Initialize(RailVehicleDefinition::MineCartDefaults(), &error),
+        "mounted-evasion test vehicle should initialize");
+    vehicle.Reset(20.0f, 12.0f, &rail);
+    const float authoritativeVehicleDistance = vehicle.State().distance;
+
+    RailVehicleOccupantClearanceDefinition clearanceDefinition =
+        RailVehicleOccupantClearanceDefinition::MineCartDefaults();
+    clearanceDefinition.includeProceduralTerrain = false;
+    RailVehicleOccupantClearanceSystem clearance;
+    runner.Expect(
+        clearance.Initialize(clearanceDefinition, &error),
+        "mounted occupant clearance should initialize with bounded query budgets");
+    CourseSpawnRuntime clearanceRuntime;
+    CourseObstacleActorDesc limitingObstacle{};
+    limitingObstacle.id = "evasion_limit_wall";
+    limitingObstacle.spawnDistance = vehicle.State().distance;
+    limitingObstacle.lateralOffset = 2.0f;
+    limitingObstacle.verticalOffset =
+        vehicle.Definition().bodyVerticalOffset +
+        vehicle.Definition().mounts.player.y;
+    limitingObstacle.halfExtents = {0.30f, 0.30f, 1.0f};
+    clearanceRuntime.SpawnObstacle(limitingObstacle);
+    RailVehicleOccupantClearanceInput clearanceInput{};
+    clearanceInput.spawnRuntime = &clearanceRuntime;
+    clearanceInput.railPath = &rail;
+    clearanceInput.startDistance = vehicle.State().distance;
+    clearanceInput.startLateralOffset = vehicle.Definition().mounts.player.x;
+    clearanceInput.startVerticalOffset =
+        vehicle.Definition().bodyVerticalOffset +
+        vehicle.Definition().mounts.player.y;
+    clearanceInput.targetDistance = vehicle.State().distance;
+    clearanceInput.targetLateralOffset =
+        clearanceInput.startLateralOffset + 1.45f;
+    clearanceInput.targetVerticalOffset = clearanceInput.startVerticalOffset;
+    const RailVehicleOccupantClearanceFrame limitedClearance =
+        clearance.Update(clearanceInput);
+    runner.Expect(
+        limitedClearance.valid && limitedClearance.blocked &&
+            !limitedClearance.startedPenetrating &&
+            limitedClearance.safeFraction > 0.20f &&
+            limitedClearance.safeFraction < 1.0f &&
+            limitedClearance.hitKind ==
+                RailVehicleClearanceHitKind::DynamicObstacle &&
+            limitedClearance.hitActorId != 0 &&
+            limitedClearance.obstacleCandidatesTested == 1,
+        "occupant clearance should sweep the authored hurt sphere and return the nearest deterministic obstacle fraction");
+
+    RailVehicleMountedEvasionInput constrainedRequest{};
+    constrainedRequest.vehicleDefinition = &vehicle.Definition();
+    constrainedRequest.vehicleState = &vehicle.State();
+    constrainedRequest.occupantMounted = true;
+    constrainedRequest.inputEnabled = true;
+    constrainedRequest.evadePressed = true;
+    constrainedRequest.directionX = 1.0f;
+    RailVehicleEvasionConstraintResolver constraintResolver;
+    RailVehicleEvasionConstraintInput constraintInput{};
+    constraintInput.requestedInput = constrainedRequest;
+    constraintInput.clearance = &limitedClearance;
+    constraintInput.canStartEvasion = true;
+    const RailVehicleEvasionConstraintFrame limitedConstraint =
+        constraintResolver.Update(constraintInput);
+    runner.Expect(
+        limitedConstraint.clearanceValid && limitedConstraint.limited &&
+            !limitedConstraint.requestRejected &&
+            limitedConstraint.constrainedInput.evadePressed &&
+            std::abs(limitedConstraint.constrainedInput.maximumDistanceScale -
+                     limitedClearance.safeFraction) < 0.001f,
+        "evasion constraint resolver should preserve a usable request while limiting its authoritative travel distance");
+
+    CourseObstacleActorDesc blockingObstacle = limitingObstacle;
+    blockingObstacle.id = "evasion_blocking_wall";
+    blockingObstacle.lateralOffset = clearanceInput.startLateralOffset;
+    clearanceRuntime.SpawnObstacle(blockingObstacle);
+    const RailVehicleOccupantClearanceFrame blockedClearance =
+        clearance.Update(clearanceInput);
+    constraintInput.clearance = &blockedClearance;
+    const RailVehicleEvasionConstraintFrame rejectedConstraint =
+        constraintResolver.Update(constraintInput);
+    runner.Expect(
+        blockedClearance.startedPenetrating &&
+            blockedClearance.safeFraction == 0.0f &&
+            rejectedConstraint.requestRejected &&
+            !rejectedConstraint.constrainedInput.evadePressed &&
+            rejectedConstraint.constrainedInput.maximumDistanceScale == 0.0f,
+        "a blocked evade should be rejected before invulnerability, cooldown and presentation events can start");
+    RailVehicleMountedEvasionSystem rejectedEvasion;
+    const RailVehicleMountedEvasionFrame rejectedMovement =
+        rejectedEvasion.Update(rejectedConstraint.constrainedInput);
+    runner.Expect(
+        !rejectedMovement.startedThisFrame && !rejectedMovement.active &&
+            !rejectedMovement.invulnerable &&
+            rejectedMovement.state.phase ==
+                RailVehicleMountedEvasionPhase::Ready &&
+            rejectedMovement.state.evasionCount == 0 &&
+            rejectedMovement.state.eventSequence == 0,
+        "rejected clearance input must not grant invulnerability, consume cooldown or emit an evasion event");
+
+    RailVehicleOccupantClearanceDefinition budgetDefinition =
+        clearanceDefinition;
+    budgetDefinition.maximumObstacleCandidates = 1;
+    RailVehicleOccupantClearanceSystem budgetedClearance;
+    runner.Expect(
+        budgetedClearance.Initialize(budgetDefinition, &error),
+        "budgeted clearance definition should initialize");
+    const RailVehicleOccupantClearanceFrame budgetFrame =
+        budgetedClearance.Update(clearanceInput);
+    runner.Expect(
+        budgetFrame.budgetExceeded && budgetFrame.blocked &&
+            budgetFrame.safeFraction == 0.0f &&
+            budgetFrame.hitKind ==
+                RailVehicleClearanceHitKind::QueryBudgetExceeded,
+        "clearance candidate exhaustion must fail closed instead of accepting an untested evade path");
+
+    CourseAsset collisionCourse{};
+    CourseTerrainPlacement collisionPlacement{};
+    collisionPlacement.id = "authored_clearance_wall";
+    collisionPlacement.layer = CourseTerrainLayer::GameplayCollision;
+    collisionPlacement.collisionMode = CourseTerrainCollisionMode::Solid;
+    collisionPlacement.distance = clearanceInput.startDistance;
+    collisionPlacement.lateralOffset = 2.0f;
+    collisionPlacement.verticalOffset = clearanceInput.startVerticalOffset;
+    collisionPlacement.scale = {0.30f, 0.30f, 1.0f};
+    collisionCourse.terrainPlacements.push_back(collisionPlacement);
+    RailVehicleOccupantClearanceInput authoredClearanceInput = clearanceInput;
+    authoredClearanceInput.spawnRuntime = nullptr;
+    authoredClearanceInput.course = &collisionCourse;
+    const RailVehicleOccupantClearanceFrame authoredClearance =
+        clearance.Update(authoredClearanceInput);
+    runner.Expect(
+        authoredClearance.blocked &&
+            authoredClearance.hitKind ==
+                RailVehicleClearanceHitKind::TerrainPlacement &&
+            authoredClearance.hitStableId == collisionPlacement.id,
+        "occupant clearance should consume authored GameplayCollision terrain proxies independently of render meshes");
+
+    RailVehicleMountedEvasionSystem limitedEvasion;
+    RailVehicleMountedEvasionInput limitedInput =
+        limitedConstraint.constrainedInput;
+    (void)limitedEvasion.Update(limitedInput);
+    limitedInput.evadePressed = false;
+    limitedInput.deltaTime =
+        limitedEvasion.Definition().evadeDurationSeconds;
+    const RailVehicleMountedEvasionFrame limitedMovement =
+        limitedEvasion.Update(limitedInput);
+    runner.Expect(
+        limitedMovement.state.distanceScale < 1.0f &&
+            limitedMovement.state.lateralOffset <=
+                limitedEvasion.Definition().lateralDistance *
+                    limitedClearance.safeFraction + 0.001f,
+        "mounted evasion authority should never expand past the resolver's safe fraction");
+
+    RailVehicleMountedEvasionSystem evasion;
+    RailVehicleMountedEvasionInput evasionInput{};
+    evasionInput.vehicleDefinition = &vehicle.Definition();
+    evasionInput.vehicleState = &vehicle.State();
+    evasionInput.occupantMounted = true;
+    evasionInput.inputEnabled = true;
+    evasionInput.evadePressed = true;
+    evasionInput.directionX = 1.0f;
+    const RailVehicleMountedEvasionFrame started = evasion.Update(evasionInput);
+    runner.Expect(
+        started.startedThisFrame && started.active && started.invulnerable &&
+            started.mounted && started.state.evasionCount == 1 &&
+            std::abs(vehicle.State().distance - authoritativeVehicleDistance) <
+                0.001f,
+        "mounted evasion should start once without changing authoritative vehicle progress");
+
+    evasionInput.evadePressed = false;
+    evasionInput.deltaTime = 0.08f;
+    const RailVehicleMountedEvasionFrame moving = evasion.Update(evasionInput);
+    const RailVehicleMountedEvasionRuntimeState checkpoint = moving.state;
+    runner.Expect(
+        moving.active && moving.invulnerable &&
+            moving.railLateralOffset > vehicle.Definition().mounts.player.x &&
+            std::abs(moving.railVerticalOffset -
+                     (vehicle.Definition().bodyVerticalOffset +
+                      vehicle.Definition().mounts.player.y)) < 0.001f &&
+            std::abs(moving.occupantWorldPosition.x -
+                     vehicle.State().playerMountPosition.x) > 0.1f,
+        "mounted evasion should move the occupant in vehicle-local space and publish collision offsets");
+
+    RailVehicleCombatMountBridge combatMount;
+    RailVehicleCombatMountInput combatInput{};
+    combatInput.vehicleDefinition = &vehicle.Definition();
+    combatInput.vehicleState = &vehicle.State();
+    combatInput.evasion = &moving;
+    combatMount.Update(combatInput);
+    const RailVehicleCombatMountFrame combat = combatMount.Frame();
+    runner.Expect(
+        combat.valid && combat.evasionActive && combat.invulnerable &&
+            std::abs(combat.playerLateralOffset -
+                     moving.railLateralOffset) < 0.001f &&
+            std::abs(combat.weaponWorldPosition.x -
+                     vehicle.State().weaponMountPosition.x) > 0.1f &&
+            combat.sourceVehicleRevision == vehicle.State().revision &&
+            combat.sourceEvasionRevision == moving.state.revision,
+        "combat mount bridge should expose one revisioned transform for hitbox, muzzle and damage feedback");
+
+    RailVehicleCameraMountBridge cameraMount;
+    RailVehicleCameraMountInput cameraInput{};
+    cameraInput.vehicleDefinition = &vehicle.Definition();
+    cameraInput.vehicleState = &vehicle.State();
+    cameraInput.evasion = &moving;
+    cameraMount.Update(cameraInput);
+    const RailVehicleCameraMountFrame camera = cameraMount.Frame();
+    runner.Expect(
+        camera.active && camera.anchorBlend > 0.0f &&
+            camera.maximumAnchorCorrection > 0.0f &&
+            std::abs(camera.cameraOffset.x) > 0.01f &&
+            std::abs(camera.targetOffset.x) > 0.01f &&
+            std::abs(camera.rollOffsetRadians) > 0.001f &&
+            camera.sourceVehicleRevision == vehicle.State().revision,
+        "camera mount bridge should publish bounded anchor follow, aim follow and evade roll for CameraDirector");
+
+    RailVehiclePresentationBridge vehiclePresentation;
+    RailVehiclePresentationInput vehiclePresentationInput{};
+    vehiclePresentationInput.definition = &vehicle.Definition();
+    vehiclePresentationInput.state = &vehicle.State();
+    vehiclePresentationInput.deltaTime = 1.0f / 60.0f;
+    vehiclePresentation.Update(vehiclePresentationInput);
+    RailVehicleMountedEvasionPresentationBridge evasionPresentation;
+    RailVehicleMountedEvasionPresentationInput presentationInput{};
+    presentationInput.vehicleState = &vehicle.State();
+    presentationInput.vehiclePresentation = &vehiclePresentation.Frame();
+    presentationInput.evasion = &moving;
+    presentationInput.combatMount = &combat;
+    presentationInput.deltaTime = 1.0f / 60.0f;
+    evasionPresentation.Update(presentationInput);
+    const RailVehicleMountedEvasionPresentationFrame presented =
+        evasionPresentation.Frame();
+    runner.Expect(
+        presented.visible &&
+            presented.posePhase == RailVehicleOccupantPosePhase::Evading &&
+            presented.poseWeight > 0.0f &&
+            std::abs(presented.lateralLeanDegrees) > 0.1f &&
+            std::abs(presented.position.x - combat.playerWorldPosition.x) <
+                0.001f &&
+            presented.afterimageAlpha > 0.0f && presented.invulnerable,
+        "mounted evasion presentation should keep the rider on the combat mount and add responsive visual pose only");
+
+    RailVehicleOccupantActor occupant;
+    RailVehicleOccupantActorInput occupantInput{};
+    occupantInput.presentation = &presented;
+    occupantInput.cameraWorldPosition = vehicle.State().cameraMountPosition;
+    occupant.Update(occupantInput);
+    runner.Expect(
+        occupant.Frame().active && occupant.Frame().visible &&
+            occupant.Frame().actorId != 0 &&
+            occupant.Frame().meshId == "rail_vehicle.occupant" &&
+            occupant.Frame().fallbackMeshId == "animated_cube" &&
+            occupant.Frame().posePhase ==
+                RailVehicleOccupantPosePhase::Evading &&
+            occupant.Frame().sourcePresentationRevision == presented.revision,
+        "mounted occupant actor should publish an independently replaceable render proxy with pose provenance");
+
+    combatInput.evasion = &started;
+    combatMount.Update(combatInput);
+    const RailVehicleCombatMountFrame startCombat = combatMount.Frame();
+    RailVehicleEvasionFeedbackBridge feedback;
+    RailVehicleEvasionFeedbackInput feedbackInput{};
+    feedbackInput.evasion = &started;
+    feedbackInput.combatMount = &startCombat;
+    feedbackInput.deltaTime = 0.0f;
+    feedback.Update(feedbackInput);
+    runner.Expect(
+        feedback.Frame().audioCueCount == 1 &&
+            feedback.Frame().audioCues[0].kind ==
+                RailVehicleEvasionAudioCueKind::Start &&
+            feedback.Frame().vfxCommandCount == 1 &&
+            feedback.Frame().haptics.active &&
+            feedback.Frame().vfxCommands[0].eventSequence ==
+                started.state.eventSequence,
+        "evasion feedback should emit one bounded start cue, VFX command and haptic envelope per event");
+    feedbackInput.evasion = &moving;
+    feedbackInput.combatMount = &combat;
+    feedbackInput.deltaTime = 0.25f;
+    feedback.Update(feedbackInput);
+    runner.Expect(
+        feedback.Frame().vfxCommandCount <=
+                RailVehicleEvasionFeedbackFrame::kMaximumVfxCommands &&
+            feedback.Frame().suppressedVfxCommands > 0,
+        "evasion afterimages should remain within the per-frame presentation budget after a long frame");
+
+    for (int frame = 0; frame < 90; ++frame) {
+        evasionInput.deltaTime = 1.0f / 60.0f;
+        evasion.Update(evasionInput);
+    }
+    runner.Expect(
+        evasion.State().phase == RailVehicleMountedEvasionPhase::Ready &&
+            !evasion.Frame().active && !evasion.Frame().invulnerable &&
+            std::abs(evasion.State().lateralOffset) < 0.001f,
+        "mounted evasion should recover to the mount and finish its cooldown deterministically");
+
+    runner.Expect(
+        evasion.RestoreState(checkpoint, &error),
+        "mounted evasion checkpoint should restore");
+    evasionInput.deltaTime = 0.0f;
+    const RailVehicleMountedEvasionFrame restored = evasion.Update(evasionInput);
+    runner.Expect(
+        restored.state.phase == checkpoint.phase && restored.active &&
+            std::abs(restored.state.lateralOffset - checkpoint.lateralOffset) <
+                0.001f,
+        "mounted evasion should resume an in-flight retry checkpoint without restarting the dodge");
+
+    RailVehicleDefinition freeOffset = vehicle.Definition();
+    freeOffset.mountedMovementMode = RailVehicleMountedMovementMode::FreeOffset;
+    combatInput.vehicleDefinition = &freeOffset;
+    combatMount.Update(combatInput);
+    cameraInput.vehicleDefinition = &freeOffset;
+    cameraMount.Update(cameraInput);
+    evasionInput.vehicleDefinition = &freeOffset;
+    const RailVehicleMountedEvasionFrame unmounted = evasion.Update(evasionInput);
+    runner.Expect(
+        !combatMount.Frame().valid && !cameraMount.Frame().active &&
+            !unmounted.mounted &&
+            evasion.State().phase == RailVehicleMountedEvasionPhase::Ready,
+        "mount bridges and mounted evasion must release ownership in FreeOffset mode");
+}
+
+void TestRailVehicleControlAssetsAndHotReload(RegressionRunner& runner) {
+    std::string error;
+    RailVehicleControlPresetRegistry packagedRegistry;
+    const bool packagedLoaded = packagedRegistry.LoadDirectory(
+        RailVehicleControlPresetRegistry::DefaultDirectory(), &error);
+    const RailVehicleControlDefinitionAsset* packaged =
+        packagedRegistry.Find(
+            RailVehicleControlPresetRegistry::kMineCartStandardPresetId);
+    runner.Expect(
+        packagedLoaded && packaged != nullptr &&
+            !packagedRegistry.IsUsingFallback(packaged->presetId) &&
+            std::abs(packaged->vehicle.maximumSpeed - 68.0f) < 0.001f &&
+            std::abs(packaged->speedPolicy.maxSpeed - 64.0f) < 0.001f &&
+            std::abs(packaged->speedPolicy.combatMultiplier - 0.82f) < 0.001f &&
+            std::abs(packaged->evasion.lateralDistance - 1.45f) < 0.001f &&
+            std::abs(packaged->rideDynamics.rollFrequencyHz - 2.6f) < 0.001f &&
+            std::abs(packaged->rideDynamics.maximumYawLagDegrees - 4.5f) < 0.001f &&
+            std::abs(packaged->trackContact.wheelbase - 3.9f) < 0.001f &&
+            std::abs(packaged->trackContact.trackGauge - 3.8f) < 0.001f &&
+            std::abs(packaged->trackContact.contactClearance - 0.05f) < 0.001f &&
+            packaged->clearance.includeProceduralTerrain &&
+            packaged->constraint.failClosedWithoutClearance,
+        "packaged mine-cart controls should load as one validated production tuning unit");
+
+    const std::filesystem::path root =
+        std::filesystem::path{"generated"} / "editor" / "tests" /
+        "rail_vehicle_control_registry";
+    std::error_code cleanupError;
+    std::filesystem::remove_all(root, cleanupError);
+    const std::filesystem::path assetPath = root / "test_cart.railvehicle";
+    const auto writePreset = [&assetPath](
+                                 float maximumSpeed,
+                                 float lateralDistance,
+                                 const std::string& extraLine = {}) {
+        WriteTextFile(
+            assetPath,
+            "RAIL_VEHICLE_CONTROL|2\n"
+            "presetId=test_cart\n"
+            "displayName=Test Cart\n"
+            "vehicle.maximumSpeed=" + std::to_string(maximumSpeed) + "\n" +
+            "evasion.lateralDistance=" + std::to_string(lateralDistance) + "\n" +
+            "vehicleAudio.masterVolume=0.5\n" + extraLine);
+    };
+
+    writePreset(55.0f, 1.10f);
+    RailVehicleControlPresetRegistry registry;
+    runner.Expect(
+        registry.LoadDirectory(root, &error),
+        "vehicle control registry should atomically load a valid preset directory");
+    const RailVehicleControlDefinitionAsset* loaded =
+        registry.Find("test_cart");
+    const uint64_t lastKnownGoodRevision = registry.Stats().revision;
+    runner.Expect(
+        loaded != nullptr &&
+            std::abs(loaded->vehicle.maximumSpeed - 55.0f) < 0.001f &&
+            std::abs(loaded->evasion.lateralDistance - 1.10f) < 0.001f &&
+            registry.IsUsingFallback(
+                RailVehicleControlPresetRegistry::kMineCartStandardPresetId),
+        "registry should expose authored presets while retaining missing packaged fallbacks");
+
+    writePreset(99.0f, 2.0f, "unsupported.setting=1\n");
+    const RailVehicleControlReloadReport rejected =
+        registry.ReloadChangedPresets();
+    loaded = registry.Find("test_cart");
+    runner.Expect(
+        rejected.status == RailVehicleControlReloadStatus::Failed &&
+            registry.Stats().revision == lastKnownGoodRevision &&
+            registry.Stats().failedReloads == 1 && loaded != nullptr &&
+            std::abs(loaded->vehicle.maximumSpeed - 55.0f) < 0.001f,
+        "malformed hot reload should reject the complete batch and retain last-known-good controls");
+
+    writePreset(61.0f, 1.25f);
+    const RailVehicleControlReloadReport reloaded =
+        registry.ReloadChangedPresets();
+    loaded = registry.Find("test_cart");
+    runner.Expect(
+        reloaded.status == RailVehicleControlReloadStatus::Reloaded &&
+            reloaded.previousRevision == lastKnownGoodRevision &&
+            reloaded.currentRevision > reloaded.previousRevision &&
+            registry.Stats().successfulReloads == 1 && loaded != nullptr &&
+            std::abs(loaded->vehicle.maximumSpeed - 61.0f) < 0.001f &&
+            std::abs(loaded->evasion.lateralDistance - 1.25f) < 0.001f,
+        "valid edits should replace the registry in one revisioned hot-reload transaction");
+
+    RailSpeedDirector speedDirector;
+    runner.Expect(
+        loaded != nullptr && speedDirector.Configure(
+            loaded->speedPolicy, false, &error),
+        "vehicle preset speed policy should configure the speed director");
+    CourseSection combatSection{};
+    combatSection.name = "Combat Contact";
+    RailSpeedDirectorFrameInput speedInput{};
+    speedInput.railPath = nullptr;
+    speedInput.section = &combatSection;
+    const RailSpeedDirectorFrame noRailSpeedFrame = speedDirector.Evaluate(speedInput);
+    runner.Expect(
+        noRailSpeedFrame.requestedSpeed == 0.0f,
+        "speed policy should not invent physical movement without a rail");
+    RailPath policyRail;
+    policyRail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 16.0f, 40.0f},
+        {{0.0f, 0.0f, 100.0f}, 16.0f, 40.0f}});
+    speedInput.railPath = &policyRail;
+    speedInput.deltaTime = 0.001f;
+    const RailSpeedDirectorFrame shortPolicyFrame =
+        speedDirector.Evaluate(speedInput);
+    speedInput.deltaTime = 0.20f;
+    const RailSpeedDirectorFrame longPolicyFrame =
+        speedDirector.Evaluate(speedInput);
+    runner.Expect(
+        std::abs(shortPolicyFrame.requestedSpeed -
+                 longPolicyFrame.requestedSpeed) < 0.001f &&
+            std::abs(shortPolicyFrame.requestedSpeed - 32.8f) < 0.01f,
+        "speed director should emit an unsmoothed policy request independent of frame integration");
+
+    RailVehicleMovementSystem vehicle;
+    RailVehicleMountedEvasionSystem evasion;
+    RailVehicleOccupantClearanceSystem clearance;
+    RailVehicleEvasionConstraintResolver constraint;
+    RailVehicleCameraMountBridge camera;
+    runner.Expect(
+        loaded != nullptr && vehicle.Initialize(loaded->vehicle, &error) &&
+            evasion.Initialize(loaded->evasion, &error) &&
+            clearance.Initialize(loaded->clearance, &error) &&
+            constraint.Initialize(loaded->constraint, &error) &&
+            camera.Initialize(loaded->camera, &error),
+        "one control asset should configure every authoritative mounted-control subsystem");
+
+    std::filesystem::remove_all(root, cleanupError);
+}
+
+void TestRailVehicleBodyCollisionAndDamage(RegressionRunner& runner) {
+    std::string error;
+    RailVehicleHitboxProfile profile =
+        RailVehicleHitboxProfile::MineCartDefaults();
+    profile.includeProceduralTerrain = false;
+    RailVehicleDefinition definition =
+        RailVehicleDefinition::MineCartDefaults();
+    RailVehicleOccupantClearanceDefinition clearance =
+        RailVehicleOccupantClearanceDefinition::MineCartDefaults();
+    profile.ApplyAuthoritativeShapes(definition, clearance);
+    const PlayerHitboxDefinition occupantHitbox =
+        profile.BuildPlayerHitboxDefinition();
+    runner.Expect(
+        profile.Validate(&error) && occupantHitbox.Validate(&error) &&
+            std::abs(definition.collisionHalfExtents.x -
+                     profile.bodyHalfExtents.x) < 0.001f &&
+            std::abs(clearance.occupantRadius -
+                     profile.occupantHurtRadius) < 0.001f &&
+            std::abs(occupantHitbox.hurtRadius -
+                     clearance.occupantRadius) < 0.001f,
+        "vehicle body, occupant hurt volume and evasion clearance should derive from one validated hitbox profile");
+
+    RailPath rail;
+    rail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 100.0f}, 18.0f, 32.0f}});
+    RailVehicleMovementSystem vehicle;
+    runner.Expect(
+        vehicle.Initialize(definition, &error),
+        "body-collision vehicle should initialize from authoritative profile dimensions");
+    vehicle.Reset(12.0f, 20.0f, &rail);
+    RailVehicleRuntimeState sweptState = vehicle.State();
+    sweptState.previousDistance = 8.0f;
+    sweptState.distance = 12.0f;
+    sweptState.speed = 20.0f;
+    runner.Expect(
+        vehicle.RestoreState(sweptState, &rail, &error),
+        "body-collision test should restore a deterministic swept movement frame");
+
+    CourseSpawnRuntime runtime;
+    CourseObstacleActorDesc obstacle{};
+    obstacle.id = "mine_cart_body_wall";
+    obstacle.spawnDistance = 16.0f;
+    obstacle.verticalOffset = definition.bodyVerticalOffset;
+    obstacle.halfExtents = {1.0f, 1.0f, 1.0f};
+    runtime.SpawnObstacle(obstacle);
+    RailVehicleBodyCollisionSystem bodyCollision;
+    runner.Expect(
+        bodyCollision.Initialize(profile, &error),
+        "vehicle body collision should initialize with bounded query budgets");
+    RailVehicleBodyCollisionInput bodyInput{};
+    bodyInput.vehicleDefinition = &vehicle.Definition();
+    bodyInput.vehicleState = &vehicle.State();
+    bodyInput.spawnRuntime = &runtime;
+    bodyInput.railPath = &rail;
+    const RailVehicleBodyCollisionFrame bodyFrame =
+        bodyCollision.Update(bodyInput);
+    runner.Expect(
+        bodyFrame.valid && bodyFrame.contact && bodyFrame.blocking &&
+            bodyFrame.beganContactThisFrame &&
+            bodyFrame.kind ==
+                RailVehicleBodyContactKind::DynamicObstacle &&
+            bodyFrame.hitActorId != 0 &&
+            bodyFrame.hitStableId == obstacle.id &&
+            bodyFrame.impactFraction > 0.0f &&
+            bodyFrame.impactFraction < 1.0f &&
+            bodyFrame.impactNormalRailLocal.z < -0.99f &&
+            bodyFrame.impactNormalWorld.z < -0.99f &&
+            std::isfinite(bodyFrame.impactWorldPosition.z) &&
+            bodyFrame.obstacleCandidatesTested == 1,
+        "vehicle body should sweep previous-to-current rail distance and resolve a stable contact point and normal from gameplay proxies");
+
+    CourseCollisionSystem collision;
+    CourseCollisionFrameInput collisionInput{};
+    collisionInput.player.distance = vehicle.State().distance;
+    collisionInput.player.verticalOffset = definition.bodyVerticalOffset;
+    collisionInput.player.hitPoints = 100.0f;
+    collisionInput.player.maximumHitPoints = 100.0f;
+    collisionInput.externalBodyCollisionAuthority = true;
+    const CourseCollisionFrameStats legacySuppressed =
+        collision.Update(runtime, collisionInput);
+    runner.Expect(
+        legacySuppressed.playerDamage == 0.0f &&
+            collision.PlayerDamageResults().empty(),
+        "mounted body authority should suppress the legacy occupant-sphere obstacle damage loop");
+
+    RailVehicleDamageCoordinator damage;
+    runner.Expect(
+        damage.Initialize(profile, &error),
+        "vehicle damage coordinator should initialize from the same hitbox profile");
+    RailVehicleDamageCoordinatorInput damageInput{};
+    damageInput.deltaTime = 1.0f / 60.0f;
+    damageInput.bodyCollision = &bodyFrame;
+    damageInput.collisionSystem = &collision;
+    damageInput.vehicleMovement = &vehicle;
+    const RailVehicleDamageCoordinatorFrame damageFrame =
+        damage.Update(damageInput);
+    runner.Expect(
+        damageFrame.submittedContactDamage &&
+            damageFrame.acceptedContactDamage &&
+            damageFrame.damageResult.accepted &&
+            damageFrame.damageResult.request.kind ==
+                PlayerHitKind::ObstacleContact &&
+            damageFrame.damageResult.request.hasWorldImpact &&
+            damageFrame.damageResult.request.impactNormalWorld.z < -0.99f &&
+            std::abs(damageFrame.damageResult.appliedDamage -
+                     profile.obstacleContactDamage) < 0.001f &&
+            std::abs(collision.PlayerDamage().State().hitPoints - 76.0f) <
+                0.001f &&
+            std::abs(vehicle.State().hitPoints - 190.0f) < 0.001f,
+        "body contact should enter PlayerHitRequest once and mirror PlayerDamageResult health ratio into vehicle state");
+
+    RailVehicleCollisionFeedbackBridge collisionFeedback;
+    RailVehicleCollisionFeedbackInput feedbackInput{};
+    feedbackInput.damageResults = collision.PlayerDamageResults();
+    feedbackInput.vehicleState = &vehicle.State();
+    feedbackInput.deltaTime = 1.0f / 60.0f;
+    feedbackInput.settings = {};
+    collisionFeedback.Update(feedbackInput);
+    const RailVehicleCollisionFeedbackFrame impactFeedback =
+        collisionFeedback.Frame();
+    runner.Expect(
+        impactFeedback.audioCueCount == 1 &&
+            impactFeedback.vfxCommandCount ==
+                feedbackInput.settings.sparkBurstCount &&
+            impactFeedback.slowdown.valid &&
+            impactFeedback.slowdown.resultSequence ==
+                damageFrame.damageResult.sequence &&
+            impactFeedback.impactNormalWorld.z < -0.99f,
+        "accepted vehicle DamageResult should produce one dedicated impact cue, a bounded spark burst and one slowdown command");
+    PlayerDamagePresentationBridge genericDamagePresentation;
+    PlayerDamagePresentationInput genericPresentationInput{};
+    genericPresentationInput.results = collision.PlayerDamageResults();
+    genericPresentationInput.deltaTime = 1.0f / 60.0f;
+    genericDamagePresentation.Update(genericPresentationInput);
+    runner.Expect(
+        genericDamagePresentation.Frame().acceptedHits == 1 &&
+            genericDamagePresentation.Frame().screenFlashIntensity > 0.0f &&
+            genericDamagePresentation.Frame().audioCues.empty() &&
+            genericDamagePresentation.Frame().vfxCommands.empty() &&
+            genericDamagePresentation.Frame().cameraShake == 0.0f,
+        "vehicle impact presentation should retain player flash and haptics without duplicating dedicated audio, sparks or camera kick");
+    feedbackInput.damageResults = {};
+    feedbackInput.deltaTime = 0.01f;
+    collisionFeedback.Update(feedbackInput);
+    const RailVehicleCollisionFeedbackFrame responseFeedback =
+        collisionFeedback.Frame();
+    runner.Expect(
+        responseFeedback.audioCueCount == 0 &&
+            responseFeedback.vfxCommandCount == 0 &&
+            responseFeedback.activeResponseRemainingSeconds > 0.0f &&
+            (std::abs(responseFeedback.bodyTranslationWorld.z) > 0.0001f ||
+             std::abs(responseFeedback.bodyPitchDegrees) > 0.0001f ||
+             std::abs(responseFeedback.bodyBankDegrees) > 0.0001f),
+        "vehicle body reaction should decay over time without replaying one-shot audio or sparks");
+
+    RailVehicleRuntimeState highSpeedState = vehicle.State();
+    highSpeedState.speed = 60.0f;
+    highSpeedState.requestedSpeed = 60.0f;
+    runner.Expect(
+        vehicle.RestoreState(highSpeedState, &rail, &error),
+        "impact slowdown test should restore a commercial cruising speed");
+    const float speedBeforeSlowdown = vehicle.State().speed;
+    runner.Expect(
+        vehicle.ApplyImpactSlowdown(
+            impactFeedback.slowdown.speedMultiplier,
+            impactFeedback.slowdown.durationSeconds,
+            impactFeedback.slowdown.resultSequence) &&
+            vehicle.State().impactSlowdownRemainingSeconds > 0.0f &&
+            vehicle.State().impactSpeedMultiplier < 1.0f,
+        "accepted collision feedback should install one sequence-deduplicated temporary speed modifier");
+    CourseAsset slowdownCourse{};
+    CourseRuntime slowdownRuntime;
+    slowdownRuntime.Bind(&slowdownCourse);
+    slowdownRuntime.Reset(vehicle.State().distance);
+    RailVehicleMovementInput slowdownInput{};
+    slowdownInput.deltaTime = 0.1f;
+    slowdownInput.requestedSpeed = definition.maximumSpeed;
+    slowdownInput.courseRuntime = &slowdownRuntime;
+    slowdownInput.railPath = &rail;
+    vehicle.Update(slowdownInput);
+    runner.Expect(
+        vehicle.Frame().impactSlowdownActive &&
+            vehicle.State().speed < speedBeforeSlowdown &&
+            !vehicle.ApplyImpactSlowdown(
+                impactFeedback.slowdown.speedMultiplier,
+                impactFeedback.slowdown.durationSeconds,
+                impactFeedback.slowdown.resultSequence),
+        "impact slowdown should reduce target speed for a bounded interval and reject duplicate DamageResult sequences");
+
+    const RailVehicleDamageCoordinatorFrame repeated =
+        damage.Update(damageInput);
+    runner.Expect(
+        !repeated.submittedContactDamage &&
+            collision.PlayerDamageResults().size() == 1 &&
+            std::abs(vehicle.State().hitPoints - 190.0f) < 0.001f,
+        "persistent body contact should respect the coordinator retrigger window and never subtract HP twice per frame");
+
+    const RailVehicleDamageRuntimeState checkpoint = damage.State();
+    damage.Reset();
+    runner.Expect(
+        damage.RestoreState(checkpoint, &error) &&
+            damage.State().lastAcceptedDamageSequence ==
+                checkpoint.lastAcceptedDamageSequence &&
+            std::abs(damage.State().repeatedContactCooldownSeconds -
+                     checkpoint.repeatedContactCooldownSeconds) < 0.001f,
+        "vehicle contact damage cooldown should restore deterministically at retry checkpoints");
 }
 
 void TestRailWorldRaycast(RegressionRunner& runner) {
@@ -20017,6 +21484,101 @@ void TestEnemyProjectilePresentationPipeline(RegressionRunner& runner) {
         "retry/reset should atomically discard projectile visual and audio history");
 }
 
+void TestEnemyProjectileCommercialVisualPipeline(RegressionRunner& runner) {
+    EnemyProjectileVisualDefinitionAsset visual{};
+    std::string visualError;
+    runner.Expect(
+        visual.LoadFromFile(
+            "Resources/courses/projectile_visuals/enemy_homing_soft.projectilevisual",
+            &visualError) &&
+            visual.projectileDefinitionId == "enemy_homing_soft" &&
+            visual.style == EnemyProjectileVisualStyle::Missile &&
+            visual.coreColor.x == 1.0f && visual.coreColor.y == 1.0f &&
+            visual.haloColor.z > 0.9f,
+        "projectile visual assets should preserve separate white core, trajectory halo and commercial style data");
+
+    EnemyProjectilePresentationFrame presentation{};
+    presentation.revision = 9;
+    EnemyProjectilePresentation projectile{};
+    projectile.projectileId = 101;
+    projectile.definitionId = "enemy_homing_soft";
+    projectile.trajectory = EnemyProjectileTrajectory::Homing;
+    projectile.worldPosition = {0.0f, 4.0f, 80.0f};
+    projectile.previousWorldPosition = {0.0f, 4.0f, 81.0f};
+    projectile.motionDirection = {0.0f, 0.0f, -1.0f};
+    projectile.collisionRadius = 0.32f;
+    projectile.threat = true;
+    presentation.projectiles.push_back(projectile);
+
+    EnemyProjectileVfxRenderer renderer;
+    std::string directoryError;
+    runner.Expect(
+        renderer.LoadDirectory(
+            EnemyProjectileVfxRenderer::DefaultDirectory(),
+            &directoryError) &&
+            renderer.FindVisual("enemy_homing_soft") != nullptr,
+        "projectile VFX renderer should atomically resolve packaged visual definitions by projectile ID");
+    EnemyProjectileVfxRenderInput renderInput{};
+    renderInput.presentation = &presentation;
+    renderInput.cameraWorldPosition = {0.0f, 4.0f, 0.0f};
+    renderInput.cameraRight = {1.0f, 0.0f, 0.0f};
+    renderInput.cameraUp = {0.0f, 1.0f, 0.0f};
+    renderInput.elapsedTime = 0.25f;
+    renderInput.gameplayActive = true;
+    renderer.Update(renderInput);
+    runner.Expect(
+        renderer.Frame().proxies.size() == 1 &&
+            renderer.Frame().fallbackProjectiles == 1 &&
+            renderer.Frame().proxies.front().style ==
+                EnemyProjectileVisualStyle::Missile &&
+            renderer.Frame().proxies.front().coreRadius >
+                projectile.collisionRadius &&
+            renderer.Frame().proxies.front().haloRadius >
+                renderer.Frame().proxies.front().coreRadius &&
+            renderer.Frame().proxies.front().trailStart.z >
+                projectile.worldPosition.z,
+        "projectile VFX renderer should enforce angular readability, layered radii and motion-aligned fallback without changing collision data");
+
+    RailPath rail;
+    rail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 120.0f}, 18.0f, 32.0f}});
+    EnemyAttackTelegraphFrame telegraph{};
+    telegraph.revision = 12;
+    EnemyAttackTelegraphCue cue{};
+    cue.actorId = 7;
+    cue.attackIntentSequence = 33;
+    cue.attackTokenId = 44;
+    cue.phase = EnemyAttackTelegraphPhase::Imminent;
+    cue.projectileTrajectory = EnemyProjectileTrajectory::Predictive;
+    cue.attackPattern = CourseEnemyFirePattern::Single;
+    cue.projectileCount = 1;
+    cue.worldPosition = {-12.0f, 8.0f, 95.0f};
+    cue.targetRailDistance = 70.0f;
+    cue.targetLateralOffset = 3.0f;
+    cue.targetVerticalOffset = 4.0f;
+    telegraph.cues.push_back(cue);
+
+    EnemyAttackLaneTelegraphRenderer laneRenderer;
+    EnemyAttackLaneTelegraphRenderInput laneInput{};
+    laneInput.telegraph = &telegraph;
+    laneInput.railPath = &rail;
+    laneInput.gameplayActive = true;
+    laneInput.elapsedTime = 0.4f;
+    laneRenderer.Update(laneInput);
+    runner.Expect(
+        laneRenderer.Frame().lanes.size() == 1 &&
+            laneRenderer.Frame().lanes.front().shape ==
+                EnemyAttackLaneShape::Line &&
+            laneRenderer.Frame().lanes.front().trajectory ==
+                EnemyProjectileTrajectory::Predictive &&
+            laneRenderer.Frame().lanes.front().color.y > 0.6f &&
+            std::abs(laneRenderer.Frame().lanes.front().targetWorld.x - 3.0f) <
+                0.001f &&
+            laneRenderer.Frame().lanes.front().targetRadius > 0.72f,
+        "lane telegraph renderer should convert locked rail-local targets into imminent trajectory-colored world warnings");
+}
+
 void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
     RailPath rail;
     rail.SetControlPoints({
@@ -21287,8 +22849,8 @@ void TestCourseEnemyAuthoringAndMutation(RegressionRunner& runner) {
     std::string error;
     runner.Expect(
         provider.Serialize(document, &serialized, &error) &&
-            serialized.schemaVersion == 7,
-        "Course schema v7 should serialize persistent enemy placements and waves");
+            serialized.schemaVersion == 12,
+        "Course schema v8 should serialize persistent enemy placements, waves, and ride profiles");
     CourseAsset loaded{};
     provider.Bind(&loaded);
     const bool loadedSuccessfully = provider.Deserialize(
@@ -21301,7 +22863,7 @@ void TestCourseEnemyAuthoringAndMutation(RegressionRunner& runner) {
             loaded.enemyPlacements.front().railAnchor.segmentGuid ==
                 course.enemyPlacements.front().railAnchor.segmentGuid &&
             loaded.enemyPlacements.front().bulletPatternOverrideId == "single_red",
-        "Course schema v7 should round-trip enemy identity, assets, and RailAnchor data");
+        "Course schema v8 should round-trip enemy identity, assets, and RailAnchor data");
 
     EditorDocumentContent legacyV5 = serialized;
     legacyV5.schemaVersion = 5;
@@ -21309,9 +22871,9 @@ void TestCourseEnemyAuthoringAndMutation(RegressionRunner& runner) {
     EditorDocumentMigrationReport migration{};
     runner.Expect(
         provider.Migrate(legacyV5, &migrated, &migration, &error) &&
-            migration.migrated && migrated.schemaVersion == 7 &&
+            migration.migrated && migrated.schemaVersion == 12 &&
             provider.Validate(migrated).Succeeded(),
-        "Course schema v5 should migrate to the v7 enemy and wave persistence unit");
+        "Course schema v5 should migrate to the v8 Course persistence unit");
 
     CourseAsset topologyCourse{};
     topologyCourse.name = "Enemy Rail Topology";
@@ -21505,13 +23067,13 @@ void TestCourseWaveAuthoringAndMutation(RegressionRunner& runner) {
     const EditorDocumentValidationReport waveValidation =
         waveSerialized ? provider.Validate(serialized) : EditorDocumentValidationReport{};
     std::string wavePersistenceDiagnostic =
-        "Course schema v7 should serialize a validated wave graph and memberships";
+        "Course schema v8 should serialize a validated wave graph, memberships, and ride data";
     if (!error.empty()) wavePersistenceDiagnostic += " error=" + error;
     for (const EditorDocumentValidationIssue& issue : waveValidation.issues) {
         wavePersistenceDiagnostic += " [" + issue.code + ": " + issue.message + "]";
     }
     runner.Expect(
-        waveSerialized && serialized.schemaVersion == 7 && waveValidation.Succeeded(),
+        waveSerialized && serialized.schemaVersion == 12 && waveValidation.Succeeded(),
         wavePersistenceDiagnostic);
     CourseAsset loaded{};
     provider.Bind(&loaded);
@@ -21525,7 +23087,7 @@ void TestCourseWaveAuthoringAndMutation(RegressionRunner& runner) {
             std::fabs(loadedAlpha->timeoutSeconds - 12.5f) < 0.001f &&
             loadedAlpha->nextWaveGuid == bravoGuid &&
             loadedWaves.Members(bravoGuid).size() == 1,
-        "Course schema v7 should round-trip wave behavior, transitions, and enemy membership");
+        "Course schema v8 should round-trip wave behavior, transitions, and enemy membership");
 
     CourseAsset legacy{};
     legacy.name = "Legacy Wave Migration";
@@ -21534,21 +23096,21 @@ void TestCourseWaveAuthoringAndMutation(RegressionRunner& runner) {
     CourseEnemyAuthoringModel::EnsureStableIdentity(legacy, "legacy-wave-migration");
     std::string legacyText;
     legacy.SaveToString(&legacyText, &error);
-    const std::string schema7 = "# editor-schema:7";
-    const std::size_t schemaOffset = legacyText.find(schema7);
+    const std::string schema8 = "# editor-schema:8";
+    const std::size_t schemaOffset = legacyText.find(schema8);
     if (schemaOffset != std::string::npos) {
-        legacyText.replace(schemaOffset, schema7.size(), "# editor-schema:6");
+        legacyText.replace(schemaOffset, schema8.size(), "# editor-schema:7");
     }
-    EditorDocumentContent legacyV6{};
-    legacyV6.schemaVersion = 6;
-    legacyV6.bytes.assign(legacyText.begin(), legacyText.end());
+    EditorDocumentContent legacyV7{};
+    legacyV7.schemaVersion = 7;
+    legacyV7.bytes.assign(legacyText.begin(), legacyText.end());
     EditorDocumentContent migrated{};
     EditorDocumentMigrationReport migration{};
     runner.Expect(
-        provider.Migrate(legacyV6, &migrated, &migration, &error) &&
-            migration.migrated && migrated.schemaVersion == 7 &&
+        provider.Migrate(legacyV7, &migrated, &migration, &error) &&
+            migration.migrated && migrated.schemaVersion == 12 &&
             provider.Validate(migrated).Succeeded(),
-        "Course schema v6 should migrate legacy group names into the v7 wave unit");
+        "Course schema v7 should migrate into the v8 ride-profile persistence unit");
     CourseAsset migratedCourse{};
     provider.Bind(&migratedCourse);
     const bool migratedLoaded = provider.Deserialize(document, migrated, &error);
@@ -23418,6 +24980,135 @@ void TestCourseMapSceneVisualizationPipeline(RegressionRunner& runner) {
     CourseRailAuthoringModel::EnsureStableIdentity(course, "course-map-scene-visualization");
     const CourseRailAuthoringModel rail(course);
     const CourseEnemyAuthoringModel enemies(course);
+    const CourseWaveAuthoringModel waves(course);
+    const CourseWaveDefinition* firstContactWave =
+        waves.Find("wave-first-contact-editor-test");
+    const std::vector<const CourseEnemyPlacement*> firstContactEnemies =
+        enemies.FindWaveGroup("wave-first-contact-editor-test");
+    const bool authoredFirstContactFormation =
+        rail.IsValid() && enemies.IsValid() && waves.IsValid() &&
+        firstContactWave != nullptr && firstContactWave->enabled &&
+        firstContactWave->completionCondition ==
+            CourseWaveCompletionCondition::AllEnemiesDefeated &&
+        firstContactEnemies.size() == 3 &&
+        std::all_of(
+            firstContactEnemies.begin(), firstContactEnemies.end(),
+            [&enemies](const CourseEnemyPlacement* placement) {
+                return placement != nullptr && placement->enabled &&
+                    placement->actorAssetId == "drone_scout" &&
+                    placement->bulletPatternOverrideId == "single_tutorial" &&
+                    enemies.Resolve(*placement).valid;
+            });
+    runner.Expect(
+        authoredFirstContactFormation,
+        "production Course should persist one editable First Contact Wave with three resolved Tutorial Scout placements");
+    CourseRuntimeCookOptions productionCookOptions{};
+    productionCookOptions.allowDebugFallbackAssets = false;
+    const CourseRuntimeCookResult productionCook =
+        CourseRuntimeCookPipeline{}.Cook(course, productionCookOptions);
+    const CourseRuntimeWaveNode* cookedFirstContact =
+        productionCook.program.FindWave("wave-first-contact-editor-test");
+    runner.Expect(
+        productionCook.succeeded && productionCook.errors == 0 &&
+            productionCook.program.waves.size() == 5 &&
+            productionCook.program.actors.size() == 7 &&
+            cookedFirstContact != nullptr &&
+            cookedFirstContact->actorIndices.size() == 3 &&
+            std::all_of(
+                cookedFirstContact->actorIndices.begin(),
+                cookedFirstContact->actorIndices.end(),
+                [&productionCook](uint32_t actorIndex) {
+                    if (actorIndex >= productionCook.program.actors.size()) return false;
+                    const CourseRuntimeActorRecord& actor =
+                        productionCook.program.actors[actorIndex];
+                    return actor.waveGuid == "wave-first-contact-editor-test" &&
+                        actor.actor.actorAssetId == "drone_scout" &&
+                        actor.actor.bulletPatternId == "single_tutorial";
+                }),
+        "production Course should cook the authored First Contact vertical slice without fallback assets");
+
+    struct ThreatSequenceExpectation final {
+        const char* waveGuid;
+        const char* nextWaveGuid;
+        const char* placementGuid;
+        const char* actorAssetId;
+        const char* patternId;
+        const char* projectileId;
+        EnemyProjectileTrajectory trajectory;
+        int projectileCount;
+    };
+    const std::array<ThreatSequenceExpectation, 4> threatSequence{{
+        {"wave-threat-sequence-01-assault", "wave-threat-sequence-02-sniper",
+            "enemy-threat-sequence-assault", "visibility_assault",
+            "assault_magenta_single", "enemy_assault_magenta_slow",
+            EnemyProjectileTrajectory::Direct, 1},
+        {"wave-threat-sequence-02-sniper", "wave-threat-sequence-03-turret",
+            "enemy-threat-sequence-sniper", "visibility_sniper",
+            "sniper_predictive_single", "enemy_sniper_predictive",
+            EnemyProjectileTrajectory::Predictive, 1},
+        {"wave-threat-sequence-03-turret", "wave-threat-sequence-04-interceptor",
+            "enemy-threat-sequence-turret", "visibility_turret",
+            "turret_readable_spread", "enemy_turret_spread",
+            EnemyProjectileTrajectory::Direct, 3},
+        {"wave-threat-sequence-04-interceptor", nullptr,
+            "enemy-threat-sequence-interceptor", "visibility_interceptor",
+            "interceptor_homing_single", "enemy_interceptor_homing",
+            EnemyProjectileTrajectory::Homing, 1},
+    }};
+    bool threatSequenceCooked = productionCook.succeeded;
+    for (std::size_t index = 0; index < threatSequence.size(); ++index) {
+        const ThreatSequenceExpectation& expected = threatSequence[index];
+        const CourseRuntimeWaveNode* waveNode =
+            productionCook.program.FindWave(expected.waveGuid);
+        const CourseRuntimeActorRecord* actorRecord =
+            productionCook.program.FindActor(expected.placementGuid);
+        threatSequenceCooked = threatSequenceCooked &&
+            waveNode != nullptr && actorRecord != nullptr &&
+            waveNode->executionPolicy == CourseWaveExecutionPolicy::Sequential &&
+            waveNode->actorIndices.size() == 1 && actorRecord->actorAssetResolved &&
+            actorRecord->actor.actorAssetId == expected.actorAssetId &&
+            actorRecord->actor.bulletPatternId == expected.patternId &&
+            actorRecord->actor.projectileDefinitionId == expected.projectileId &&
+            actorRecord->actor.projectileDefinition.trajectory == expected.trajectory &&
+            actorRecord->actor.bulletCount == expected.projectileCount &&
+            actorRecord->actor.behaviorDefinition.requireTelegraphPresentation;
+        if (expected.nextWaveGuid != nullptr && waveNode != nullptr) {
+            const CourseRuntimeWaveNode* next =
+                productionCook.program.FindWave(expected.nextWaveGuid);
+            threatSequenceCooked = threatSequenceCooked && next != nullptr &&
+                waveNode->nextWaveIndex >= 0 &&
+                static_cast<std::size_t>(waveNode->nextWaveIndex) <
+                    productionCook.program.waves.size() &&
+                productionCook.program.waves[
+                    static_cast<std::size_t>(waveNode->nextWaveIndex)].waveGuid ==
+                    expected.nextWaveGuid;
+        } else if (waveNode != nullptr) {
+            threatSequenceCooked = threatSequenceCooked &&
+                waveNode->nextWaveIndex < 0 &&
+                waveNode->completionCondition ==
+                    CourseWaveCompletionCondition::AllEnemiesDefeated;
+        }
+    }
+    runner.Expect(
+        threatSequenceCooked,
+        "production Course should strictly cook the Assault, Sniper, Turret and Interceptor chain with resolved projectile trajectories and telegraphs");
+
+    bool threatVisualsResolved = true;
+    for (const ThreatSequenceExpectation& expected : threatSequence) {
+        EnemyProjectileVisualDefinitionAsset visual{};
+        std::string visualError;
+        const std::string path =
+            std::string("Resources/courses/projectile_visuals/") +
+            expected.projectileId + ".projectilevisual";
+        threatVisualsResolved = threatVisualsResolved &&
+            visual.LoadFromFile(path, &visualError) && visual.enabled &&
+            visual.projectileDefinitionId == expected.projectileId &&
+            visual.coreColor.x == 1.0f && visual.coreColor.y == 1.0f &&
+            visual.coreColor.z == 1.0f;
+    }
+    runner.Expect(
+        threatVisualsResolved,
+        "all four production projectiles should resolve a white-core commercial visual asset");
     CourseOverviewMapProjection projection;
     CourseOverviewMapProjectionSettings projectionSettings{};
     projectionSettings.mode = CourseOverviewMapProjectionMode::Top;
@@ -24928,6 +26619,7 @@ int RunEditorCoreRegressionTests() {
         {"bottom dock evolution", [&]() { TestBottomDockEvolution(runner); }},
         {"menu toolbar status evolution", [&]() { TestMenuToolbarStatusEvolution(runner); }},
         {"course sequencer track provider", [&]() { TestCourseSequencerTrackProvider(runner); }},
+        {"course ride profile director sequencer", [&]() { TestCourseRideProfileDirectorAndSequencer(runner); }},
         {"prefab asset and instance foundation", [&]() { TestPrefabFoundation(runner); }},
         {"material graph foundation", [&]() { TestMaterialGraphFoundation(runner); }},
         {"production material scene lighting pipeline", [&]() { TestProductionMaterialLightingPipeline(runner); }},
@@ -25114,6 +26806,21 @@ int RunEditorCoreRegressionTests() {
          {"rail vehicle movement and presentation", [&]() {
               TestRailVehicleMovementAndPresentation(runner);
           }},
+         {"course rail track bake and wheel presentation", [&]() {
+              TestCourseRailTrackBakeAndWheelPresentation(runner);
+          }},
+         {"rail shooter HUD pipeline", [&]() {
+              TestRailShooterHudPipeline(runner);
+          }},
+         {"rail vehicle mounted evasion and mount bridges", [&]() {
+              TestRailVehicleMountedEvasionAndMountBridges(runner);
+          }},
+         {"rail vehicle control assets and hot reload", [&]() {
+              TestRailVehicleControlAssetsAndHotReload(runner);
+          }},
+         {"rail vehicle body collision and damage authority", [&]() {
+              TestRailVehicleBodyCollisionAndDamage(runner);
+          }},
          {"rail world raycast", [&]() { TestRailWorldRaycast(runner); }},
          {"rail world shot routing", [&]() { TestRailWorldShotRouting(runner); }},
          {"weapon damage reception", [&]() { TestWeaponDamageReception(runner); }},
@@ -25130,6 +26837,9 @@ int RunEditorCoreRegressionTests() {
           }},
          {"enemy projectile presentation pipeline", [&]() {
               TestEnemyProjectilePresentationPipeline(runner);
+          }},
+         {"enemy projectile commercial visual pipeline", [&]() {
+              TestEnemyProjectileCommercialVisualPipeline(runner);
           }},
          {"enemy attack coordination and execution", [&]() {
               TestEnemyAttackCoordinationAndExecution(runner);

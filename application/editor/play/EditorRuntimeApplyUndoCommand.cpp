@@ -20,7 +20,8 @@ std::size_t VectorBytes(const std::vector<T>& values) noexcept {
 std::size_t CourseBytes(const CourseAsset& course) noexcept {
     std::size_t bytes = sizeof(course) + StringBytes(course.name) +
         VectorBytes(course.railPoints) + VectorBytes(course.cameraKeys) +
-        VectorBytes(course.sections) + VectorBytes(course.events) +
+        VectorBytes(course.sections) + VectorBytes(course.rideProfiles) +
+        VectorBytes(course.rideSpeedBeats) + VectorBytes(course.events) +
         VectorBytes(course.enemyPlacements) +
         VectorBytes(course.terrainPlacements) + VectorBytes(course.rockClusters) +
         VectorBytes(course.lightingPresets) + VectorBytes(course.cameraShotPresets) +
@@ -31,6 +32,13 @@ std::size_t CourseBytes(const CourseAsset& course) noexcept {
     }
     for (const CourseEventMarker& value : course.events) {
         bytes += StringBytes(value.type) + StringBytes(value.id) + StringBytes(value.payload);
+    }
+    for (const CourseRideProfileDefinition& value : course.rideProfiles) {
+        bytes += StringBytes(value.editorGuid) + StringBytes(value.displayName) +
+            StringBytes(value.cameraShotId);
+    }
+    for (const RailRideSpeedBeatDefinition& value : course.rideSpeedBeats) {
+        bytes += StringBytes(value.editorGuid) + StringBytes(value.displayName);
     }
     for (const CourseEnemyPlacement& value : course.enemyPlacements) {
         bytes += StringBytes(value.editorGuid) + StringBytes(value.actorAssetId) +

@@ -125,6 +125,26 @@ uint64_t EditorCourseAuthoringFingerprint(const CourseAsset& course) {
         EDITOR_HASH_FIELD(value, startDistance); EDITOR_HASH_FIELD(value, endDistance);
         EDITOR_HASH_FIELD(value, name); EDITOR_HASH_FIELD(value, category); return hash;
     });
+    hash = HashVector(hash, course.rideProfiles, [](uint64_t hash, const CourseRideProfileDefinition& value) {
+        EDITOR_HASH_FIELD(value, editorGuid); EDITOR_HASH_FIELD(value, displayName);
+        EDITOR_HASH_FIELD(value, startDistance); EDITOR_HASH_FIELD(value, endDistance);
+        EDITOR_HASH_FIELD(value, speedMode); EDITOR_HASH_FIELD(value, speedMultiplier);
+        EDITOR_HASH_FIELD(value, targetSpeedOverride); EDITOR_HASH_FIELD(value, turnAnticipationDistance);
+        EDITOR_HASH_FIELD(value, visualBankScale); EDITOR_HASH_FIELD(value, maximumVisualBankDegrees);
+        EDITOR_HASH_FIELD(value, blendInDistance); EDITOR_HASH_FIELD(value, blendOutDistance);
+        EDITOR_HASH_FIELD(value, cameraShotId); EDITOR_HASH_FIELD(value, enabled);
+        EDITOR_HASH_FIELD(value, editorVisible); EDITOR_HASH_FIELD(value, editorLocked); return hash;
+    });
+    hash = HashVector(hash, course.rideSpeedBeats, [](uint64_t hash, const RailRideSpeedBeatDefinition& value) {
+        EDITOR_HASH_FIELD(value, editorGuid); EDITOR_HASH_FIELD(value, displayName);
+        EDITOR_HASH_FIELD(value, startDistance); EDITOR_HASH_FIELD(value, endDistance);
+        EDITOR_HASH_FIELD(value, type); EDITOR_HASH_FIELD(value, speedMultiplier);
+        EDITOR_HASH_FIELD(value, targetSpeedOverride); EDITOR_HASH_FIELD(value, accelerationScale);
+        EDITOR_HASH_FIELD(value, brakingScale); EDITOR_HASH_FIELD(value, maximumJerk);
+        EDITOR_HASH_FIELD(value, blendInDistance); EDITOR_HASH_FIELD(value, blendOutDistance);
+        EDITOR_HASH_FIELD(value, priority); EDITOR_HASH_FIELD(value, enabled);
+        EDITOR_HASH_FIELD(value, editorVisible); EDITOR_HASH_FIELD(value, editorLocked); return hash;
+    });
     hash = HashVector(hash, course.events, [](uint64_t hash, const CourseEventMarker& value) {
         EDITOR_HASH_FIELD(value, distance); EDITOR_HASH_FIELD(value, type);
         EDITOR_HASH_FIELD(value, id); EDITOR_HASH_FIELD(value, payload); return hash;

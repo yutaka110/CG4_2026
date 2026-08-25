@@ -102,6 +102,17 @@ PlayerDamageResult PlayerDamageSystem::Submit(
         std::isfinite(request.railDistance) &&
         std::isfinite(request.lateralOffset) &&
         std::isfinite(request.verticalOffset) &&
+        (!request.hasWorldImpact ||
+         (std::isfinite(request.impactWorldPosition.x) &&
+          std::isfinite(request.impactWorldPosition.y) &&
+          std::isfinite(request.impactWorldPosition.z) &&
+          std::isfinite(request.impactNormalWorld.x) &&
+          std::isfinite(request.impactNormalWorld.y) &&
+          std::isfinite(request.impactNormalWorld.z) &&
+          request.impactNormalWorld.x * request.impactNormalWorld.x +
+                  request.impactNormalWorld.y * request.impactNormalWorld.y +
+                  request.impactNormalWorld.z * request.impactNormalWorld.z >
+              0.000001f)) &&
         request.rawDamage > 0.0f &&
         request.postHitInvulnerabilitySeconds >= 0.0f;
     if (!validRequest) {

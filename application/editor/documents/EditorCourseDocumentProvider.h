@@ -14,7 +14,7 @@ public:
 
     std::string_view TypeId() const noexcept override { return EditorDocumentTypes::Course; }
     std::string_view DisplayName() const noexcept override { return "Course"; }
-    uint32_t CurrentSchemaVersion() const noexcept override { return 7; }
+    uint32_t CurrentSchemaVersion() const noexcept override { return 12; }
     bool SupportsPath(const std::filesystem::path& path) const override;
     bool ReadSource(
         const std::filesystem::path& path,

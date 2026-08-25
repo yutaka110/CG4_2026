@@ -5,6 +5,7 @@
 
 #include "RailVehicleMovementSystem.h"
 #include "RailVehiclePresentationBridge.h"
+#include "RailVehicleCollisionFeedbackBridge.h"
 
 struct RailVehicleActorDefinition final {
     uint32_t actorId = 0xF0000001u;
@@ -36,12 +37,14 @@ struct RailVehicleActorFrame final {
     Vector3 damageVfxMountPosition{};
     float visualBankDegrees = 0.0f;
     float visualPitchDegrees = 0.0f;
+    float visualYawDegrees = 0.0f;
     float wheelRotationRadians = 0.0f;
     float healthNormalized = 0.0f;
     float speedNormalized = 0.0f;
     bool brakeSparksActive = false;
     uint64_t sourceVehicleRevision = 0;
     uint64_t sourcePresentationRevision = 0;
+    uint64_t sourceCollisionFeedbackRevision = 0;
     uint64_t revision = 0;
 };
 
@@ -49,6 +52,7 @@ struct RailVehicleActorInput final {
     const RailVehicleDefinition* vehicleDefinition = nullptr;
     const RailVehicleRuntimeState* vehicleState = nullptr;
     const RailVehiclePresentationFrame* presentation = nullptr;
+    const RailVehicleCollisionFeedbackFrame* collisionFeedback = nullptr;
 };
 
 class RailVehicleActor final {
