@@ -8,8 +8,8 @@
 #include "CourseAsset.h"
 #include "CourseSpawnRuntime.h"
 
-inline constexpr uint32_t kCourseRuntimeProgramFormatVersion = 3;
-inline constexpr uint32_t kCourseRuntimeCompilerVersion = 3;
+inline constexpr uint32_t kCourseRuntimeProgramFormatVersion = 5;
+inline constexpr uint32_t kCourseRuntimeCompilerVersion = 5;
 inline constexpr uint32_t kCourseRuntimeAuthoringSchemaVersion = 7;
 
 enum class CourseRuntimeBuildConfiguration : uint8_t {

@@ -3254,6 +3254,11 @@ bool AppSceneResources::Initialize(
     if (!debugDraw.Initialize(device, 65536)) {
         OutputDebugStringA("[AppSceneResources] DebugDraw initialization failed.\n");
     }
+    if (!enemyThreatVisualDraw.Initialize(device, 32768)) {
+        OutputDebugStringA(
+            "[AppSceneResources] Enemy threat production visual initialization failed.\n");
+        return false;
+    }
     if (!courseMeshRenderQueue.Initialize(device, 256)) {
         OutputDebugStringA("[AppSceneResources] CourseMeshRenderQueue initialization failed.\n");
         return false;
@@ -3608,7 +3613,8 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
     const RailPath& railPath,
     const Matrix4x4& viewMatrix,
     const Matrix4x4& projMatrix,
-    const EnemyCombatPresentationBridge* enemyPresentation) {
+    const EnemyCombatPresentationBridge* enemyPresentation,
+    const EnemyEncounterReadabilityDirector* enemyReadability) {
     std::vector<CourseMeshModelBinding> bindings;
     bindings.reserve(vfxModelLibrary.size());
     for (const AppManagedModelResource& model : vfxModelLibrary) {
@@ -3630,7 +3636,8 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
         bindings,
         viewMatrix,
         projMatrix,
-        enemyPresentation);
+        enemyPresentation,
+        enemyReadability);
 }
 
 void AppSceneResources::SyncRailVehicleRenderFrame(

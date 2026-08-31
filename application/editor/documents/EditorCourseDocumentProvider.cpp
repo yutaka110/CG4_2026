@@ -201,7 +201,7 @@ bool EditorCourseDocumentProvider::Migrate(
         source.schemaVersion != 5 && source.schemaVersion != 6 &&
         source.schemaVersion != 7 && source.schemaVersion != 8 &&
         source.schemaVersion != 9 && source.schemaVersion != 10 &&
-        source.schemaVersion != 11) {
+        source.schemaVersion != 11 && source.schemaVersion != 12) {
         if (errorMessage != nullptr) *errorMessage = "No Course schema migration path is registered.";
         return false;
     }
@@ -239,7 +239,7 @@ bool EditorCourseDocumentProvider::Migrate(
             " rail control points, and " + std::to_string(enemyAssigned) +
             " enemy placements; created " +
             std::to_string(waveUpgrade.createdWaveDefinitions) +
-            " schema-v12 Course data (including wave definitions, ride motion envelopes and Rail Ride Events) and remapped " +
+            " schema-v13 Course data (including Wave definitions, Ride motion, Rail Ride Events and Encounter Beats) and remapped " +
             std::to_string(waveUpgrade.remappedEnemyReferences) +
             " enemy wave references.");
     }

@@ -128,6 +128,13 @@ DamageResult CourseActorDamageReceiver::Apply(
                 result.remainingHitPoints = currentHitPoints;
                 return result;
             }
+            if (enemy.entranceExitState.initialized &&
+                !enemy.entranceExitState.targetable) {
+                result.rejectReason = DamageRejectReason::TargetNotDamageable;
+                result.hitPointsBefore = currentHitPoints;
+                result.remainingHitPoints = currentHitPoints;
+                return result;
+            }
             if (enemy.combatState.initialized) {
                 ApplyHitPoints(enemy.combatState.currentHitPoints, result);
                 enemy.desc.hitPoints = enemy.combatState.currentHitPoints;

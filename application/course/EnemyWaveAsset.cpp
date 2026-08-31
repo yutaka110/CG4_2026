@@ -39,6 +39,44 @@ bool EnemyWaveAsset::LoadFromFile(const std::string& path, std::string* errorMes
             if (parts.size() >= 3) {
                 loaded.displayName = parts[2];
             }
+        } else if (parts[0] == "formation") {
+            if (parts.size() < 4) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid formation row at line " +
+                        std::to_string(lineNumber);
+                }
+                return false;
+            }
+            EnemyFormationDefinition definition =
+                EnemyFormationDefinition::CommercialDefault();
+            if (!TryParseEnemyFormationPattern(parts[1], definition.pattern) ||
+                !TryParseEnemyEntranceStyle(parts[2], definition.entranceStyle) ||
+                !TryParseEnemyExitStyle(parts[3], definition.exitStyle)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid formation enum at line " +
+                        std::to_string(lineNumber);
+                }
+                return false;
+            }
+            if (parts.size() > 4) {
+                const std::string value = parts[4];
+                definition.preserveAuthoredSlots =
+                    value != "0" && value != "false" && value != "False";
+            }
+            definition.slotSpacing = ParseFloatOr(parts, 5, definition.slotSpacing);
+            definition.verticalSpacing = ParseFloatOr(parts, 6, definition.verticalSpacing);
+            definition.cohesionResponse = ParseFloatOr(parts, 7, definition.cohesionResponse);
+            definition.maximumCorrection = ParseFloatOr(parts, 8, definition.maximumCorrection);
+            definition.attackStaggerSeconds = ParseFloatOr(parts, 9, definition.attackStaggerSeconds);
+            definition.entranceDurationSeconds = ParseFloatOr(parts, 10, definition.entranceDurationSeconds);
+            definition.entranceStaggerSeconds = ParseFloatOr(parts, 11, definition.entranceStaggerSeconds);
+            definition.entranceForwardDistance = ParseFloatOr(parts, 12, definition.entranceForwardDistance);
+            definition.entranceSideDistance = ParseFloatOr(parts, 13, definition.entranceSideDistance);
+            definition.exitDurationSeconds = ParseFloatOr(parts, 14, definition.exitDurationSeconds);
+            definition.exitForwardDistance = ParseFloatOr(parts, 15, definition.exitForwardDistance);
+            definition.exitSideDistance = ParseFloatOr(parts, 16, definition.exitSideDistance);
+            if (!definition.Validate(errorMessage)) return false;
+            loaded.formationDefinition = std::move(definition);
         } else if (parts[0] == "unit") {
             if (parts.size() < 11) {
                 if (errorMessage != nullptr) {
@@ -92,6 +130,9 @@ bool EnemyWaveAsset::LoadFromFile(const std::string& path, std::string* errorMes
     }
     if (loaded.displayName.empty()) {
         loaded.displayName = loaded.id;
+    }
+    if (loaded.formationDefinition.has_value()) {
+        loaded.formationDefinition->definitionId = loaded.id;
     }
     if (loaded.units.empty()) {
         if (errorMessage != nullptr) {

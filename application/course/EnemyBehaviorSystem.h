@@ -134,6 +134,9 @@ public:
         uint64_t attackIntentSequence);
     bool CanCommitAttack(const CourseEnemyActor& actor) const noexcept;
     bool NotifyAttackCommitted(CourseEnemyActor& actor);
+    bool CancelAttackIntent(
+        CourseEnemyActor& actor,
+        float cooldownSeconds);
 
     const EnemyBehaviorFrame& Frame() const noexcept { return frame_; }
     std::vector<EnemyBehaviorEvent> ConsumeEvents();

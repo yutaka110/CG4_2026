@@ -249,6 +249,7 @@ void GameSessionSystem::Update(const GameSessionFrameInput& input) {
         state_.totalMandatoryWaves = input.totalMandatoryWaves;
         state_.completedMandatoryObjectives = input.completedMandatoryObjectives;
         state_.totalMandatoryObjectives = input.totalMandatoryObjectives;
+        state_.combatClearConfirmed = input.combatClearConfirmed;
         state_.objectiveFailed = state_.objectiveFailed || input.objectiveFailed;
         state_.mandatoryWavesSatisfied = !definition_.requireAllMandatoryWaves ||
             state_.totalMandatoryWaves == 0 ||
@@ -532,6 +533,7 @@ bool GameSessionSystem::VictoryConditionsSatisfied() const {
     return state_.courseEndReached &&
         state_.mandatoryWavesSatisfied &&
         state_.mandatoryObjectivesSatisfied &&
+        state_.combatClearConfirmed &&
         !state_.objectiveFailed;
 }
 

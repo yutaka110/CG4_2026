@@ -372,6 +372,12 @@ void CourseEventDispatcher::SpawnEnemyWave(
     for (const EnemyWaveUnit& unit : wave.units) {
         CourseEnemyActorDesc desc{};
         desc.waveId = event.id;
+        if (wave.formationDefinition.has_value()) {
+            desc.formationDefinition = *wave.formationDefinition;
+            // One Wave asset can be instantiated more than once; the event id
+            // is the runtime-stable formation identity for this occurrence.
+            desc.formationDefinition.definitionId = event.id;
+        }
         desc.role = unit.role;
         desc.spawnDistance = event.distance;
         const std::string actorAssetId = !unit.actorAssetId.empty()

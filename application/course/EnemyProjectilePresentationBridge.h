@@ -39,6 +39,8 @@ struct EnemyProjectilePresentation final {
     std::string definitionId;
     std::string trailEffectId;
     std::string impactEffectId;
+    EnemyAttackDefenseResponse defenseResponses =
+        EnemyAttackDefenseResponse::None;
     Vector3 worldPosition{};
     Vector3 previousWorldPosition{};
     Vector3 motionDirection{0.0f, 0.0f, -1.0f};

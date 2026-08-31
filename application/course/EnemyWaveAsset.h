@@ -1,8 +1,10 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "EnemyFormationDefinition.h"
 #include "utils/math/Vector.h"
 
 struct EnemyWaveUnit {
@@ -21,6 +23,7 @@ struct EnemyWaveUnit {
 struct EnemyWaveAsset {
     std::string id;
     std::string displayName;
+    std::optional<EnemyFormationDefinition> formationDefinition;
     std::vector<EnemyWaveUnit> units;
 
     bool LoadFromFile(const std::string& path, std::string* errorMessage = nullptr);

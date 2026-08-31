@@ -122,10 +122,16 @@ const PlayerHitboxRuntimeState& PlayerHitboxSystem::Update(
     state_.verticalOffset = nextVertical;
     state_.dodgeActive = input.dodgeActive;
     state_.invulnerable = input.invulnerable;
+    const float requestedScale = Finite(input.hurtRadiusScale)
+        ? (std::clamp)(input.hurtRadiusScale, 0.0f, 1.0f)
+        : 1.0f;
+    const float activeScale = requestedScale < 0.999f
+        ? requestedScale
+        : definition_.dodgeHurtRadiusScale;
     state_.hurtRadius = input.dodgeActive
         ? (std::max)(
             definition_.minimumHurtRadius,
-            definition_.hurtRadius * definition_.dodgeHurtRadiusScale)
+            definition_.hurtRadius * activeScale)
         : definition_.hurtRadius;
     state_.nearMissOuterRadius = definition_.nearMissOuterRadius;
     state_.motionHistoryResetThisFrame = resetHistory;

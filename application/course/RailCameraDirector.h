@@ -194,6 +194,15 @@ struct RailCameraDirectorFrameInput {
     float cameraInertiaFovOffsetRadians = 0.0f;
     std::string preferredCinematicShotId;
     float preferredCinematicShotWeight = 0.0f;
+    // Optional authored Encounter Beat request. This is blended by the
+    // existing camera director and never bypasses comfort/safety ownership.
+    bool authoredEncounterCompositionActive = false;
+    bool authoredEncounterHasFocusWorld = false;
+    Vector3 authoredEncounterFocusWorld{};
+    float authoredEncounterCompositionWeight = 0.0f;
+    float authoredEncounterFocusWeight = 0.0f;
+    float authoredEncounterFovOffsetRadians = 0.0f;
+    float authoredEncounterBackDistanceOffset = 0.0f;
 };
 
 struct RailCameraDirectorFrame {
@@ -237,6 +246,9 @@ struct RailCameraDirectorFrame {
     float encounterFramingThreatSpread = 0.0f;
     float encounterFramingRemaining = 0.0f;
     float cinematicShotWeight = 0.0f;
+    float authoredEncounterCompositionWeight = 0.0f;
+    float authoredEncounterFocusWeight = 0.0f;
+    bool authoredEncounterCompositionActive = false;
     Vector2 compositionCorrection{};
     int lookAtCandidateCount = 0;
     int compositionCandidateCount = 0;

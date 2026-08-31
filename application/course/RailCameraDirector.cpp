@@ -364,6 +364,7 @@ RailCameraDirectorMode ClassifyMode(const std::string& mode) {
         ContainsInsensitive(mode, "contact") ||
         ContainsInsensitive(mode, "crossfire") ||
         ContainsInsensitive(mode, "encounter framing") ||
+        ContainsInsensitive(mode, "authored encounter") ||
         ContainsInsensitive(mode, "readability") ||
         ContainsInsensitive(mode, "composition safety") ||
         ContainsInsensitive(mode, "line-of-sight") ||
@@ -545,6 +546,21 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
         frame);
     ApplyEventDirecting(targetRig, input.deltaTime, frame.mode);
     ApplyEncounterFramingRules(targetRig, input, frame.mode, frame);
+    if (input.authoredEncounterCompositionActive) {
+        const float authoredWeight = (std::clamp)(
+            input.authoredEncounterCompositionWeight, 0.0f, 1.0f);
+        targetRig.fovY = (std::clamp)(
+            targetRig.fovY +
+                input.authoredEncounterFovOffsetRadians,
+            Degrees(36.0f), Degrees(78.0f));
+        targetRig.backDistance = (std::max)(
+            0.25f,
+            targetRig.backDistance +
+                input.authoredEncounterBackDistanceOffset);
+        frame.authoredEncounterCompositionActive = true;
+        frame.authoredEncounterCompositionWeight = authoredWeight;
+        AppendMode(frame.mode, "Authored Encounter Beat");
+    }
     ApplyAimFocusStabilization(targetRig, input, frame.mode, frame);
     frame.rig = SmoothRig(targetRig, input.deltaTime);
 
@@ -589,6 +605,16 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
     }
     frame.baseTarget = frame.target;
     UpdateLookAtTarget(frame, input, cameraSample);
+    if (input.authoredEncounterCompositionActive &&
+        input.authoredEncounterHasFocusWorld) {
+        const float focusWeight = (std::clamp)(
+            input.authoredEncounterFocusWeight, 0.0f, 1.0f);
+        frame.target = Add(
+            Scale(frame.target, 1.0f - focusWeight),
+            Scale(input.authoredEncounterFocusWorld, focusWeight));
+        frame.threatCenter = input.authoredEncounterFocusWorld;
+        frame.authoredEncounterFocusWeight = focusWeight;
+    }
     ApplyCompositionSafety(frame, input, cameraSample, frame.mode);
     ApplyCameraCollisionProtection(frame, input, cameraSample, frame.mode);
     ApplyLineOfSightSafety(frame, input, frame.mode);

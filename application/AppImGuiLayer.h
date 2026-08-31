@@ -93,6 +93,7 @@ class CourseRailViewportRenderer;
 #include "editor/course/CourseRideSequencerTrackBridge.h"
 #include "editor/course/RailRideSpeedBeatAuthoring.h"
 #include "editor/course/CourseRailRideEventAuthoring.h"
+#include "editor/course/CourseEncounterBeatAuthoring.h"
 #include "editor/course/CourseRideProfileDetailsPanel.h"
 #include "editor/course/CourseCameraShotDetailsPanel.h"
 #include "editor/course/RailRideTuningTelemetryPanel.h"
@@ -574,6 +575,7 @@ private:
     editor::CourseRideSequencerTrackBridge editorCourseRideSequencerBridge_{};
     editor::RailRideSpeedBeatAuthoring editorRailRideSpeedBeatAuthoring_{};
     editor::CourseRailRideEventAuthoring editorCourseRailRideEventAuthoring_{};
+    editor::CourseEncounterBeatAuthoring editorCourseEncounterBeatAuthoring_{};
     editor::CourseRideProfileDetailsPanel courseRideProfileDetailsPanel_{};
     editor::CourseCameraShotDetailsPanel courseCameraShotDetailsPanel_{};
     editor::RailRideTuningTelemetryPanel railRideTuningTelemetryPanel_{};

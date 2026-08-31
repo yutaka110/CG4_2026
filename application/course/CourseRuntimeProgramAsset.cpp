@@ -153,6 +153,64 @@ bool ReadBehaviorDefinition(
     return value.definitionId.empty() || value.Validate(nullptr);
 }
 
+void WriteFormationDefinition(
+    BinaryWriter& writer,
+    const EnemyFormationDefinition& value) {
+    writer.String(value.definitionId);
+    writer.U8(static_cast<uint8_t>(value.pattern));
+    writer.U8(static_cast<uint8_t>(value.entranceStyle));
+    writer.U8(static_cast<uint8_t>(value.exitStyle));
+    writer.F32(value.slotSpacing);
+    writer.F32(value.verticalSpacing);
+    writer.F32(value.cohesionResponse);
+    writer.F32(value.maximumCorrection);
+    writer.F32(value.attackStaggerSeconds);
+    writer.F32(value.entranceDurationSeconds);
+    writer.F32(value.entranceStaggerSeconds);
+    writer.F32(value.entranceForwardDistance);
+    writer.F32(value.entranceSideDistance);
+    writer.F32(value.exitDurationSeconds);
+    writer.F32(value.exitForwardDistance);
+    writer.F32(value.exitSideDistance);
+    writer.Bool(value.preserveAuthoredSlots);
+    writer.Bool(value.commercialFormation);
+}
+
+bool ReadFormationDefinition(
+    BinaryReader& reader,
+    EnemyFormationDefinition& value) {
+    uint8_t pattern = 0;
+    uint8_t entranceStyle = 0;
+    uint8_t exitStyle = 0;
+    if (!reader.String(value.definitionId) ||
+        !reader.U8(pattern) ||
+        pattern > static_cast<uint8_t>(EnemyFormationPattern::Ring) ||
+        !reader.U8(entranceStyle) ||
+        entranceStyle > static_cast<uint8_t>(EnemyEntranceStyle::RearChase) ||
+        !reader.U8(exitStyle) ||
+        exitStyle > static_cast<uint8_t>(EnemyExitStyle::RearRetreat) ||
+        !reader.F32(value.slotSpacing) ||
+        !reader.F32(value.verticalSpacing) ||
+        !reader.F32(value.cohesionResponse) ||
+        !reader.F32(value.maximumCorrection) ||
+        !reader.F32(value.attackStaggerSeconds) ||
+        !reader.F32(value.entranceDurationSeconds) ||
+        !reader.F32(value.entranceStaggerSeconds) ||
+        !reader.F32(value.entranceForwardDistance) ||
+        !reader.F32(value.entranceSideDistance) ||
+        !reader.F32(value.exitDurationSeconds) ||
+        !reader.F32(value.exitForwardDistance) ||
+        !reader.F32(value.exitSideDistance) ||
+        !reader.Bool(value.preserveAuthoredSlots) ||
+        !reader.Bool(value.commercialFormation)) {
+        return false;
+    }
+    value.pattern = static_cast<EnemyFormationPattern>(pattern);
+    value.entranceStyle = static_cast<EnemyEntranceStyle>(entranceStyle);
+    value.exitStyle = static_cast<EnemyExitStyle>(exitStyle);
+    return value.definitionId.empty() || value.Validate(nullptr);
+}
+
 void WriteProjectileDefinition(
     BinaryWriter& writer,
     const EnemyProjectileDefinitionAsset& value) {
@@ -172,12 +230,16 @@ void WriteProjectileDefinition(
     WriteVector4(writer, value.color);
     writer.String(value.trailEffectId);
     writer.String(value.impactEffectId);
+    writer.U32(static_cast<uint32_t>(value.defenseResponses));
+    writer.F32(value.shootDownHitPoints);
+    writer.F32(value.shootDownRadiusScale);
 }
 
 bool ReadProjectileDefinition(
     BinaryReader& reader,
     EnemyProjectileDefinitionAsset& value) {
     uint8_t trajectory = 0;
+    uint32_t defenseResponses = 0;
     if (!reader.String(value.id) || !reader.String(value.displayName) ||
         !reader.U8(trajectory) ||
         trajectory > static_cast<uint8_t>(EnemyProjectileTrajectory::Arc) ||
@@ -193,10 +255,15 @@ bool ReadProjectileDefinition(
         !reader.F32(value.damage) ||
         !ReadVector4(reader, value.color) ||
         !reader.String(value.trailEffectId) ||
-        !reader.String(value.impactEffectId)) {
+        !reader.String(value.impactEffectId) ||
+        !reader.U32(defenseResponses) ||
+        !reader.F32(value.shootDownHitPoints) ||
+        !reader.F32(value.shootDownRadiusScale)) {
         return false;
     }
     value.trajectory = static_cast<EnemyProjectileTrajectory>(trajectory);
+    value.defenseResponses = static_cast<EnemyAttackDefenseResponse>(
+        defenseResponses);
     return value.id.empty() || value.Validate(nullptr);
 }
 
@@ -232,6 +299,7 @@ void WriteActorDesc(BinaryWriter& writer, const CourseEnemyActorDesc& value) {
     WriteVector3(writer, value.localRotation);
     WriteVector3(writer, value.localScale);
     WriteBehaviorDefinition(writer, value.behaviorDefinition);
+    WriteFormationDefinition(writer, value.formationDefinition);
     writer.Bool(value.previewOnly);
     writer.Bool(value.suppressFire);
 }
@@ -270,6 +338,7 @@ bool ReadActorDesc(BinaryReader& reader, CourseEnemyActorDesc& value) {
         !ReadVector3(reader, value.localRotation) ||
         !ReadVector3(reader, value.localScale) ||
         !ReadBehaviorDefinition(reader, value.behaviorDefinition) ||
+        !ReadFormationDefinition(reader, value.formationDefinition) ||
         !reader.Bool(value.previewOnly) ||
         !reader.Bool(value.suppressFire)) {
         return false;
@@ -364,6 +433,10 @@ bool CourseRuntimeProgramAsset::Validate(std::string* errorMessage) const {
         if (!actor.actor.behaviorDefinition.definitionId.empty() &&
             !actor.actor.behaviorDefinition.Validate(nullptr)) {
             return fail("Course runtime program contains invalid Actor behavior data.");
+        }
+        if (!actor.actor.formationDefinition.definitionId.empty() &&
+            !actor.actor.formationDefinition.Validate(nullptr)) {
+            return fail("Course runtime program contains invalid Actor formation data.");
         }
         if (!actor.actor.projectileDefinition.id.empty() &&
             !actor.actor.projectileDefinition.Validate(nullptr)) {

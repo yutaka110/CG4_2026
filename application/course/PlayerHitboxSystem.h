@@ -51,6 +51,7 @@ struct PlayerHitboxFrameInput final {
     float verticalOffset = 4.0f;
     bool dodgeActive = false;
     bool invulnerable = false;
+    float hurtRadiusScale = 1.0f;
     bool resetMotionHistory = false;
 };
 

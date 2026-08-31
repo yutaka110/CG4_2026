@@ -383,6 +383,7 @@ const char* ToString(EnemyAttackCancelReason reason) noexcept {
     case EnemyAttackCancelReason::ActorUnavailable: return "ActorUnavailable";
     case EnemyAttackCancelReason::ReservationExpired: return "ReservationExpired";
     case EnemyAttackCancelReason::RuntimeReset: return "RuntimeReset";
+    case EnemyAttackCancelReason::PlayerInterrupted: return "PlayerInterrupted";
     }
     return "Unknown";
 }

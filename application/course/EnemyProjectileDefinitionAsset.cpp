@@ -66,6 +66,18 @@ bool EnemyProjectileDefinitionAsset::LoadFromFile(
         loaded.color.w = ParseFloatOr(parts, 17, loaded.color.w);
         loaded.trailEffectId = parts[18];
         loaded.impactEffectId = parts[19];
+        if (parts.size() > 20 && !parts[20].empty() &&
+            !TryParseEnemyAttackDefenseResponses(
+                parts[20], loaded.defenseResponses)) {
+            SetError(errorMessage,
+                "Unknown enemy projectile defense response at line " +
+                std::to_string(lineNumber));
+            return false;
+        }
+        loaded.shootDownHitPoints = ParseFloatOr(
+            parts, 21, loaded.shootDownHitPoints);
+        loaded.shootDownRadiusScale = ParseFloatOr(
+            parts, 22, loaded.shootDownRadiusScale);
     }
     if (loaded.displayName.empty()) loaded.displayName = loaded.id;
     if (!loaded.Validate(errorMessage)) return false;
@@ -90,6 +102,13 @@ bool EnemyProjectileDefinitionAsset::Validate(
         predictionScale < 0.0f || maximumPredictionSeconds < 0.0f ||
         arcGravity < 0.0f || color.w < 0.0f ||
         trailEffectId.empty() || impactEffectId.empty() ||
+        defenseResponses == EnemyAttackDefenseResponse::None ||
+        !std::isfinite(shootDownHitPoints) ||
+        !std::isfinite(shootDownRadiusScale) ||
+        shootDownHitPoints < 0.0f || shootDownRadiusScale <= 0.0f ||
+        (HasDefenseResponse(
+            defenseResponses, EnemyAttackDefenseResponse::ShootDown) &&
+            shootDownHitPoints <= 0.0f) ||
         (trajectory == EnemyProjectileTrajectory::Homing &&
             homingTurnRateRadians <= 0.0f) ||
         (trajectory == EnemyProjectileTrajectory::Arc && arcGravity <= 0.0f)) {
@@ -126,4 +145,41 @@ const char* ToString(EnemyProjectileTrajectory trajectory) noexcept {
     case EnemyProjectileTrajectory::Arc: return "Arc";
     }
     return "Unknown";
+}
+
+bool TryParseEnemyAttackDefenseResponses(
+    const std::string& text,
+    EnemyAttackDefenseResponse& responses) noexcept {
+    responses = EnemyAttackDefenseResponse::None;
+    size_t start = 0;
+    while (start <= text.size()) {
+        const size_t separator = text.find(',', start);
+        const std::string token = Trim(text.substr(
+            start,
+            separator == std::string::npos
+                ? std::string::npos : separator - start));
+        EnemyAttackDefenseResponse response =
+            EnemyAttackDefenseResponse::None;
+        if (token == "shootdown") {
+            response = EnemyAttackDefenseResponse::ShootDown;
+        } else if (token == "interrupt") {
+            response = EnemyAttackDefenseResponse::Interrupt;
+        } else if (token == "lean_left") {
+            response = EnemyAttackDefenseResponse::LeanLeft;
+        } else if (token == "lean_right") {
+            response = EnemyAttackDefenseResponse::LeanRight;
+        } else if (token == "lean") {
+            response = EnemyAttackDefenseResponse::LeanLeft |
+                EnemyAttackDefenseResponse::LeanRight;
+        } else if (token == "duck") {
+            response = EnemyAttackDefenseResponse::Duck;
+        } else {
+            responses = EnemyAttackDefenseResponse::None;
+            return false;
+        }
+        responses = responses | response;
+        if (separator == std::string::npos) break;
+        start = separator + 1;
+    }
+    return responses != EnemyAttackDefenseResponse::None;
 }

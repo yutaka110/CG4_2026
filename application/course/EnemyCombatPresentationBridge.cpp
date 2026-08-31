@@ -193,6 +193,13 @@ void ApplyProceduralAnimation(
             output.scaleMultiplier *= 1.08f;
         }
     }
+    if (actor.entranceExitState.initialized) {
+        output.scaleMultiplier *= actor.entranceExitState.presentationScale;
+        output.materialColor.w *= actor.entranceExitState.presentationAlpha;
+        output.visible = output.visible &&
+            actor.entranceExitState.presentationAlpha > 0.001f &&
+            !actor.entranceExitState.exitComplete;
+    }
 }
 
 struct SpatialMix final {

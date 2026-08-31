@@ -40,6 +40,65 @@ void UpdateEffectInstance(
     instance->attached = true;
     instance->previewLoop = true;
 }
+
+bool IsRenderableEffectInstance(
+    const EffectRuntime* runtime,
+    uint32_t instanceId) {
+    if (runtime == nullptr || instanceId == 0) return false;
+    const EffectInstance* instance = runtime->FindInstance(instanceId);
+    if (instance == nullptr || instance->asset == nullptr) return false;
+
+    for (const EffectComponentInstance& componentInstance : instance->components) {
+        if (!componentInstance.active) continue;
+        bool renderable = false;
+        instance->asset->Components().ForEachComponentCommon(
+            [&](const EffectComponentCommon& common) {
+                if (renderable || common.id != componentInstance.componentId ||
+                    common.duration <= 0.0f) {
+                    return;
+                }
+                if (common.type != EffectComponentType::Particle) {
+                    renderable = true;
+                    return;
+                }
+                const ParticleComponentAssetView particle =
+                    FindParticleComponent(
+                        instance->asset->Components().ParticleStorageView(),
+                        common.id);
+                renderable = particle && particle.settings->spawnCount > 0.0f;
+            });
+        if (renderable) return true;
+    }
+    return false;
+}
+
+void AppendProjectilePrimitive(
+    const EnemyProjectileVfxProxy& proxy,
+    ge3::debug::DebugDrawSystem& draw) {
+    draw.AddLine(
+        proxy.trailStart,
+        proxy.worldPosition,
+        proxy.trailColor,
+        proxy.haloColor);
+    draw.AddPoint(
+        proxy.worldPosition,
+        proxy.coreRadius,
+        proxy.coreColor);
+    draw.AddCircle(
+        proxy.worldPosition,
+        proxy.cameraRight,
+        proxy.cameraUp,
+        proxy.haloRadius,
+        proxy.haloColor,
+        24);
+    draw.AddCircle(
+        proxy.worldPosition,
+        proxy.cameraRight,
+        proxy.cameraUp,
+        proxy.coreRadius,
+        proxy.coreColor,
+        18);
+}
 } // namespace
 
 EnemyProjectileVfxRenderer::EnemyProjectileVfxRenderer()
@@ -178,13 +237,28 @@ void EnemyProjectileVfxRenderer::Update(
             visual.coreRadiusScale;
         const float angularRadius = cameraDistance *
             visual.minimumAngularRadius;
-        const float coreRadius = (std::clamp)(
+        const float authoredCoreRadius = (std::clamp)(
             (std::max)(physicalRadius, angularRadius) * pulse * threatScale,
             0.04f,
             visual.maximumWorldRadius);
-        const float haloRadius = (std::min)(
-            coreRadius * visual.haloRadiusScale,
+        const float authoredHaloRadius = (std::min)(
+            authoredCoreRadius * visual.haloRadiusScale,
             visual.maximumWorldRadius * visual.haloRadiusScale);
+        EnemyProjectileScreenSpaceReadabilityInput readabilityInput{};
+        readabilityInput.cameraDistance = cameraDistance;
+        readabilityInput.verticalFovRadians = input.verticalFovRadians;
+        readabilityInput.viewportHeightPixels = input.viewportHeightPixels;
+        readabilityInput.authoredCoreRadius = authoredCoreRadius;
+        readabilityInput.authoredHaloRadius = authoredHaloRadius;
+        readabilityInput.authoredTrailWidth =
+            authoredCoreRadius * visual.trailWidthScale;
+        readabilityInput.threat = projectile.threat;
+        readabilityInput.settings = input.readabilitySettings;
+        const EnemyProjectileScreenSpaceReadabilityResult readability =
+            EnemyProjectileScreenSpaceReadabilityPolicy{}.Evaluate(
+                readabilityInput);
+        const float coreRadius = readability.coreRadius;
+        const float haloRadius = readability.haloRadius;
 
         EnemyProjectileVfxProxy proxy{};
         proxy.projectileId = projectile.projectileId;
@@ -198,9 +272,17 @@ void EnemyProjectileVfxRenderer::Update(
         proxy.trailColor = visual.trailColor;
         proxy.coreRadius = coreRadius;
         proxy.haloRadius = haloRadius;
-        proxy.trailWidth = coreRadius * visual.trailWidthScale;
+        proxy.trailWidth = readability.trailWidth;
         proxy.distanceFromCamera = cameraDistance;
+        proxy.coreDiameterPixels = readability.coreDiameterPixels;
+        proxy.haloDiameterPixels = readability.haloDiameterPixels;
         proxy.threat = projectile.threat;
+        proxy.readabilityBoosted = readability.boosted;
+        proxy.readabilityLimitReached = readability.worldLimitReached;
+        if (readability.boosted) ++frame_.readabilityBoostedProjectiles;
+        if (readability.worldLimitReached) {
+            ++frame_.readabilityLimitedProjectiles;
+        }
         const Vector3 motionDirection = NormalizeOr(
             projectile.motionDirection, {0.0f, 0.0f, -1.0f});
         proxy.trailStart = Add(
@@ -251,10 +333,24 @@ void EnemyProjectileVfxRenderer::Update(
         }
         proxy.coreEffectInstanceId = managed.coreInstanceId;
         proxy.haloEffectInstanceId = managed.haloInstanceId;
-        proxy.effectBacked = managed.coreInstanceId != 0 &&
-            managed.haloInstanceId != 0;
-        if (proxy.effectBacked) ++frame_.effectBackedProjectiles;
-        else ++frame_.fallbackProjectiles;
+        proxy.effectBacked =
+            IsRenderableEffectInstance(input.effectRuntime, managed.coreInstanceId) &&
+            IsRenderableEffectInstance(input.effectRuntime, managed.haloInstanceId);
+        if (proxy.effectBacked) {
+            proxy.visualState = EnemyProjectileVisualState::ProductionEffectReady;
+            ++frame_.effectBackedProjectiles;
+        } else if (input.settings.productionPrimitivesEnabled ||
+                   input.settings.fallbackPrimitivesEnabled) {
+            proxy.visualState = EnemyProjectileVisualState::ProductionFallbackReady;
+            ++frame_.fallbackProjectiles;
+        } else {
+            proxy.visualState = EnemyProjectileVisualState::Unavailable;
+            ++frame_.unavailableProjectiles;
+        }
+        if (input.settings.productionPrimitivesEnabled ||
+            (!proxy.effectBacked && input.settings.fallbackPrimitivesEnabled)) {
+            ++frame_.productionSubmittedProjectiles;
+        }
         frame_.proxies.push_back(std::move(proxy));
     }
 
@@ -263,34 +359,32 @@ void EnemyProjectileVfxRenderer::Update(
     frame_.revision = touchedRevision;
 }
 
+void EnemyProjectileVfxRenderer::AppendProductionWorldPrimitives(
+    ge3::debug::DebugDrawSystem& productionDraw) const {
+    for (const EnemyProjectileVfxProxy& proxy : frame_.proxies) {
+        if (proxy.visualState == EnemyProjectileVisualState::Unavailable) continue;
+        AppendProjectilePrimitive(proxy, productionDraw);
+    }
+}
+
 void EnemyProjectileVfxRenderer::AppendFallbackWorldPrimitives(
     ge3::debug::DebugDrawSystem& debugDraw) const {
     for (const EnemyProjectileVfxProxy& proxy : frame_.proxies) {
         if (proxy.effectBacked) continue;
-        debugDraw.AddLine(
-            proxy.trailStart,
-            proxy.worldPosition,
-            proxy.trailColor,
-            proxy.haloColor);
-        debugDraw.AddPoint(
-            proxy.worldPosition,
-            proxy.coreRadius,
-            proxy.coreColor);
-        debugDraw.AddCircle(
-            proxy.worldPosition,
-            proxy.cameraRight,
-            proxy.cameraUp,
-            proxy.haloRadius,
-            proxy.haloColor,
-            24);
-        debugDraw.AddCircle(
-            proxy.worldPosition,
-            proxy.cameraRight,
-            proxy.cameraUp,
-            proxy.coreRadius,
-            proxy.coreColor,
-            18);
+        AppendProjectilePrimitive(proxy, debugDraw);
     }
+}
+
+const char* ToString(EnemyProjectileVisualState state) noexcept {
+    switch (state) {
+    case EnemyProjectileVisualState::ProductionEffectReady:
+        return "ProductionEffectReady";
+    case EnemyProjectileVisualState::ProductionFallbackReady:
+        return "ProductionFallbackReady";
+    case EnemyProjectileVisualState::Unavailable:
+        return "Unavailable";
+    }
+    return "Unknown";
 }
 
 const EnemyProjectileVisualDefinitionAsset*

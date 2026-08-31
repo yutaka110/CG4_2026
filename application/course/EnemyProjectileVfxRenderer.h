@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "EnemyProjectilePresentationBridge.h"
+#include "EnemyProjectileScreenSpaceReadabilityPolicy.h"
 #include "EnemyProjectileVisualDefinitionAsset.h"
 
 class EffectRuntime;
@@ -16,9 +17,18 @@ namespace ge3::debug { class DebugDrawSystem; }
 struct EnemyProjectileVfxRendererSettings final {
     bool enabled = true;
     bool effectRuntimeEnabled = true;
+    // Production primitives are the readability guarantee. Effects are an
+    // optional enhancement and must never be the only visible representation.
+    bool productionPrimitivesEnabled = true;
     bool fallbackPrimitivesEnabled = true;
     size_t maximumVisibleProjectiles = 256;
     float maximumDrawDistance = 900.0f;
+};
+
+enum class EnemyProjectileVisualState : unsigned char {
+    ProductionEffectReady,
+    ProductionFallbackReady,
+    Unavailable,
 };
 
 struct EnemyProjectileVfxProxy final {
@@ -36,18 +46,28 @@ struct EnemyProjectileVfxProxy final {
     float haloRadius = 1.0f;
     float trailWidth = 0.2f;
     float distanceFromCamera = 0.0f;
+    float coreDiameterPixels = 0.0f;
+    float haloDiameterPixels = 0.0f;
     uint32_t coreEffectInstanceId = 0;
     uint32_t haloEffectInstanceId = 0;
     bool threat = false;
+    bool readabilityBoosted = false;
+    bool readabilityLimitReached = false;
     bool effectBacked = false;
+    EnemyProjectileVisualState visualState =
+        EnemyProjectileVisualState::Unavailable;
 };
 
 struct EnemyProjectileVfxRenderFrame final {
     std::vector<EnemyProjectileVfxProxy> proxies;
     uint32_t effectBackedProjectiles = 0;
     uint32_t fallbackProjectiles = 0;
+    uint32_t productionSubmittedProjectiles = 0;
+    uint32_t unavailableProjectiles = 0;
     uint32_t culledByDistance = 0;
     uint32_t droppedByBudget = 0;
+    uint32_t readabilityBoostedProjectiles = 0;
+    uint32_t readabilityLimitedProjectiles = 0;
     uint64_t sourcePresentationRevision = 0;
     uint64_t assetRevision = 0;
     uint64_t revision = 0;
@@ -60,8 +80,11 @@ struct EnemyProjectileVfxRenderInput final {
     Vector3 cameraRight{1.0f, 0.0f, 0.0f};
     Vector3 cameraUp{0.0f, 1.0f, 0.0f};
     float elapsedTime = 0.0f;
+    float verticalFovRadians = 0.78539816339f;
+    uint32_t viewportHeightPixels = 720;
     bool gameplayActive = true;
     EnemyProjectileVfxRendererSettings settings{};
+    EnemyProjectileScreenSpaceReadabilitySettings readabilitySettings{};
 };
 
 // Production hostile-projectile presentation. It resolves a visual asset by
@@ -77,6 +100,10 @@ public:
         std::string* errorMessage = nullptr);
     void Reset(EffectRuntime* effectRuntime = nullptr);
     void Update(const EnemyProjectileVfxRenderInput& input);
+    void AppendProductionWorldPrimitives(
+        ge3::debug::DebugDrawSystem& productionDraw) const;
+    // Compatibility entry point for tests/tools that intentionally request
+    // only degraded visuals. Gameplay uses AppendProductionWorldPrimitives.
     void AppendFallbackWorldPrimitives(
         ge3::debug::DebugDrawSystem& debugDraw) const;
 
@@ -118,3 +145,5 @@ private:
     uint64_t assetRevision_ = 0;
     uint64_t revision_ = 0;
 };
+
+const char* ToString(EnemyProjectileVisualState state) noexcept;

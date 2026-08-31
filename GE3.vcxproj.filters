@@ -1049,10 +1049,52 @@
     <ClCompile Include="application\course\EnemyCombatPresentationBridge.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\CombatTruthGate.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyScreenPresencePolicy.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyEncounterReadabilityDirector.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyEncounterBeatDefinition.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyEncounterPacingDirector.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyEncounterCameraCompositionBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\EnemyBehaviorSystem.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\EnemyFormationDefinition.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyFormationSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyEntranceExitDirector.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\EnemyAttackCoordinator.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyAttackInterruptSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyAttackDefenseValidationSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyAttackDefensePresentationBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyAttackDefenseResolutionSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyAttackDefenseOutcomeFeedbackBridge.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\EnemyAttackExecutionSystem.cpp">
@@ -1074,6 +1116,12 @@
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\EnemyProjectileVfxRenderer.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyProjectileScreenSpaceReadabilityPolicy.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\EnemyProjectileShootDownSystem.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\EnemyProjectileAudioBridge.cpp">
@@ -1166,6 +1214,9 @@
     <ClCompile Include="application\course\RailShooterHudRenderer.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\RailShooterDefensePromptRenderer.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\CourseRailRideEventDefinition.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
@@ -1173,6 +1224,9 @@
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\editor\course\CourseRailRideEventAuthoring.cpp">
+      <Filter>ソース ファイル\application\editor\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\editor\course\CourseEncounterBeatAuthoring.cpp">
       <Filter>ソース ファイル\application\editor\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\RailVehicleCameraInertiaBridge.cpp">
@@ -1188,6 +1242,9 @@
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\RailVehicleMountedEvasionSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailVehicleMountedDefenseSystem.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\RailVehicleOccupantClearanceSystem.cpp">
@@ -1759,10 +1816,55 @@
     <ClInclude Include="application\course\EnemyCombatPresentationBridge.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\CombatTruthGate.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyScreenPresencePolicy.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyEncounterReadabilityDirector.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyEncounterBeatDefinition.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyEncounterPacingDirector.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyEncounterCameraCompositionBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\EnemyBehaviorSystem.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\EnemyFormationDefinition.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyFormationSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyEntranceExitDirector.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\EnemyAttackCoordinator.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyAttackInterruptSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyAttackDefenseValidationSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyAttackDefensePresentationBridge.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyAttackDefenseResult.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyAttackDefenseResolutionSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyAttackDefenseOutcomeFeedbackBridge.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\EnemyAttackExecutionSystem.h">
@@ -1784,6 +1886,12 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\EnemyProjectileVfxRenderer.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyProjectileScreenSpaceReadabilityPolicy.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EnemyProjectileShootDownSystem.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\EnemyProjectileAudioBridge.h">
@@ -1876,6 +1984,9 @@
     <ClInclude Include="application\course\RailShooterHudRenderer.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\RailShooterDefensePromptRenderer.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\CourseRailRideEventDefinition.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
@@ -1883,6 +1994,9 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\course\CourseRailRideEventAuthoring.h">
+      <Filter>ヘッダー ファイル\application\editor\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseEncounterBeatAuthoring.h">
       <Filter>ヘッダー ファイル\application\editor\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailVehicleCameraInertiaBridge.h">
@@ -1898,6 +2012,9 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailVehicleMountedEvasionSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleMountedDefenseSystem.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailVehicleOccupantClearanceSystem.h">

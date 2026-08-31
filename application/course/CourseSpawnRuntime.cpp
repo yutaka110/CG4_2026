@@ -63,6 +63,8 @@ void CourseSpawnRuntime::Reset() {
     enemyAttackExecutionSystem_.Reset();
     enemyTargetingSystem_.Reset();
     enemyProjectileSystem_.Reset();
+    enemyFormationSystem_.Reset();
+    enemyEntranceExitDirector_.Reset();
     nextActorId_ = 1;
 }
 
@@ -93,6 +95,8 @@ void CourseSpawnRuntime::RestoreCheckpoint(
     enemyTargetingSystem_.Reset();
     enemyProjectileSystem_.Reset();
     enemyProjectileSystem_.RebuildFromProjectiles(bullets_);
+    enemyFormationSystem_.Reset();
+    enemyEntranceExitDirector_.Reset();
     nextActorId_ = (std::max)(1u, checkpoint.nextActorId);
 }
 
@@ -106,6 +110,11 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     const float dt = (std::max)(0.0f, deltaTime);
     fireSafetyStats_ = {};
 
+    // Additive staging is removed in reverse order before Behavior writes the
+    // new base pose. This prevents cumulative drift in long-lived formations.
+    enemyEntranceExitDirector_.BeginFrame(*this);
+    enemyFormationSystem_.BeginFrame(*this);
+
     EnemyCombatFrameInput combatInput{};
     combatInput.deltaTime = dt;
     combatInput.playerDistance = safetyInput.playerDistance;
@@ -114,6 +123,8 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     behaviorInput.deltaTime = dt;
     behaviorInput.playerDistance = safetyInput.playerDistance;
     enemyBehaviorSystem_.Update(*this, behaviorInput);
+    enemyFormationSystem_.Update(*this, dt);
+    enemyEntranceExitDirector_.Update(*this, dt);
 
     for (CourseEnemyActor& enemy : enemies_) {
         ++fireSafetyStats_.activeEnemies;
@@ -177,12 +188,14 @@ bool CourseSpawnRuntime::CanEnemyFire(
     CourseEnemyActor& enemy,
     const CourseEnemyFireSafetyFrameInput& safetyInput,
     float dt) {
-    if (enemy.desc.suppressFire ||
+    if (enemy.desc.suppressFire || enemy.entranceExitState.attackSuppressed ||
         (enemy.combatState.initialized && !enemy.combatState.canFire)) {
         enemy.fireSafetyAllowed = false;
         enemy.fireSafetyReason = enemy.desc.suppressFire
             ? "actor fire suppressed"
-            : "combat phase: " + std::string(ToString(enemy.combatState.phase));
+            : (enemy.entranceExitState.attackSuppressed
+                ? "entrance/exit staging gate"
+                : "combat phase: " + std::string(ToString(enemy.combatState.phase)));
         fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;
         return false;
     }
@@ -195,6 +208,22 @@ bool CourseSpawnRuntime::CanEnemyFire(
                 ? "behavior attack countdown"
                 : "behavior waiting for telegraph presentation"
             : "behavior has no attack intent";
+        fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;
+        return false;
+    }
+    if (enemy.screenPresenceEvaluated &&
+        !enemy.screenPresenceAttackAllowed) {
+        enemy.fireSafetyAllowed = false;
+        enemy.fireSafetyReason = "screen presence exposure gate";
+        ++fireSafetyStats_.blockedByVisibilityTime;
+        fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;
+        return false;
+    }
+    if (enemy.encounterPacingEvaluated &&
+        !enemy.encounterPacingAttackAllowed) {
+        enemy.fireSafetyAllowed = false;
+        enemy.fireSafetyReason = "encounter pacing phase gate";
+        ++fireSafetyStats_.blockedByVisibilityTime;
         fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;
         return false;
     }
@@ -261,6 +290,9 @@ void CourseSpawnRuntime::PruneDestroyedActors() {
             enemies_.end(),
             [](const CourseEnemyActor& enemy) {
                 if (enemy.age >= enemy.desc.lifetime) {
+                    return true;
+                }
+                if (enemy.entranceExitState.exitComplete) {
                     return true;
                 }
                 if (!enemy.combatState.initialized) {

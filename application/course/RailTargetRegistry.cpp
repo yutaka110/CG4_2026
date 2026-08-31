@@ -135,7 +135,9 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
     for (const CourseEnemyActor& enemy : input.spawnRuntime->Enemies()) {
         if (enemy.desc.hitPoints <= 0.0f ||
             (enemy.combatState.initialized &&
-             !enemy.combatState.canBeTargeted)) {
+             !enemy.combatState.canBeTargeted) ||
+            (enemy.entranceExitState.initialized &&
+             !enemy.entranceExitState.targetable)) {
             continue;
         }
         const float distance = EnemyDistance(enemy);

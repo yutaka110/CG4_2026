@@ -15,6 +15,7 @@
 
 class CourseSpawnRuntime;
 class EnemyCombatPresentationBridge;
+class EnemyEncounterReadabilityDirector;
 
 struct CourseMeshModelBinding {
     std::string name;
@@ -69,7 +70,8 @@ public:
         std::span<const CourseMeshModelBinding> models,
         const Matrix4x4& viewMatrix,
         const Matrix4x4& projMatrix,
-        const EnemyCombatPresentationBridge* enemyPresentation = nullptr);
+        const EnemyCombatPresentationBridge* enemyPresentation = nullptr,
+        const EnemyEncounterReadabilityDirector* enemyReadability = nullptr);
 
     const std::vector<CourseMeshRenderItem>& Items() const { return items_; }
     size_t Capacity() const { return items_.size(); }
@@ -81,7 +83,8 @@ private:
         const RailPath& railPath,
         std::span<const CourseMeshModelBinding> models,
         const Matrix4x4& viewProjection,
-        const EnemyCombatPresentationBridge* enemyPresentation);
+        const EnemyCombatPresentationBridge* enemyPresentation,
+        const EnemyEncounterReadabilityDirector* enemyReadability);
     void AddCourseDebrisInstances(
         const CourseAsset& course,
         float currentDistance,

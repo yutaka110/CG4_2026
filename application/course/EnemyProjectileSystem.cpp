@@ -120,6 +120,13 @@ uint32_t EnemyProjectileSystem::SpawnVolley(
         projectile.color = definition.color;
         projectile.trailEffectId = definition.trailEffectId;
         projectile.impactEffectId = definition.impactEffectId;
+        projectile.defenseResponses = definition.defenseResponses;
+        projectile.shootDownHitPoints = definition.shootDownHitPoints;
+        projectile.shootDownMaximumHitPoints = definition.shootDownHitPoints;
+        projectile.shootDownRadiusScale = definition.shootDownRadiusScale;
+        projectile.shootDownEnabled = HasDefenseResponse(
+            definition.defenseResponses,
+            EnemyAttackDefenseResponse::ShootDown);
 
         if (hasTarget) {
             projectile.lockedTargetDistance =
@@ -234,6 +241,11 @@ void EnemyProjectileSystem::InitializeLegacy(
         std::sqrt(projectile.forwardSpeed * projectile.forwardSpeed +
             projectile.lateralSpeed * projectile.lateralSpeed +
             projectile.verticalSpeed * projectile.verticalSpeed));
+    projectile.shootDownMaximumHitPoints = (std::max)(
+        projectile.shootDownMaximumHitPoints,
+        projectile.shootDownHitPoints);
+    projectile.shootDownEnabled = projectile.shootDownEnabled &&
+        projectile.shootDownHitPoints > 0.0f;
     projectile.initialized = true;
     projectile.active = true;
 }

@@ -67,6 +67,7 @@ EnemyProjectilePresentation BuildPresentation(
     output.definitionId = projectile.definitionId;
     output.trailEffectId = projectile.trailEffectId;
     output.impactEffectId = projectile.impactEffectId;
+    output.defenseResponses = projectile.defenseResponses;
     output.worldPosition = ResolveRailLocal(
         railPath,
         distance,

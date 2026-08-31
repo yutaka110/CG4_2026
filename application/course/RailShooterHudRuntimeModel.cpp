@@ -1,6 +1,7 @@
 #include "RailShooterHudRuntimeModel.h"
 
 #include "CourseGameplayWaveRuntimeBridge.h"
+#include "EnemyEncounterReadabilityDirector.h"
 #include "GrazeScoreSystem.h"
 #include "RailVehicleMovementSystem.h"
 #include "WeaponFireSystem.h"
@@ -123,6 +124,25 @@ void RailShooterHudRuntimeModel::Update(
         next.threatNormalized =
             (std::clamp)(input.threat->threatNormalized, 0.0f, 1.0f);
         next.nearbyThreats = input.threat->nearbyThreats;
+    }
+    if (input.encounterReadability != nullptr) {
+        const EnemyEncounterReadabilityFrame& encounter =
+            *input.encounterReadability;
+        next.encounterReadabilityRevision = encounter.revision;
+        next.activeEnemies = encounter.truth.activeHostiles;
+        next.activeTelegraphs = encounter.truth.activeTelegraphs;
+        next.activeHostileProjectiles =
+            encounter.truth.activeHostileProjectiles;
+        next.unresolvedDefenseWindows =
+            encounter.truth.unresolvedDefenseWindows;
+        next.readableHostiles = encounter.readableHostiles;
+        next.combatClearConfirmed = encounter.truth.safeToAnnounceClear;
+        next.combatStatusText = encounter.truth.statusText;
+        next.nearbyThreats = (std::max)(
+            next.nearbyThreats,
+            encounter.truth.activeHostiles +
+                encounter.truth.activeHostileProjectiles +
+                encounter.truth.unresolvedDefenseWindows);
     }
     next.maximumLocks = input.maximumLocks;
     next.lockCount = (std::min)(input.lockCount, input.maximumLocks);

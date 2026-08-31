@@ -25,6 +25,7 @@ enum class EnemyAttackCancelReason : uint8_t {
     ActorUnavailable,
     ReservationExpired,
     RuntimeReset,
+    PlayerInterrupted,
 };
 
 // Checkpoint-safe per-actor attack state. The coordinator owns admission and

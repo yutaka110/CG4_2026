@@ -108,6 +108,9 @@ struct GameSessionRuntimeState final {
     bool courseEndReached = false;
     bool mandatoryWavesSatisfied = true;
     bool mandatoryObjectivesSatisfied = true;
+    // CombatTruthGate owns this value. Course distance and Wave counters may
+    // not resolve victory while an attack, projectile or defense window lives.
+    bool combatClearConfirmed = true;
     bool objectiveFailed = false;
     bool gameplaySimulationEnabled = false;
     bool playerInputEnabled = false;
@@ -125,6 +128,8 @@ struct GameSessionFrameInput final {
     uint32_t totalMandatoryObjectives = 0;
     bool objectiveFailed = false;
     bool abortRequested = false;
+    // Appended to retain the established aggregate-initializer field order.
+    bool combatClearConfirmed = true;
 };
 
 struct GameSessionEvent final {

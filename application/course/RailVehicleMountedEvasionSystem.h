@@ -16,7 +16,7 @@ struct RailVehicleMountedEvasionDefinition final {
     float evadeDurationSeconds = 0.16f;
     float recoveryDurationSeconds = 0.20f;
     float cooldownSeconds = 0.70f;
-    float invulnerabilityDurationSeconds = 0.24f;
+    float invulnerabilityDurationSeconds = 0.0f;
     float lateralDistance = 1.45f;
     float verticalDistance = 0.72f;
     float minimumDirectionalInput = 0.20f;

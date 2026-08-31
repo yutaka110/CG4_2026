@@ -24,6 +24,7 @@
 struct RailVehicleRenderFrame;
 struct RailVehicleOccupantActorFrame;
 class EnemyCombatPresentationBridge;
+class EnemyEncounterReadabilityDirector;
 struct SphereMeshData {
     Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource;
     D3D12_VERTEX_BUFFER_VIEW vbv{};
@@ -285,7 +286,8 @@ public:
         const RailPath& railPath,
         const Matrix4x4& viewMatrix,
         const Matrix4x4& projMatrix,
-        const EnemyCombatPresentationBridge* enemyPresentation = nullptr);
+        const EnemyCombatPresentationBridge* enemyPresentation = nullptr,
+        const EnemyEncounterReadabilityDirector* enemyReadability = nullptr);
     void SyncRailVehicleRenderFrame(
         const RailVehicleRenderFrame& frame,
         const Matrix4x4& viewMatrix,
@@ -437,6 +439,9 @@ public:
     UINT skeletonDebugVertexCapacity = 0;
     UINT skeletonDebugVertexCount = 0;
     ge3::debug::DebugDrawSystem debugDraw;
+    // Dedicated gameplay production buffer. It deliberately does not share
+    // Debug.Draw visibility flags so hostile fire remains visible in Release.
+    ge3::debug::DebugDrawSystem enemyThreatVisualDraw;
 
 private:
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> initialUploadResources_;

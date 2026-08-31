@@ -11,6 +11,7 @@
 #include "CourseRideProfileDefinition.h"
 #include "RailRideSpeedBeatDefinition.h"
 #include "CourseRailRideEventDefinition.h"
+#include "EnemyEncounterBeatDefinition.h"
 #include "utils/math/Vector.h"
 
 struct CourseCameraKey {
@@ -284,6 +285,7 @@ struct CourseAsset {
     std::vector<CourseRailRideEventDefinition> railRideEvents;
     std::vector<CourseEventMarker> events;
     std::vector<CourseWaveDefinition> waveDefinitions;
+    std::vector<EnemyEncounterBeatDefinition> encounterBeats;
     std::vector<CourseEnemyPlacement> enemyPlacements;
     std::vector<CourseTerrainPlacement> terrainPlacements;
     TerrainEditLayer terrainEditLayer{};

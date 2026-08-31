@@ -41,6 +41,15 @@ struct EnemyProjectileRuntimeState final {
     Vector4 color{1.0f, 0.18f, 0.08f, 1.0f};
     std::string trailEffectId;
     std::string impactEffectId = "ice_impact";
+    EnemyAttackDefenseResponse defenseResponses =
+        EnemyAttackDefenseResponse::ShootDown |
+        EnemyAttackDefenseResponse::Interrupt |
+        EnemyAttackDefenseResponse::LeanLeft |
+        EnemyAttackDefenseResponse::LeanRight;
+    float shootDownHitPoints = 1.0f;
+    float shootDownMaximumHitPoints = 1.0f;
+    float shootDownRadiusScale = 1.65f;
+    bool shootDownEnabled = true;
     float lockedTargetDistance = 0.0f;
     float lockedTargetLateralOffset = 0.0f;
     float lockedTargetVerticalOffset = 0.0f;

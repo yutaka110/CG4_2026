@@ -83,6 +83,8 @@ void CourseCollisionSystem::Reset() {
         player_.hitPoints);
     playerHitboxSystem_.Reset();
     playerNearMissSystem_.Reset();
+    projectileShootDownSystem_.Reset();
+    attackInterruptSystem_.Reset();
     weapon_ = {};
     lastFrameStats_ = {};
     lastShotDistance_ = 0.0f;
@@ -134,6 +136,11 @@ DamageResult CourseCollisionSystem::ApplyWeaponHit(
     const WeaponHitRequest& request) {
     lastWeaponHitRequest_ = request;
     lastDamageResult_ = damageReceiver_.Apply(runtime, course, request);
+    const EnemyAttackInterruptResult interruptResult =
+        attackInterruptSystem_.Submit(runtime, lastDamageResult_);
+    if (interruptResult.interrupted) {
+        ++lastFrameStats_.enemyAttacksInterrupted;
+    }
     lastWeaponFeedbackResult_ =
         weaponFeedbackSystem_.Submit(runtime, request, lastDamageResult_);
     runtime.EnemyCombat().SubmitDamageResult(
@@ -156,6 +163,8 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     const float dt = (std::max)(0.0f, input.deltaTime);
     weaponFeedbackSystem_.Update(dt);
     lastFrameStats_ = {};
+    projectileShootDownSystem_.BeginFrame();
+    attackInterruptSystem_.BeginFrame();
     lastShotVisible_ = false;
 
     PlayerHitboxFrameInput hitboxInput{};
@@ -165,6 +174,7 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     hitboxInput.dodgeActive = input.player.dodgeActive ||
         input.player.invulnerabilityTime > 0.0f;
     hitboxInput.invulnerable = input.player.invulnerabilityTime > 0.0f;
+    hitboxInput.hurtRadiusScale = input.player.hurtRadiusScale;
     const PlayerHitboxRuntimeState& hitbox =
         playerHitboxSystem_.Update(hitboxInput);
     playerNearMissSystem_.Update(dt);
@@ -405,6 +415,32 @@ void CourseCollisionSystem::FirePlayerShot(
     const Vector3 direction = NormalizeOr(aim->worldRayDirection, {0.0f, 0.0f, 1.0f});
     lastShotWorldPoint_ = Add(aim->worldRayOrigin, Scale(direction, shot.range));
     lastShotHasWorldPoint_ = true;
+    if (input.railPath != nullptr) {
+        EnemyProjectileShootDownRequest shootDownRequest{};
+        shootDownRequest.shotId = shot.shotId;
+        shootDownRequest.rayOrigin = aim->worldRayOrigin;
+        shootDownRequest.rayDirection = direction;
+        shootDownRequest.maximumDistance = shot.range;
+        shootDownRequest.maximumWorldHitDistance =
+            aim->hasWorldHit ? aim->aimDistance : shot.range;
+        shootDownRequest.damage = shot.damage;
+        const EnemyProjectileShootDownResult shootDown =
+            projectileShootDownSystem_.Submit(
+                runtime.MutableBullets(),
+                *input.railPath,
+                shootDownRequest);
+        if (shootDown.accepted) {
+            lastShotWorldPoint_ = shootDown.worldHitPoint;
+            lastShotWorldNormal_ = shootDown.worldHitNormal;
+            lastShotDistance_ = input.player.distance + shootDown.hitDistance;
+            lastShotHasWorldHit_ = true;
+            if (shootDown.destroyed) {
+                ++lastFrameStats_.enemyProjectilesShotDown;
+            }
+            ++lastFrameStats_.playerShotWorldHits;
+            return;
+        }
+    }
     if (!aim->hasWorldHit || aim->hitKind == RailAimHitKind::None ||
         !Finite(aim->worldAimPoint) || !Finite(aim->worldAimNormal) ||
         !std::isfinite(aim->aimDistance) || aim->aimDistance < 0.0f ||
@@ -494,7 +530,9 @@ void CourseCollisionSystem::LogFrameStats(const CourseCollisionFrameStats& stats
         stats.playerShotWorldHits == 0 &&
         stats.playerShotStaleHits == 0 &&
         stats.playerShotEnemyHits == 0 &&
-        stats.playerShotObstacleHits == 0) {
+        stats.playerShotObstacleHits == 0 &&
+        stats.enemyProjectilesShotDown == 0 &&
+        stats.enemyAttacksInterrupted == 0) {
         return;
     }
 
@@ -510,6 +548,8 @@ void CourseCollisionSystem::LogFrameStats(const CourseCollisionFrameStats& stats
          << " obstacleShotHits=" << stats.playerShotObstacleHits
          << " terrainShotHits=" << stats.playerShotTerrainHits
          << " staleShotHits=" << stats.playerShotStaleHits
+         << " projectilesShotDown=" << stats.enemyProjectilesShotDown
+         << " attacksInterrupted=" << stats.enemyAttacksInterrupted
          << "\n";
     OutputDebugStringA(line.str().c_str());
     std::ofstream log = app::OpenRotatingLog("logs/course_collision.log");

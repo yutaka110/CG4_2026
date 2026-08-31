@@ -372,13 +372,31 @@ void CourseGameplayWaveRuntimeBridge::SpawnActor(uint32_t actorIndex) {
 void CourseGameplayWaveRuntimeBridge::RemoveActorsForWave(std::size_t waveIndex) {
     std::unordered_set<uint32_t> removedActorIds;
     auto& enemies = runtime_->MutableEnemies();
-    enemies.erase(std::remove_if(enemies.begin(), enemies.end(), [&](const auto& actor) {
+    enemies.erase(std::remove_if(enemies.begin(), enemies.end(), [&](auto& actor) {
         const CourseRuntimeActorRecord* record =
             program_->FindActor(actor.desc.sourcePlacementGuid);
         if (record == nullptr || record->waveIndex != waveIndex) return false;
         removedActorIds.insert(actor.actorId);
-        return true;
+        const std::string formationId =
+            !actor.desc.formationDefinition.definitionId.empty()
+                ? actor.desc.formationDefinition.definitionId
+                : actor.desc.waveId;
+        const bool hasAuthoredExit =
+            !actor.desc.formationDefinition.definitionId.empty() ||
+            runtime_->EnemyFormations().FindDefinition(formationId) != nullptr;
+        if (!hasAuthoredExit) return true;
+        actor.entranceExitState.exitRequested = true;
+        actor.entranceExitState.attackSuppressed = true;
+        actor.entranceExitState.targetable = false;
+        if (formationId.empty()) {
+            runtime_->EnemyEntranceExit().RequestActorExit(actor.actorId);
+        } else {
+            runtime_->EnemyEntranceExit().RequestFormationExit(formationId);
+        }
+        return false;
     }), enemies.end());
+    // Projectiles cease being gameplay threats as soon as the Wave resolves;
+    // only the enemy actors remain long enough to perform their authored exit.
     auto& bullets = runtime_->MutableBullets();
     bullets.erase(std::remove_if(bullets.begin(), bullets.end(), [&](const auto& bullet) {
         return removedActorIds.contains(bullet.ownerActorId);

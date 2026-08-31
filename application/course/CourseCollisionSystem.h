@@ -9,6 +9,8 @@
 #include "PlayerDamageSystem.h"
 #include "PlayerHitboxSystem.h"
 #include "PlayerNearMissSystem.h"
+#include "EnemyProjectileShootDownSystem.h"
+#include "EnemyAttackInterruptSystem.h"
 #include "RailAimState.h"
 #include "WeaponDamageSystem.h"
 #include "WeaponDefinitionRegistry.h"
@@ -24,6 +26,7 @@ struct CourseCollisionPlayerState {
     float maximumHitPoints = 100.0f;
     float invulnerabilityTime = 0.0f;
     bool dodgeActive = false;
+    float hurtRadiusScale = 1.0f;
 };
 
 struct CourseCollisionWeaponState {
@@ -50,6 +53,7 @@ struct CourseCollisionFrameInput {
     float deltaTime = 0.016f;
     const CourseAsset* course = nullptr;
     const RailAimState* worldAim = nullptr;
+    const RailPath* railPath = nullptr;
     CourseCollisionPlayerState player;
     CourseCollisionWeaponState weapon;
     // Mounted vehicle body collision is resolved by
@@ -69,6 +73,8 @@ struct CourseCollisionFrameStats {
     uint32_t playerShotObstacleHits = 0;
     uint32_t playerShotTerrainHits = 0;
     uint32_t playerShotStaleHits = 0;
+    uint32_t enemyProjectilesShotDown = 0;
+    uint32_t enemyAttacksInterrupted = 0;
     float playerDamage = 0.0f;
 };
 
@@ -125,6 +131,12 @@ public:
     }
     const WeaponFeedbackSystem& WeaponFeedback() const { return weaponFeedbackSystem_; }
     const WeaponFireResult& LastWeaponFireResult() const { return lastWeaponFireResult_; }
+    const EnemyProjectileShootDownSystem& ProjectileShootDown() const noexcept {
+        return projectileShootDownSystem_;
+    }
+    const EnemyAttackInterruptSystem& AttackInterrupt() const noexcept {
+        return attackInterruptSystem_;
+    }
     WeaponFireSystem& WeaponFire() { return weaponFireSystem_; }
     const WeaponFireSystem& WeaponFire() const { return weaponFireSystem_; }
     bool LoadWeaponDefinitions(
@@ -158,6 +170,8 @@ private:
     PlayerDamageSystem playerDamageSystem_{};
     PlayerHitboxSystem playerHitboxSystem_{};
     PlayerNearMissSystem playerNearMissSystem_{};
+    EnemyProjectileShootDownSystem projectileShootDownSystem_{};
+    EnemyAttackInterruptSystem attackInterruptSystem_{};
     float lastShotDistance_ = 0.0f;
     float lastShotLateralOffset_ = 0.0f;
     float lastShotVerticalOffset_ = 0.0f;

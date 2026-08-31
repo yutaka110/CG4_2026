@@ -1444,6 +1444,41 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         }});
 
     ctx.renderGraph->AddPass({
+        "Gameplay.EnemyThreatVisuals",
+        ge3::graphics::RenderPassLayer::Geometry,
+        {
+            {"SceneColor", ge3::graphics::RenderResourceAccessType::WriteRtv},
+            {"SceneDepth", ge3::graphics::RenderResourceAccessType::ReadDepth},
+        },
+        "SceneDepth",
+        [ctx](ge3::graphics::RenderPassContext& passContext) {
+            // Hostile projectile and lane readability is a gameplay contract,
+            // so this pass is intentionally independent from every Debug.Draw
+            // and editor visualization flag.
+            if (ctx.scene->enemyThreatVisualDraw.VertexCount() == 0 ||
+                !ctx.scene->enemyThreatVisualDraw.IsReady()) {
+                return;
+            }
+
+            const bool ready = ctx.frameRenderer->PrepareMainPass(
+                passContext.commandList,
+                ctx.srvDescriptorHeap,
+                ctx.runtimeState->viewport,
+                ctx.runtimeState->scissorRect,
+                ctx.appPipelines->GetSkeletonDebugRootSignature(),
+                ctx.appPipelines->GetSkeletonDebugDepthTestPSO() != nullptr
+                    ? ctx.appPipelines->GetSkeletonDebugDepthTestPSO()
+                    : ctx.appPipelines->GetSkeletonDebugPSO());
+            if (!ready) return;
+
+            ctx.frameRenderer->DrawSkeletonDebugLines(
+                passContext.commandList,
+                ctx.scene->enemyThreatVisualDraw.VertexBufferView(),
+                ctx.scene->enemyThreatVisualDraw.TransformBufferAddress(),
+                ctx.scene->enemyThreatVisualDraw.VertexCount());
+        }});
+
+    ctx.renderGraph->AddPass({
         "Debug.Draw",
         ge3::graphics::RenderPassLayer::Geometry,
         {

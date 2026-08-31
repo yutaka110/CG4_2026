@@ -189,6 +189,7 @@ void EnemyAttackLaneTelegraphRenderer::Update(
             (markers.sourceInstanceId != 0 ? 1u : 0u) +
             (markers.targetInstanceId != 0 ? 1u : 0u);
         frame_.lanes.push_back(std::move(proxy));
+        ++frame_.productionSubmittedLanes;
     }
 
     StopUntouched(input.effectRuntime, revision);
@@ -196,20 +197,20 @@ void EnemyAttackLaneTelegraphRenderer::Update(
     frame_.revision = revision;
 }
 
-void EnemyAttackLaneTelegraphRenderer::AppendWorldPrimitives(
-    ge3::debug::DebugDrawSystem& debugDraw) const {
+void EnemyAttackLaneTelegraphRenderer::AppendProductionWorldPrimitives(
+    ge3::debug::DebugDrawSystem& productionDraw) const {
     for (const EnemyAttackLaneTelegraphProxy& lane : frame_.lanes) {
         Vector4 faint = lane.color;
         faint.w *= 0.28f;
-        debugDraw.AddLine(lane.startWorld, lane.targetWorld, faint, lane.color);
-        debugDraw.AddCircle(
+        productionDraw.AddLine(lane.startWorld, lane.targetWorld, faint, lane.color);
+        productionDraw.AddCircle(
             lane.startWorld,
             lane.railRight,
             lane.railUp,
             lane.sourceRadius,
             lane.color,
             20);
-        debugDraw.AddCircle(
+        productionDraw.AddCircle(
             lane.targetWorld,
             lane.railRight,
             lane.railUp,
@@ -225,10 +226,10 @@ void EnemyAttackLaneTelegraphRenderer::AppendWorldPrimitives(
                 const Vector3 endpoint = Add(
                     lane.targetWorld,
                     Scale(lane.railRight, centered * lane.targetRadius * 2.4f));
-                debugDraw.AddLine(lane.startWorld, endpoint, faint, lane.color);
+                productionDraw.AddLine(lane.startWorld, endpoint, faint, lane.color);
             }
         } else if (lane.shape == EnemyAttackLaneShape::Homing) {
-            debugDraw.AddCircle(
+            productionDraw.AddCircle(
                 lane.targetWorld,
                 lane.railRight,
                 lane.railUp,
@@ -244,11 +245,29 @@ void EnemyAttackLaneTelegraphRenderer::AppendWorldPrimitives(
                     point,
                     Scale(lane.railUp, std::sin(t * 3.14159265f) *
                         lane.targetRadius * 3.0f));
-                debugDraw.AddLine(previous, point, faint, lane.color);
+                productionDraw.AddLine(previous, point, faint, lane.color);
                 previous = point;
             }
         }
     }
+}
+
+void EnemyAttackLaneTelegraphRenderer::AppendWorldPrimitives(
+    ge3::debug::DebugDrawSystem& debugDraw) const {
+    AppendProductionWorldPrimitives(debugDraw);
+}
+
+bool EnemyAttackLaneTelegraphRenderer::WasSubmitted(
+    uint32_t actorId,
+    uint64_t attackIntentSequence) const noexcept {
+    return std::any_of(
+        frame_.lanes.begin(),
+        frame_.lanes.end(),
+        [actorId, attackIntentSequence](
+            const EnemyAttackLaneTelegraphProxy& lane) {
+            return lane.actorId == actorId &&
+                lane.attackIntentSequence == attackIntentSequence;
+        });
 }
 
 void EnemyAttackLaneTelegraphRenderer::StopMarkers(

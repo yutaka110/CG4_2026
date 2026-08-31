@@ -2075,12 +2075,14 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     editorCourseRideSequencerBridge_.Bind(editableCourse);
     editorRailRideSpeedBeatAuthoring_.Bind(editableCourse);
     editorCourseRailRideEventAuthoring_.Bind(editableCourse);
+    editorCourseEncounterBeatAuthoring_.Bind(editableCourse);
     editorSequencer_.BeginFrame();
     editorSequencer_.RegisterProvider(editorCourseSequencerProvider_);
     editorSequencer_.RegisterProvider(editorCourseWaveSequencerBridge_);
     editorSequencer_.RegisterProvider(editorCourseRideSequencerBridge_);
     editorSequencer_.RegisterProvider(editorRailRideSpeedBeatAuthoring_);
     editorSequencer_.RegisterProvider(editorCourseRailRideEventAuthoring_);
+    editorSequencer_.RegisterProvider(editorCourseEncounterBeatAuthoring_);
     editorSequencer_.SetTransactionStack(&editorTransactions);
     editorSequencer_.SetSequenceRange(0.0, context.courseRailLength);
     editorSequencer_.SetPreviewPositionCallback(

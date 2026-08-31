@@ -3,6 +3,7 @@
 #include "CourseSpawnRuntime.h"
 #include "DebrisCompositionSystem.h"
 #include "EnemyCombatPresentationBridge.h"
+#include "EnemyEncounterReadabilityDirector.h"
 #include "utils/dx12/BufferHelper.h"
 
 #include <algorithm>
@@ -169,7 +170,8 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
     std::span<const CourseMeshModelBinding> models,
     const Matrix4x4& viewMatrix,
     const Matrix4x4& projMatrix,
-    const EnemyCombatPresentationBridge* enemyPresentation) {
+    const EnemyCombatPresentationBridge* enemyPresentation,
+    const EnemyEncounterReadabilityDirector* enemyReadability) {
     Reset();
     if (railPath.Length() <= 0.0f || models.empty()) {
         return;
@@ -184,7 +186,8 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
         railPath,
         models,
         viewProjection,
-        enemyPresentation);
+        enemyPresentation,
+        enemyReadability);
 
     if (course != nullptr) {
         for (const CourseTerrainPlacement& placement : course->terrainPlacements) {
@@ -302,7 +305,8 @@ void CourseMeshRenderQueue::AddEnemyInstances(
     const RailPath& railPath,
     std::span<const CourseMeshModelBinding> models,
     const Matrix4x4& viewProjection,
-    const EnemyCombatPresentationBridge* enemyPresentation) {
+    const EnemyCombatPresentationBridge* enemyPresentation,
+    const EnemyEncounterReadabilityDirector* enemyReadability) {
     for (const CourseEnemyActor& enemy : runtime.Enemies()) {
         if (enemy.combatState.initialized &&
             enemy.combatState.phase == EnemyCombatPhase::Retired) {
@@ -345,6 +349,10 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             enemyPresentation != nullptr
             ? enemyPresentation->FindActor(enemy.actorId)
             : nullptr;
+        const EnemyEncounterActorReadability* readability =
+            enemyReadability != nullptr
+            ? enemyReadability->FindActor(enemy.actorId)
+            : nullptr;
         if (presentation != nullptr && !presentation->visible) {
             item->visible = false;
             continue;
@@ -364,9 +372,13 @@ void CourseMeshRenderQueue::AddEnemyInstances(
         const float presentationScale = enemy.combatState.initialized
             ? (std::max)(0.0f, enemy.combatState.presentationScale)
             : 1.0f;
-        const float bridgeScale = presentation != nullptr
+        float bridgeScale = presentation != nullptr
             ? (std::max)(0.0f, presentation->scaleMultiplier)
             : 1.0f;
+        if (readability != nullptr) {
+            bridgeScale *= (std::max)(
+                1.0f, readability->presentationScale);
+        }
         const float baseScale = (std::max)(0.01f,
             enemy.desc.radius * presentationScale * bridgeScale);
         Vector3 rotation = Add(
@@ -379,9 +391,23 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             const float alpha = enemy.combatState.initialized
                 ? enemy.combatState.presentationAlpha
                 : 1.0f;
-            item->materialData->color = presentation != nullptr
+            Vector4 materialColor = presentation != nullptr
                 ? presentation->materialColor
                 : Vector4{1.0f, 1.0f, 1.0f, alpha};
+            if (readability != nullptr) {
+                const float boost = (std::max)(
+                    1.0f, readability->colorBoost);
+                materialColor.x = (std::clamp)(
+                    materialColor.x * boost, 0.0f, 1.0f);
+                materialColor.y = (std::clamp)(
+                    materialColor.y * boost, 0.0f, 1.0f);
+                materialColor.z = (std::clamp)(
+                    materialColor.z * boost, 0.0f, 1.0f);
+                materialColor.w = (std::clamp)(
+                    materialColor.w * readability->presentationAlpha,
+                    0.0f, 1.0f);
+            }
+            item->materialData->color = materialColor;
             item->materialData->shininess = presentation != nullptr &&
                 presentation->flashStrength > 0.01f
                 ? 18.0f

@@ -119,9 +119,11 @@ void RailShooterHudPresentationBridge::Update(
         ? "WAVE " + std::to_string(runtime.completedWaves) + "/" +
             std::to_string(runtime.totalWaves)
         : "WAVE --";
-    next.enemyText = runtime.activeEnemies > 0
-        ? "HOSTILES " + std::to_string(runtime.activeEnemies)
-        : "AREA CLEAR";
+    next.enemyText = !runtime.combatStatusText.empty()
+        ? runtime.combatStatusText
+        : runtime.activeEnemies > 0
+            ? "HOSTILES " + std::to_string(runtime.activeEnemies)
+            : "AREA CLEAR";
     next.grazeText = runtime.grazeChain > 0
         ? "GRAZE X" + std::to_string(runtime.grazeChain)
         : "GRAZE READY";

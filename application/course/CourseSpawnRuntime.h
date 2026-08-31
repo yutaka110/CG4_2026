@@ -12,6 +12,8 @@
 #include "EnemyBehaviorSystem.h"
 #include "EnemyProjectileDefinitionAsset.h"
 #include "EnemyProjectileSystem.h"
+#include "EnemyFormationSystem.h"
+#include "EnemyEntranceExitDirector.h"
 #include "EnemyTargetingSystem.h"
 #include "utils/math/Vector.h"
 
@@ -91,6 +93,7 @@ struct CourseEnemyActorDesc {
     EnemyCombatDefinition combatDefinition{};
     EnemyBehaviorDefinition behaviorDefinition{};
     EnemyProjectileDefinitionAsset projectileDefinition{};
+    EnemyFormationDefinition formationDefinition{};
     bool previewOnly = false;
     bool suppressFire = false;
 };
@@ -135,6 +138,8 @@ struct CourseEnemyActor {
     EnemyBehaviorRuntimeState behaviorState{};
     EnemyAttackRuntimeState attackState{};
     EnemyTargetingRuntimeState targetingState{};
+    EnemyFormationMemberRuntimeState formationState{};
+    EnemyEntranceExitRuntimeState entranceExitState{};
     float age = 0.0f;
     float fireTimer = 0.0f;
     float fireVisibleTime = 0.0f;
@@ -142,6 +147,15 @@ struct CourseEnemyActor {
     uint32_t bulletsEmittedThisFrame = 0;
     bool fireSafetyAllowed = false;
     std::string fireSafetyReason = "not evaluated";
+    // Written by EnemyEncounterReadabilityDirector after presentation. The
+    // following gameplay frame may commit an attack only after the actor (or
+    // its warning) has remained readable for the configured exposure window.
+    bool screenPresenceEvaluated = false;
+    bool screenPresenceAttackAllowed = true;
+    // Encounter pacing is independent from screen readability: Establish,
+    // Threaten, Recovery and Resolve deliberately hold committed fire.
+    bool encounterPacingEvaluated = false;
+    bool encounterPacingAttackAllowed = true;
     uint32_t actorId = 0;
 };
 
@@ -219,6 +233,18 @@ public:
     const EnemyProjectileSystem& EnemyProjectiles() const noexcept {
         return enemyProjectileSystem_;
     }
+    const EnemyFormationSystem& EnemyFormations() const noexcept {
+        return enemyFormationSystem_;
+    }
+    EnemyFormationSystem& EnemyFormations() noexcept {
+        return enemyFormationSystem_;
+    }
+    const EnemyEntranceExitDirector& EnemyEntranceExit() const noexcept {
+        return enemyEntranceExitDirector_;
+    }
+    EnemyEntranceExitDirector& EnemyEntranceExit() noexcept {
+        return enemyEntranceExitDirector_;
+    }
     bool MarkEnemyAttackTelegraphPresented(
         uint32_t actorId,
         uint64_t attackIntentSequence);
@@ -240,5 +266,7 @@ private:
     EnemyAttackExecutionSystem enemyAttackExecutionSystem_{};
     EnemyTargetingSystem enemyTargetingSystem_{};
     EnemyProjectileSystem enemyProjectileSystem_{};
+    EnemyFormationSystem enemyFormationSystem_{};
+    EnemyEntranceExitDirector enemyEntranceExitDirector_{};
     uint32_t nextActorId_ = 1;
 };

@@ -1544,6 +1544,12 @@ AppRunLoop::AppRunLoop(
         "rail-threat-critical", 132.0f, 0.150f, 0.34f);
     railThreatClearSound_ = audio_.CreateTone(
         "rail-threat-clear", 920.0f, 0.080f, 0.24f);
+    railDefenseOutcomeSuccessSound_ = audio_.CreateTone(
+        "rail-defense-success", 1120.0f, 0.090f, 0.38f);
+    railDefenseOutcomePerfectSound_ = audio_.CreateTone(
+        "rail-defense-perfect", 1480.0f, 0.125f, 0.46f);
+    railDefenseOutcomeFailedSound_ = audio_.CreateTone(
+        "rail-defense-failed", 190.0f, 0.100f, 0.30f);
     std::string grazeScoreError;
     if (!railGrazeScoreSystem_.Initialize({}, &grazeScoreError)) {
         OutputDebugStringA(
@@ -1756,6 +1762,7 @@ void AppRunLoop::ApplyRailShooterCourse() {
     railShooterHudRuntimeModel_.Reset();
     railShooterHudPresentation_.Reset();
     railShooterHudRenderer_.Reset();
+    railShooterDefensePromptRenderer_.Reset();
     if (!railShooterCourse_.IsValid()) {
         railShooterCourse_.BuildFallbackCanyon(runtimeState_.terrain.settings.corridorRadius);
     }
@@ -1885,6 +1892,8 @@ void AppRunLoop::ApplyRailShooterCourse() {
         &railPath_);
     railShooterPlayerVehicleMount_.Reset();
     railShooterMountedEvasion_.Reset();
+    railShooterMountedDefense_.Reset();
+    railEnemyAttackDefenseValidation_.Reset();
     railShooterVehicleBodyCollision_.Reset();
     railShooterVehicleDamageCoordinator_.Reset();
     railShooterVehicleCollisionFeedback_.Reset();
@@ -2001,6 +2010,8 @@ void AppRunLoop::ApplyRailShooterCourse() {
     StopGameSessionPresentation();
     railShooterCombatFeelSystem_.Reset();
     railShooterEncounterDirector_.Reset();
+    railEnemyEncounterPacingDirector_.Reset(&railShooterSpawnRuntime_);
+    railEnemyEncounterCameraCompositionBridge_.Reset();
     railShooterCameraDirector_.Reset();
     railShooterSpeedDirector_.Reset();
     railShooterRideDirector_.Reset();
@@ -2162,6 +2173,8 @@ void AppRunLoop::TeleportRailShooterCourse(float distance) {
     railShooterVehicleMovement_.Reset(clampedDistance, 0.0f, &railPath_);
     railShooterPlayerVehicleMount_.Reset();
     railShooterMountedEvasion_.Reset();
+    railShooterMountedDefense_.Reset();
+    railEnemyAttackDefenseValidation_.Reset();
     railShooterVehicleBodyCollision_.Reset();
     railShooterVehicleDamageCoordinator_.Reset();
     railShooterVehicleCollisionFeedback_.Reset();
@@ -2200,6 +2213,8 @@ void AppRunLoop::TeleportRailShooterCourse(float distance) {
     }
     railShooterCombatFeelSystem_.Reset();
     railShooterEncounterDirector_.Reset();
+    railEnemyEncounterPacingDirector_.Reset(&railShooterSpawnRuntime_);
+    railEnemyEncounterCameraCompositionBridge_.Reset();
     railShooterCameraDirector_.Reset();
     railShooterSpeedDirector_.Reset();
     railShooterRideDirector_.Reset();
@@ -3829,33 +3844,46 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     hudRenderInput.viewportWidth = hudWidth;
     hudRenderInput.viewportHeight = hudHeight;
     railShooterHudRenderer_.Update(hudRenderInput);
-    for (const RailShooterHudDrawCommand& command :
-         railShooterHudRenderer_.Frame().commands) {
-        if (command.kind == RailShooterHudDrawCommandKind::Rectangle) {
-            addQuad(
-                command.x,
-                command.y,
-                command.width,
-                command.height,
-                uvWhite,
-                command.color);
-        } else if (command.textAlignment ==
-                   RailShooterHudTextAlignment::Center) {
-            addCenteredText(
-                command.text,
-                command.x,
-                command.y,
-                command.fontScale,
-                command.color);
-        } else {
-            addText(
-                command.text,
-                command.x,
-                command.y,
-                command.fontScale,
-                command.color);
+    const auto emitHudCommands = [&](const auto& commands) {
+        for (const RailShooterHudDrawCommand& command : commands) {
+            if (command.kind == RailShooterHudDrawCommandKind::Rectangle) {
+                addQuad(
+                    command.x,
+                    command.y,
+                    command.width,
+                    command.height,
+                    uvWhite,
+                    command.color);
+            } else if (command.textAlignment ==
+                       RailShooterHudTextAlignment::Center) {
+                addCenteredText(
+                    command.text,
+                    command.x,
+                    command.y,
+                    command.fontScale,
+                    command.color);
+            } else {
+                addText(
+                    command.text,
+                    command.x,
+                    command.y,
+                    command.fontScale,
+                    command.color);
+            }
         }
-    }
+    };
+    emitHudCommands(railShooterHudRenderer_.Frame().commands);
+
+    RailShooterDefensePromptRenderInput defensePromptInput{};
+    defensePromptInput.presentation =
+        &railEnemyAttackDefensePresentationBridge_.Frame();
+    defensePromptInput.outcome =
+        &railEnemyAttackDefenseOutcomeFeedbackBridge_.Frame();
+    defensePromptInput.viewportWidth = hudWidth;
+    defensePromptInput.viewportHeight = hudHeight;
+    defensePromptInput.settings = railShooterDefensePromptRendererSettings_;
+    railShooterDefensePromptRenderer_.Update(defensePromptInput);
+    emitHudCommands(railShooterDefensePromptRenderer_.Frame().commands);
 
     return railLockOnHudAtlasVertexCount_ > 0;
 }
@@ -4263,6 +4291,22 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
         railEnemyAttackTelegraphFeedbackSettings_;
     const EnemyAttackTelegraphFeedbackFrame& telegraphFeedbackFrame =
         railEnemyAttackTelegraphFeedbackBridge_.Frame();
+    EnemyProjectileVfxRendererSettings& projectileVisualSettings =
+        railEnemyProjectileVfxRendererSettings_;
+    const EnemyProjectilePresentationFrame& projectilePresentationFrame =
+        railEnemyProjectilePresentationBridge_.Frame();
+    const EnemyProjectileVfxRenderFrame& projectileVisualFrame =
+        railEnemyProjectileVfxRenderer_.Frame();
+    const EnemyAttackLaneTelegraphRenderFrame& laneVisualFrame =
+        railEnemyAttackLaneTelegraphRenderer_.Frame();
+    const EnemyProjectileShootDownFrame& shootDownFrame =
+        railShooterCollisionSystem_.ProjectileShootDown().Frame();
+    const EnemyAttackInterruptFrame& interruptFrame =
+        railShooterCollisionSystem_.AttackInterrupt().Frame();
+    const EnemyAttackDefenseValidationFrame& defenseValidationFrame =
+        railEnemyAttackDefenseValidation_.Frame();
+    const RailVehicleMountedDefenseFrame& mountedDefenseFrame =
+        railShooterMountedDefense_.Frame();
     const IAppSceneState* currentScene = sceneStateManager_.CurrentState();
     const char* currentSceneName = currentScene != nullptr ? currentScene->Name() : "-";
     ImGui::Text(
@@ -4782,6 +4826,41 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
             telegraphFrame.stats.visibilityBudgetExhausted,
             telegraphFrame.highestPriority,
             static_cast<unsigned long long>(telegraphFrame.revision));
+        ImGui::SeparatorText("Production Threat Visual Pipeline");
+        ImGui::Checkbox(
+            "Production Projectile Readability Guard",
+            &projectileVisualSettings.productionPrimitivesEnabled);
+        ImGui::Text(
+            "Runtime=%u presentation=%zu submitted=%u effects=%u fallback=%u unavailable=%u culled=%u budget=%u",
+            railShooterSpawnRuntime_.EnemyProjectiles().Frame().activeProjectiles,
+            projectilePresentationFrame.projectiles.size(),
+            projectileVisualFrame.productionSubmittedProjectiles,
+            projectileVisualFrame.effectBackedProjectiles,
+            projectileVisualFrame.fallbackProjectiles,
+            projectileVisualFrame.unavailableProjectiles,
+            projectileVisualFrame.culledByDistance,
+            projectileVisualFrame.droppedByBudget);
+        ImGui::Text(
+            "Telegraph cues=%zu production lanes=%u marker effects=%u lane budget=%u",
+            telegraphFrame.cues.size(),
+            laneVisualFrame.productionSubmittedLanes,
+            laneVisualFrame.effectBackedMarkers,
+            laneVisualFrame.droppedByBudget);
+        ImGui::Text(
+            "Defense=%s strength=%.2f hitbox=%.2f invulnerable=%s | shotDown=%u interrupted=%u",
+            ToString(mountedDefenseFrame.state.action),
+            mountedDefenseFrame.state.actionStrength,
+            mountedDefenseFrame.state.hitboxRadiusScale,
+            mountedDefenseFrame.invulnerable ? "true" : "false",
+            shootDownFrame.projectilesDestroyed,
+            interruptFrame.interruptedAttacks);
+        ImGui::Text(
+            "Defense validation actors=%u valid=%u warnings=%u errors=%u revision=%llu",
+            defenseValidationFrame.validatedActors,
+            defenseValidationFrame.validAttacks,
+            defenseValidationFrame.warnings,
+            defenseValidationFrame.errors,
+            static_cast<unsigned long long>(defenseValidationFrame.revision));
         for (const EnemyAttackTelegraphEvent& event : telegraphFrame.events) {
             ImGui::BulletText(
                 "event=%s actor=%u sequence=%llu severity=%.2f offscreen=%s",
@@ -5762,6 +5841,8 @@ void AppRunLoop::EnterVfxPreviewScene() {
     railShooterVehicleRenderer_.Reset();
     railShooterVehicleAudioBridge_.Reset();
     railShooterMountedEvasion_.Reset();
+    railShooterMountedDefense_.Reset();
+    railEnemyAttackDefenseValidation_.Reset();
     railShooterVehicleBodyCollision_.Reset();
     railShooterVehicleDamageCoordinator_.Reset();
     railShooterVehicleCollisionFeedback_.Reset();
@@ -5790,6 +5871,8 @@ void AppRunLoop::EnterMultiMaterialShowcaseScene() {
     railShooterVehicleRenderer_.Reset();
     railShooterVehicleAudioBridge_.Reset();
     railShooterMountedEvasion_.Reset();
+    railShooterMountedDefense_.Reset();
+    railEnemyAttackDefenseValidation_.Reset();
     railShooterVehicleBodyCollision_.Reset();
     railShooterVehicleDamageCoordinator_.Reset();
     railShooterVehicleCollisionFeedback_.Reset();
@@ -5879,6 +5962,8 @@ void AppRunLoop::EnterRailShooterScene() {
         &railPath_);
     railShooterPlayerVehicleMount_.Reset();
     railShooterMountedEvasion_.Reset();
+    railShooterMountedDefense_.Reset();
+    railEnemyAttackDefenseValidation_.Reset();
     railShooterVehicleBodyCollision_.Reset();
     railShooterVehicleDamageCoordinator_.Reset();
     railShooterVehicleCollisionFeedback_.Reset();
@@ -6289,6 +6374,14 @@ void AppRunLoop::UpdateRailShooterFrame() {
         railShooterEvasionConstraintResolver_.Update(constraintInput);
     const RailVehicleMountedEvasionFrame& mountedEvasionFrame =
         railShooterMountedEvasion_.Update(constraintFrame.constrainedInput);
+    RailVehicleMountedDefenseInput mountedDefenseInput{};
+    mountedDefenseInput.vehicleDefinition =
+        &railShooterVehicleMovement_.Definition();
+    mountedDefenseInput.vehicleState = &railShooterVehicleMovement_.State();
+    mountedDefenseInput.occupantMotion = &mountedEvasionFrame;
+    mountedDefenseInput.occupantMounted = true;
+    const RailVehicleMountedDefenseFrame& mountedDefenseFrame =
+        railShooterMountedDefense_.Update(mountedDefenseInput);
     if (mountedEvasionFrame.startedThisFrame) {
         railShooterCameraDirector_.AddFeedbackImpulse(
             0.24f,
@@ -6496,6 +6589,37 @@ void AppRunLoop::UpdateRailShooterFrame() {
         railShooterSpawnRuntime_,
         railShooterDistance_);
 
+    EnemyEncounterPacingInput pacingInput{};
+    pacingInput.course = &railShooterCourse_;
+    pacingInput.runtime = &railShooterSpawnRuntime_;
+    // Readability is intentionally the completed previous-frame contract.
+    // This avoids ordering cycles with projection/telegraph presentation.
+    pacingInput.readability = &railEnemyEncounterReadabilityDirector_.Frame();
+    pacingInput.currentDistance = railShooterDistance_;
+    pacingInput.deltaTime = gameplayDeltaTime;
+    pacingInput.gameplayActive = !coursePreviewOwnsRail &&
+        gameplayDeltaTime > 0.0f &&
+        (!railShooterGameSession_.IsInitialized() ||
+         railShooterGameSession_.State().gameplaySimulationEnabled);
+    const EnemyEncounterPacingFrame& encounterPacingFrame =
+        railEnemyEncounterPacingDirector_.Update(pacingInput);
+    for (const EnemyEncounterPacingEvent& event :
+         encounterPacingFrame.events) {
+        OutputDebugStringA(
+            ("[EnemyEncounterPacing] " +
+             std::string(ToString(event.kind)) + " " +
+             event.encounterId + ": " + event.message + "\n").c_str());
+    }
+    EnemyEncounterCameraCompositionInput compositionInput{};
+    compositionInput.pacing = &encounterPacingFrame;
+    compositionInput.runtime = &railShooterSpawnRuntime_;
+    compositionInput.railPath = &railPath_;
+    compositionInput.playerDistance = railShooterDistance_;
+    compositionInput.deltaTime = gameplayDeltaTime;
+    compositionInput.gameplayActive = pacingInput.gameplayActive;
+    const EnemyEncounterCameraCompositionFrame& encounterCompositionFrame =
+        railEnemyEncounterCameraCompositionBridge_.Update(compositionInput);
+
     RailVehicleBodyCollisionInput vehicleBodyCollisionInput{};
     vehicleBodyCollisionInput.vehicleDefinition =
         &railShooterVehicleMovement_.Definition();
@@ -6528,10 +6652,12 @@ void AppRunLoop::UpdateRailShooterFrame() {
     fireSafetyInput.deltaTime = gameplayDeltaTime;
     fireSafetyInput.cameraReason = previousCameraSafetyFrame.comfortReason;
     railShooterSpawnRuntime_.Update(gameplayDeltaTime, fireSafetyInput);
+    railEnemyAttackDefenseValidation_.Update(railShooterSpawnRuntime_);
     editorPatrolRuntimeWorld_.Update(gameplayDeltaTime);
     CourseCollisionFrameInput collisionInput{};
     collisionInput.deltaTime = gameplayDeltaTime;
     collisionInput.course = &railShooterCourse_;
+    collisionInput.railPath = &railPath_;
     collisionInput.player.distance = combatMountFrame.valid
         ? combatMountFrame.playerDistance
         : railShooterDistance_;
@@ -6539,15 +6665,18 @@ void AppRunLoop::UpdateRailShooterFrame() {
     collisionInput.player.verticalOffset = railShooterPlayerVerticalOffset_;
     collisionInput.player.radius = 1.6f;
     collisionInput.player.invulnerabilityTime =
-        combatMountFrame.valid && combatMountFrame.invulnerable
-        ? mountedEvasionFrame.state.invulnerabilityRemainingSeconds
+        combatMountFrame.valid
+        ? 0.0f
         : (dodgeFrame.invulnerable
             ? dodgeFrame.state.invulnerabilityRemainingSeconds
             : 0.0f);
     collisionInput.player.dodgeActive =
         combatMountFrame.valid
-        ? combatMountFrame.evasionActive
+        ? mountedDefenseFrame.state.active
         : dodgeFrame.state.phase == RailDodgePhase::Active;
+    collisionInput.player.hurtRadiusScale = combatMountFrame.valid
+        ? mountedDefenseFrame.state.hitboxRadiusScale
+        : 1.0f;
     collisionInput.player.hitPoints = railShooterGameSession_.IsInitialized()
         ? railShooterGameSession_.State().playerHealth
         : 100.0f;
@@ -6659,6 +6788,29 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraInput.cameraInertiaFovOffsetRadians = cameraInertiaFrame.fovOffsetRadians;
     cameraInput.preferredCinematicShotId = rideFrame.cameraShotId;
     cameraInput.preferredCinematicShotWeight = rideFrame.cameraShotWeight;
+    if (encounterCompositionFrame.active &&
+        !encounterCompositionFrame.preferredCameraShotId.empty() &&
+        encounterCompositionFrame.preferredCameraShotWeight >=
+            cameraInput.preferredCinematicShotWeight) {
+        cameraInput.preferredCinematicShotId =
+            encounterCompositionFrame.preferredCameraShotId;
+        cameraInput.preferredCinematicShotWeight =
+            encounterCompositionFrame.preferredCameraShotWeight;
+    }
+    cameraInput.authoredEncounterCompositionActive =
+        encounterCompositionFrame.active;
+    cameraInput.authoredEncounterHasFocusWorld =
+        encounterCompositionFrame.hasFocusWorld;
+    cameraInput.authoredEncounterFocusWorld =
+        encounterCompositionFrame.focusWorld;
+    cameraInput.authoredEncounterCompositionWeight =
+        encounterCompositionFrame.blend;
+    cameraInput.authoredEncounterFocusWeight =
+        encounterCompositionFrame.focusWeight;
+    cameraInput.authoredEncounterFovOffsetRadians =
+        encounterCompositionFrame.fovOffsetRadians;
+    cameraInput.authoredEncounterBackDistanceOffset =
+        encounterCompositionFrame.backDistanceOffset;
     const RailCameraDirectorFrame directedCamera =
         railShooterCameraDirector_.Evaluate(cameraInput);
     if (gameplayDeltaTime > 0.0f) {
@@ -6707,14 +6859,6 @@ void AppRunLoop::UpdateRailShooterFrame() {
     telegraphInput.viewportHeight = metrics.height;
     telegraphInput.settings = railEnemyAttackTelegraphSettings_;
     railEnemyAttackTelegraphSystem_.Update(telegraphInput);
-    for (const EnemyAttackTelegraphCue& cue :
-         railEnemyAttackTelegraphSystem_.Frame().cues) {
-        if (cue.attackIntentSequence != 0) {
-            (void)railShooterSpawnRuntime_.MarkEnemyAttackTelegraphPresented(
-                cue.actorId,
-                cue.attackIntentSequence);
-        }
-    }
     EnemyAttackLaneTelegraphRenderInput laneTelegraphInput{};
     laneTelegraphInput.telegraph = &railEnemyAttackTelegraphSystem_.Frame();
     laneTelegraphInput.railPath = &railPath_;
@@ -6728,6 +6872,19 @@ void AppRunLoop::UpdateRailShooterFrame() {
     laneTelegraphInput.settings =
         railEnemyAttackLaneTelegraphRendererSettings_;
     railEnemyAttackLaneTelegraphRenderer_.Update(laneTelegraphInput);
+    // Fire authorization follows an actually submitted production warning,
+    // not merely the existence of a simulation cue.
+    for (const EnemyAttackLaneTelegraphProxy& lane :
+         railEnemyAttackLaneTelegraphRenderer_.Frame().lanes) {
+        if (lane.attackIntentSequence != 0 &&
+            railEnemyAttackLaneTelegraphRenderer_.WasSubmitted(
+                lane.actorId,
+                lane.attackIntentSequence)) {
+            (void)railShooterSpawnRuntime_.MarkEnemyAttackTelegraphPresented(
+                lane.actorId,
+                lane.attackIntentSequence);
+        }
+    }
 
     bool gimmickInteractionAllowed =
         gameplayDeltaTime > 0.0f &&
@@ -7025,6 +7182,34 @@ void AppRunLoop::UpdateRailShooterFrame() {
     grazeInput.gameplayActive =
         playerDamagePresentationInput.gameplayActive && !coursePreviewOwnsRail;
     railGrazeScoreSystem_.Update(grazeInput);
+    EnemyAttackDefenseResolutionInput defenseResolutionInput{};
+    defenseResolutionInput.runtime = &railShooterSpawnRuntime_;
+    defenseResolutionInput.shootDown =
+        &railShooterCollisionSystem_.ProjectileShootDown().Frame();
+    defenseResolutionInput.interrupt =
+        &railShooterCollisionSystem_.AttackInterrupt().Frame();
+    defenseResolutionInput.nearMissResults =
+        railShooterCollisionSystem_.PlayerNearMissResults();
+    defenseResolutionInput.damageResults =
+        railShooterCollisionSystem_.PlayerDamageResults();
+    defenseResolutionInput.mountedDefense =
+        &railShooterMountedDefense_.Frame();
+    defenseResolutionInput.playerDistance = railShooterDistance_;
+    defenseResolutionInput.deltaTime = gameplayDeltaTime;
+    defenseResolutionInput.gameplayActive = grazeInput.gameplayActive;
+    railEnemyAttackDefenseResolutionSystem_.Update(
+        defenseResolutionInput,
+        railEnemyAttackDefenseResolutionSettings_);
+    EnemyAttackDefenseOutcomeFeedbackInput defenseFeedbackInput{};
+    defenseFeedbackInput.results =
+        railEnemyAttackDefenseResolutionSystem_.Frame().results;
+    defenseFeedbackInput.deltaTime = gameplayDeltaTime;
+    defenseFeedbackInput.gameplayActive = grazeInput.gameplayActive;
+    defenseFeedbackInput.settings =
+        railEnemyAttackDefenseOutcomeFeedbackSettings_;
+    railEnemyAttackDefenseOutcomeFeedbackBridge_.Update(
+        defenseFeedbackInput);
+    DispatchEnemyAttackDefenseOutcomeFeedback();
     const Vector3 projectileCameraRight = NormalizeOr(
         Cross(cameraUp, forward),
         {1.0f, 0.0f, 0.0f});
@@ -7070,6 +7255,31 @@ void AppRunLoop::UpdateRailShooterFrame() {
         gameplayDeltaTime,
         gameplayDeltaTime > 0.0f &&
             (hwnd_ == nullptr || GetForegroundWindow() == hwnd_));
+    EnemyEncounterReadabilityInput encounterReadabilityInput{};
+    encounterReadabilityInput.runtime = &railShooterSpawnRuntime_;
+    encounterReadabilityInput.railPath = &railPath_;
+    encounterReadabilityInput.viewProjection =
+        &frameState_.viewProjectionMatrix;
+    encounterReadabilityInput.telegraph =
+        &railEnemyAttackTelegraphSystem_.Frame();
+    encounterReadabilityInput.projectiles =
+        &railEnemyProjectilePresentationBridge_.Frame();
+    encounterReadabilityInput.defense =
+        &railEnemyAttackDefensePresentationBridge_.Frame();
+    encounterReadabilityInput.damageResults =
+        railShooterCollisionSystem_.PlayerDamageResults();
+    encounterReadabilityInput.activeWaves =
+        railShooterGameplayWaveBridge_.IsBound()
+        ? railShooterGameplayWaveBridge_.Stats().activeWaves
+        : 0;
+    encounterReadabilityInput.viewportWidth = metrics.width;
+    encounterReadabilityInput.viewportHeight = metrics.height;
+    encounterReadabilityInput.deltaTime = gameplayDeltaTime;
+    encounterReadabilityInput.gameplayActive = grazeInput.gameplayActive;
+    encounterReadabilityInput.settings =
+        railEnemyEncounterReadabilitySettings_;
+    railEnemyEncounterReadabilityDirector_.Update(
+        encounterReadabilityInput);
     railInputRouteDebug_.normalShotsFired = collisionStats.playerShotsFired;
     railInputRouteDebug_.normalShotHits = collisionStats.playerShotWorldHits;
     if (collisionStats.playerShotsFired > 0 &&
@@ -7134,13 +7344,22 @@ void AppRunLoop::UpdateRailShooterFrame() {
             if (!result.accepted || result.scoreAwarded == 0) continue;
             grazeScoreThisFrame += result.scoreAwarded;
         }
+        const EnemyAttackDefenseResolutionFrame& defenseResults =
+            railEnemyAttackDefenseResolutionSystem_.Frame();
         railShooterGameSession_.SetCombo(
-            railGrazeScoreSystem_.State().chain,
-            "graze_chain");
+            (std::max)(railGrazeScoreSystem_.State().chain,
+                       railEnemyAttackDefenseResolutionSystem_.State().chain),
+            defenseResults.successes > 0
+                ? "enemy_attack_defense_chain" : "graze_chain");
         if (grazeScoreThisFrame > 0) {
             railShooterGameSession_.AddScore(
                 grazeScoreThisFrame,
                 "near_miss_graze");
+        }
+        if (defenseResults.scoreAwarded > 0) {
+            railShooterGameSession_.AddScore(
+                defenseResults.scoreAwarded,
+                "enemy_attack_defense");
         }
         for (const PlayerDamageResult& result :
              railShooterCollisionSystem_.PlayerDamageResults()) {
@@ -7155,6 +7374,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
         GameSessionFrameInput sessionInput{};
         sessionInput.deltaTime = sessionDeltaTime;
         sessionInput.courseDistance = railShooterDistance_;
+        sessionInput.combatClearConfirmed =
+            railEnemyEncounterReadabilityDirector_.Frame()
+                .truth.safeToResolveSession;
         if (railShooterGameplayWaveBridge_.IsBound()) {
             sessionInput.completedMandatoryWaves =
                 railShooterGameplayWaveBridge_.Stats().completedWaves;
@@ -7221,6 +7443,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
                 StopRailEnemyAttackFeedback();
                 railShooterCombatFeelSystem_.Reset();
                 railShooterEncounterDirector_.Reset();
+                railEnemyEncounterPacingDirector_.Reset(
+                    &railShooterSpawnRuntime_);
+                railEnemyEncounterCameraCompositionBridge_.Reset();
                 railShooterCameraDirector_.Reset();
                 railShooterLockOnSystem_.Reset();
                 railShooterSpeedDirector_.Reset();
@@ -7282,6 +7507,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     hudRuntimeInput.graze = &railGrazeScoreSystem_.State();
     hudRuntimeInput.threat = &railThreatResponseDirector_.Frame();
+    hudRuntimeInput.encounterReadability =
+        &railEnemyEncounterReadabilityDirector_.Frame();
     hudRuntimeInput.lockCount = static_cast<uint32_t>(
         railShooterLockOnSystem_.DebugFrame().tokens.size());
     hudRuntimeInput.maximumLocks = static_cast<uint32_t>((std::max)(
@@ -8034,6 +8261,12 @@ void AppRunLoop::RenderFrame() {
 
 void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
     TerrainAuthoringState& terrain = runtimeState_.terrain;
+    scene_.enemyThreatVisualDraw.BeginFrame();
+    railEnemyProjectileVfxRenderer_.AppendProductionWorldPrimitives(
+        scene_.enemyThreatVisualDraw);
+    railEnemyAttackLaneTelegraphRenderer_.AppendProductionWorldPrimitives(
+        scene_.enemyThreatVisualDraw);
+    scene_.enemyThreatVisualDraw.Upload(frameState_.viewProjectionMatrix);
     if (!terrain.enabled) {
         scene_.debugDraw.BeginFrame();
         scene_.debugDraw.Upload(frameState_.viewProjectionMatrix);
@@ -8100,10 +8333,6 @@ void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
         ? coursePreviewActorRuntimeBridge_.Runtime()
         : railShooterSpawnRuntime_;
     previewPresentationRuntime.AppendDebugDraw(scene_.debugDraw, railPath_);
-    railEnemyProjectileVfxRenderer_.AppendFallbackWorldPrimitives(
-        scene_.debugDraw);
-    railEnemyAttackLaneTelegraphRenderer_.AppendWorldPrimitives(
-        scene_.debugDraw);
     railShooterCollisionSystem_.AppendDebugDraw(scene_.debugDraw, railPath_);
     railShooterLockOnSystem_.AppendDebugDraw(scene_.debugDraw);
     const bool debugDrawEnabled =
@@ -8709,9 +8938,33 @@ void AppRunLoop::DispatchEnemyProjectilePresentation(
     vfxRenderInput.cameraRight = cameraRight;
     vfxRenderInput.cameraUp = cameraUp;
     vfxRenderInput.elapsedTime = railEnemyProjectilePresentationTime_;
+    const RenderViewportMetrics projectileMetrics =
+        ResolveRenderViewportMetrics(
+            imguiLayer_.EditorViewportRenderTargetState(),
+            windowWidth_,
+            windowHeight_);
+    vfxRenderInput.verticalFovRadians = runtimeState_.camera.fovY;
+    vfxRenderInput.viewportHeightPixels = projectileMetrics.height;
     vfxRenderInput.gameplayActive = gameplayActive || previewActive;
     vfxRenderInput.settings = railEnemyProjectileVfxRendererSettings_;
+    vfxRenderInput.readabilitySettings =
+        railEnemyProjectileReadabilitySettings_;
     railEnemyProjectileVfxRenderer_.Update(vfxRenderInput);
+
+    EnemyAttackDefensePresentationInput defensePresentationInput{};
+    defensePresentationInput.telegraph =
+        &railEnemyAttackTelegraphSystem_.Frame();
+    defensePresentationInput.projectiles =
+        &railEnemyProjectilePresentationBridge_.Frame();
+    defensePresentationInput.runtime = &presentationRuntime;
+    defensePresentationInput.mountedDefense =
+        &railShooterMountedDefense_.Frame();
+    defensePresentationInput.deltaTime = deltaTime;
+    defensePresentationInput.gameplayActive = gameplayActive && !previewActive;
+    defensePresentationInput.settings =
+        railEnemyAttackDefensePresentationSettings_;
+    railEnemyAttackDefensePresentationBridge_.Update(
+        defensePresentationInput);
 
     EnemyProjectileAudioInput audioInput{};
     audioInput.presentation = &railEnemyProjectilePresentationBridge_.Frame();
@@ -8750,9 +9003,38 @@ void AppRunLoop::ResetEnemyProjectilePresentation(bool resetGrazeState) {
     railEnemyProjectilePresentationBridge_.Reset();
     railEnemyProjectileVfxRenderer_.Reset(&vfxEngine_.Runtime());
     railEnemyProjectileAudioBridge_.Reset();
+    railEnemyAttackDefensePresentationBridge_.Reset();
+    railEnemyAttackDefenseResolutionSystem_.Reset();
+    railEnemyAttackDefenseOutcomeFeedbackBridge_.Reset();
+    railShooterDefensePromptRenderer_.Reset();
     if (resetGrazeState) railGrazeScoreSystem_.Reset();
     railThreatResponseDirector_.Reset();
+    railEnemyEncounterReadabilityDirector_.Reset();
     railEnemyProjectilePresentationTime_ = 0.0f;
+}
+
+void AppRunLoop::DispatchEnemyAttackDefenseOutcomeFeedback() {
+    const EnemyAttackDefenseOutcomeFeedbackFrame& feedback =
+        railEnemyAttackDefenseOutcomeFeedbackBridge_.Frame();
+    for (const EnemyAttackDefenseOutcomeAudioCue& cue : feedback.audioCues) {
+        audio::SoundHandle sound = railDefenseOutcomeFailedSound_;
+        if (cue.outcome == EnemyAttackDefenseOutcome::Success) {
+            sound = cue.grade == EnemyAttackDefenseGrade::Perfect
+                ? railDefenseOutcomePerfectSound_
+                : railDefenseOutcomeSuccessSound_;
+        }
+        if (sound.IsValid() && cue.volume > 0.0f) {
+            (void)audio_.PlaySpatial(sound, cue.volume, 0.0f, cue.pitch);
+        }
+    }
+    if (feedback.cameraShake > 0.0f ||
+        std::abs(feedback.cameraPitchImpulse) > 0.00001f ||
+        std::abs(feedback.cameraYawImpulse) > 0.00001f) {
+        railShooterCameraDirector_.AddFeedbackImpulse(
+            feedback.cameraShake,
+            feedback.cameraPitchImpulse,
+            feedback.cameraYawImpulse);
+    }
 }
 
 void AppRunLoop::DispatchThreatResponse() {
@@ -8878,10 +9160,13 @@ void AppRunLoop::DispatchGameSessionPresentation(
         railEnemyAttackTelegraphFeedbackBridge_.Frame().haptics;
     const RailTrackFeedbackFrame& trackFeedback =
         railShooterTrackFeedbackDirector_.Frame();
+    const EnemyAttackDefenseOutcomeFeedbackFrame& defenseOutcome =
+        railEnemyAttackDefenseOutcomeFeedbackBridge_.Frame();
     if (presentation.hapticsActive ||
         damagePresentation.hapticRemainingSeconds > 0.0f ||
         threatResponse.hapticRemainingSeconds > 0.0f ||
         evasionHaptics.active || telegraphHaptics.active ||
+        defenseOutcome.hapticRemainingSeconds > 0.0f ||
         trackFeedback.hapticLow > 0.0f || trackFeedback.hapticHigh > 0.0f) {
         (void)AppGamepadInput::SetVibration(
             railSessionVibrationController_,
@@ -8891,6 +9176,7 @@ void AppRunLoop::DispatchGameSessionPresentation(
                 threatResponse.hapticLow,
                 evasionHaptics.lowFrequencyMotor,
                 telegraphHaptics.lowFrequencyMotor,
+                defenseOutcome.hapticLow,
                 trackFeedback.hapticLow}),
             (std::max)({
                 presentation.hapticHigh,
@@ -8898,6 +9184,7 @@ void AppRunLoop::DispatchGameSessionPresentation(
                 threatResponse.hapticHigh,
                 evasionHaptics.highFrequencyMotor,
                 telegraphHaptics.highFrequencyMotor,
+                defenseOutcome.hapticHigh,
                 trackFeedback.hapticHigh}));
     } else {
         (void)AppGamepadInput::SetVibration(
@@ -8946,6 +9233,8 @@ void AppRunLoop::StopGameSessionPresentation() {
     railShooterHudRuntimeModel_.Reset();
     railShooterHudPresentation_.Reset();
     railShooterHudRenderer_.Reset();
+    railShooterDefensePromptRenderer_.Reset();
+    railEnemyAttackDefenseOutcomeFeedbackBridge_.Reset();
     railPlayerDamagePresentationBridge_.Reset();
 }
 
@@ -11058,6 +11347,10 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         coursePreviewActorRuntimeBridge_.Active()
         ? nullptr
         : &railEnemyCombatPresentationBridge_;
+    const EnemyEncounterReadabilityDirector* enemyEncounterReadability =
+        coursePreviewActorRuntimeBridge_.Active()
+        ? nullptr
+        : &railEnemyEncounterReadabilityDirector_;
     scene_.SyncCourseMeshRenderQueue(
         coursePresentationRuntime,
         &railShooterCourse_,
@@ -11065,7 +11358,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         railPath_,
         frameState_.viewMatrix,
         frameState_.projMatrix,
-        enemyCombatPresentation);
+        enemyCombatPresentation,
+        enemyEncounterReadability);
     gRailPerfFrame.syncCourseMeshMs = ElapsedMs(syncCourseMeshStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterSyncCourseMeshes");
 
@@ -11222,7 +11516,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         railPath_,
         frameState_.viewMatrix,
         frameState_.projMatrix,
-        enemyCombatPresentation);
+        enemyCombatPresentation,
+        enemyEncounterReadability);
 
     ProcessCourseObjectViewportEditing();
     ProcessIceProjectileMouseLaunch();

@@ -394,6 +394,17 @@ void SortCourseData(CourseAsset& asset) {
             return a.editorGuid < b.editorGuid;
         });
     std::sort(
+        asset.encounterBeats.begin(),
+        asset.encounterBeats.end(),
+        [](const EnemyEncounterBeatDefinition& a,
+           const EnemyEncounterBeatDefinition& b) {
+            if (a.triggerRailDistance != b.triggerRailDistance) {
+                return a.triggerRailDistance < b.triggerRailDistance;
+            }
+            if (a.priority != b.priority) return a.priority > b.priority;
+            return a.editorGuid < b.editorGuid;
+        });
+    std::sort(
         asset.terrainPlacements.begin(),
         asset.terrainPlacements.end(),
         [](const CourseTerrainPlacement& a, const CourseTerrainPlacement& b) {
@@ -896,6 +907,55 @@ bool CourseAsset::LoadFromString(const std::string& text, std::string* errorMess
             wave.editorVisible = parts[11] != "0";
             wave.editorLocked = parts[12] == "1";
             loaded.waveDefinitions.push_back(std::move(wave));
+        } else if (kind == "encounter_beat") {
+            if (parts.size() < 30) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid encounter_beat row at line " +
+                        std::to_string(lineNumber);
+                }
+                return false;
+            }
+            EnemyEncounterBeatDefinition beat{};
+            beat.editorGuid = parts[1];
+            beat.encounterId = parts[2];
+            beat.displayName = parts[3];
+            beat.waveGuid = parts[4];
+            beat.triggerRailDistance = ParseFloatOr(parts, 5, 0.0f);
+            beat.endRailDistance = ParseFloatOr(parts, 6,
+                beat.triggerRailDistance + 120.0f);
+            beat.prewarmDistance = ParseFloatOr(parts, 7, 60.0f);
+            beat.establishMinimumSeconds = ParseFloatOr(parts, 8, 0.55f);
+            beat.establishMaximumSeconds = ParseFloatOr(parts, 9, 2.0f);
+            beat.threatenMinimumSeconds = ParseFloatOr(parts, 10, 0.45f);
+            beat.threatenMaximumSeconds = ParseFloatOr(parts, 11, 2.5f);
+            beat.attackMinimumSeconds = ParseFloatOr(parts, 12, 0.8f);
+            beat.attackMaximumSeconds = ParseFloatOr(parts, 13, 12.0f);
+            beat.recoverySeconds = ParseFloatOr(parts, 14, 0.55f);
+            beat.resolveTimeoutSeconds = ParseFloatOr(parts, 15, 5.0f);
+            beat.requiredReadableRatio = ParseFloatOr(parts, 16, 0.65f);
+            beat.maximumConcurrentAttackers = static_cast<uint32_t>(
+                (std::max)(0.0f, ParseFloatOr(parts, 17, 2.0f)));
+            beat.maximumThreatBudget = ParseFloatOr(parts, 18, 2.6f);
+            beat.cameraShotId = parts[19] == "-" ? std::string{} : parts[19];
+            beat.cameraWeight = ParseFloatOr(parts, 20, 0.85f);
+            beat.cameraFocusWeight = ParseFloatOr(parts, 21, 0.72f);
+            beat.cameraFovOffsetDegrees = ParseFloatOr(parts, 22, 2.5f);
+            beat.cameraBackDistanceOffset = ParseFloatOr(parts, 23, 1.8f);
+            beat.priority = static_cast<int>(ParseFloatOr(parts, 24, 0.0f));
+            beat.exitSurvivorsOnResolve = parts[25] != "0";
+            beat.requireCombatTruthForCompletion = parts[26] != "0";
+            beat.enabled = parts[27] != "0";
+            beat.editorVisible = parts[28] != "0";
+            beat.editorLocked = parts[29] == "1";
+            std::string beatError;
+            if (!beat.Validate(&beatError)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid encounter_beat at line " +
+                        std::to_string(lineNumber) + ": " + beatError;
+                }
+                return false;
+            }
+            loaded.encounterBeats.push_back(std::move(beat));
         } else if (kind == "enemy_placement") {
             if (parts.size() < 20) {
                 if (errorMessage != nullptr) {
@@ -1224,6 +1284,9 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
     for (const CourseRailRideEventDefinition& event : saved.railRideEvents) {
         if (!event.Validate(errorMessage)) return false;
     }
+    for (const EnemyEncounterBeatDefinition& beat : saved.encounterBeats) {
+        if (!beat.Validate(errorMessage)) return false;
+    }
 
     const bool hasPersistentEditorWorldIdentity =
         std::all_of(saved.cameraKeys.begin(), saved.cameraKeys.end(),
@@ -1259,6 +1322,11 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
             [](const CourseRailRideEventDefinition& value) {
                 return !value.editorGuid.empty();
             });
+    const bool hasPersistentEncounterBeatIdentity =
+        std::all_of(saved.encounterBeats.begin(), saved.encounterBeats.end(),
+            [](const EnemyEncounterBeatDefinition& value) {
+                return !value.editorGuid.empty();
+            });
 
     std::ostringstream file;
 
@@ -1267,7 +1335,8 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
          << (hasPersistentEditorWorldIdentity && hasPersistentRailIdentity &&
                 hasPersistentWaveIdentity && hasPersistentRideProfileIdentity &&
                 hasPersistentSpeedBeatIdentity &&
-                hasPersistentRailRideEventIdentity ? 12
+                hasPersistentRailRideEventIdentity &&
+                hasPersistentEncounterBeatIdentity ? 13
              : (hasPersistentEditorWorldIdentity ? 3 : 1)) << "\n";
     file << "# row format:\n";
     file << "# course|name\n";
@@ -1289,6 +1358,7 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
     file << "# terrain_material|distance|id|blendDistance|baseR|baseG|baseB|brightness|noise|strata|breakup|specular|rim|backlight|floorShadow|detailNormal|microDetail|cavityAo|skyFill\n";
     file << "# cinematic_shot_set|start|end|id|label|heroLandmarksCsv|vistaLandmarksCsv|lightingId|cameraShotId|terrainMaterialId|fogMood|compositionNotes\n";
     file << "# wave|editorGuid|displayName|triggerRailDistance|prewarmDistance|timeoutSeconds|completionCondition|executionPolicy|nextWaveGuid|triggerEventId|enabled|editorVisible|editorLocked\n";
+    file << "# encounter_beat|editorGuid|encounterId|displayName|waveGuid|triggerRailDistance|endRailDistance|prewarmDistance|establishMin|establishMax|threatenMin|threatenMax|attackMin|attackMax|recoverySeconds|resolveTimeout|requiredReadableRatio|maxConcurrentAttackers|maxThreatBudget|cameraShotId|cameraWeight|cameraFocusWeight|cameraFovOffsetDeg|cameraBackOffset|priority|exitSurvivors|requireCombatTruth|enabled|editorVisible|editorLocked\n";
     file << "# enemy_placement|editorGuid|actorAssetId|bulletPatternOverrideId|waveGroupGuid|segmentGuid|normalizedT|lateralOffset|verticalOffset|forwardOffset|pitchDeg|yawDeg|rollDeg|scaleX|scaleY|scaleZ|activationLeadDistance|enabled|editorVisible|editorLocked\n";
     file << "# event|distance|type|id|payload|editorGuid|editorVisible|editorLocked\n\n";
 
@@ -1628,6 +1698,40 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
              << (wave.editorLocked ? 1 : 0) << "\n";
     }
 
+    file << "\n# Authored encounter rhythm layered over stable Wave membership.\n";
+    for (const EnemyEncounterBeatDefinition& beat : saved.encounterBeats) {
+        file << "encounter_beat|"
+             << beat.editorGuid << '|'
+             << beat.encounterId << '|'
+             << beat.displayName << '|'
+             << beat.waveGuid << '|'
+             << beat.triggerRailDistance << '|'
+             << beat.endRailDistance << '|'
+             << beat.prewarmDistance << '|'
+             << beat.establishMinimumSeconds << '|'
+             << beat.establishMaximumSeconds << '|'
+             << beat.threatenMinimumSeconds << '|'
+             << beat.threatenMaximumSeconds << '|'
+             << beat.attackMinimumSeconds << '|'
+             << beat.attackMaximumSeconds << '|'
+             << beat.recoverySeconds << '|'
+             << beat.resolveTimeoutSeconds << '|'
+             << beat.requiredReadableRatio << '|'
+             << beat.maximumConcurrentAttackers << '|'
+             << beat.maximumThreatBudget << '|'
+             << (beat.cameraShotId.empty() ? "-" : beat.cameraShotId) << '|'
+             << beat.cameraWeight << '|'
+             << beat.cameraFocusWeight << '|'
+             << beat.cameraFovOffsetDegrees << '|'
+             << beat.cameraBackDistanceOffset << '|'
+             << beat.priority << '|'
+             << (beat.exitSurvivorsOnResolve ? 1 : 0) << '|'
+             << (beat.requireCombatTruthForCompletion ? 1 : 0) << '|'
+             << (beat.enabled ? 1 : 0) << '|'
+             << (beat.editorVisible ? 1 : 0) << '|'
+             << (beat.editorLocked ? 1 : 0) << "\n";
+    }
+
     file << "\n# Persistent enemy instances anchored to rail topology.\n";
     file << std::setprecision(6);
     for (const CourseEnemyPlacement& placement : saved.enemyPlacements) {
@@ -1691,6 +1795,7 @@ void CourseAsset::BuildFallbackCanyon(float corridorRadius) {
     railRideEvents.clear();
     events.clear();
     waveDefinitions.clear();
+    encounterBeats.clear();
     enemyPlacements.clear();
     terrainPlacements.clear();
     rockClusters.clear();

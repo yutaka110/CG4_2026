@@ -54,6 +54,7 @@ struct EnemyAttackLaneTelegraphProxy final {
 struct EnemyAttackLaneTelegraphRenderFrame final {
     std::vector<EnemyAttackLaneTelegraphProxy> lanes;
     uint32_t effectBackedMarkers = 0;
+    uint32_t productionSubmittedLanes = 0;
     uint32_t droppedByBudget = 0;
     uint64_t sourceTelegraphRevision = 0;
     uint64_t revision = 0;
@@ -75,7 +76,13 @@ class EnemyAttackLaneTelegraphRenderer final {
 public:
     void Reset(EffectRuntime* effectRuntime = nullptr);
     void Update(const EnemyAttackLaneTelegraphRenderInput& input);
+    void AppendProductionWorldPrimitives(
+        ge3::debug::DebugDrawSystem& productionDraw) const;
     void AppendWorldPrimitives(ge3::debug::DebugDrawSystem& debugDraw) const;
+
+    bool WasSubmitted(
+        uint32_t actorId,
+        uint64_t attackIntentSequence) const noexcept;
 
     const EnemyAttackLaneTelegraphRenderFrame& Frame() const noexcept {
         return frame_;

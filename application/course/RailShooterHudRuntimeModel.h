@@ -7,6 +7,7 @@
 #include "ThreatResponseDirector.h"
 
 struct CourseGameplayWaveRuntimeStats;
+struct EnemyEncounterReadabilityFrame;
 struct GrazeScoreRuntimeState;
 struct RailVehicleDefinition;
 struct RailVehicleRuntimeState;
@@ -43,6 +44,7 @@ struct RailShooterHudRuntimeInput final {
     const CourseGameplayWaveRuntimeStats* waves = nullptr;
     const GrazeScoreRuntimeState* graze = nullptr;
     const ThreatResponseFrame* threat = nullptr;
+    const EnemyEncounterReadabilityFrame* encounterReadability = nullptr;
     uint32_t lockCount = 0;
     uint32_t maximumLocks = 0;
 };
@@ -56,6 +58,7 @@ struct RailShooterHudRuntimeFrame final {
     uint64_t vehicleRevision = 0;
     uint64_t grazeRevision = 0;
     uint64_t threatRevision = 0;
+    uint64_t encounterReadabilityRevision = 0;
 
     float playerHealth = 0.0f;
     float maximumPlayerHealth = 0.0f;
@@ -78,6 +81,12 @@ struct RailShooterHudRuntimeFrame final {
     uint32_t activeWaves = 0;
     uint32_t activeEnemies = 0;
     uint32_t defeatedEnemies = 0;
+    uint32_t activeTelegraphs = 0;
+    uint32_t activeHostileProjectiles = 0;
+    uint32_t unresolvedDefenseWindows = 0;
+    uint32_t readableHostiles = 0;
+    bool combatClearConfirmed = true;
+    std::string combatStatusText;
     uint32_t grazeChain = 0;
     float adrenalineNormalized = 0.0f;
     ThreatResponseBand threatBand = ThreatResponseBand::Calm;

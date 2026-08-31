@@ -391,6 +391,24 @@ bool EnemyBehaviorSystem::NotifyAttackCommitted(CourseEnemyActor& actor) {
     return true;
 }
 
+bool EnemyBehaviorSystem::CancelAttackIntent(
+    CourseEnemyActor& actor,
+    float cooldownSeconds) {
+    EnemyBehaviorRuntimeState& state = actor.behaviorState;
+    if (!state.initialized || !state.attackIntentActive) return false;
+    state.attackIntentActive = false;
+    state.telegraphPresented = false;
+    state.attackTimeRemaining = 0.0f;
+    state.attackCooldownRemaining = (std::max)(
+        state.attackCooldownRemaining,
+        (std::max)(0.0f, cooldownSeconds));
+    actor.fireTimer = state.attackCooldownRemaining;
+    EnterState(actor, EnemyBehaviorState::Repositioning,
+        EnemyBehaviorEventKind::StateChanged);
+    state.revision = ++revision_;
+    return true;
+}
+
 std::vector<EnemyBehaviorEvent> EnemyBehaviorSystem::ConsumeEvents() {
     std::vector<EnemyBehaviorEvent> result = std::move(pendingEvents_);
     pendingEvents_.clear();

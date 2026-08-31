@@ -254,6 +254,67 @@ CourseValidationReport ValidateCourseAsset(
         }
     }
 
+    std::unordered_set<std::string> encounterBeatGuids;
+    std::unordered_set<std::string> encounterIds;
+    for (size_t index = 0; index < course.encounterBeats.size(); ++index) {
+        const EnemyEncounterBeatDefinition& beat =
+            course.encounterBeats[index];
+        const std::string subject =
+            "encounter_beat[" + std::to_string(index) + "]";
+        std::string beatError;
+        if (!beat.Validate(&beatError)) {
+            AddIssue(report, CourseValidationSeverity::Error, subject,
+                beatError, beat.triggerRailDistance);
+        }
+        if (!encounterBeatGuids.insert(beat.editorGuid).second) {
+            AddIssue(report, CourseValidationSeverity::Error, subject,
+                "Encounter Beat editor GUID is duplicated.",
+                beat.triggerRailDistance);
+        }
+        if (!encounterIds.insert(beat.encounterId).second) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject,
+                "Encounter ID is reused; only one active Beat is paced at a time.",
+                beat.triggerRailDistance);
+        }
+        const bool waveExists = std::any_of(
+            course.waveDefinitions.begin(), course.waveDefinitions.end(),
+            [&beat](const CourseWaveDefinition& wave) {
+                return wave.editorGuid == beat.waveGuid;
+            });
+        if (!waveExists) {
+            AddIssue(report, CourseValidationSeverity::Error, subject,
+                "Encounter Beat references a missing Wave GUID: " +
+                    beat.waveGuid,
+                beat.triggerRailDistance);
+        }
+        if (!beat.cameraShotId.empty()) {
+            const bool shotExists = std::any_of(
+                course.cinematicCameraShots.begin(),
+                course.cinematicCameraShots.end(),
+                [&beat](const CourseCinematicCameraShot& shot) {
+                    return shot.id == beat.cameraShotId;
+                });
+            if (!shotExists) {
+                AddIssue(report, CourseValidationSeverity::Error, subject,
+                    "Encounter Beat references a missing camera shot: " +
+                        beat.cameraShotId,
+                    beat.triggerRailDistance);
+            }
+        }
+        if (railLength > 0.0f &&
+            beat.triggerRailDistance > railLength + 0.01f) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject,
+                "Encounter Beat trigger is beyond rail length.",
+                beat.triggerRailDistance);
+        }
+        if (railLength > 0.0f &&
+            beat.endRailDistance > railLength + 0.01f) {
+            AddIssue(report, CourseValidationSeverity::Warning, subject,
+                "Encounter Beat authored range extends beyond rail length.",
+                beat.endRailDistance);
+        }
+    }
+
     uint32_t gameplayTerrainCount = 0;
     uint32_t heroTerrainCount = 0;
     uint32_t vistaTerrainCount = 0;

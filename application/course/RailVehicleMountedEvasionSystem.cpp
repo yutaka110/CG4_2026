@@ -182,6 +182,16 @@ void RailVehicleMountedEvasionSystem::BeginEvasion(
         x = (state_.evasionCount % 2u) == 0u ? 1.0f : -1.0f;
         y = 0.0f;
         length = 1.0f;
+    } else if (std::abs(y) > std::abs(x)) {
+        // Mounted vertical defense is always a duck. An upward occupant dodge
+        // has no readable mine-cart silhouette and must never move the cart.
+        x = 0.0f;
+        y = -1.0f;
+        length = 1.0f;
+    } else {
+        x = x < 0.0f ? -1.0f : 1.0f;
+        y = 0.0f;
+        length = 1.0f;
     }
     state_.directionX = x / length;
     state_.directionY = y / length;
