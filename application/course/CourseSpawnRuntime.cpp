@@ -188,12 +188,15 @@ bool CourseSpawnRuntime::CanEnemyFire(
     CourseEnemyActor& enemy,
     const CourseEnemyFireSafetyFrameInput& safetyInput,
     float dt) {
-    if (enemy.desc.suppressFire || enemy.entranceExitState.attackSuppressed ||
+    const bool entranceExitSuppressesFire =
+        enemy.entranceExitState.initialized &&
+        enemy.entranceExitState.attackSuppressed;
+    if (enemy.desc.suppressFire || entranceExitSuppressesFire ||
         (enemy.combatState.initialized && !enemy.combatState.canFire)) {
         enemy.fireSafetyAllowed = false;
         enemy.fireSafetyReason = enemy.desc.suppressFire
             ? "actor fire suppressed"
-            : (enemy.entranceExitState.attackSuppressed
+            : (entranceExitSuppressesFire
                 ? "entrance/exit staging gate"
                 : "combat phase: " + std::string(ToString(enemy.combatState.phase)));
         fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;

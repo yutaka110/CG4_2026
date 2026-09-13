@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "EnemyProjectileSystem.h"
+#include "EnemyProjectileShootDownSystem.h"
 #include "PlayerDamageSystem.h"
 #include "../terrain/RailPath.h"
 #include "utils/math/Vector.h"
@@ -17,6 +18,7 @@ class CourseSpawnRuntime;
 enum class EnemyProjectilePresentationEventKind : uint8_t {
     Spawned,
     Impacted,
+    Intercepted,
     Expired,
 };
 
@@ -62,6 +64,7 @@ struct EnemyProjectilePresentationEvent final {
     uint32_t ownerActorId = 0;
     EnemyProjectileTrajectory trajectory = EnemyProjectileTrajectory::Direct;
     Vector3 worldPosition{};
+    Vector3 motionDirection{0.0f, 0.0f, -1.0f};
     Vector4 color{1.0f, 0.18f, 0.08f, 1.0f};
     std::string effectId;
     bool lethal = false;
@@ -81,6 +84,7 @@ struct EnemyProjectilePresentationInput final {
     const CourseSpawnRuntime* runtime = nullptr;
     const RailPath* railPath = nullptr;
     std::span<const PlayerDamageResult> playerDamageResults{};
+    std::span<const EnemyProjectileShootDownResult> shootDownResults{};
     float playerDistance = 0.0f;
     float playerLateralOffset = 0.0f;
     float playerVerticalOffset = 4.0f;

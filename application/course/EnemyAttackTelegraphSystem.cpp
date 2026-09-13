@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <cstdio>
 #include <unordered_set>
 
 namespace {
@@ -205,6 +206,67 @@ bool HigherPriority(
     return left.actorId < right.actorId;
 }
 } // namespace
+
+EnemyAttackTelegraphReadabilityStyle ResolveEnemyAttackTelegraphReadabilityStyle(
+    EnemyAttackTelegraphPhase phase,
+    float pulse) noexcept {
+    const float boundedPulse = Clamp01(pulse);
+    EnemyAttackTelegraphReadabilityStyle style{};
+    switch (phase) {
+    case EnemyAttackTelegraphPhase::Warming:
+        style.label = reinterpret_cast<const char*>(u8"\u4e88\u544a");
+        style.primaryColor = {1.0f, 0.82f, 0.16f, 0.74f};
+        style.glowAlpha = 0.16f;
+        style.markerScale = 0.92f;
+        style.tier = 0;
+        break;
+    case EnemyAttackTelegraphPhase::Tracking:
+        style.label = reinterpret_cast<const char*>(u8"\u63a5\u8fd1");
+        style.primaryColor = {1.0f, 0.48f, 0.04f, 0.88f};
+        style.glowAlpha = 0.24f;
+        style.markerScale = 1.0f;
+        style.tier = 1;
+        break;
+    case EnemyAttackTelegraphPhase::Imminent:
+        style.label = reinterpret_cast<const char*>(u8"\u5371\u967a");
+        style.primaryColor = {
+            1.0f,
+            0.10f + boundedPulse * 0.06f,
+            0.02f,
+            0.94f + boundedPulse * 0.06f};
+        style.glowAlpha = 0.38f;
+        style.markerScale = 1.42f;
+        style.tier = 2;
+        break;
+    case EnemyAttackTelegraphPhase::Fired:
+        style.label = reinterpret_cast<const char*>(u8"\u767a\u5c04");
+        style.primaryColor = {1.0f, 0.96f, 0.78f, 1.0f};
+        style.glowAlpha = 0.48f;
+        style.markerScale = 1.60f;
+        style.tier = 3;
+        style.showCountdown = false;
+        break;
+    case EnemyAttackTelegraphPhase::None:
+        style.label = "";
+        style.primaryColor = {1.0f, 0.48f, 0.04f, 0.0f};
+        style.glowAlpha = 0.0f;
+        style.markerScale = 0.0f;
+        style.tier = 0;
+        style.showCountdown = false;
+        break;
+    }
+    return style;
+}
+
+std::string FormatEnemyAttackCountdown(float seconds) {
+    const float finiteSeconds = std::isfinite(seconds) ? seconds : 0.0f;
+    const float roundedUp = std::ceil(
+        (std::clamp)(finiteSeconds, 0.0f, 9.9f) * 10.0f) / 10.0f;
+    const float readable = (std::max)(0.1f, roundedUp);
+    char text[16]{};
+    std::snprintf(text, sizeof(text), "%.1fs", readable);
+    return text;
+}
 
 void EnemyAttackTelegraphSystem::Reset() {
     trackedActors_.clear();

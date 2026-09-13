@@ -1,8 +1,15 @@
 #include "RailShooterHudRenderer.h"
 
 #include <algorithm>
+#include <string_view>
 
 namespace {
+std::string Utf8(std::u8string_view text) {
+    return {
+        reinterpret_cast<const char*>(text.data()),
+        reinterpret_cast<const char*>(text.data() + text.size())};
+}
+
 Vector4 WithOpacity(Vector4 color, float opacity) {
     color.w *= (std::clamp)(opacity, 0.0f, 1.0f);
     return color;
@@ -111,7 +118,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
                 hud.vehicleIntegrityCritical ? critical : warning,
                 barBackground);
         }
-        text("RETRY " + std::to_string(hud.retriesRemaining),
+        text(Utf8(u8"\u6b8b\u6a5f ") + std::to_string(hud.retriesRemaining),
              x + panelWidth - 82.0f * scale,
              y + 18.0f * scale, 0.48f * scale, muted);
     }
@@ -150,7 +157,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         const float x = safe;
         const float y = height - safe - 61.0f * scale;
         rect(x, y, panelWidth, 61.0f * scale, panel);
-        text("SPEED", x + 11.0f * scale, y + 20.0f * scale,
+        text(Utf8(u8"\u901f\u5ea6"), x + 11.0f * scale, y + 20.0f * scale,
              0.48f * scale, muted);
         text(hud.speedText, x + 11.0f * scale, y + 47.0f * scale,
              0.82f * scale, primary);

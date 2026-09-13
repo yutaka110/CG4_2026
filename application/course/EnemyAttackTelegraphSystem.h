@@ -41,6 +41,22 @@ struct EnemyAttackTelegraphSettings {
     uint32_t maximumVisibilityQueries = 12;
 };
 
+// One shared visual language for HUD, world-lane and VFX presentation. Phase
+// remains readable without hue through the label, tier and marker scale.
+struct EnemyAttackTelegraphReadabilityStyle final {
+    const char* label = "";
+    Vector4 primaryColor{1.0f, 0.48f, 0.04f, 1.0f};
+    float glowAlpha = 0.20f;
+    float markerScale = 1.0f;
+    uint32_t tier = 0;
+    bool showCountdown = true;
+};
+
+EnemyAttackTelegraphReadabilityStyle ResolveEnemyAttackTelegraphReadabilityStyle(
+    EnemyAttackTelegraphPhase phase,
+    float pulse = 0.0f) noexcept;
+std::string FormatEnemyAttackCountdown(float seconds);
+
 struct EnemyAttackTelegraphCue {
     uint32_t actorId = 0;
     uint64_t fireSequence = 0;

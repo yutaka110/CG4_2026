@@ -12,6 +12,18 @@ float Saturate(float value) noexcept {
     return (std::clamp)(value, 0.0f, 1.0f);
 }
 
+float SmoothStep(float value) noexcept {
+    const float t = Saturate(value);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+float EaseOutBack(float value) noexcept {
+    const float t = Saturate(value) - 1.0f;
+    constexpr float kOvershoot = 1.70158f;
+    return 1.0f + (kOvershoot + 1.0f) * t * t * t +
+        kOvershoot * t * t;
+}
+
 float PhaseDuration(
     EnemyCombatPhase phase,
     const EnemyCombatDefinition& definition) noexcept {
@@ -100,8 +112,14 @@ void ApplyProceduralAnimation(
     output.visible = state.phase != EnemyCombatPhase::Retired &&
         state.presentationAlpha > 0.001f;
     output.scaleMultiplier = 1.0f;
+    output.bodyScale = {1.0f, 1.0f, 1.0f};
     output.materialColor = {1.0f, 1.0f, 1.0f, state.presentationAlpha};
+    output.coreColor = {0.30f, 0.92f, 1.0f, state.presentationAlpha};
     output.flashStrength = Saturate(state.hitFlash);
+    output.emissiveStrength = 0.35f;
+    output.silhouetteSpread = settings.dronePodSpread;
+    output.commercialSilhouette =
+        actor.combatDefinition.commercialStateMachine;
     output.sourceCombatRevision = state.revision;
     output.sourceBehaviorRevision = actor.behaviorState.revision;
     output.sourceAttackRevision = actor.attackState.revision;
@@ -109,34 +127,90 @@ void ApplyProceduralAnimation(
     output.attackCommittedThisFrame = actor.attackState.committedThisFrame;
 
     switch (state.phase) {
-    case EnemyCombatPhase::Spawning:
-        output.verticalOffset = -(1.0f - progress) * 0.72f;
-        output.rotationOffset.y = (1.0f - progress) * 0.42f;
-        output.materialColor = {0.48f, 0.88f, 1.0f, state.presentationAlpha};
+    case EnemyCombatPhase::Spawning: {
+        const float reveal = SmoothStep(progress);
+        const float arrival = EaseOutBack(progress);
+        const float spawnAlpha = (std::max)(
+            settings.minimumSpawnAlpha,
+            settings.minimumSpawnAlpha +
+                (1.0f - settings.minimumSpawnAlpha) * reveal);
+        output.visible = true;
+        output.verticalOffset = -(1.0f - reveal) * 0.82f;
+        output.rotationOffset.y = (1.0f - reveal) * 0.56f;
+        output.rotationOffset.z = (1.0f - reveal) * -0.18f;
+        output.scaleMultiplier = 0.82f + arrival * 0.18f;
+        output.bodyScale = {
+            0.68f + reveal * 0.32f,
+            1.42f - reveal * 0.42f,
+            0.74f + reveal * 0.26f};
+        output.silhouetteSpread = settings.dronePodSpread *
+            (0.56f + reveal * 0.44f);
+        output.materialColor = {0.34f, 0.82f, 1.0f, spawnAlpha};
+        output.coreColor = {0.82f, 0.98f, 1.0f, spawnAlpha};
+        output.emissiveStrength = 3.4f - reveal * 2.1f;
         break;
+    }
     case EnemyCombatPhase::Engaging:
         output.verticalOffset = std::sin(ambientPhase) *
             settings.idleBobAmplitude * progress;
         output.rotationOffset.z = std::sin(progress * kPi * 2.0f) * 0.055f;
+        output.bodyScale = {
+            1.0f + pulse * 0.06f,
+            1.0f - pulse * 0.08f,
+            1.0f + pulse * 0.04f};
+        output.coreColor = {0.34f, 0.88f, 1.0f, state.presentationAlpha};
+        output.emissiveStrength = 0.75f + pulse * 0.55f;
         break;
-    case EnemyCombatPhase::Telegraphing:
+    case EnemyCombatPhase::Telegraphing: {
+        const float heartbeat = 0.5f + 0.5f * std::sin(ambientPhase * 5.6f);
+        output.weaponCharge = Saturate(0.18f + progress * 0.70f + heartbeat * 0.12f);
         output.verticalOffset = std::sin(ambientPhase) * settings.idleBobAmplitude;
-        output.scaleMultiplier = 1.0f + pulse * settings.telegraphPulseStrength;
+        output.forwardOffset = -output.weaponCharge * 0.12f;
+        output.rotationOffset.x = -output.weaponCharge * 0.085f;
+        output.scaleMultiplier = 1.0f +
+            output.weaponCharge * settings.telegraphPulseStrength;
+        output.bodyScale = {
+            1.0f + output.weaponCharge * 0.12f,
+            1.0f - output.weaponCharge * 0.07f,
+            1.0f + output.weaponCharge * 0.09f};
         output.materialColor = {
             1.0f,
-            0.72f + 0.22f * pulse,
-            0.42f + 0.24f * pulse,
+            0.68f + 0.18f * heartbeat,
+            0.30f + 0.18f * heartbeat,
             state.presentationAlpha};
+        output.coreColor = {1.0f, 0.90f, 0.42f, state.presentationAlpha};
+        output.emissiveStrength = 1.2f + output.weaponCharge * 2.8f;
         break;
-    case EnemyCombatPhase::Attacking:
-        output.forwardOffset = -pulse * settings.attackRecoilDistance;
-        output.rotationOffset.x = -pulse * 0.12f;
-        output.scaleMultiplier = 1.0f + pulse * 0.08f;
+    }
+    case EnemyCombatPhase::Attacking: {
+        // The muzzle frame must carry the strongest silhouette change.  A pure
+        // sin(progress * pi) envelope starts at zero and made the exact shot
+        // frame look neutral even though the projectile and flash had fired.
+        const float shotKick = 1.0f - progress;
+        output.forwardOffset =
+            -(shotKick * 0.72f + pulse * 0.28f) * settings.attackRecoilDistance;
+        output.rotationOffset.x =
+            -(shotKick * 0.08f + pulse * 0.04f);
+        output.scaleMultiplier = 1.0f + shotKick * 0.05f + pulse * 0.03f;
+        output.bodyScale = {
+            1.0f - shotKick * 0.08f - pulse * 0.02f,
+            1.0f - shotKick * 0.06f - pulse * 0.02f,
+            1.0f + shotKick * 0.24f + pulse * 0.08f};
         output.materialColor = {1.0f, 0.58f, 0.30f, state.presentationAlpha};
+        output.coreColor = {1.0f, 1.0f, 0.86f, state.presentationAlpha};
+        output.weaponCharge = 1.0f - progress;
+        output.emissiveStrength = 4.8f * (1.0f - progress) + 0.8f;
         break;
+    }
     case EnemyCombatPhase::Recovering:
         output.verticalOffset = std::sin(ambientPhase) * settings.idleBobAmplitude;
         output.rotationOffset.x = std::sin(progress * kPi) * 0.045f;
+        output.bodyScale = {
+            1.0f + pulse * 0.04f,
+            1.0f + pulse * 0.07f,
+            1.0f - pulse * 0.10f};
+        output.weaponCharge = (1.0f - progress) * 0.28f;
+        output.coreColor = {0.74f, 0.80f, 1.0f, state.presentationAlpha};
         break;
     case EnemyCombatPhase::HitReact: {
         const float decay = 1.0f - progress;
@@ -144,11 +218,17 @@ void ApplyProceduralAnimation(
             settings.hitShakeAmplitude * decay;
         output.rotationOffset.z = output.lateralOffset * 0.32f;
         output.scaleMultiplier = 1.0f - pulse * 0.08f;
+        output.bodyScale = {
+            0.82f + progress * 0.18f,
+            1.14f - progress * 0.14f,
+            0.90f + progress * 0.10f};
         output.materialColor = {
             1.0f,
             1.0f - output.flashStrength * 0.76f,
             1.0f - output.flashStrength * 0.88f,
             state.presentationAlpha};
+        output.coreColor = {1.0f, 1.0f, 1.0f, state.presentationAlpha};
+        output.emissiveStrength = 4.5f * decay;
         break;
     }
     case EnemyCombatPhase::Dying:
@@ -156,16 +236,26 @@ void ApplyProceduralAnimation(
         output.rotationOffset.z = state.deathProgress * 2.2f;
         output.rotationOffset.x = state.deathProgress * 0.55f;
         output.scaleMultiplier = 1.0f + pulse * 0.20f;
+        output.bodyScale = {
+            1.0f + pulse * 0.32f,
+            1.0f - state.deathProgress * 0.42f,
+            1.0f + pulse * 0.18f};
+        output.silhouetteSpread = settings.dronePodSpread *
+            (1.0f + state.deathProgress * 0.46f);
         output.materialColor = {
             1.0f,
             0.48f * (1.0f - state.deathProgress),
             0.14f,
             state.presentationAlpha};
+        output.coreColor = {1.0f, 0.82f, 0.22f, state.presentationAlpha};
+        output.emissiveStrength = 2.0f + (1.0f - state.deathProgress) * 3.0f;
         break;
     case EnemyCombatPhase::Retired:
         output.visible = false;
         output.scaleMultiplier = 0.0f;
+        output.bodyScale = {};
         output.materialColor.w = 0.0f;
+        output.coreColor.w = 0.0f;
         break;
     }
     if (actor.behaviorState.initialized &&
@@ -185,20 +275,34 @@ void ApplyProceduralAnimation(
             output.materialColor.x = (std::max)(output.materialColor.x, 0.92f);
             output.materialColor.y *= 0.92f;
             output.materialColor.z *= 0.82f;
+            output.weaponCharge = (std::max)(output.weaponCharge, 0.24f);
         }
         if (actor.attackState.committedThisFrame) {
             output.animation = EnemyCombatAnimationState::Attack;
             output.forwardOffset -= settings.attackRecoilDistance;
             output.rotationOffset.x -= 0.12f;
             output.scaleMultiplier *= 1.08f;
+            output.bodyScale.z *= 1.18f;
+            output.coreColor = {1.0f, 1.0f, 0.88f, output.materialColor.w};
+            output.emissiveStrength = (std::max)(
+                output.emissiveStrength, 4.8f);
         }
     }
     if (actor.entranceExitState.initialized) {
         output.scaleMultiplier *= actor.entranceExitState.presentationScale;
         output.materialColor.w *= actor.entranceExitState.presentationAlpha;
+        output.coreColor.w *= actor.entranceExitState.presentationAlpha;
         output.visible = output.visible &&
             actor.entranceExitState.presentationAlpha > 0.001f &&
             !actor.entranceExitState.exitComplete;
+    }
+    if (state.phase == EnemyCombatPhase::Spawning &&
+        !actor.entranceExitState.exitComplete) {
+        output.materialColor.w = (std::max)(
+            output.materialColor.w, settings.minimumSpawnAlpha);
+        output.coreColor.w = (std::max)(
+            output.coreColor.w, settings.minimumSpawnAlpha);
+        output.visible = true;
     }
 }
 
@@ -333,8 +437,14 @@ void EnemyCombatPresentationBridge::Update(
 
             const bool spawnVfx = event->kind == EnemyCombatEventKind::Spawned &&
                 actor->combatDefinition.commercialStateMachine;
+            const bool chargeVfx =
+                event->kind == EnemyCombatEventKind::TelegraphStarted &&
+                actor->combatDefinition.commercialStateMachine;
+            const bool attackVfx =
+                event->kind == EnemyCombatEventKind::AttackCommitted &&
+                actor->combatDefinition.commercialStateMachine;
             const bool deathVfx = event->kind == EnemyCombatEventKind::Defeated;
-            if (spawnVfx || deathVfx) {
+            if (spawnVfx || chargeVfx || attackVfx || deathVfx) {
                 EnemyCombatPresentationVfxCommand vfx{};
                 vfx.actorId = actor->actorId;
                 vfx.worldPosition = mix.position;
@@ -342,16 +452,33 @@ void EnemyCombatPresentationBridge::Update(
                     // WeaponFeedback owns the contact impact. This is a larger,
                     // actor-centered destruction burst and is emitted once.
                     vfx.cueId = "enemy_combat_death";
-                    vfx.effectName = "hit_plane_burst";
+                    vfx.effectName = "enemy_death_burst";
                     vfx.color = {1.0f, 0.34f, 0.08f, 0.96f};
-                    vfx.radius = (std::max)(1.15f, actor->desc.radius * 1.65f);
-                    vfx.lifetime = 0.72f;
+                    vfx.radius = (std::max)(1.25f, actor->desc.radius * 1.72f);
+                    vfx.lifetime = 0.90f;
+                } else if (attackVfx) {
+                    const RailPathSample sample = input.railPath->Evaluate(
+                        actor->desc.spawnDistance + actor->desc.distanceOffset);
+                    vfx.worldPosition = Add(
+                        mix.position,
+                        Scale(sample.tangent, -actor->desc.radius * 0.88f));
+                    vfx.cueId = "enemy_combat_muzzle";
+                    vfx.effectName = "enemy_muzzle_burst";
+                    vfx.color = {1.0f, 0.72f, 0.20f, 0.96f};
+                    vfx.radius = (std::max)(0.72f, actor->desc.radius * 0.78f);
+                    vfx.lifetime = 0.30f;
+                } else if (chargeVfx) {
+                    vfx.cueId = "enemy_combat_charge";
+                    vfx.effectName = "enemy_charge_pulse";
+                    vfx.color = {1.0f, 0.48f, 0.12f, 0.82f};
+                    vfx.radius = (std::max)(0.82f, actor->desc.radius * 1.08f);
+                    vfx.lifetime = 0.48f;
                 } else {
                     vfx.cueId = "enemy_combat_spawn";
-                    vfx.effectName = "hit_ring";
+                    vfx.effectName = "enemy_spawn_reveal";
                     vfx.color = {0.24f, 0.82f, 1.0f, 0.76f};
-                    vfx.radius = (std::max)(0.65f, actor->desc.radius * 0.92f);
-                    vfx.lifetime = 0.34f;
+                    vfx.radius = (std::max)(0.78f, actor->desc.radius * 1.12f);
+                    vfx.lifetime = 0.58f;
                 }
                 if (frame_.vfxCommands.size() <
                     input.settings.maximumVfxCommandsPerFrame) {

@@ -72,7 +72,12 @@ AppStartupScene ParseAppStartupSceneArguments(
             continue;
         }
         const std::wstring_view argument(arguments[argumentIndex]);
-        if (argument == L"--rail-shooter") {
+        if (argument == L"--rail-shooter" ||
+            argument == L"--combat-loop-10s" ||
+            argument == L"--combat-loop-ui-proof" ||
+            argument == L"--combat-loop-ui-proof=interrupt" ||
+            argument == L"--combat-loop-ui-proof=shootdown" ||
+            argument == L"--combat-loop-ui-proof=evade") {
             return AppStartupScene::RailShooter;
         }
         if (argument == L"--multi-material-showcase") {
@@ -90,6 +95,21 @@ AppStartupScene ParseAppStartupSceneArguments(
         : AppStartupScene::RailShooter;
 }
 
+bool ParseCombatLoop10SecondModeArguments(
+    int argumentCount,
+    const wchar_t* const* arguments) noexcept {
+    if (argumentCount <= 1 || arguments == nullptr) {
+        return false;
+    }
+    for (int argumentIndex = 1; argumentIndex < argumentCount; ++argumentIndex) {
+        if (arguments[argumentIndex] != nullptr &&
+            std::wstring_view(arguments[argumentIndex]) == L"--combat-loop-10s") {
+            return true;
+        }
+    }
+    return false;
+}
+
 AppStartupScene ResolveAppStartupSceneFromCommandLine() {
     int argumentCount = 0;
     LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
@@ -101,6 +121,70 @@ AppStartupScene ResolveAppStartupSceneFromCommandLine() {
         ParseAppStartupSceneArguments(argumentCount, arguments);
     LocalFree(arguments);
     return startupScene;
+}
+
+bool ResolveCombatLoop10SecondModeFromCommandLine() {
+    int argumentCount = 0;
+    LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
+    if (arguments == nullptr) {
+        return false;
+    }
+
+    const bool enabled =
+        ParseCombatLoop10SecondModeArguments(argumentCount, arguments);
+    LocalFree(arguments);
+    return enabled;
+}
+
+bool ParseCombatLoopDefenseUiProofArguments(
+    int argumentCount,
+    const wchar_t* const* arguments) noexcept {
+    return ParseCombatLoopDefenseUiProofVariantArguments(
+               argumentCount, arguments) !=
+        CombatLoopDefenseUiProofVariant::Disabled;
+}
+
+CombatLoopDefenseUiProofVariant ParseCombatLoopDefenseUiProofVariantArguments(
+    int argumentCount,
+    const wchar_t* const* arguments) noexcept {
+    if (argumentCount <= 1 || arguments == nullptr) {
+        return CombatLoopDefenseUiProofVariant::Disabled;
+    }
+    for (int argumentIndex = 1; argumentIndex < argumentCount; ++argumentIndex) {
+        if (arguments[argumentIndex] == nullptr) continue;
+        const std::wstring_view argument(arguments[argumentIndex]);
+        if (argument == L"--combat-loop-ui-proof") {
+            return CombatLoopDefenseUiProofVariant::Sequence;
+        }
+        if (argument == L"--combat-loop-ui-proof=interrupt") {
+            return CombatLoopDefenseUiProofVariant::Interrupt;
+        }
+        if (argument == L"--combat-loop-ui-proof=shootdown") {
+            return CombatLoopDefenseUiProofVariant::ShootDown;
+        }
+        if (argument == L"--combat-loop-ui-proof=evade") {
+            return CombatLoopDefenseUiProofVariant::Evade;
+        }
+    }
+    return CombatLoopDefenseUiProofVariant::Disabled;
+}
+
+bool ResolveCombatLoopDefenseUiProofFromCommandLine() {
+    return ResolveCombatLoopDefenseUiProofVariantFromCommandLine() !=
+        CombatLoopDefenseUiProofVariant::Disabled;
+}
+
+CombatLoopDefenseUiProofVariant
+ResolveCombatLoopDefenseUiProofVariantFromCommandLine() {
+    int argumentCount = 0;
+    LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
+    if (arguments == nullptr) {
+        return CombatLoopDefenseUiProofVariant::Disabled;
+    }
+    const CombatLoopDefenseUiProofVariant variant =
+        ParseCombatLoopDefenseUiProofVariantArguments(argumentCount, arguments);
+    LocalFree(arguments);
+    return variant;
 }
 
 void ResetMultiMaterialShowcaseHumanoidPose(AppRuntimeState& runtimeState) {

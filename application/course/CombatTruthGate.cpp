@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string_view>
 #include <utility>
 
 #include "CourseSpawnRuntime.h"
@@ -10,6 +11,12 @@
 #include "EnemyProjectilePresentationBridge.h"
 
 namespace {
+std::string Utf8(std::u8string_view text) {
+    return {
+        reinterpret_cast<const char*>(text.data()),
+        reinterpret_cast<const char*>(text.data() + text.size())};
+}
+
 bool IsLivingThreat(const CourseEnemyActor& actor) noexcept {
     if (actor.entranceExitState.exitComplete ||
         actor.entranceExitState.phase == EnemyEntranceExitPhase::Exited) {
@@ -54,7 +61,7 @@ void CombatTruthGate::Update(
     if (!input.gameplayActive) {
         clearCandidateSeconds_ = 0.0f;
         recentDamageHoldSeconds_ = 0.0f;
-        next.statusText = "COMBAT STANDBY";
+        next.statusText = Utf8(u8"\u5f85\u6a5f");
         frame_ = std::move(next);
         return;
     }
@@ -140,25 +147,25 @@ void CombatTruthGate::Update(
         next.activeHostileProjectiles == 0;
 
     if (next.activeHostileProjectiles > 0) {
-        next.statusText = "INCOMING " +
+        next.statusText = Utf8(u8"\u5f3e\u63a5\u8fd1 ") +
             std::to_string(next.activeHostileProjectiles);
     } else if (next.unresolvedDefenseWindows > 0) {
-        next.statusText = "DEFEND " +
+        next.statusText = Utf8(u8"\u9632\u5fa1 ") +
             std::to_string(next.unresolvedDefenseWindows);
     } else if (next.activeTelegraphs > 0) {
-        next.statusText = "ATTACK WARNING " +
+        next.statusText = Utf8(u8"\u653b\u6483\u4e88\u544a ") +
             std::to_string(next.activeTelegraphs);
     } else if (next.activeHostiles > 0) {
-        next.statusText = "HOSTILES " +
+        next.statusText = Utf8(u8"\u6575 ") +
             std::to_string(next.activeHostiles);
     } else if (next.activeWaves > 0) {
-        next.statusText = "COMBAT RESOLVING";
+        next.statusText = Utf8(u8"\u6226\u95d8\u4e2d");
     } else if (recentDamageHoldSeconds_ > 0.0f) {
-        next.statusText = "DANGER CLEARING";
+        next.statusText = Utf8(u8"\u8105\u5a01\u7d42\u4e86");
     } else if (!next.safeToAnnounceClear) {
-        next.statusText = "SECURING AREA";
+        next.statusText = Utf8(u8"\u5b89\u5168\u78ba\u8a8d");
     } else {
-        next.statusText = "AREA CLEAR";
+        next.statusText = Utf8(u8"\u5b89\u5168");
     }
     frame_ = std::move(next);
 }

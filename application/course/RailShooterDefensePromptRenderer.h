@@ -11,6 +11,8 @@ struct RailShooterDefensePromptRendererSettings final {
     bool enabled = true;
     uint32_t maximumDrawCommands = 32;
     float opacity = 0.94f;
+    float urgentThreatSeconds = 0.40f;
+    float urgentThreatThreshold = 0.82f;
 };
 
 struct RailShooterDefensePromptRenderInput final {
@@ -23,6 +25,8 @@ struct RailShooterDefensePromptRenderInput final {
 
 struct RailShooterDefensePromptRenderFrame final {
     bool visible = false;
+    bool urgentThreatActive = false;
+    bool outcomeDemoted = false;
     uint32_t visiblePrompts = 0;
     uint32_t droppedCommands = 0;
     uint64_t sourceRevision = 0;

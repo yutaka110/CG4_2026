@@ -2,9 +2,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string_view>
 #include <utility>
 
 namespace {
+
+std::string Utf8(std::u8string_view text) {
+    return {
+        reinterpret_cast<const char*>(text.data()),
+        reinterpret_cast<const char*>(text.data() + text.size())};
+}
 
 float Clamp01(float value) {
     return (std::clamp)(value, 0.0f, 1.0f);
@@ -94,16 +101,18 @@ void GameSessionPresentationBridge::Update(
         hud.showBanner = true;
         hud.bannerAlpha = 1.0f;
         hud.bannerColor = White();
-        hud.headline = "PAUSED";
-        hud.detail = "PRESS P TO RESUME";
+        hud.headline = Utf8(u8"\u4e00\u6642\u505c\u6b62");
+        hud.detail = Utf8(u8"P\u3067\u518d\u958b");
     } else if (state.phase == GameSessionPhase::Result) {
         hud.showBanner = true;
         hud.bannerAlpha = 1.0f;
         hud.bannerColor = state.outcome == GameSessionOutcome::Victory ? Green() : Red();
         hud.headline = state.outcome == GameSessionOutcome::Victory
-            ? "MISSION COMPLETE"
-            : "MISSION FAILED";
-        hud.detail = state.canRetry ? "PRESS R OR A TO RETRY" : "RESULT";
+            ? Utf8(u8"\u4efb\u52d9\u5b8c\u4e86")
+            : Utf8(u8"\u4efb\u52d9\u5931\u6557");
+        hud.detail = state.canRetry
+            ? Utf8(u8"R/A\u3067\u518d\u6311\u6226")
+            : Utf8(u8"\u7d50\u679c");
     }
     frame_.hud = std::move(hud);
 
@@ -212,7 +221,7 @@ void GameSessionPresentationBridge::ConsumeEvent(
         flashColor_ = Green();
         flashDuration_ = (std::max)(0.01f, settings.outcomeFlashDurationSeconds);
         flashRemaining_ = flashDuration_;
-        SetBanner("MISSION COMPLETE", "COURSE CLEAR", Green(), settings.bannerDurationSeconds * 2.0f);
+        SetBanner(Utf8(u8"\u4efb\u52d9\u5b8c\u4e86"), Utf8(u8"\u7a81\u7834"), Green(), settings.bannerDurationSeconds * 2.0f);
         break;
     case GameSessionEventType::DefeatConfirmed:
         cue.kind = GameSessionPresentationCueKind::Defeat;
@@ -227,7 +236,7 @@ void GameSessionPresentationBridge::ConsumeEvent(
         flashColor_ = Red();
         flashDuration_ = (std::max)(0.01f, settings.outcomeFlashDurationSeconds);
         flashRemaining_ = flashDuration_;
-        SetBanner("MISSION FAILED", ToString(event.reason), Red(), settings.bannerDurationSeconds * 2.0f);
+        SetBanner(Utf8(u8"\u4efb\u52d9\u5931\u6557"), Utf8(u8"\u7d50\u679c"), Red(), settings.bannerDurationSeconds * 2.0f);
         break;
     case GameSessionEventType::ResultEntered:
         cue.kind = GameSessionPresentationCueKind::Result;
@@ -241,13 +250,13 @@ void GameSessionPresentationBridge::ConsumeEvent(
         cue.cameraShake = 0.12f;
         cue.hapticHigh = 0.24f;
         cue.hapticDurationSeconds = 0.10f;
-        SetBanner("RETRY", event.subjectId, Cyan(), settings.bannerDurationSeconds);
+        SetBanner(Utf8(u8"\u518d\u6311\u6226"), event.subjectId, Cyan(), settings.bannerDurationSeconds);
         break;
     case GameSessionEventType::RunRestarted:
         cue.kind = GameSessionPresentationCueKind::Restart;
         cue.audioVolume = 0.62f;
         cue.audioPitch = 1.08f;
-        SetBanner("RESTART", "", Cyan(), settings.bannerDurationSeconds);
+        SetBanner(Utf8(u8"\u518d\u958b"), "", Cyan(), settings.bannerDurationSeconds);
         break;
     }
 

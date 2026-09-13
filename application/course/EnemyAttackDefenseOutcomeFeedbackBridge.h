@@ -10,14 +10,23 @@
 
 struct EnemyAttackDefenseOutcomeFeedbackSettings final {
     bool enabled = true;
-    float displayDurationSeconds = 0.75f;
-    float failureDisplayDurationSeconds = 0.42f;
+    float displayDurationSeconds = 1.45f;
+    float failureDisplayDurationSeconds = 0.85f;
     float hapticDurationSeconds = 0.14f;
     size_t maximumAudioCuesPerFrame = 4;
 };
 
+enum class EnemyAttackDefenseCelebrationStyle : uint8_t {
+    None,
+    InterruptBreak,
+    ShootDownBurst,
+    EvasionFlow,
+    FailureImpact,
+};
+
 struct EnemyAttackDefenseOutcomeAudioCue final {
     uint64_t resultSequence = 0;
+    EnemyAttackDefenseMethod method = EnemyAttackDefenseMethod::None;
     EnemyAttackDefenseOutcome outcome = EnemyAttackDefenseOutcome::Failed;
     EnemyAttackDefenseGrade grade = EnemyAttackDefenseGrade::None;
     float volume = 0.0f;
@@ -33,9 +42,17 @@ struct EnemyAttackDefenseOutcomeFeedbackFrame final {
     std::string headline;
     std::string detail;
     Vector4 color{0.25f, 0.92f, 1.0f, 1.0f};
+    Vector4 secondaryColor{1.0f, 1.0f, 1.0f, 1.0f};
+    EnemyAttackDefenseCelebrationStyle celebrationStyle =
+        EnemyAttackDefenseCelebrationStyle::None;
     uint32_t scoreAwarded = 0;
     uint32_t chain = 0;
     float alpha = 0.0f;
+    float normalizedAge = 0.0f;
+    float impactPulse = 0.0f;
+    float screenFlashAlpha = 0.0f;
+    float bannerScale = 1.0f;
+    float accentDirectionX = 0.0f;
     float cameraShake = 0.0f;
     float cameraPitchImpulse = 0.0f;
     float cameraYawImpulse = 0.0f;
@@ -72,3 +89,5 @@ private:
     EnemyAttackDefenseOutcomeFeedbackFrame frame_{};
     uint64_t revision_ = 0;
 };
+
+const char* ToString(EnemyAttackDefenseCelebrationStyle style) noexcept;

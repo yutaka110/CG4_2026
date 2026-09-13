@@ -411,20 +411,133 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             item->materialData->shininess = presentation != nullptr &&
                 presentation->flashStrength > 0.01f
                 ? 18.0f
-                : 5.0f;
+                : 5.0f + (presentation != nullptr
+                    ? presentation->emissiveStrength * 4.0f
+                    : 0.0f);
+            item->materialData->environmentCoefficient = presentation != nullptr
+                ? (std::clamp)(
+                    0.16f + presentation->emissiveStrength * 0.055f,
+                    0.16f,
+                    0.58f)
+                : 0.16f;
             item->useMaterialOverride = true;
         }
+        const Vector3 bodyScale = presentation != nullptr
+            ? presentation->bodyScale
+            : Vector3{1.0f, 1.0f, 1.0f};
         WriteItemTransform(
             *item,
             model.rootLocal,
             {
-                baseScale * (std::max)(0.01f, enemy.desc.localScale.x),
-                baseScale * (std::max)(0.01f, enemy.desc.localScale.y),
-                baseScale * (std::max)(0.01f, enemy.desc.localScale.z),
+                baseScale * (std::max)(0.01f, enemy.desc.localScale.x) *
+                    (std::max)(0.01f, bodyScale.x),
+                baseScale * (std::max)(0.01f, enemy.desc.localScale.y) *
+                    (std::max)(0.01f, bodyScale.y),
+                baseScale * (std::max)(0.01f, enemy.desc.localScale.z) *
+                    (std::max)(0.01f, bodyScale.z),
             },
             rotation,
             center,
             viewProjection);
+
+        if (presentation == nullptr ||
+            !presentation->commercialSilhouette ||
+            !presentation->visible) {
+            continue;
+        }
+
+        const float spread = baseScale * (std::max)(
+            0.45f, presentation->silhouetteSpread);
+        const Vector4 bodyColor = presentation->materialColor;
+        const Vector4 podColor{
+            bodyColor.x * 0.72f,
+            bodyColor.y * 0.76f,
+            bodyColor.z * 0.88f,
+            bodyColor.w};
+        auto addDronePart = [&] (
+            const char* suffix,
+            const Vector3& position,
+            const Vector3& scale,
+            const Vector3& rotationOffset,
+            const Vector4& color,
+            float shininess,
+            float environmentCoefficient) {
+            CourseMeshRenderItem* part = AllocateItem();
+            if (part == nullptr) return;
+            part->kind = CourseMeshRenderKind::Enemy;
+            part->name = enemy.desc.role + suffix;
+            part->meshId = model.name;
+            part->sourceActorId = enemy.actorId;
+            part->modelIndex = modelIndex;
+            part->sortDistance = sample.distance;
+            part->visible = model.loaded && part->transformData != nullptr;
+            if (!part->visible) return;
+            if (part->materialData != nullptr) {
+                part->materialData->color = color;
+                part->materialData->shininess = shininess;
+                part->materialData->environmentCoefficient =
+                    environmentCoefficient;
+                part->materialData->specularMode = 1;
+                part->useMaterialOverride = true;
+            }
+            WriteItemTransform(
+                *part,
+                model.rootLocal,
+                scale,
+                Add(rotation, rotationOffset),
+                position,
+                viewProjection);
+        };
+
+        const Vector3 podAdvance = Scale(sample.tangent, -baseScale * 0.08f);
+        const Vector3 podLift = Scale(sample.up, baseScale * 0.08f);
+        const Vector3 leftPodPosition = Add(
+            Add(center, Scale(sample.right, -spread)),
+            Add(podAdvance, podLift));
+        const Vector3 rightPodPosition = Add(
+            Add(center, Scale(sample.right, spread)),
+            Add(podAdvance, podLift));
+        const float podRecoil = presentation->weaponCharge * baseScale * 0.14f;
+        const Vector3 podScale{
+            baseScale * 0.42f,
+            baseScale * 0.30f,
+            baseScale * (0.54f + presentation->weaponCharge * 0.12f)};
+        addDronePart(
+            "/left-pod",
+            Add(leftPodPosition, Scale(sample.tangent, podRecoil)),
+            podScale,
+            {0.0f, 0.0f, -0.16f - presentation->weaponCharge * 0.12f},
+            podColor,
+            9.0f + presentation->emissiveStrength * 2.0f,
+            0.28f);
+        addDronePart(
+            "/right-pod",
+            Add(rightPodPosition, Scale(sample.tangent, podRecoil)),
+            podScale,
+            {0.0f, 0.0f, 0.16f + presentation->weaponCharge * 0.12f},
+            podColor,
+            9.0f + presentation->emissiveStrength * 2.0f,
+            0.28f);
+
+        const Vector3 corePosition = Add(
+            Add(center, Scale(sample.tangent, -baseScale * 0.78f)),
+            Scale(sample.up, baseScale * 0.04f));
+        const float corePulse = 1.0f + presentation->weaponCharge * 0.48f;
+        addDronePart(
+            "/weapon-core",
+            corePosition,
+            {
+                baseScale * 0.34f * corePulse,
+                baseScale * 0.34f * corePulse,
+                baseScale * 0.24f,
+            },
+            {},
+            presentation->coreColor,
+            22.0f + presentation->emissiveStrength * 5.0f,
+            (std::clamp)(
+                0.42f + presentation->emissiveStrength * 0.045f,
+                0.42f,
+                0.72f));
     }
 }
 

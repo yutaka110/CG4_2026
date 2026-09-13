@@ -20,6 +20,16 @@ Vector3 Scale(Vector3 value, float scale) noexcept {
 Vector3 Lerp(Vector3 a, Vector3 b, float t) noexcept {
     return Add(a, Scale(Subtract(b, a), t));
 }
+float LengthSquared(Vector3 value) noexcept {
+    return value.x * value.x + value.y * value.y + value.z * value.z;
+}
+Vector3 NormalizeOr(Vector3 value, Vector3 fallback) noexcept {
+    const float lengthSquared = LengthSquared(value);
+    if (!std::isfinite(lengthSquared) || lengthSquared <= 0.000001f) {
+        return fallback;
+    }
+    return Scale(value, 1.0f / std::sqrt(lengthSquared));
+}
 float PhaseOpacity(EnemyAttackTelegraphPhase phase) noexcept {
     switch (phase) {
     case EnemyAttackTelegraphPhase::Warming: return 0.34f;
@@ -29,15 +39,6 @@ float PhaseOpacity(EnemyAttackTelegraphPhase phase) noexcept {
     case EnemyAttackTelegraphPhase::None: return 0.0f;
     }
     return 0.0f;
-}
-Vector4 TrajectoryColor(EnemyProjectileTrajectory trajectory, float alpha) noexcept {
-    switch (trajectory) {
-    case EnemyProjectileTrajectory::Direct: return {1.0f, 0.08f, 0.72f, alpha};
-    case EnemyProjectileTrajectory::Predictive: return {1.0f, 0.72f, 0.08f, alpha};
-    case EnemyProjectileTrajectory::Homing: return {0.92f, 0.12f, 1.0f, alpha};
-    case EnemyProjectileTrajectory::Arc: return {1.0f, 0.22f, 0.10f, alpha};
-    }
-    return {1.0f, 0.08f, 0.72f, alpha};
 }
 EnemyAttackLaneShape ResolveShape(const EnemyAttackTelegraphCue& cue) noexcept {
     if (cue.projectileTrajectory == EnemyProjectileTrajectory::Homing) {
@@ -118,9 +119,13 @@ void EnemyAttackLaneTelegraphRenderer::Update(
                 Scale(targetSample.right, cue.targetLateralOffset)),
             Scale(targetSample.up, cue.targetVerticalOffset));
         const float opacity = PhaseOpacity(cue.phase);
-        const float urgencyScale = cue.phase == EnemyAttackTelegraphPhase::Imminent
-            ? input.settings.imminentScale
-            : 1.0f;
+        const EnemyAttackTelegraphReadabilityStyle style =
+            ResolveEnemyAttackTelegraphReadabilityStyle(cue.phase, cue.pulse);
+        const float urgency = (std::clamp)(cue.urgency, 0.0f, 1.0f);
+        const float urgencyScale = style.markerScale *
+            (cue.phase == EnemyAttackTelegraphPhase::Imminent
+                ? input.settings.imminentScale
+                : 1.0f);
         const float pulse = 1.0f + 0.08f * std::sin(
             input.elapsedTime * 11.0f + static_cast<float>(cue.actorId % 13u));
 
@@ -136,12 +141,22 @@ void EnemyAttackLaneTelegraphRenderer::Update(
         proxy.railRight = targetSample.right;
         proxy.railUp = targetSample.up;
         proxy.opacity = opacity;
-        proxy.color = TrajectoryColor(cue.projectileTrajectory, opacity);
+        proxy.color = style.primaryColor;
+        proxy.color.w *= opacity;
         proxy.laneWidth = input.settings.baseLaneWidth * urgencyScale;
         proxy.sourceRadius = input.settings.sourceMarkerRadius *
             urgencyScale * pulse;
         proxy.targetRadius = input.settings.targetMarkerRadius *
             urgencyScale * pulse;
+        proxy.urgency = urgency;
+        proxy.pulse = cue.pulse;
+        proxy.convergenceRadius = proxy.targetRadius *
+            (std::max)(0.18f, 1.0f - urgency * 0.82f);
+        proxy.flowPhase = std::fmod(
+            input.elapsedTime * (0.62f + urgency * 1.10f), 1.0f);
+        proxy.readabilityTier = style.tier;
+        proxy.directionMarkerCount = static_cast<uint32_t>((std::clamp)(
+            3 + static_cast<int>(std::round(urgency * 3.0f)), 3, 6));
         proxy.projectileCount = (std::max)(1, cue.projectileCount);
 
         const LaneKey key{cue.actorId, cue.attackIntentSequence};
@@ -201,22 +216,89 @@ void EnemyAttackLaneTelegraphRenderer::AppendProductionWorldPrimitives(
     ge3::debug::DebugDrawSystem& productionDraw) const {
     for (const EnemyAttackLaneTelegraphProxy& lane : frame_.lanes) {
         Vector4 faint = lane.color;
-        faint.w *= 0.28f;
+        faint.w *= 0.32f;
+        Vector4 core = lane.color;
+        core.w = (std::min)(1.0f, core.w * 1.18f);
         productionDraw.AddLine(lane.startWorld, lane.targetWorld, faint, lane.color);
+        const float halfWidth = lane.laneWidth * 0.5f;
+        const Vector3 horizontal = Scale(lane.railRight, halfWidth);
+        const Vector3 vertical = Scale(lane.railUp, halfWidth * 0.68f);
+        productionDraw.AddLine(
+            Add(lane.startWorld, horizontal),
+            Add(lane.targetWorld, horizontal), faint, faint);
+        productionDraw.AddLine(
+            Subtract(lane.startWorld, horizontal),
+            Subtract(lane.targetWorld, horizontal), faint, faint);
+        productionDraw.AddLine(
+            Add(lane.startWorld, vertical),
+            Add(lane.targetWorld, vertical), faint, faint);
+        productionDraw.AddLine(
+            Subtract(lane.startWorld, vertical),
+            Subtract(lane.targetWorld, vertical), faint, faint);
         productionDraw.AddCircle(
             lane.startWorld,
             lane.railRight,
             lane.railUp,
             lane.sourceRadius,
-            lane.color,
+            core,
+            20);
+        productionDraw.AddCircle(
+            lane.startWorld,
+            lane.railRight,
+            lane.railUp,
+            lane.sourceRadius * 1.45f,
+            faint,
             20);
         productionDraw.AddCircle(
             lane.targetWorld,
             lane.railRight,
             lane.railUp,
             lane.targetRadius,
-            lane.color,
+            core,
             24);
+        productionDraw.AddCircle(
+            lane.targetWorld,
+            lane.railRight,
+            lane.railUp,
+            lane.convergenceRadius,
+            core,
+            24);
+        productionDraw.AddLine(
+            Subtract(lane.targetWorld, Scale(lane.railRight, lane.targetRadius * 1.25f)),
+            Add(lane.targetWorld, Scale(lane.railRight, lane.targetRadius * 1.25f)),
+            faint,
+            core);
+        productionDraw.AddLine(
+            Subtract(lane.targetWorld, Scale(lane.railUp, lane.targetRadius * 1.25f)),
+            Add(lane.targetWorld, Scale(lane.railUp, lane.targetRadius * 1.25f)),
+            faint,
+            core);
+
+        // Moving chevrons make the attack direction legible even without
+        // colour perception and accelerate as the commit moment approaches.
+        const Vector3 direction = NormalizeOr(
+            Subtract(lane.targetWorld, lane.startWorld),
+            {0.0f, 0.0f, 1.0f});
+        for (uint32_t index = 0; index < lane.directionMarkerCount; ++index) {
+            const float base = static_cast<float>(index + 1u) /
+                static_cast<float>(lane.directionMarkerCount + 1u);
+            const float t = 0.10f + std::fmod(
+                base + lane.flowPhase * 0.14f, 0.80f);
+            const Vector3 center = Lerp(lane.startWorld, lane.targetWorld, t);
+            const float markerLength = lane.targetRadius * 0.42f;
+            const Vector3 tip = Add(center, Scale(direction, markerLength));
+            const Vector3 back = Subtract(center, Scale(direction, markerLength * 0.65f));
+            productionDraw.AddLine(
+                Add(back, Scale(lane.railRight, markerLength * 0.58f)),
+                tip,
+                faint,
+                core);
+            productionDraw.AddLine(
+                Subtract(back, Scale(lane.railRight, markerLength * 0.58f)),
+                tip,
+                faint,
+                core);
+        }
 
         if (lane.shape == EnemyAttackLaneShape::Fan) {
             const int count = (std::clamp)(lane.projectileCount, 3, 5);

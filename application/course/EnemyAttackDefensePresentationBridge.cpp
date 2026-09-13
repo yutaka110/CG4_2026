@@ -99,6 +99,82 @@ bool ActionSatisfied(
     }
 }
 
+EnemyAttackDefenseDecisionPhase ResolveDecisionPhase(
+    EnemyAttackTelegraphPhase phase,
+    bool projectileInFlight) noexcept {
+    if (projectileInFlight || phase == EnemyAttackTelegraphPhase::Fired) {
+        return EnemyAttackDefenseDecisionPhase::ProjectileInFlight;
+    }
+    if (phase == EnemyAttackTelegraphPhase::Imminent) {
+        return EnemyAttackDefenseDecisionPhase::FinalCommit;
+    }
+    return EnemyAttackDefenseDecisionPhase::EarlyWarning;
+}
+
+EnemyAttackDefenseDecisionAvailability AvailabilityFor(
+    EnemyAttackDefenseDecisionStrategy strategy,
+    EnemyAttackDefenseDecisionPhase phase) noexcept {
+    switch (strategy) {
+    case EnemyAttackDefenseDecisionStrategy::PreventLaunch:
+        return phase == EnemyAttackDefenseDecisionPhase::ProjectileInFlight
+            ? EnemyAttackDefenseDecisionAvailability::Closed
+            : EnemyAttackDefenseDecisionAvailability::AvailableNow;
+    case EnemyAttackDefenseDecisionStrategy::DestroyProjectile:
+        return phase == EnemyAttackDefenseDecisionPhase::ProjectileInFlight
+            ? EnemyAttackDefenseDecisionAvailability::AvailableNow
+            : EnemyAttackDefenseDecisionAvailability::AfterLaunch;
+    case EnemyAttackDefenseDecisionStrategy::EvadeImpact:
+        if (phase == EnemyAttackDefenseDecisionPhase::EarlyWarning) {
+            return EnemyAttackDefenseDecisionAvailability::AtImpact;
+        }
+        return EnemyAttackDefenseDecisionAvailability::AvailableNow;
+    }
+    return EnemyAttackDefenseDecisionAvailability::Closed;
+}
+
+void BuildDecisionOptions(
+    EnemyAttackDefensePresentationCue& cue,
+    const RailVehicleMountedDefenseFrame* defense) noexcept {
+    cue.decisionOptionCount = 0;
+    cue.availableNowCount = 0;
+    cue.decisionOptions = {};
+
+    const auto add = [&](EnemyAttackDefensePromptAction action,
+                         EnemyAttackDefenseDecisionStrategy strategy) {
+        if (action == EnemyAttackDefensePromptAction::None ||
+            cue.decisionOptionCount >= cue.decisionOptions.size()) {
+            return;
+        }
+        EnemyAttackDefenseDecisionOption& option =
+            cue.decisionOptions[cue.decisionOptionCount++];
+        option.action = action;
+        option.strategy = strategy;
+        option.availability = AvailabilityFor(strategy, cue.decisionPhase);
+        option.recommended = action == cue.primaryAction;
+        option.actionSatisfied = ActionSatisfied(action, defense);
+        if (option.availability ==
+            EnemyAttackDefenseDecisionAvailability::AvailableNow) {
+            ++cue.availableNowCount;
+        }
+    };
+
+    if (HasDefenseResponse(
+            cue.availableResponses, EnemyAttackDefenseResponse::Interrupt)) {
+        add(EnemyAttackDefensePromptAction::Interrupt,
+            EnemyAttackDefenseDecisionStrategy::PreventLaunch);
+    }
+    if (HasDefenseResponse(
+            cue.availableResponses, EnemyAttackDefenseResponse::ShootDown)) {
+        add(EnemyAttackDefensePromptAction::ShootDown,
+            EnemyAttackDefenseDecisionStrategy::DestroyProjectile);
+    }
+    add(SelectPose(cue.availableResponses, cue.directionFromCenter.x),
+        EnemyAttackDefenseDecisionStrategy::EvadeImpact);
+
+    cue.hasMeaningfulChoice = cue.decisionOptionCount >= 2;
+    cue.actionSatisfied = ActionSatisfied(cue.primaryAction, defense);
+}
+
 } // namespace
 
 void EnemyAttackDefensePresentationBridge::Reset() {
@@ -149,6 +225,8 @@ void EnemyAttackDefensePresentationBridge::Update(
         cue.primaryAction = action;
         cue.availableResponses = responses;
         cue.phase = source.phase;
+        cue.decisionPhase = ResolveDecisionPhase(
+            source.phase, projectileInFlight);
         cue.screenPosition = source.screenPosition;
         cue.directionFromCenter = source.directionFromCenter;
         cue.color = ColorFor(action);
@@ -158,7 +236,7 @@ void EnemyAttackDefensePresentationBridge::Update(
         cue.pulse = source.pulse;
         cue.onScreen = source.onScreen;
         cue.projectileInFlight = projectileInFlight;
-        cue.actionSatisfied = ActionSatisfied(action, input.mountedDefense);
+        BuildDecisionOptions(cue, input.mountedDefense);
         tracked_[source.actorId] = {
             cue, input.settings.projectilePromptHoldSeconds};
         touched.insert(source.actorId);
@@ -178,9 +256,10 @@ void EnemyAttackDefensePresentationBridge::Update(
                 EnemyAttackTelegraphPhase::Fired,
                 tracked.cue.directionFromCenter.x,
                 true);
+            tracked.cue.decisionPhase =
+                EnemyAttackDefenseDecisionPhase::ProjectileInFlight;
             tracked.cue.color = ColorFor(tracked.cue.primaryAction);
-            tracked.cue.actionSatisfied = ActionSatisfied(
-                tracked.cue.primaryAction, input.mountedDefense);
+            BuildDecisionOptions(tracked.cue, input.mountedDefense);
             ++next.projectilePrompts;
         } else if (!touched.contains(it->first)) {
             tracked.graceRemaining -= (std::clamp)(
@@ -223,4 +302,38 @@ const char* ToString(EnemyAttackDefensePromptAction action) noexcept {
     case EnemyAttackDefensePromptAction::Duck: return "DUCK";
     default: return "";
     }
+}
+
+const char* ToString(EnemyAttackDefenseDecisionPhase phase) noexcept {
+    switch (phase) {
+    case EnemyAttackDefenseDecisionPhase::EarlyWarning: return "EARLY WINDOW";
+    case EnemyAttackDefenseDecisionPhase::FinalCommit: return "COMMIT WINDOW";
+    case EnemyAttackDefenseDecisionPhase::ProjectileInFlight:
+        return "SHOT IN FLIGHT";
+    }
+    return "";
+}
+
+const char* ToString(EnemyAttackDefenseDecisionStrategy strategy) noexcept {
+    switch (strategy) {
+    case EnemyAttackDefenseDecisionStrategy::PreventLaunch:
+        return "CANCEL ATTACK";
+    case EnemyAttackDefenseDecisionStrategy::DestroyProjectile:
+        return "DESTROY SHOT";
+    case EnemyAttackDefenseDecisionStrategy::EvadeImpact:
+        return "AVOID IMPACT";
+    }
+    return "";
+}
+
+const char* ToString(
+    EnemyAttackDefenseDecisionAvailability availability) noexcept {
+    switch (availability) {
+    case EnemyAttackDefenseDecisionAvailability::Closed: return "CLOSED";
+    case EnemyAttackDefenseDecisionAvailability::AvailableNow: return "NOW";
+    case EnemyAttackDefenseDecisionAvailability::AfterLaunch:
+        return "AFTER LAUNCH";
+    case EnemyAttackDefenseDecisionAvailability::AtImpact: return "AT IMPACT";
+    }
+    return "";
 }

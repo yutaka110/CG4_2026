@@ -22,7 +22,12 @@ struct EnemyProjectileVfxRendererSettings final {
     bool productionPrimitivesEnabled = true;
     bool fallbackPrimitivesEnabled = true;
     size_t maximumVisibleProjectiles = 256;
+    size_t maximumLifecycleBursts = 64;
     float maximumDrawDistance = 900.0f;
+    float threatApproachDistance = 42.0f;
+    float launchBurstDurationSeconds = 0.30f;
+    float impactBurstDurationSeconds = 0.48f;
+    float interceptBurstDurationSeconds = 0.58f;
 };
 
 enum class EnemyProjectileVisualState : unsigned char {
@@ -37,6 +42,7 @@ struct EnemyProjectileVfxProxy final {
     EnemyProjectileVisualStyle style = EnemyProjectileVisualStyle::Bolt;
     Vector3 worldPosition{};
     Vector3 trailStart{};
+    Vector3 motionDirection{0.0f, 0.0f, -1.0f};
     Vector3 cameraRight{1.0f, 0.0f, 0.0f};
     Vector3 cameraUp{0.0f, 1.0f, 0.0f};
     Vector4 coreColor{1.0f, 1.0f, 1.0f, 1.0f};
@@ -48,9 +54,11 @@ struct EnemyProjectileVfxProxy final {
     float distanceFromCamera = 0.0f;
     float coreDiameterPixels = 0.0f;
     float haloDiameterPixels = 0.0f;
+    float approachNormalized = 0.0f;
     uint32_t coreEffectInstanceId = 0;
     uint32_t haloEffectInstanceId = 0;
     bool threat = false;
+    bool shootDownEligible = false;
     bool readabilityBoosted = false;
     bool readabilityLimitReached = false;
     bool effectBacked = false;
@@ -58,8 +66,29 @@ struct EnemyProjectileVfxProxy final {
         EnemyProjectileVisualState::Unavailable;
 };
 
+enum class EnemyProjectileLifecycleVisualKind : unsigned char {
+    Launch,
+    PlayerImpact,
+    Intercepted,
+};
+
+struct EnemyProjectileLifecycleVfxProxy final {
+    uint64_t projectileId = 0;
+    EnemyProjectileLifecycleVisualKind kind =
+        EnemyProjectileLifecycleVisualKind::Launch;
+    Vector3 worldPosition{};
+    Vector3 motionDirection{0.0f, 0.0f, -1.0f};
+    Vector3 cameraRight{1.0f, 0.0f, 0.0f};
+    Vector3 cameraUp{0.0f, 1.0f, 0.0f};
+    Vector4 primaryColor{1.0f, 1.0f, 1.0f, 1.0f};
+    Vector4 secondaryColor{1.0f, 0.18f, 0.08f, 0.8f};
+    float radius = 1.0f;
+    float normalizedAge = 0.0f;
+};
+
 struct EnemyProjectileVfxRenderFrame final {
     std::vector<EnemyProjectileVfxProxy> proxies;
+    std::vector<EnemyProjectileLifecycleVfxProxy> lifecycleBursts;
     uint32_t effectBackedProjectiles = 0;
     uint32_t fallbackProjectiles = 0;
     uint32_t productionSubmittedProjectiles = 0;
@@ -68,6 +97,9 @@ struct EnemyProjectileVfxRenderFrame final {
     uint32_t droppedByBudget = 0;
     uint32_t readabilityBoostedProjectiles = 0;
     uint32_t readabilityLimitedProjectiles = 0;
+    uint32_t launchBursts = 0;
+    uint32_t impactBursts = 0;
+    uint32_t interceptBursts = 0;
     uint64_t sourcePresentationRevision = 0;
     uint64_t assetRevision = 0;
     uint64_t revision = 0;
@@ -80,6 +112,7 @@ struct EnemyProjectileVfxRenderInput final {
     Vector3 cameraRight{1.0f, 0.0f, 0.0f};
     Vector3 cameraUp{0.0f, 1.0f, 0.0f};
     float elapsedTime = 0.0f;
+    float deltaTime = 1.0f / 60.0f;
     float verticalFovRadians = 0.78539816339f;
     uint32_t viewportHeightPixels = 720;
     bool gameplayActive = true;
@@ -128,6 +161,17 @@ private:
         uint64_t touchedRevision = 0;
     };
 
+    struct LifecycleBurst final {
+        uint64_t projectileId = 0;
+        EnemyProjectileLifecycleVisualKind kind =
+            EnemyProjectileLifecycleVisualKind::Launch;
+        Vector3 worldPosition{};
+        Vector3 motionDirection{0.0f, 0.0f, -1.0f};
+        Vector4 color{1.0f, 0.18f, 0.08f, 1.0f};
+        float ageSeconds = 0.0f;
+        float durationSeconds = 0.3f;
+    };
+
     const EnemyProjectileVisualDefinitionAsset& ResolveVisual(
         const EnemyProjectilePresentation& projectile) const noexcept;
     void StopManaged(ManagedEffect& managed, EffectRuntime* runtime);
@@ -141,6 +185,7 @@ private:
     EnemyProjectileVisualDefinitionAsset fallbackHoming_{};
     EnemyProjectileVisualDefinitionAsset fallbackArc_{};
     std::unordered_map<uint64_t, ManagedEffect> managedEffects_;
+    std::vector<LifecycleBurst> lifecycleBursts_;
     EnemyProjectileVfxRenderFrame frame_{};
     uint64_t assetRevision_ = 0;
     uint64_t revision_ = 0;

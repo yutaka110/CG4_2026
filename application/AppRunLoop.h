@@ -436,6 +436,11 @@ private:
         railEnemyAttackDefenseOutcomeFeedbackBridge_{};
     EnemyAttackDefenseOutcomeFeedbackSettings
         railEnemyAttackDefenseOutcomeFeedbackSettings_{};
+    CombatLoopDefenseUiProofVariant railDefenseUiProofVariant_ =
+        CombatLoopDefenseUiProofVariant::Disabled;
+    bool railDefenseUiProofEnabled_ = false;
+    float railDefenseUiProofElapsedSeconds_ = 0.0f;
+    uint32_t railDefenseUiProofStage_ = 0;
     EnemyCombatPresentationBridge railEnemyCombatPresentationBridge_{};
     EnemyCombatPresentationSettings railEnemyCombatPresentationSettings_{};
     EnemyEncounterReadabilityDirector
@@ -486,6 +491,9 @@ private:
     audio::SoundHandle railThreatCriticalSound_{};
     audio::SoundHandle railThreatClearSound_{};
     audio::SoundHandle railDefenseOutcomeSuccessSound_{};
+    audio::SoundHandle railDefenseInterruptSound_{};
+    audio::SoundHandle railDefenseShootDownSound_{};
+    audio::SoundHandle railDefenseEvadeSound_{};
     audio::SoundHandle railDefenseOutcomePerfectSound_{};
     audio::SoundHandle railDefenseOutcomeFailedSound_{};
     uint32_t railTelegraphVibrationController_ = UINT32_MAX;
@@ -518,13 +526,14 @@ private:
     D3D12_VERTEX_BUFFER_VIEW submissionHudVertexBufferView_{};
     uint32_t submissionHudVertexCount_ = 0;
     struct SubmissionHudGlyph {
+        uint32_t codepoint = 0;
         Vector4 uv{};
         Vector2 size{};
         Vector2 offset{};
         float advance = 0.0f;
         bool valid = false;
     };
-    std::array<SubmissionHudGlyph, 95> submissionHudGlyphs_{};
+    std::vector<SubmissionHudGlyph> submissionHudGlyphs_;
     bool submissionHudFontReady_ = false;
     bool submissionHudManuallyHidden_ = false;
     std::vector<RailNormalShotLine> railNormalShotLines_;

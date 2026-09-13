@@ -154,6 +154,7 @@ void EnemyProjectilePresentationBridge::Update(
             input.settings,
             spawned);
         const Vector3 eventPosition = visual.worldPosition;
+        const Vector3 eventMotionDirection = visual.motionDirection;
         if (frame_.projectiles.size() < maximumProjectiles) {
             frame_.projectiles.push_back(visual);
         } else {
@@ -167,6 +168,7 @@ void EnemyProjectilePresentationBridge::Update(
             event.ownerActorId = projectile.ownerActorId;
             event.trajectory = projectile.trajectory;
             event.worldPosition = eventPosition;
+            event.motionDirection = eventMotionDirection;
             event.color = projectile.color;
             event.effectId = projectile.trailEffectId;
             PushEvent(std::move(event), input.settings.maximumEventsPerFrame);
@@ -197,7 +199,30 @@ void EnemyProjectilePresentationBridge::Update(
             const auto tracked = tracked_.find(event.projectileId);
             if (tracked != tracked_.end()) {
                 event.trajectory = tracked->second.trajectory;
+                event.motionDirection = tracked->second.motionDirection;
                 event.color = tracked->second.color;
+            }
+            PushEvent(std::move(event), input.settings.maximumEventsPerFrame);
+        }
+
+        for (const EnemyProjectileShootDownResult& result :
+             input.shootDownResults) {
+            if (!result.accepted || !result.destroyed ||
+                result.projectileId == 0) {
+                continue;
+            }
+            impactedIds.insert(result.projectileId);
+            EnemyProjectilePresentationEvent event{};
+            event.kind = EnemyProjectilePresentationEventKind::Intercepted;
+            event.projectileId = result.projectileId;
+            event.ownerActorId = result.ownerActorId;
+            event.worldPosition = result.worldHitPoint;
+            const auto tracked = tracked_.find(event.projectileId);
+            if (tracked != tracked_.end()) {
+                event.trajectory = tracked->second.trajectory;
+                event.motionDirection = tracked->second.motionDirection;
+                event.color = tracked->second.color;
+                event.effectId = tracked->second.impactEffectId;
             }
             PushEvent(std::move(event), input.settings.maximumEventsPerFrame);
         }
@@ -215,6 +240,7 @@ void EnemyProjectilePresentationBridge::Update(
             event.ownerActorId = previous.ownerActorId;
             event.trajectory = previous.trajectory;
             event.worldPosition = previous.worldPosition;
+            event.motionDirection = previous.motionDirection;
             event.color = previous.color;
             PushEvent(std::move(event), input.settings.maximumEventsPerFrame);
         }
@@ -258,6 +284,7 @@ const char* ToString(EnemyProjectilePresentationEventKind kind) noexcept {
     switch (kind) {
     case EnemyProjectilePresentationEventKind::Spawned: return "Spawned";
     case EnemyProjectilePresentationEventKind::Impacted: return "Impacted";
+    case EnemyProjectilePresentationEventKind::Intercepted: return "Intercepted";
     case EnemyProjectilePresentationEventKind::Expired: return "Expired";
     }
     return "Unknown";

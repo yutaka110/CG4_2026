@@ -46,6 +46,12 @@ struct EnemyAttackLaneTelegraphProxy final {
     float sourceRadius = 0.48f;
     float targetRadius = 0.72f;
     float opacity = 1.0f;
+    float urgency = 0.0f;
+    float pulse = 0.0f;
+    float convergenceRadius = 0.72f;
+    float flowPhase = 0.0f;
+    uint32_t readabilityTier = 0;
+    uint32_t directionMarkerCount = 3;
     int projectileCount = 1;
     uint32_t sourceEffectInstanceId = 0;
     uint32_t targetEffectInstanceId = 0;

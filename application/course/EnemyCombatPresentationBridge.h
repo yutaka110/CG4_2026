@@ -40,6 +40,8 @@ struct EnemyCombatPresentationSettings final {
     float attackRecoilDistance = 0.46f;
     float deathDropDistance = 1.35f;
     float telegraphPulseStrength = 0.16f;
+    float minimumSpawnAlpha = 0.16f;
+    float dronePodSpread = 1.08f;
     size_t maximumAudioCuesPerFrame = 12;
     size_t maximumVfxCommandsPerFrame = 8;
 };
@@ -53,10 +55,16 @@ struct EnemyCombatActorPresentation final {
     float lateralOffset = 0.0f;
     float verticalOffset = 0.0f;
     Vector3 rotationOffset{};
+    Vector3 bodyScale{1.0f, 1.0f, 1.0f};
     float scaleMultiplier = 1.0f;
     Vector4 materialColor{1.0f, 1.0f, 1.0f, 1.0f};
+    Vector4 coreColor{0.30f, 0.92f, 1.0f, 1.0f};
     float flashStrength = 0.0f;
+    float emissiveStrength = 0.0f;
+    float silhouetteSpread = 1.0f;
+    float weaponCharge = 0.0f;
     bool visible = false;
+    bool commercialSilhouette = false;
     uint64_t sourceCombatRevision = 0;
     uint64_t sourceBehaviorRevision = 0;
     uint64_t sourceAttackRevision = 0;

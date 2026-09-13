@@ -1,0 +1,18 @@
+# Deterministic lab course for polishing one 10-second combat loop.
+# editor-schema:13
+# Launch with: GE3.exe --combat-loop-10s
+course|Combat Loop 10s Lab
+rail_track|mine_cart_standard
+
+# Straight, constant-speed rail keeps distance, framing and attack timing stable.
+rail|0.000|6.000|0.000|20.000|12.000|combat-loop-rail-start|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|0.000|6.000|140.000|20.000|12.000|combat-loop-rail-mid|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|0.000|6.000|280.000|20.000|12.000|combat-loop-rail-end|0|0.000|0.000|0.000|0.000|0.000|0.000
+
+# One locked composition: no cuts or geometry may hide the threat.
+camera|0.000|24.000|7.000|0.000|64.000|2.000|8.000|54.000|0.000|combat-loop-camera-start|1|1
+camera|280.000|24.000|7.000|0.000|64.000|2.000|8.000|54.000|0.000|combat-loop-camera-end|1|1
+section|0.000|280.000|10-Second Combat Loop|Combat Lab
+
+# At 12 units/second this dispatches exactly one second after a clean start.
+event|12.000|enemy_wave|combat_loop_10s|one telegraphed assault, one decision, one result|combat-loop-wave-event|1|1

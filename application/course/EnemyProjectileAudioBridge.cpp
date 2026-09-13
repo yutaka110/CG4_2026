@@ -68,6 +68,16 @@ void EnemyProjectileAudioBridge::Update(
                 event.lethal ? 1.0f : 0.86f);
             flyByPlayed_.insert(event.projectileId);
             break;
+        case EnemyProjectilePresentationEventKind::Intercepted:
+            PushCue(
+                EnemyProjectileAudioCueKind::Impact,
+                event.projectileId,
+                event.worldPosition,
+                event.trajectory,
+                input,
+                0.68f);
+            flyByPlayed_.insert(event.projectileId);
+            break;
         case EnemyProjectilePresentationEventKind::Expired:
             break;
         }

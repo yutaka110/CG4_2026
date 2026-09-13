@@ -251,6 +251,9 @@
 #include "../PostProcessStack.h"
 #include "../course/CourseAsset.h"
 #include "../course/CourseCollisionSystem.h"
+#include "../course/CourseEventDispatcher.h"
+#include "../course/EnemyWaveAsset.h"
+#include "../course/CourseActorAsset.h"
 #include "../course/CourseMeshRenderQueue.h"
 #include "../course/CourseSpawnRuntime.h"
 #include "../course/CourseRuntimeProgramAsset.h"
@@ -361,6 +364,12 @@
 
 namespace editor {
 namespace {
+
+std::string Utf8ForTest(std::u8string_view text) {
+    return {
+        reinterpret_cast<const char*>(text.data()),
+        reinterpret_cast<const char*>(text.data() + text.size())};
+}
 
 struct RegressionCase {
     std::string name;
@@ -17671,6 +17680,327 @@ void TestAppStartupSceneArguments(RegressionRunner& runner) {
         ParseAppStartupSceneArguments(0, nullptr) ==
             AppStartupScene::RailShooter,
         "invalid startup arguments should fail safely to Rail Shooter");
+
+    const wchar_t* combatLoopArguments[] = {
+        L"GE3.exe",
+        L"--vfx-preview",
+        L"--combat-loop-10s",
+    };
+    runner.Expect(
+        ParseAppStartupSceneArguments(3, combatLoopArguments) ==
+            AppStartupScene::RailShooter &&
+            ParseCombatLoop10SecondModeArguments(3, combatLoopArguments),
+        "--combat-loop-10s should select the focused Rail Shooter encounter even after a preview argument");
+
+    const wchar_t* combatLoopNearMatch[] = {
+        L"GE3.exe",
+        L"--combat-loop-10s-extra",
+    };
+    runner.Expect(
+        !ParseCombatLoop10SecondModeArguments(2, combatLoopNearMatch) &&
+            !ParseCombatLoop10SecondModeArguments(0, nullptr),
+        "the focused encounter switch should require an exact, valid argument");
+
+    const wchar_t* defenseUiProofArguments[] = {
+        L"GE3.exe",
+        L"--combat-loop-ui-proof",
+    };
+    runner.Expect(
+        ParseAppStartupSceneArguments(2, defenseUiProofArguments) ==
+            AppStartupScene::RailShooter &&
+            ParseCombatLoopDefenseUiProofArguments(
+                2, defenseUiProofArguments) &&
+            !ParseCombatLoopDefenseUiProofArguments(2, combatLoopNearMatch),
+        "the defense UI proof switch should select only the deterministic Rail Shooter visual-proof playlist");
+
+    const wchar_t* defenseUiShootDownProofArguments[] = {
+        L"GE3.exe",
+        L"--combat-loop-ui-proof=shootdown",
+    };
+    const wchar_t* defenseUiEvadeProofArguments[] = {
+        L"GE3.exe",
+        L"--combat-loop-ui-proof=evade",
+    };
+    runner.Expect(
+        ParseCombatLoopDefenseUiProofVariantArguments(
+            2, defenseUiShootDownProofArguments) ==
+                CombatLoopDefenseUiProofVariant::ShootDown &&
+            ParseCombatLoopDefenseUiProofVariantArguments(
+                2, defenseUiEvadeProofArguments) ==
+                CombatLoopDefenseUiProofVariant::Evade,
+        "the defense UI proof switch should support reproducible individual success branches");
+}
+
+void TestTenSecondCombatLoopEncounter(RegressionRunner& runner) {
+    constexpr float kFixedDeltaSeconds = 1.0f / 60.0f;
+    constexpr float kEncounterSeconds = 10.0f;
+    constexpr float kRailSpeed = 12.0f;
+
+    CourseAsset course{};
+    std::string error;
+    const bool courseLoaded = course.LoadFromFile(
+        "Resources/courses/CombatLoop10s.course", &error);
+    runner.Expect(
+        courseLoaded && course.IsValid(),
+        "10-second combat loop course should load as a valid isolated rail");
+    if (!courseLoaded || !course.IsValid()) {
+        return;
+    }
+
+    const size_t enemyWaveCount = static_cast<size_t>(std::count_if(
+        course.events.begin(), course.events.end(),
+        [](const CourseEventMarker& event) {
+            return event.type == "enemy_wave";
+        }));
+    runner.Expect(
+        course.events.size() == 1 && enemyWaveCount == 1 &&
+            course.events.front().id == "combat_loop_10s",
+        "focused course should contain exactly one combat-loop enemy wave and no unrelated events");
+
+    EnemyWaveAsset wave{};
+    const bool waveLoaded = wave.LoadFromFile(
+        "Resources/courses/waves/combat_loop_10s.wave", &error);
+    runner.Expect(
+        waveLoaded && wave.units.size() == 1 &&
+            wave.units.front().actorAssetId == "combat_loop_assault",
+        "10-second wave should always spawn exactly one dedicated assault actor");
+
+    CourseActorAsset actor{};
+    const bool actorLoaded = actor.LoadFromFile(
+        "Resources/courses/actors/combat_loop_assault.actor", &error);
+    runner.Expect(
+        actorLoaded && actor.behaviorDefinition.commercialBehavior &&
+            actor.behaviorDefinition.requireTelegraphPresentation &&
+            actor.behaviorDefinition.attackLeadSeconds >= 1.20f &&
+            actor.behaviorDefinition.attackCooldownSeconds >= kEncounterSeconds,
+        "combat-loop actor should require a readable warning and allow only one committed attack in ten seconds");
+    if (!waveLoaded || !actorLoaded) {
+        return;
+    }
+
+    struct SimulationResult final {
+        float firstIntentSeconds = -1.0f;
+        float firstVolleySeconds = -1.0f;
+        uint32_t committedVolleys = 0;
+        size_t maximumEnemies = 0;
+        bool defenseContractValid = false;
+        bool telegraphAcknowledged = false;
+        uint32_t evaluatedAttacks = 0;
+        uint32_t safetyBlockedAttacks = 0;
+        bool lastFireSafetyAllowed = false;
+        bool readableTrackingWarning = false;
+        bool readableImminentWarning = false;
+        bool productionLaneSubmitted = false;
+        bool earlyDefenseChoice = false;
+        bool commitDefenseChoice = false;
+        bool inFlightDefenseChoice = false;
+        float lastForwardDistance = 0.0f;
+        float lastAttackTime = -1.0f;
+        EnemyAttackRuntimePhase lastAttackPhase = EnemyAttackRuntimePhase::Idle;
+        std::string lastFireSafetyReason;
+    };
+
+    const auto simulate = [&course]() {
+        SimulationResult result{};
+        CourseSpawnRuntime runtime{};
+        CourseEventDispatcher dispatcher{};
+        RailPath rail{};
+        course.ApplyToRailPath(rail);
+        const Matrix4x4 viewProjection = MakeIdentity4x4();
+        EnemyAttackTelegraphSystem warningSystem{};
+        EnemyAttackLaneTelegraphRenderer warningRenderer{};
+        EnemyAttackDefensePresentationBridge defensePresentation{};
+        dispatcher.Dispatch(
+            course.events,
+            runtime,
+            course.events.front().distance);
+
+        for (int frame = 0;
+             frame < static_cast<int>(kEncounterSeconds / kFixedDeltaSeconds);
+             ++frame) {
+            const float elapsed = static_cast<float>(frame + 1) *
+                kFixedDeltaSeconds;
+            CourseEnemyFireSafetyFrameInput safety{};
+            safety.deltaTime = kFixedDeltaSeconds;
+            safety.playerDistance = course.events.front().distance +
+                kRailSpeed * elapsed;
+            safety.cameraAllowsEnemyFire = true;
+            safety.cameraStableForAiming = true;
+            safety.cameraHardTransition = false;
+            runtime.Update(kFixedDeltaSeconds, safety);
+            result.maximumEnemies = (std::max)(
+                result.maximumEnemies, runtime.ActiveEnemyCount());
+
+            EnemyAttackTelegraphFrameInput warningInput{};
+            warningInput.spawnRuntime = &runtime;
+            warningInput.railPath = &rail;
+            warningInput.viewProjection = &viewProjection;
+            warningInput.playerDistance = safety.playerDistance;
+            warningInput.deltaTime = kFixedDeltaSeconds;
+            warningInput.viewportWidth = 1280;
+            warningInput.viewportHeight = 720;
+            warningInput.settings.requireWorldVisibility = false;
+            warningInput.settings.suppressOccluded = false;
+            warningInput.settings.leadSeconds = 1.25f;
+            warningInput.settings.imminentSeconds = 0.38f;
+            warningSystem.Update(warningInput);
+            EnemyAttackLaneTelegraphRenderInput laneInput{};
+            laneInput.telegraph = &warningSystem.Frame();
+            laneInput.railPath = &rail;
+            laneInput.gameplayActive = true;
+            laneInput.elapsedTime = elapsed;
+            warningRenderer.Update(laneInput);
+            for (const EnemyAttackTelegraphCue& cue : warningSystem.Frame().cues) {
+                const EnemyAttackTelegraphReadabilityStyle style =
+                    ResolveEnemyAttackTelegraphReadabilityStyle(
+                        cue.phase, cue.pulse);
+                result.readableTrackingWarning =
+                    result.readableTrackingWarning ||
+                    (cue.phase == EnemyAttackTelegraphPhase::Tracking &&
+                     style.label == Utf8ForTest(u8"\u63a5\u8fd1") &&
+                     FormatEnemyAttackCountdown(cue.timeToFire).ends_with("s"));
+                result.readableImminentWarning =
+                    result.readableImminentWarning ||
+                    (cue.phase == EnemyAttackTelegraphPhase::Imminent &&
+                     style.label == Utf8ForTest(u8"\u5371\u967a") &&
+                    style.tier >= 2);
+            }
+
+            EnemyProjectilePresentationFrame projectilePresentation{};
+            for (const EnemyProjectileRuntimeState& bullet : runtime.Bullets()) {
+                if (!bullet.active) continue;
+                EnemyProjectilePresentation projectile{};
+                projectile.projectileId = bullet.projectileId;
+                projectile.ownerActorId = bullet.ownerActorId;
+                projectile.attackIntentSequence = bullet.attackIntentSequence;
+                projectile.attackTokenId = bullet.attackTokenId;
+                projectile.defenseResponses = bullet.defenseResponses;
+                projectile.threat = true;
+                projectilePresentation.projectiles.push_back(projectile);
+            }
+            EnemyAttackDefensePresentationInput defenseInput{};
+            defenseInput.telegraph = &warningSystem.Frame();
+            defenseInput.projectiles = &projectilePresentation;
+            defenseInput.runtime = &runtime;
+            defenseInput.deltaTime = kFixedDeltaSeconds;
+            defenseInput.gameplayActive = true;
+            defensePresentation.Update(defenseInput);
+            for (const EnemyAttackDefensePresentationCue& cue :
+                 defensePresentation.Frame().cues) {
+                const bool completeChoice = cue.decisionOptionCount == 3 &&
+                    cue.hasMeaningfulChoice;
+                result.earlyDefenseChoice = result.earlyDefenseChoice ||
+                    (completeChoice && cue.decisionPhase ==
+                        EnemyAttackDefenseDecisionPhase::EarlyWarning &&
+                     cue.availableNowCount == 1);
+                result.commitDefenseChoice = result.commitDefenseChoice ||
+                    (completeChoice && cue.decisionPhase ==
+                        EnemyAttackDefenseDecisionPhase::FinalCommit &&
+                     cue.availableNowCount == 2);
+                result.inFlightDefenseChoice =
+                    result.inFlightDefenseChoice ||
+                    (completeChoice && cue.decisionPhase ==
+                        EnemyAttackDefenseDecisionPhase::ProjectileInFlight &&
+                     cue.availableNowCount == 2);
+            }
+
+            const EnemyBehaviorFrame& behavior = runtime.EnemyBehavior().Frame();
+            if (!behavior.attackIntents.empty()) {
+                const EnemyAttackIntent& intent = behavior.attackIntents.front();
+                if (result.firstIntentSeconds < 0.0f) {
+                    result.firstIntentSeconds = elapsed;
+                }
+                if (warningRenderer.WasSubmitted(
+                        intent.actorId, intent.sequence)) {
+                    result.productionLaneSubmitted = true;
+                    result.telegraphAcknowledged =
+                        runtime.MarkEnemyAttackTelegraphPresented(
+                            intent.actorId, intent.sequence) ||
+                        result.telegraphAcknowledged;
+                }
+            }
+
+            const EnemyAttackExecutionFrame& execution =
+                runtime.EnemyAttackExecution().Frame();
+            if (execution.committedVolleys > 0) {
+                if (result.firstVolleySeconds < 0.0f) {
+                    result.firstVolleySeconds = elapsed;
+                }
+                result.committedVolleys += execution.committedVolleys;
+            }
+            result.evaluatedAttacks += execution.evaluatedAttacks;
+            result.safetyBlockedAttacks += execution.safetyBlockedAttacks;
+            if (!runtime.Enemies().empty()) {
+                const CourseEnemyActor& enemy = runtime.Enemies().front();
+                result.lastFireSafetyAllowed = enemy.fireSafetyAllowed;
+                result.lastFireSafetyReason = enemy.fireSafetyReason;
+                result.lastForwardDistance = enemy.desc.spawnDistance +
+                    enemy.desc.distanceOffset - safety.playerDistance;
+                result.lastAttackTime = enemy.behaviorState.attackTimeRemaining;
+                result.lastAttackPhase = enemy.attackState.phase;
+            }
+            if (!runtime.Bullets().empty()) {
+                const EnemyAttackDefenseResponse responses =
+                    runtime.Bullets().front().defenseResponses;
+                result.defenseContractValid =
+                    HasDefenseResponse(
+                        responses, EnemyAttackDefenseResponse::ShootDown) &&
+                    HasDefenseResponse(
+                        responses, EnemyAttackDefenseResponse::Interrupt) &&
+                    HasDefenseResponse(
+                        responses, EnemyAttackDefenseResponse::LeanLeft) &&
+                    HasDefenseResponse(
+                        responses, EnemyAttackDefenseResponse::LeanRight);
+            }
+        }
+        return result;
+    };
+
+    const SimulationResult first = simulate();
+    const SimulationResult replay = simulate();
+    std::ostringstream timingContract;
+    timingContract
+        << "focused encounter should expose one threat, give at least 1.2 seconds "
+           "to decide, and commit one volley inside ten seconds"
+        << " enemies=" << first.maximumEnemies
+        << " volleys=" << first.committedVolleys
+        << " intent=" << first.firstIntentSeconds
+        << " volley=" << first.firstVolleySeconds
+        << " lead=" << (first.firstVolleySeconds - first.firstIntentSeconds)
+        << " ack=" << first.telegraphAcknowledged
+        << " evaluated=" << first.evaluatedAttacks
+        << " blocked=" << first.safetyBlockedAttacks
+        << " fireSafe=" << first.lastFireSafetyAllowed
+        << " forward=" << first.lastForwardDistance
+        << " attackTime=" << first.lastAttackTime
+        << " attackPhase=" << ToString(first.lastAttackPhase)
+        << " reason=" << first.lastFireSafetyReason;
+    runner.Expect(
+        first.maximumEnemies == 1 && first.committedVolleys == 1 &&
+            first.firstIntentSeconds >= 0.0f &&
+            first.firstVolleySeconds > first.firstIntentSeconds &&
+            first.firstVolleySeconds - first.firstIntentSeconds >= 1.18f &&
+            first.firstVolleySeconds <= kEncounterSeconds,
+        timingContract.str());
+    runner.Expect(
+        first.defenseContractValid,
+        "focused encounter projectile should support shoot-down, interrupt, and left/right evasion outcomes");
+    runner.Expect(
+        first.earlyDefenseChoice && first.commitDefenseChoice &&
+            first.inFlightDefenseChoice,
+        "focused encounter should progress one three-strategy decision through early, commit, and in-flight availability windows");
+    runner.Expect(
+        first.readableTrackingWarning && first.readableImminentWarning &&
+            first.productionLaneSubmitted && first.telegraphAcknowledged,
+        "focused encounter should authorize fire only after an INCOMING countdown, a DANGER phase, and a submitted world-space lane");
+    runner.Expect(
+        replay.maximumEnemies == first.maximumEnemies &&
+            replay.committedVolleys == first.committedVolleys &&
+            std::abs(replay.firstIntentSeconds - first.firstIntentSeconds) <
+                kFixedDeltaSeconds * 0.5f &&
+            std::abs(replay.firstVolleySeconds - first.firstVolleySeconds) <
+                kFixedDeltaSeconds * 0.5f,
+        "replaying the focused encounter at fixed input should reproduce identical threat and volley timing");
 }
 
 void TestMultiMaterialShowcasePresentationDefaults(RegressionRunner& runner) {
@@ -18372,6 +18702,27 @@ void TestEnemyAttackTelegraphSystem(RegressionRunner& runner) {
         0.1f,
         1000.0f);
 
+    const EnemyAttackTelegraphReadabilityStyle trackingStyle =
+        ResolveEnemyAttackTelegraphReadabilityStyle(
+            EnemyAttackTelegraphPhase::Tracking, 0.25f);
+    const EnemyAttackTelegraphReadabilityStyle imminentStyle =
+        ResolveEnemyAttackTelegraphReadabilityStyle(
+            EnemyAttackTelegraphPhase::Imminent, 0.75f);
+    const EnemyAttackTelegraphReadabilityStyle firedStyle =
+        ResolveEnemyAttackTelegraphReadabilityStyle(
+            EnemyAttackTelegraphPhase::Fired, 1.0f);
+    runner.Expect(
+        trackingStyle.label == Utf8ForTest(u8"\u63a5\u8fd1") &&
+            imminentStyle.label == Utf8ForTest(u8"\u5371\u967a") &&
+            firedStyle.label == Utf8ForTest(u8"\u767a\u5c04") &&
+            trackingStyle.tier < imminentStyle.tier &&
+            imminentStyle.tier < firedStyle.tier &&
+            trackingStyle.markerScale < imminentStyle.markerScale &&
+            trackingStyle.primaryColor.y > imminentStyle.primaryColor.y &&
+            FormatEnemyAttackCountdown(1.21f) == "1.3s" &&
+            FormatEnemyAttackCountdown(0.01f) == "0.1s",
+        "attack warning phases should be distinguishable by text, shape scale, tier, phase color and a real seconds countdown");
+
     CourseSpawnRuntime runtime;
     runtime.MutableFireSafetySettings().enabled = false;
     CourseEnemyActorDesc attack{};
@@ -18909,7 +19260,7 @@ void TestGameSessionPresentationAndRetry(RegressionRunner& runner) {
     presentation.Update(presentationInput);
     runner.Expect(
         presentation.Frame().hud.showBanner &&
-            presentation.Frame().hud.headline == "RETRY" &&
+            presentation.Frame().hud.headline == Utf8ForTest(u8"\u518d\u6311\u6226") &&
             std::any_of(
                 presentation.Frame().cues.begin(),
                 presentation.Frame().cues.end(),
@@ -19540,8 +19891,9 @@ void TestRailShooterHudPipeline(RegressionRunner& runner) {
         presentation.visible && presentation.playerHealthCritical &&
             presentation.vehicleIntegrityCritical &&
             presentation.threatWarning &&
-            presentation.threatText.find("CRITICAL") != std::string::npos &&
-            presentation.waveText == "WAVE 1/4" &&
+            presentation.threatText.find(Utf8ForTest(u8"\u5371\u967a")) !=
+                std::string::npos &&
+            presentation.waveText == Utf8ForTest(u8"\u6ce2 1/4") &&
             presentation.enemyText == "INCOMING 1" &&
             presentation.weaponText.find("6/45") != std::string::npos &&
             presentation.showBanner,
@@ -19566,8 +19918,10 @@ void TestRailShooterHudPipeline(RegressionRunner& runner) {
             return command.kind == RailShooterHudDrawCommandKind::Rectangle;
         });
     runner.Expect(
-        renderFrame.visible && hasRectangle && containsText("HP") &&
-            containsText("WAVE") && containsText("THREAT CRITICAL") &&
+        renderFrame.visible && hasRectangle &&
+            containsText(Utf8ForTest(u8"\u8010\u4e45")) &&
+            containsText(Utf8ForTest(u8"\u6ce2")) &&
+            containsText(Utf8ForTest(u8"\u5371\u967a")) &&
             containsText("CHECKPOINT") &&
             renderFrame.commands.size() <= definition.maximumDrawCommands,
         "HUD renderer should emit a resolution-aware bounded command frame containing all priority combat information");
@@ -21037,7 +21391,7 @@ void TestEnemyEncounterReadabilityAuthority(RegressionRunner& runner) {
     runner.Expect(
         first.truth.activeHostiles == 1 &&
             !first.truth.safeToAnnounceClear &&
-            first.truth.statusText == "HOSTILES 1" &&
+            first.truth.statusText == Utf8ForTest(u8"\u6575 1") &&
             firstActor != nullptr &&
             firstActor->fixedSizeProxyApplied &&
             firstActor->presentationScale > 1.0f &&
@@ -21061,7 +21415,7 @@ void TestEnemyEncounterReadabilityAuthority(RegressionRunner& runner) {
     director.Update(input);
     runner.Expect(
         director.Frame().truth.activeHostileProjectiles == 1 &&
-            director.Frame().truth.statusText == "INCOMING 1" &&
+            director.Frame().truth.statusText == Utf8ForTest(u8"\u5f3e\u63a5\u8fd1 1") &&
             !director.Frame().truth.safeToResolveSession,
         "Combat Truth should keep HUD and session unresolved while a hostile projectile remains in flight after its actor is gone");
 
@@ -21076,7 +21430,7 @@ void TestEnemyEncounterReadabilityAuthority(RegressionRunner& runner) {
         HasCombatTruthBlocker(
             director.Frame().truth.blockers,
             CombatTruthBlocker::RecentDamage) &&
-            director.Frame().truth.statusText == "DANGER CLEARING",
+            director.Frame().truth.statusText == Utf8ForTest(u8"\u8105\u5a01\u7d42\u4e86"),
         "accepted damage should hold the truth gate closed even when the impact projectile was consumed in the same frame");
 
     input.damageResults = {};
@@ -21084,7 +21438,7 @@ void TestEnemyEncounterReadabilityAuthority(RegressionRunner& runner) {
     runner.Expect(
         director.Frame().truth.safeToAnnounceClear &&
             director.Frame().truth.safeToResolveSession &&
-            director.Frame().truth.statusText == "AREA CLEAR",
+            director.Frame().truth.statusText == Utf8ForTest(u8"\u5b89\u5168"),
         "Combat Truth should announce clear only after damage hold and a stable threat-free confirmation window");
 }
 
@@ -21978,6 +22332,38 @@ void TestEnemyProjectilePresentationPipeline(RegressionRunner& runner) {
         "authoritative projectile impact should produce exactly one spatial impact cue");
 
     presentation.Reset();
+    audio.Reset();
+    runtime.MutableBullets().push_back(projectile);
+    presentationInput.playerDamageResults = {};
+    presentationInput.shootDownResults = {};
+    presentation.Update(presentationInput);
+    runtime.MutableBullets().clear();
+    EnemyProjectileShootDownResult intercepted{};
+    intercepted.projectileId = 7701;
+    intercepted.ownerActorId = 42;
+    intercepted.worldHitPoint = {1.0f, 4.0f, 18.0f};
+    intercepted.accepted = true;
+    intercepted.destroyed = true;
+    const std::array<EnemyProjectileShootDownResult, 1> interceptedResults{
+        intercepted};
+    presentationInput.shootDownResults = interceptedResults;
+    presentation.Update(presentationInput);
+    runner.Expect(
+        presentation.Frame().projectiles.empty() &&
+            presentation.Frame().events.size() == 1 &&
+            presentation.Frame().events.front().kind ==
+                EnemyProjectilePresentationEventKind::Intercepted &&
+            presentation.Frame().events.front().worldPosition.x == 1.0f,
+        "destroyed shoot-down results should replace inferred expiry with one cyan interception lifecycle event at the hit point");
+    audioInput.presentation = &presentation.Frame();
+    audio.Update(audioInput);
+    runner.Expect(
+        audio.Frame().cues.size() == 1 &&
+            audio.Frame().cues.front().kind ==
+                EnemyProjectileAudioCueKind::Impact,
+        "projectile interception should emit one bounded destruction cue instead of disappearing silently");
+
+    presentation.Reset();
     renderer.Reset();
     audio.Reset();
     runner.Expect(
@@ -22011,7 +22397,16 @@ void TestEnemyProjectileCommercialVisualPipeline(RegressionRunner& runner) {
     projectile.motionDirection = {0.0f, 0.0f, -1.0f};
     projectile.collisionRadius = 0.32f;
     projectile.threat = true;
+    projectile.forwardDistanceToPlayer = 8.0f;
+    projectile.defenseResponses = EnemyAttackDefenseResponse::ShootDown;
     presentation.projectiles.push_back(projectile);
+    EnemyProjectilePresentationEvent spawned{};
+    spawned.kind = EnemyProjectilePresentationEventKind::Spawned;
+    spawned.projectileId = projectile.projectileId;
+    spawned.worldPosition = projectile.worldPosition;
+    spawned.motionDirection = projectile.motionDirection;
+    spawned.color = projectile.color;
+    presentation.events.push_back(spawned);
 
     EnemyProjectileVfxRenderer renderer;
     std::string directoryError;
@@ -22047,9 +22442,63 @@ void TestEnemyProjectileCommercialVisualPipeline(RegressionRunner& runner) {
             renderer.Frame().proxies.front().haloRadius >
                 renderer.Frame().proxies.front().coreRadius &&
             renderer.Frame().proxies.front().trailStart.z >
-                projectile.worldPosition.z,
-        "projectile VFX renderer should enforce angular readability, layered radii and motion-aligned fallback without changing collision data");
+                projectile.worldPosition.z &&
+            renderer.Frame().proxies.front().motionDirection.z < 0.0f &&
+            renderer.Frame().proxies.front().shootDownEligible &&
+            renderer.Frame().proxies.front().approachNormalized > 0.75f &&
+            renderer.Frame().launchBursts == 1 &&
+            renderer.Frame().lifecycleBursts.size() == 1,
+        "projectile VFX renderer should enforce angular readability, direction markers, interception brackets, danger growth and a launch flash without changing collision data");
 
+    presentation.projectiles.clear();
+    presentation.events.clear();
+    EnemyProjectilePresentationEvent interceptEvent{};
+    interceptEvent.kind = EnemyProjectilePresentationEventKind::Intercepted;
+    interceptEvent.projectileId = projectile.projectileId;
+    interceptEvent.worldPosition = {0.0f, 4.0f, 42.0f};
+    interceptEvent.motionDirection = projectile.motionDirection;
+    interceptEvent.color = projectile.color;
+    presentation.events.push_back(interceptEvent);
+    renderInput.deltaTime = 0.08f;
+    renderer.Update(renderInput);
+    runner.Expect(
+        renderer.Frame().proxies.empty() &&
+            renderer.Frame().interceptBursts == 1 &&
+            std::any_of(
+                renderer.Frame().lifecycleBursts.begin(),
+                renderer.Frame().lifecycleBursts.end(),
+                [](const EnemyProjectileLifecycleVfxProxy& burst) {
+                    return burst.kind ==
+                               EnemyProjectileLifecycleVisualKind::Intercepted &&
+                        burst.secondaryColor.z > 0.9f &&
+                        burst.secondaryColor.x < 0.2f;
+                }),
+        "shoot-down disappearance should be replaced by a persistent cyan radial interception burst at the authoritative hit point");
+
+    presentation.events.clear();
+    EnemyProjectilePresentationEvent impactEvent{};
+    impactEvent.kind = EnemyProjectilePresentationEventKind::Impacted;
+    impactEvent.projectileId = projectile.projectileId + 1;
+    impactEvent.worldPosition = {0.0f, 4.0f, 6.0f};
+    impactEvent.motionDirection = projectile.motionDirection;
+    impactEvent.color = projectile.color;
+    presentation.events.push_back(impactEvent);
+    renderer.Update(renderInput);
+    runner.Expect(
+        renderer.Frame().impactBursts == 1 &&
+            std::any_of(
+                renderer.Frame().lifecycleBursts.begin(),
+                renderer.Frame().lifecycleBursts.end(),
+                [](const EnemyProjectileLifecycleVfxProxy& burst) {
+                    return burst.kind ==
+                               EnemyProjectileLifecycleVisualKind::PlayerImpact &&
+                        burst.secondaryColor.x > 0.9f &&
+                        burst.secondaryColor.z < 0.1f;
+                }),
+        "player impact should use a warm expanding burst that cannot be confused with the cyan interception result");
+
+    presentation.projectiles.push_back(projectile);
+    presentation.events.clear();
     renderInput.settings.productionPrimitivesEnabled = false;
     renderInput.settings.fallbackPrimitivesEnabled = false;
     renderer.Update(renderInput);
@@ -22072,6 +22521,8 @@ void TestEnemyProjectileCommercialVisualPipeline(RegressionRunner& runner) {
     cue.attackIntentSequence = 33;
     cue.attackTokenId = 44;
     cue.phase = EnemyAttackTelegraphPhase::Imminent;
+    cue.urgency = 0.92f;
+    cue.pulse = 0.75f;
     cue.projectileTrajectory = EnemyProjectileTrajectory::Predictive;
     cue.attackPattern = CourseEnemyFirePattern::Single;
     cue.projectileCount = 1;
@@ -22097,11 +22548,16 @@ void TestEnemyProjectileCommercialVisualPipeline(RegressionRunner& runner) {
                 EnemyAttackLaneShape::Line &&
             laneRenderer.Frame().lanes.front().trajectory ==
                 EnemyProjectileTrajectory::Predictive &&
-            laneRenderer.Frame().lanes.front().color.y > 0.6f &&
+            laneRenderer.Frame().lanes.front().readabilityTier == 2 &&
+            laneRenderer.Frame().lanes.front().color.x > 0.95f &&
+            laneRenderer.Frame().lanes.front().color.y < 0.20f &&
             std::abs(laneRenderer.Frame().lanes.front().targetWorld.x - 3.0f) <
                 0.001f &&
-            laneRenderer.Frame().lanes.front().targetRadius > 0.72f,
-        "lane telegraph renderer should convert locked rail-local targets into imminent trajectory-colored world warnings");
+            laneRenderer.Frame().lanes.front().targetRadius > 0.72f &&
+            laneRenderer.Frame().lanes.front().convergenceRadius <
+                laneRenderer.Frame().lanes.front().targetRadius * 0.35f &&
+            laneRenderer.Frame().lanes.front().directionMarkerCount >= 5,
+        "lane telegraph renderer should convert locked targets into red imminent lanes with converging impact rings and directional chevrons");
 }
 
 void TestMountedDefenseResponseContract(RegressionRunner& runner) {
@@ -22216,25 +22672,101 @@ void TestMountedDefenseResponseContract(RegressionRunner& runner) {
     defenseInput.runtime = &runtime;
     defenseInput.gameplayActive = true;
     defensePresentation.Update(defenseInput);
+    const auto findDecision = [](
+        const EnemyAttackDefensePresentationCue& cue,
+        EnemyAttackDefenseDecisionStrategy strategy) {
+        for (uint32_t index = 0; index < cue.decisionOptionCount; ++index) {
+            if (cue.decisionOptions[index].strategy == strategy) {
+                return &cue.decisionOptions[index];
+            }
+        }
+        return static_cast<const EnemyAttackDefenseDecisionOption*>(nullptr);
+    };
+    const EnemyAttackDefensePresentationCue& earlyDecision =
+        defensePresentation.Frame().cues.front();
+    const EnemyAttackDefenseDecisionOption* earlyInterrupt = findDecision(
+        earlyDecision, EnemyAttackDefenseDecisionStrategy::PreventLaunch);
+    const EnemyAttackDefenseDecisionOption* earlyShootDown = findDecision(
+        earlyDecision, EnemyAttackDefenseDecisionStrategy::DestroyProjectile);
+    const EnemyAttackDefenseDecisionOption* earlyEvade = findDecision(
+        earlyDecision, EnemyAttackDefenseDecisionStrategy::EvadeImpact);
     RailShooterDefensePromptRenderer promptRenderer;
     RailShooterDefensePromptRenderInput promptInput{};
     promptInput.presentation = &defensePresentation.Frame();
     promptInput.viewportWidth = 1600;
     promptInput.viewportHeight = 900;
     promptRenderer.Update(promptInput);
-    const bool hasInterruptText = std::any_of(
+    const auto jp = [](std::u8string_view value) {
+        return std::string(
+            reinterpret_cast<const char*>(value.data()),
+            reinterpret_cast<const char*>(value.data() + value.size()));
+    };
+    const bool hasInterruptInputText = std::any_of(
         promptRenderer.Frame().commands.begin(),
         promptRenderer.Frame().commands.end(),
-        [](const RailShooterHudDrawCommand& command) {
+        [&jp](const RailShooterHudDrawCommand& command) {
             return command.kind == RailShooterHudDrawCommandKind::Text &&
-                command.text.find("INTERRUPT") != std::string::npos;
+                command.text.find(jp(u8"\u6575\u3092\u6483\u3066")) !=
+                    std::string::npos;
         });
+    const auto promptContains = [&promptRenderer](std::string_view expected) {
+        return std::any_of(
+            promptRenderer.Frame().commands.begin(),
+            promptRenderer.Frame().commands.end(),
+            [expected](const RailShooterHudDrawCommand& command) {
+                return command.kind == RailShooterHudDrawCommandKind::Text &&
+                    command.text.find(expected) != std::string::npos;
+            });
+    };
     runner.Expect(
         defensePresentation.Frame().cues.size() == 1 &&
             defensePresentation.Frame().cues.front().primaryAction ==
                 EnemyAttackDefensePromptAction::Interrupt &&
-            promptRenderer.Frame().visible && hasInterruptText,
-        "defense presentation should turn tracking response metadata into a bounded actionable HUD prompt");
+            earlyDecision.decisionPhase ==
+                EnemyAttackDefenseDecisionPhase::EarlyWarning &&
+            earlyDecision.decisionOptionCount == 3 &&
+            earlyDecision.availableNowCount == 1 &&
+            earlyDecision.hasMeaningfulChoice &&
+            earlyInterrupt != nullptr && earlyInterrupt->recommended &&
+            earlyInterrupt->availability ==
+                EnemyAttackDefenseDecisionAvailability::AvailableNow &&
+            earlyShootDown != nullptr && earlyShootDown->availability ==
+                EnemyAttackDefenseDecisionAvailability::AfterLaunch &&
+            earlyEvade != nullptr && earlyEvade->availability ==
+                EnemyAttackDefenseDecisionAvailability::AtImpact &&
+            promptRenderer.Frame().visible && hasInterruptInputText &&
+            promptContains(jp(u8"\u963b\u6b62 \u4eca")) &&
+            promptContains(jp(u8"\u8fce\u6483 \u767a\u5c04\u5f8c")) &&
+            promptContains(jp(u8"\u5de6\u56de\u907f \u7740\u5f3e\u6642")),
+        "an early warning should expose three short Japanese timed decisions without requiring English strategy copy");
+
+    telegraph.cues.front().phase = EnemyAttackTelegraphPhase::Imminent;
+    telegraph.cues.front().timeToFire = 0.32f;
+    defensePresentation.Update(defenseInput);
+    const EnemyAttackDefensePresentationCue& commitDecision =
+        defensePresentation.Frame().cues.front();
+    const EnemyAttackDefenseDecisionOption* commitInterrupt = findDecision(
+        commitDecision, EnemyAttackDefenseDecisionStrategy::PreventLaunch);
+    const EnemyAttackDefenseDecisionOption* commitShootDown = findDecision(
+        commitDecision, EnemyAttackDefenseDecisionStrategy::DestroyProjectile);
+    const EnemyAttackDefenseDecisionOption* commitEvade = findDecision(
+        commitDecision, EnemyAttackDefenseDecisionStrategy::EvadeImpact);
+    runner.Expect(
+        commitDecision.decisionPhase ==
+            EnemyAttackDefenseDecisionPhase::FinalCommit &&
+            commitDecision.primaryAction ==
+                EnemyAttackDefensePromptAction::LeanLeft &&
+            commitDecision.availableNowCount == 2 &&
+            commitInterrupt != nullptr && commitInterrupt->availability ==
+                EnemyAttackDefenseDecisionAvailability::AvailableNow &&
+            commitShootDown != nullptr && commitShootDown->availability ==
+                EnemyAttackDefenseDecisionAvailability::AfterLaunch &&
+            commitEvade != nullptr && commitEvade->recommended &&
+            commitEvade->action ==
+                EnemyAttackDefensePromptAction::LeanLeft &&
+            commitEvade->availability ==
+                EnemyAttackDefenseDecisionAvailability::AvailableNow,
+        "the final commit window should recommend the safe direction while preserving the higher-value interrupt choice");
 
     EnemyProjectilePresentationFrame projectileFrame{};
     projectileFrame.revision = 42;
@@ -22247,12 +22779,30 @@ void TestMountedDefenseResponseContract(RegressionRunner& runner) {
     telegraph.cues.front().phase = EnemyAttackTelegraphPhase::Fired;
     defenseInput.projectiles = &projectileFrame;
     defensePresentation.Update(defenseInput);
+    const EnemyAttackDefensePresentationCue& flightDecision =
+        defensePresentation.Frame().cues.front();
+    const EnemyAttackDefenseDecisionOption* closedInterrupt = findDecision(
+        flightDecision, EnemyAttackDefenseDecisionStrategy::PreventLaunch);
+    const EnemyAttackDefenseDecisionOption* liveShootDown = findDecision(
+        flightDecision, EnemyAttackDefenseDecisionStrategy::DestroyProjectile);
+    const EnemyAttackDefenseDecisionOption* liveEvade = findDecision(
+        flightDecision, EnemyAttackDefenseDecisionStrategy::EvadeImpact);
     runner.Expect(
         defensePresentation.Frame().cues.size() == 1 &&
             defensePresentation.Frame().cues.front().projectileInFlight &&
             defensePresentation.Frame().cues.front().primaryAction ==
-                EnemyAttackDefensePromptAction::ShootDown,
-        "defense presentation should switch from pre-launch interruption to projectile shoot-down after commit");
+                EnemyAttackDefensePromptAction::ShootDown &&
+            flightDecision.decisionPhase ==
+                EnemyAttackDefenseDecisionPhase::ProjectileInFlight &&
+            flightDecision.availableNowCount == 2 &&
+            closedInterrupt != nullptr && closedInterrupt->availability ==
+                EnemyAttackDefenseDecisionAvailability::Closed &&
+            liveShootDown != nullptr && liveShootDown->recommended &&
+            liveShootDown->availability ==
+                EnemyAttackDefenseDecisionAvailability::AvailableNow &&
+            liveEvade != nullptr && liveEvade->availability ==
+                EnemyAttackDefenseDecisionAvailability::AvailableNow,
+        "after launch the interrupt window should close while precision shoot-down and safer evasion remain distinct live choices");
 
     EnemyAttackDefenseResolutionSystem resolution;
     EnemyAttackDefenseResolutionInput resolutionInput{};
@@ -22281,16 +22831,149 @@ void TestMountedDefenseResponseContract(RegressionRunner& runner) {
     const bool hasOutcomeText = std::any_of(
         promptRenderer.Frame().commands.begin(),
         promptRenderer.Frame().commands.end(),
-        [](const RailShooterHudDrawCommand& command) {
+        [&jp](const RailShooterHudDrawCommand& command) {
             return command.kind == RailShooterHudDrawCommandKind::Text &&
-                command.text.find("INTERRUPTED") != std::string::npos;
+                command.text.find(jp(u8"\u653b\u6483\u963b\u6b62!")) !=
+                    std::string::npos;
+        });
+    const bool urgentActionStillVisible = std::any_of(
+        promptRenderer.Frame().commands.begin(),
+        promptRenderer.Frame().commands.end(),
+        [&jp](const RailShooterHudDrawCommand& command) {
+            return command.kind == RailShooterHudDrawCommandKind::Text &&
+                command.text.find(jp(u8"\u5f3e\u3092\u6483\u3066")) !=
+                    std::string::npos;
         });
     runner.Expect(
         outcomeFeedback.Frame().visible &&
             outcomeFeedback.Frame().audioCues.size() == 1 &&
             outcomeFeedback.Frame().hapticRemainingSeconds > 0.0f &&
-            promptRenderer.Frame().visible && hasOutcomeText,
-        "authoritative defense outcome should drive one-shot audio/haptics and replace the prompt with readable success feedback");
+            promptRenderer.Frame().visible && hasOutcomeText &&
+            urgentActionStillVisible &&
+            promptRenderer.Frame().urgentThreatActive &&
+            promptRenderer.Frame().outcomeDemoted,
+        "an urgent live threat should keep the Japanese action prompt dominant while demoting success to a compact toast");
+
+    const EnemyAttackDefenseOutcomeFeedbackFrame interruptCelebration =
+        outcomeFeedback.Frame();
+    EnemyAttackDefenseResult shootDownCelebration{};
+    shootDownCelebration.sequence =
+        interruptCelebration.resultSequence + 1;
+    shootDownCelebration.method = EnemyAttackDefenseMethod::ShootDown;
+    shootDownCelebration.outcome = EnemyAttackDefenseOutcome::Success;
+    shootDownCelebration.grade = EnemyAttackDefenseGrade::Perfect;
+    shootDownCelebration.scoreAwarded = 210;
+    shootDownCelebration.chainAfter = 2;
+    shootDownCelebration.accepted = true;
+    const std::array<EnemyAttackDefenseResult, 1> shootDownResults{
+        shootDownCelebration};
+    outcomeInput.results = shootDownResults;
+    outcomeFeedback.Update(outcomeInput);
+    const EnemyAttackDefenseOutcomeFeedbackFrame shootDownFeedback =
+        outcomeFeedback.Frame();
+
+    EnemyAttackDefenseResult evasionCelebration{};
+    evasionCelebration.sequence = shootDownCelebration.sequence + 1;
+    evasionCelebration.method = EnemyAttackDefenseMethod::LeanLeft;
+    evasionCelebration.outcome = EnemyAttackDefenseOutcome::Success;
+    evasionCelebration.grade = EnemyAttackDefenseGrade::Good;
+    evasionCelebration.scoreAwarded = 160;
+    evasionCelebration.chainAfter = 3;
+    evasionCelebration.accepted = true;
+    const std::array<EnemyAttackDefenseResult, 1> evasionResults{
+        evasionCelebration};
+    outcomeInput.results = evasionResults;
+    outcomeFeedback.Update(outcomeInput);
+    const EnemyAttackDefenseOutcomeFeedbackFrame evasionFeedback =
+        outcomeFeedback.Frame();
+
+    runner.Expect(
+        interruptCelebration.celebrationStyle ==
+            EnemyAttackDefenseCelebrationStyle::InterruptBreak &&
+            interruptCelebration.headline ==
+                jp(u8"\u653b\u6483\u963b\u6b62!") &&
+            interruptCelebration.audioCues.size() == 1 &&
+            interruptCelebration.audioCues.front().method ==
+                EnemyAttackDefenseMethod::Interrupt &&
+            interruptCelebration.hapticLow >
+                interruptCelebration.hapticHigh &&
+        shootDownFeedback.celebrationStyle ==
+            EnemyAttackDefenseCelebrationStyle::ShootDownBurst &&
+            shootDownFeedback.headline ==
+                jp(u8"\u5b8c\u5168\u8fce\u6483!") &&
+            shootDownFeedback.audioCues.size() == 1 &&
+            shootDownFeedback.audioCues.front().method ==
+                EnemyAttackDefenseMethod::ShootDown &&
+            shootDownFeedback.hapticHigh > shootDownFeedback.hapticLow &&
+            shootDownFeedback.secondaryColor.x > 0.95f &&
+            shootDownFeedback.secondaryColor.y > 0.75f &&
+        evasionFeedback.celebrationStyle ==
+            EnemyAttackDefenseCelebrationStyle::EvasionFlow &&
+            evasionFeedback.headline ==
+                jp(u8"\u56de\u907f\u6210\u529f!") &&
+            evasionFeedback.detail.find(jp(u8"\u9023\u7d9a")) !=
+                std::string::npos &&
+            evasionFeedback.audioCues.size() == 1 &&
+            evasionFeedback.audioCues.front().method ==
+                EnemyAttackDefenseMethod::LeanLeft &&
+            evasionFeedback.accentDirectionX < 0.0f &&
+            evasionFeedback.cameraYawImpulse < 0.0f &&
+        interruptCelebration.color.x > interruptCelebration.color.z &&
+            shootDownFeedback.color.z > shootDownFeedback.color.x &&
+            evasionFeedback.color.x > evasionFeedback.color.y &&
+            interruptCelebration.screenFlashAlpha > 0.0f &&
+            shootDownFeedback.bannerScale > 1.0f &&
+            evasionFeedback.impactPulse > 0.0f,
+        "interrupt, shoot-down and evasion successes should produce distinct authoritative color, copy, audio, haptic, camera and motion profiles");
+
+    EnemyAttackDefensePresentationFrame noThreatPresentation{};
+    promptInput.presentation = &noThreatPresentation;
+    const auto renderCelebration = [&](
+        const EnemyAttackDefenseOutcomeFeedbackFrame& feedback,
+        std::string_view expectedHeadline) {
+        promptInput.outcome = &feedback;
+        promptRenderer.Update(promptInput);
+        const bool headlineVisible = std::any_of(
+            promptRenderer.Frame().commands.begin(),
+            promptRenderer.Frame().commands.end(),
+            [expectedHeadline](const RailShooterHudDrawCommand& command) {
+                return command.kind == RailShooterHudDrawCommandKind::Text &&
+                    command.text.find(expectedHeadline) != std::string::npos;
+            });
+        const size_t rectangles = static_cast<size_t>(std::count_if(
+            promptRenderer.Frame().commands.begin(),
+            promptRenderer.Frame().commands.end(),
+            [](const RailShooterHudDrawCommand& command) {
+                return command.kind ==
+                    RailShooterHudDrawCommandKind::Rectangle;
+            }));
+        return headlineVisible && promptRenderer.Frame().droppedCommands == 0
+            ? rectangles : size_t{0};
+    };
+    const size_t interruptLayers = renderCelebration(
+        interruptCelebration, jp(u8"\u653b\u6483\u963b\u6b62!"));
+    const size_t shootDownLayers = renderCelebration(
+        shootDownFeedback, jp(u8"\u5b8c\u5168\u8fce\u6483!"));
+    const size_t evasionLayers = renderCelebration(
+        evasionFeedback, jp(u8"\u56de\u907f\u6210\u529f!"));
+    runner.Expect(
+        interruptLayers >= 9 && shootDownLayers >= 9 &&
+            evasionLayers >= 9 && interruptLayers != shootDownLayers &&
+            shootDownLayers != evasionLayers &&
+            interruptLayers != evasionLayers,
+        "each defense method should render a bounded but visibly layered celebration instead of a shared generic banner");
+
+    const float initialEvasionPulse = evasionFeedback.impactPulse;
+    outcomeInput.results = {};
+    outcomeInput.deltaTime = 0.10f;
+    outcomeFeedback.Update(outcomeInput);
+    runner.Expect(
+        outcomeFeedback.Frame().audioCues.empty() &&
+            outcomeFeedback.Frame().visible &&
+            outcomeFeedback.Frame().impactPulse < initialEvasionPulse &&
+            outcomeFeedback.Frame().screenFlashAlpha <
+                evasionFeedback.screenFlashAlpha,
+        "celebration audio and camera impulses should be one-shot while the HUD flash decays smoothly over its readable hold");
 
     PlayerDamageResult failedDamage{};
     failedDamage.sequence = 99;
@@ -22318,6 +23001,30 @@ void TestMountedDefenseResponseContract(RegressionRunner& runner) {
 }
 
 void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
+    EffectAssetLoader effectLoader;
+    const std::array<const char*, 4> presentationEffectPaths{
+        "Resources/effects/EnemySpawnReveal.effect",
+        "Resources/effects/EnemyChargePulse.effect",
+        "Resources/effects/EnemyMuzzleBurst.effect",
+        "Resources/effects/EnemyDeathBurst.effect"};
+    bool presentationEffectsValid = true;
+    for (const char* path : presentationEffectPaths) {
+        LoadedEffectAsset loaded{};
+        presentationEffectsValid = presentationEffectsValid &&
+            effectLoader.LoadFile(path, loaded) &&
+            loaded.asset.Components().ComponentCount() >= 3 &&
+            std::none_of(
+                loaded.diagnostics.begin(),
+                loaded.diagnostics.end(),
+                [](const EffectAssetDiagnostic& diagnostic) {
+                    return diagnostic.severity ==
+                        EffectAssetDiagnosticSeverity::Error;
+                });
+    }
+    runner.Expect(
+        presentationEffectsValid,
+        "commercial enemy spawn, charge, muzzle and death assets should load as layered production effects");
+
     RailPath rail;
     rail.SetControlPoints({
         {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
@@ -22351,13 +23058,19 @@ void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
         spawn != nullptr && spawn->visible &&
             spawn->animation == EnemyCombatAnimationState::Spawn &&
             spawn->materialColor.z > spawn->materialColor.x &&
+            spawn->materialColor.w >= 0.15f &&
+            spawn->bodyScale.y > spawn->bodyScale.x &&
+            spawn->commercialSilhouette &&
+            spawn->emissiveStrength > 3.0f &&
             bridge.Frame().audioCues.size() == 1 &&
             bridge.Frame().audioCues.front().kind ==
                 EnemyCombatPresentationAudioCueKind::Spawn &&
             bridge.Frame().vfxCommands.size() == 1 &&
             std::string(bridge.Frame().vfxCommands.front().cueId) ==
-                "enemy_combat_spawn",
-        "enemy presentation should convert Spawned into a blue spawn material, procedural animation and bounded one-shot cues");
+                "enemy_combat_spawn" &&
+            std::string(bridge.Frame().vfxCommands.front().effectName) ==
+                "enemy_spawn_reveal",
+        "enemy presentation should reveal a visible blue compound silhouette with squash, emissive core and layered spawn cue on its first frame");
 
     runtime.Update(0.35f);
     runtime.Update(0.19f);
@@ -22370,8 +23083,52 @@ void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
         telegraph != nullptr &&
             telegraph->animation == EnemyCombatAnimationState::Telegraph &&
             telegraph->materialColor.x > telegraph->materialColor.z &&
-            telegraph->scaleMultiplier >= 1.0f,
-        "telegraph combat state should produce a readable warm pulse without changing authoritative actor transforms");
+            telegraph->scaleMultiplier >= 1.0f &&
+            telegraph->weaponCharge >= 0.18f &&
+            telegraph->emissiveStrength > 1.0f &&
+            bridge.Frame().vfxCommands.size() == 1 &&
+            std::string(bridge.Frame().vfxCommands.front().effectName) ==
+                "enemy_charge_pulse",
+        "telegraph combat state should produce a readable warm charging pose and actor-centered pulse without changing authoritative transforms");
+
+    runtime.MutableEnemies().front().fireSequence += 1;
+    runtime.Update(0.01f);
+    events = runtime.EnemyCombat().ConsumeEvents();
+    input.events = events;
+    bridge.Update(input);
+    const EnemyCombatActorPresentation* attack =
+        bridge.FindActor(runtime.Enemies().front().actorId);
+    std::string attackDiagnostic =
+        "attack commit should snap into a forward-stretched recoil silhouette and emit one muzzle burst at the actor weapon core";
+    if (attack != nullptr) {
+        attackDiagnostic += "; animation=" +
+            std::string(ToString(attack->animation)) +
+            "; bodyScale=" + std::to_string(attack->bodyScale.x) + "," +
+            std::to_string(attack->bodyScale.y) + "," +
+            std::to_string(attack->bodyScale.z) +
+            "; emissive=" + std::to_string(attack->emissiveStrength) +
+            "; vfxCount=" +
+            std::to_string(bridge.Frame().vfxCommands.size());
+        if (!bridge.Frame().vfxCommands.empty()) {
+            attackDiagnostic += "; cue=" + std::string(
+                bridge.Frame().vfxCommands.front().cueId) +
+                "; effect=" + std::string(
+                    bridge.Frame().vfxCommands.front().effectName);
+        }
+    } else {
+        attackDiagnostic += "; actor=null";
+    }
+    runner.Expect(
+        attack != nullptr &&
+            attack->animation == EnemyCombatAnimationState::Attack &&
+            attack->bodyScale.z > attack->bodyScale.x &&
+            attack->emissiveStrength >= 4.0f &&
+            bridge.Frame().vfxCommands.size() == 1 &&
+            std::string(bridge.Frame().vfxCommands.front().cueId) ==
+                "enemy_combat_muzzle" &&
+            std::string(bridge.Frame().vfxCommands.front().effectName) ==
+                "enemy_muzzle_burst",
+        attackDiagnostic);
 
     CourseCollisionSystem collision;
     const uint32_t actorId = runtime.Enemies().front().actorId;
@@ -22381,6 +23138,7 @@ void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
         request.targetActorId = actorId;
         request.hitKind = RailAimHitKind::Enemy;
         request.damageType = WeaponDamageType::Energy;
+        request.rayOrigin = {3.0f, 2.0f, 0.0f};
         request.rayDirection = {0.0f, 0.0f, 1.0f};
         request.hitPoint = {3.0f, 2.0f, 70.0f};
         request.hitNormal = {0.0f, 0.0f, -1.0f};
@@ -22393,16 +23151,31 @@ void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
     input.events = events;
     bridge.Update(input);
     const EnemyCombatActorPresentation* reaction = bridge.FindActor(actorId);
+    std::string hitDiagnostic =
+        "normal DamageResult should drive model hit animation, material flash and dedicated SFX while WeaponFeedback remains the sole contact-VFX owner";
+    if (reaction != nullptr) {
+        hitDiagnostic += "; animation=" +
+            std::string(ToString(reaction->animation)) +
+            "; bodyScale=" + std::to_string(reaction->bodyScale.x) + "," +
+            std::to_string(reaction->bodyScale.y) + "," +
+            std::to_string(reaction->bodyScale.z) +
+            "; flash=" + std::to_string(reaction->flashStrength) +
+            "; emissive=" + std::to_string(reaction->emissiveStrength) +
+            "; audioCount=" + std::to_string(bridge.Frame().audioCues.size()) +
+            "; vfxCount=" + std::to_string(bridge.Frame().vfxCommands.size());
+    }
     runner.Expect(
         reaction != nullptr &&
             reaction->animation == EnemyCombatAnimationState::HitReact &&
             reaction->flashStrength > 0.9f &&
             reaction->materialColor.x > reaction->materialColor.y &&
+            reaction->bodyScale.y > reaction->bodyScale.x &&
+            reaction->emissiveStrength > 4.0f &&
             bridge.Frame().audioCues.size() == 1 &&
             bridge.Frame().audioCues.front().kind ==
                 EnemyCombatPresentationAudioCueKind::HitReact &&
             bridge.Frame().vfxCommands.empty(),
-        "normal DamageResult should drive model hit animation, material flash and dedicated SFX while WeaponFeedback remains the sole contact-VFX owner");
+        hitDiagnostic);
 
     collision.ApplyWeaponHit(runtime, nullptr, hit(7202, 50.0f));
     events = runtime.EnemyCombat().ConsumeEvents();
@@ -22419,8 +23192,10 @@ void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
             std::string(bridge.Frame().vfxCommands.front().cueId) ==
                 "enemy_combat_death" &&
             std::string(bridge.Frame().vfxCommands.front().effectName) ==
-                "hit_plane_burst",
-        "lethal DamageResult should produce one actor-centered death animation, destruction burst and spatial death cue");
+                "enemy_death_burst" &&
+            death->silhouetteSpread > 1.0f &&
+            death->coreColor.x > death->coreColor.z,
+        "lethal DamageResult should break the compound silhouette apart through an orange core, staged destruction burst and spatial death cue");
 
     input.gameplayActive = false;
     input.events = events;
@@ -27483,6 +28258,9 @@ int RunEditorCoreRegressionTests() {
              TestTrainingSwordSubmissionAsset(runner);
          }},
         {"app startup scene arguments", [&]() { TestAppStartupSceneArguments(runner); }},
+        {"ten second combat loop encounter", [&]() {
+             TestTenSecondCombatLoopEncounter(runner);
+         }},
         {"multi material showcase presentation defaults", [&]() {
              TestMultiMaterialShowcasePresentationDefaults(runner);
          }},

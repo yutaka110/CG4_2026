@@ -17,6 +17,7 @@
 #include <iterator>
 #include <memory>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <ctime>
 #include <utility>
@@ -57,10 +58,22 @@ using namespace DirectX;
 using namespace Microsoft::WRL;
 
 namespace {
+std::string HudUtf8(std::u8string_view text) {
+    return {
+        reinterpret_cast<const char*>(text.data()),
+        reinterpret_cast<const char*>(text.data() + text.size())};
+}
+
 constexpr uint32_t kRailWatchdogStartFrame = 400;
 constexpr DWORD kRailWatchdogStallMs = 3000;
 constexpr double kRailGpuTimingLogThresholdMs = 10.0;
 constexpr double kRailFramePacingLogThresholdMs = 8.0;
+// One native atlas backs the lock-on HUD, Japanese gameplay text and the
+// submission HUD.  Texture creation and every UV producer must share these
+// dimensions; duplicating the old 256px height caused geometry to sample the
+// Japanese glyph rows instead of the solid-white and marker cells.
+constexpr uint32_t kRailHudAtlasWidth = 512;
+constexpr uint32_t kRailHudAtlasHeight = 512;
 
 struct RenderViewportMetrics {
     uint32_t width = 1;
@@ -1546,6 +1559,12 @@ AppRunLoop::AppRunLoop(
         "rail-threat-clear", 920.0f, 0.080f, 0.24f);
     railDefenseOutcomeSuccessSound_ = audio_.CreateTone(
         "rail-defense-success", 1120.0f, 0.090f, 0.38f);
+    railDefenseInterruptSound_ = audio_.CreateTone(
+        "rail-defense-interrupt-break", 620.0f, 0.140f, 0.52f);
+    railDefenseShootDownSound_ = audio_.CreateTone(
+        "rail-defense-shoot-down-burst", 1540.0f, 0.075f, 0.44f);
+    railDefenseEvadeSound_ = audio_.CreateTone(
+        "rail-defense-evasion-flow", 980.0f, 0.110f, 0.38f);
     railDefenseOutcomePerfectSound_ = audio_.CreateTone(
         "rail-defense-perfect", 1480.0f, 0.125f, 0.46f);
     railDefenseOutcomeFailedSound_ = audio_.CreateTone(
@@ -1596,6 +1615,38 @@ AppRunLoop::AppRunLoop(
         sceneStateManager_.Initialize(std::make_unique<VfxPreviewSceneState>(), *this);
         OutputDebugStringA("[AppRunLoop] Startup scene: VfxPreview (--vfx-preview).\n");
     } else {
+        railDefenseUiProofVariant_ =
+            ResolveCombatLoopDefenseUiProofVariantFromCommandLine();
+        railDefenseUiProofEnabled_ = railDefenseUiProofVariant_ !=
+            CombatLoopDefenseUiProofVariant::Disabled;
+        if (ResolveCombatLoop10SecondModeFromCommandLine() ||
+            railDefenseUiProofEnabled_) {
+            railShooterCoursePath_ = "Resources/courses/CombatLoop10s.course";
+            // The combat-loop executable is a player-facing visual proof, not
+            // an editor tools capture. Keep the viewport unobstructed and let
+            // the runtime advance without requiring editor Play state.
+            imguiLayer_.SetVisible(false);
+            // The focused encounter promises a full decision window. Keep this
+            // local to the lab course until the telegraph presentation is tuned
+            // and promoted to the production route.
+            railEnemyAttackTelegraphSettings_.leadSeconds = 1.25f;
+            railEnemyAttackTelegraphSettings_.imminentSeconds = 0.38f;
+            railEnemyAttackLaneTelegraphRendererSettings_.baseLaneWidth = 0.52f;
+            railEnemyAttackLaneTelegraphRendererSettings_.sourceMarkerRadius = 0.68f;
+            railEnemyAttackLaneTelegraphRendererSettings_.targetMarkerRadius = 1.05f;
+            railEnemyAttackLaneTelegraphRendererSettings_.imminentScale = 1.18f;
+            railEnemyAttackTelegraphFeedbackSettings_.masterVolume = 0.84f;
+            OutputDebugStringA(
+                "[AppRunLoop] Combat loop lab: CombatLoop10s.course.\n");
+            if (railDefenseUiProofEnabled_) {
+                // Keep each proof result on screen long enough for deterministic
+                // capture; normal gameplay retains the production timing.
+                railEnemyAttackDefenseOutcomeFeedbackSettings_.displayDurationSeconds =
+                    4.00f;
+                OutputDebugStringA(
+                    "[AppRunLoop] Defense UI proof: interrupt, shoot-down, evade.\n");
+            }
+        }
         sceneStateManager_.Initialize(std::make_unique<RailShooterSceneState>(), *this);
         std::string presetError;
         terrainPresetStore_.Load(runtimeState_.terrain, &presetError);
@@ -2939,8 +2990,6 @@ void AppRunLoop::BuildRailVisibilityDebugOverlay(
 }
 
 bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList) {
-    constexpr uint32_t kAtlasWidth = 512;
-    constexpr uint32_t kAtlasHeight = 256;
     constexpr uint32_t kDescriptorIndex = 18;
     constexpr uint32_t kMaxAtlasVertices = 16384;
     ComPtr<ID3D12Device> device = dev_.GetDevice();
@@ -2976,8 +3025,8 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
     DirectX::ScratchImage atlasImage;
     if (FAILED(atlasImage.Initialize2D(
             DXGI_FORMAT_R8G8B8A8_UNORM,
-            kAtlasWidth,
-            kAtlasHeight,
+            kRailHudAtlasWidth,
+            kRailHudAtlasHeight,
             1,
             1))) {
         return false;
@@ -2989,7 +3038,9 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
     std::memset(image->pixels, 0, image->slicePitch);
 
     auto writePixel = [&](int x, int y, uint8_t alpha) {
-        if (x < 0 || y < 0 || x >= static_cast<int>(kAtlasWidth) || y >= static_cast<int>(kAtlasHeight)) {
+        if (x < 0 || y < 0 ||
+            x >= static_cast<int>(kRailHudAtlasWidth) ||
+            y >= static_cast<int>(kRailHudAtlasHeight)) {
             return;
         }
         uint8_t* p = image->pixels + static_cast<size_t>(y) * image->rowPitch + static_cast<size_t>(x) * 4u;
@@ -3052,9 +3103,25 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
     // rasterized once and rendered by UI.SubmissionLiveVisualizer.
     constexpr int kSubmissionFontFirstCodepoint = 32;
     constexpr int kSubmissionFontGlyphCount = 95;
-    constexpr int kSubmissionFontBitmapHeight = 128;
+    constexpr int kSubmissionFontBitmapHeight = 384;
     constexpr int kSubmissionFontAtlasY = 128;
-    constexpr float kSubmissionFontPixelHeight = 24.0f;
+    constexpr float kSubmissionFontPixelHeight = 26.0f;
+    static_assert(
+        kSubmissionFontAtlasY + kSubmissionFontBitmapHeight <=
+        static_cast<int>(kRailHudAtlasHeight),
+        "The native HUD font region must fit inside the shared atlas");
+    std::vector<int> submissionJapaneseCodepoints{
+        0x304B, 0x3051, 0x3059, 0x3066, 0x3067, 0x3078, 0x308A, 0x308D, 0x3092,
+        0x4E00, 0x4E0B, 0x4E2D, 0x4E3B, 0x4E45, 0x4E88, 0x4ECA, 0x4EFB, 0x4F53,
+        0x505C, 0x5099, 0x5168, 0x518D, 0x524D, 0x529F, 0x52D9, 0x5371, 0x53F3,
+        0x544A, 0x56DE, 0x586B, 0x5931, 0x5A01, 0x5B89, 0x5B8C, 0x5C04, 0x5DE6,
+        0x5EA6, 0x5F3E, 0x5F85, 0x5F8C, 0x5F97, 0x5FA1, 0x6210, 0x6212, 0x6226,
+        0x6311, 0x63A5, 0x6483, 0x653B, 0x6557, 0x6575, 0x6642, 0x679C, 0x6A5F,
+        0x6B62, 0x6B8B, 0x6CE2, 0x6E96, 0x70B9, 0x7121, 0x71B1, 0x767A, 0x76F4,
+        0x7832, 0x7834, 0x78BA, 0x7A81, 0x7740, 0x7D42, 0x7D50, 0x7D9A, 0x8010,
+        0x8105, 0x88C5, 0x8A8D, 0x8B66, 0x8ECA, 0x8FCE, 0x8FD1, 0x901F, 0x9023,
+        0x9032, 0x904E, 0x907F, 0x958B, 0x95D8, 0x9632, 0x963B, 0x9650, 0x967A,
+    };
     submissionHudFontReady_ = false;
     submissionHudGlyphs_ = {};
     std::ifstream fontFile(
@@ -3066,47 +3133,95 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
             fontFile.seekg(0, std::ios::beg);
             std::vector<unsigned char> fontBytes(static_cast<size_t>(byteCount));
             std::vector<unsigned char> fontBitmap(
-                static_cast<size_t>(kAtlasWidth) * kSubmissionFontBitmapHeight,
-                0);
-            std::array<stbtt_bakedchar, kSubmissionFontGlyphCount> baked{};
-            if (fontFile.read(
-                    reinterpret_cast<char*>(fontBytes.data()), byteCount) &&
-                stbtt_BakeFontBitmap(
-                    fontBytes.data(),
-                    0,
-                    kSubmissionFontPixelHeight,
-                    fontBitmap.data(),
-                    static_cast<int>(kAtlasWidth),
+                static_cast<size_t>(kRailHudAtlasWidth) *
                     kSubmissionFontBitmapHeight,
-                    kSubmissionFontFirstCodepoint,
-                    kSubmissionFontGlyphCount,
-                    baked.data()) > 0) {
+                0);
+            std::array<stbtt_packedchar, kSubmissionFontGlyphCount> ascii{};
+            std::vector<stbtt_packedchar> japanese(
+                submissionJapaneseCodepoints.size());
+            bool packed = false;
+            if (fontFile.read(
+                    reinterpret_cast<char*>(fontBytes.data()), byteCount)) {
+                stbtt_pack_context context{};
+                if (stbtt_PackBegin(
+                        &context,
+                        fontBitmap.data(),
+                        static_cast<int>(kRailHudAtlasWidth),
+                        kSubmissionFontBitmapHeight,
+                        0,
+                        1,
+                        nullptr) != 0) {
+                    stbtt_PackSetOversampling(&context, 1, 1);
+                    std::array<stbtt_pack_range, 2> ranges{};
+                    ranges[0].font_size = kSubmissionFontPixelHeight;
+                    ranges[0].first_unicode_codepoint_in_range =
+                        kSubmissionFontFirstCodepoint;
+                    ranges[0].num_chars = kSubmissionFontGlyphCount;
+                    ranges[0].chardata_for_range = ascii.data();
+                    ranges[1].font_size = kSubmissionFontPixelHeight;
+                    ranges[1].array_of_unicode_codepoints =
+                        submissionJapaneseCodepoints.data();
+                    ranges[1].num_chars = static_cast<int>(
+                            submissionJapaneseCodepoints.size());
+                    ranges[1].chardata_for_range = japanese.data();
+                    packed = stbtt_PackFontRanges(
+                        &context,
+                        fontBytes.data(),
+                        0,
+                        ranges.data(),
+                        static_cast<int>(ranges.size())) != 0;
+                    stbtt_PackEnd(&context);
+                }
+            }
+            if (packed) {
                 for (int y = 0; y < kSubmissionFontBitmapHeight; ++y) {
-                    for (int x = 0; x < static_cast<int>(kAtlasWidth); ++x) {
+                    for (int x = 0;
+                         x < static_cast<int>(kRailHudAtlasWidth);
+                         ++x) {
                         const uint8_t alpha = fontBitmap[
-                            static_cast<size_t>(y) * kAtlasWidth +
+                            static_cast<size_t>(y) * kRailHudAtlasWidth +
                             static_cast<size_t>(x)];
                         if (alpha != 0) {
                             writePixel(x, kSubmissionFontAtlasY + y, alpha);
                         }
                     }
                 }
-                for (int glyphIndex = 0;
-                     glyphIndex < kSubmissionFontGlyphCount;
-                     ++glyphIndex) {
-                    const stbtt_bakedchar& source = baked[glyphIndex];
-                    SubmissionHudGlyph& destination = submissionHudGlyphs_[glyphIndex];
+                const auto addPackedGlyph = [&]
+                    (uint32_t codepoint, const stbtt_packedchar& source) {
+                    SubmissionHudGlyph destination{};
+                    destination.codepoint = codepoint;
                     destination.uv = {
-                        static_cast<float>(source.x0) / kAtlasWidth,
-                        static_cast<float>(source.y0 + kSubmissionFontAtlasY) / kAtlasHeight,
-                        static_cast<float>(source.x1) / kAtlasWidth,
-                        static_cast<float>(source.y1 + kSubmissionFontAtlasY) / kAtlasHeight};
+                        static_cast<float>(source.x0) / kRailHudAtlasWidth,
+                        static_cast<float>(source.y0 + kSubmissionFontAtlasY) /
+                            kRailHudAtlasHeight,
+                        static_cast<float>(source.x1) / kRailHudAtlasWidth,
+                        static_cast<float>(source.y1 + kSubmissionFontAtlasY) /
+                            kRailHudAtlasHeight};
                     destination.size = {
                         static_cast<float>(source.x1 - source.x0),
                         static_cast<float>(source.y1 - source.y0)};
                     destination.offset = {source.xoff, source.yoff};
                     destination.advance = source.xadvance;
                     destination.valid = source.x1 > source.x0 && source.y1 > source.y0;
+                    submissionHudGlyphs_.push_back(destination);
+                };
+                submissionHudGlyphs_.reserve(
+                    ascii.size() + japanese.size());
+                for (int glyphIndex = 0;
+                     glyphIndex < kSubmissionFontGlyphCount;
+                     ++glyphIndex) {
+                    addPackedGlyph(
+                        static_cast<uint32_t>(
+                            kSubmissionFontFirstCodepoint + glyphIndex),
+                        ascii[glyphIndex]);
+                }
+                for (size_t glyphIndex = 0;
+                     glyphIndex < submissionJapaneseCodepoints.size();
+                     ++glyphIndex) {
+                    addPackedGlyph(
+                        static_cast<uint32_t>(
+                            submissionJapaneseCodepoints[glyphIndex]),
+                        japanese[glyphIndex]);
                 }
                 submissionHudFontReady_ = true;
             }
@@ -3143,8 +3258,6 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
 
 bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     constexpr uint32_t kMaxAtlasVertices = 16384;
-    constexpr float kAtlasW = 512.0f;
-    constexpr float kAtlasH = 256.0f;
     railLockOnHudAtlasVertexCount_ = 0;
     const RenderViewportMetrics hudMetrics =
         ResolveRenderViewportMetrics(
@@ -3158,7 +3271,11 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     }
 
     const auto uv = [](float x, float y, float w, float h) {
-        return Vector4{x / kAtlasW, y / kAtlasH, (x + w) / kAtlasW, (y + h) / kAtlasH};
+        return Vector4{
+            x / static_cast<float>(kRailHudAtlasWidth),
+            y / static_cast<float>(kRailHudAtlasHeight),
+            (x + w) / static_cast<float>(kRailHudAtlasWidth),
+            (y + h) / static_cast<float>(kRailHudAtlasHeight)};
     };
     const Vector4 uvWhite = uv(0.0f, 112.0f, 8.0f, 8.0f);
     const Vector4 uvCircle = uv(16.0f, 88.0f, 32.0f, 32.0f);
@@ -3236,12 +3353,58 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             cursor += 12.0f * scale;
         }
     };
+    const auto nextUtf8Codepoint = [](std::string_view value, size_t& offset) {
+        if (offset >= value.size()) return uint32_t{0};
+        const auto byte = [&](size_t index) {
+            return static_cast<uint32_t>(
+                static_cast<unsigned char>(value[index]));
+        };
+        const uint32_t lead = byte(offset++);
+        if (lead < 0x80u) return lead;
+        const auto continuation = [&](uint32_t& result) {
+            if (offset >= value.size()) return false;
+            const uint32_t next = byte(offset);
+            if ((next & 0xC0u) != 0x80u) return false;
+            ++offset;
+            result = (result << 6u) | (next & 0x3Fu);
+            return true;
+        };
+        uint32_t result = 0;
+        int remaining = 0;
+        if ((lead & 0xE0u) == 0xC0u) {
+            result = lead & 0x1Fu;
+            remaining = 1;
+        } else if ((lead & 0xF0u) == 0xE0u) {
+            result = lead & 0x0Fu;
+            remaining = 2;
+        } else if ((lead & 0xF8u) == 0xF0u) {
+            result = lead & 0x07u;
+            remaining = 3;
+        } else {
+            return uint32_t{0xFFFD};
+        }
+        for (int index = 0; index < remaining; ++index) {
+            if (!continuation(result)) return uint32_t{0xFFFD};
+        }
+        return result;
+    };
+    const auto findHudGlyph = [&](uint32_t codepoint)
+        -> const SubmissionHudGlyph* {
+        const auto found = std::find_if(
+            submissionHudGlyphs_.begin(), submissionHudGlyphs_.end(),
+            [codepoint](const SubmissionHudGlyph& glyph) {
+                return glyph.codepoint == codepoint;
+            });
+        return found != submissionHudGlyphs_.end() ? &*found : nullptr;
+    };
     auto measureText = [&](const std::string& text, float scale) {
         float width = 0.0f;
         if (!submissionHudFontReady_) return width;
-        for (const unsigned char codepoint : text) {
-            if (codepoint < 32 || codepoint > 126) continue;
-            width += submissionHudGlyphs_[codepoint - 32].advance * scale;
+        size_t offset = 0;
+        while (offset < text.size()) {
+            const SubmissionHudGlyph* glyph = findHudGlyph(
+                nextUtf8Codepoint(text, offset));
+            if (glyph != nullptr) width += glyph->advance * scale;
         }
         return width;
     };
@@ -3249,19 +3412,21 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                        float scale, const Vector4& color) {
         if (!submissionHudFontReady_) return;
         float cursor = x;
-        for (const unsigned char codepoint : text) {
-            if (codepoint < 32 || codepoint > 126) continue;
-            const SubmissionHudGlyph& glyph = submissionHudGlyphs_[codepoint - 32];
-            if (glyph.valid) {
+        size_t offset = 0;
+        while (offset < text.size()) {
+            const SubmissionHudGlyph* glyph = findHudGlyph(
+                nextUtf8Codepoint(text, offset));
+            if (glyph == nullptr) continue;
+            if (glyph->valid) {
                 addQuad(
-                    cursor + glyph.offset.x * scale,
-                    baseline + glyph.offset.y * scale,
-                    glyph.size.x * scale,
-                    glyph.size.y * scale,
-                    glyph.uv,
+                    cursor + glyph->offset.x * scale,
+                    baseline + glyph->offset.y * scale,
+                    glyph->size.x * scale,
+                    glyph->size.y * scale,
+                    glyph->uv,
                     color);
             }
-            cursor += glyph.advance * scale;
+            cursor += glyph->advance * scale;
         }
     };
     auto addCenteredText = [&](const std::string& text, float centerX,
@@ -3460,21 +3625,18 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         const float severity = (std::clamp)(cue.severity, 0.0f, 1.0f);
         const bool fired = cue.phase == EnemyAttackTelegraphPhase::Fired;
         const bool imminent = cue.phase == EnemyAttackTelegraphPhase::Imminent;
-        const bool warming = cue.phase == EnemyAttackTelegraphPhase::Warming;
-        const Vector4 warningColor = fired
-            ? Vector4{1.0f, 0.94f, 0.76f, opacity}
-            : (imminent
-                ? Vector4{1.0f, 0.22f, 0.10f, opacity * (0.78f + cuePulse * 0.22f)}
-                : (warming
-                    ? Vector4{1.0f, 0.78f, 0.22f, opacity * 0.72f}
-                    : Vector4{1.0f, 0.47f, 0.14f, opacity * 0.82f}));
+        const EnemyAttackTelegraphReadabilityStyle warningStyle =
+            ResolveEnemyAttackTelegraphReadabilityStyle(cue.phase, cuePulse);
+        Vector4 warningColor = warningStyle.primaryColor;
+        warningColor.w *= opacity;
         const Vector4 warningGlow{
             warningColor.x,
             warningColor.y,
             warningColor.z,
-            warningColor.w * (0.16f + urgency * 0.18f)};
+            opacity * warningStyle.glowAlpha * (0.78f + cuePulse * 0.22f)};
         const float radius =
-            (18.0f + severity * 10.0f + urgency * 5.0f + cuePulse * 2.0f) *
+            (20.0f + severity * 10.0f + cuePulse * 2.0f) *
+            warningStyle.markerScale *
             hudScale;
 
         addCentered(
@@ -3499,6 +3661,38 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                     warningColor.y,
                     warningColor.z,
                     warningColor.w * 0.78f});
+            if (!fired) {
+                const float convergenceRadius = radius *
+                    (std::max)(0.20f, 1.0f - urgency * 0.80f);
+                addCircleLine(
+                    cue.screenPosition,
+                    convergenceRadius,
+                    (imminent ? 2.2f : 1.35f) * hudScale,
+                    warningColor,
+                    32);
+                const float cardinalOuter = radius * 0.88f;
+                const float cardinalInner = convergenceRadius * 1.12f;
+                addLine(
+                    {cue.screenPosition.x - cardinalOuter, cue.screenPosition.y},
+                    {cue.screenPosition.x - cardinalInner, cue.screenPosition.y},
+                    1.7f * hudScale,
+                    warningColor);
+                addLine(
+                    {cue.screenPosition.x + cardinalOuter, cue.screenPosition.y},
+                    {cue.screenPosition.x + cardinalInner, cue.screenPosition.y},
+                    1.7f * hudScale,
+                    warningColor);
+                addLine(
+                    {cue.screenPosition.x, cue.screenPosition.y - cardinalOuter},
+                    {cue.screenPosition.x, cue.screenPosition.y - cardinalInner},
+                    1.7f * hudScale,
+                    warningColor);
+                addLine(
+                    {cue.screenPosition.x, cue.screenPosition.y + cardinalOuter},
+                    {cue.screenPosition.x, cue.screenPosition.y + cardinalInner},
+                    1.7f * hudScale,
+                    warningColor);
+            }
             if (imminent || fired) {
                 addCross(
                     cue.screenPosition,
@@ -3531,16 +3725,45 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 warningColor,
                 20);
         }
-        if (!fired) {
-            const int tenths = static_cast<int>(std::ceil(
-                (std::max)(0.0f, cue.timeToFire) * 10.0f));
-            const Vector2 numberPosition{
+        const float labelScale = (imminent ? 0.72f : 0.62f) * hudScale;
+        const float labelBaseline = cue.screenPosition.y -
+            radius - 28.0f * hudScale;
+        const std::string warningLabel = warningStyle.label;
+        if (!warningLabel.empty()) {
+            const float labelWidth = measureText(warningLabel, labelScale) +
+                14.0f * hudScale;
+            addCenteredRect(
+                {cue.screenPosition.x, labelBaseline + 8.0f * hudScale},
+                labelWidth,
+                20.0f * hudScale,
+                uvWhite,
+                Vector4{0.015f, 0.010f, 0.008f, 0.72f * opacity});
+            addCenteredText(
+                warningLabel,
                 cue.screenPosition.x,
-                cue.screenPosition.y + radius + 12.0f * hudScale};
-            addNumber(
-                (std::min)(99, tenths),
-                numberPosition,
-                0.72f * hudScale,
+                labelBaseline,
+                labelScale,
+                warningColor);
+        }
+        if (warningStyle.showCountdown) {
+            const std::string countdown =
+                FormatEnemyAttackCountdown(cue.timeToFire);
+            const float countdownScale = (imminent ? 0.78f : 0.66f) * hudScale;
+            const float countdownBaseline = cue.screenPosition.y +
+                radius + 10.0f * hudScale;
+            const float countdownWidth = measureText(countdown, countdownScale) +
+                12.0f * hudScale;
+            addCenteredRect(
+                {cue.screenPosition.x, countdownBaseline + 8.0f * hudScale},
+                countdownWidth,
+                20.0f * hudScale,
+                uvWhite,
+                Vector4{0.015f, 0.010f, 0.008f, 0.72f * opacity});
+            addCenteredText(
+                countdown,
+                cue.screenPosition.x,
+                countdownBaseline,
+                countdownScale,
                 warningColor);
         }
     }
@@ -3758,7 +3981,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             : Vector4{1.0f, 0.22f, 0.12f, opacity};
         addQuad(left, top, barWidth + 22.0f * sessionScale,
                 67.0f * sessionScale, uvWhite, sessionPanel);
-        addText("HP", left + 10.0f * sessionScale,
+        addText(HudUtf8(u8"\u8010\u4e45"), left + 10.0f * sessionScale,
                 top + 20.0f * sessionScale, 0.72f * sessionScale, sessionCyan);
         addQuad(left + 10.0f * sessionScale, top + 29.0f * sessionScale,
                 barWidth, barHeight, uvWhite,
@@ -3767,7 +3990,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 barWidth * sessionHud.healthNormalized, barHeight,
                 uvWhite, healthColor);
         addText(
-            "RETRY " + std::to_string(sessionHud.retriesRemaining),
+            HudUtf8(u8"\u6b8b\u6a5f ") + std::to_string(sessionHud.retriesRemaining),
             left + 10.0f * sessionScale,
             top + 58.0f * sessionScale,
             0.62f * sessionScale,
@@ -3778,7 +4001,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         addQuad(progressX - 12.0f * sessionScale, top,
                 progressWidth + 24.0f * sessionScale, 43.0f * sessionScale,
                 uvWhite, sessionPanel);
-        addCenteredText("COURSE", static_cast<float>(hudWidth) * 0.5f,
+        addCenteredText(HudUtf8(u8"\u9032\u5ea6"), static_cast<float>(hudWidth) * 0.5f,
                         top + 18.0f * sessionScale, 0.62f * sessionScale, sessionCyan);
         addQuad(progressX, top + 27.0f * sessionScale,
                 progressWidth, 7.0f * sessionScale, uvWhite,
@@ -3787,9 +4010,9 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 progressWidth * sessionHud.courseProgressNormalized,
                 7.0f * sessionScale, uvWhite, sessionCyan);
 
-        const std::string scoreText = "SCORE " + std::to_string(sessionHud.score);
+        const std::string scoreText = HudUtf8(u8"\u5f97\u70b9 ") + std::to_string(sessionHud.score);
         const std::string comboText = sessionHud.combo > 1
-            ? "COMBO X" + std::to_string(sessionHud.combo)
+            ? HudUtf8(u8"\u9023\u7d9a ") + std::to_string(sessionHud.combo)
             : std::string{};
         const float scoreWidth = (std::max)(
             175.0f * sessionScale,
@@ -3875,8 +4098,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     emitHudCommands(railShooterHudRenderer_.Frame().commands);
 
     RailShooterDefensePromptRenderInput defensePromptInput{};
-    defensePromptInput.presentation =
-        &railEnemyAttackDefensePresentationBridge_.Frame();
+    defensePromptInput.presentation = railDefenseUiProofEnabled_
+        ? nullptr : &railEnemyAttackDefensePresentationBridge_.Frame();
     defensePromptInput.outcome =
         &railEnemyAttackDefenseOutcomeFeedbackBridge_.Frame();
     defensePromptInput.viewportWidth = hudWidth;
@@ -3969,8 +4192,6 @@ bool AppRunLoop::EnsureSubmissionHudResources(
 
 bool AppRunLoop::BuildSubmissionHudQuads() {
     constexpr uint32_t kMaxSubmissionHudVertices = 4096;
-    constexpr float kAtlasWidth = 512.0f;
-    constexpr float kAtlasHeight = 256.0f;
 
     submissionHudVertexCount_ = 0;
     if (!runtimeState_.submissionShowcase.enabled ||
@@ -3994,10 +4215,10 @@ bool AppRunLoop::BuildSubmissionHudQuads() {
         1.18f);
     const auto uv = [](float x, float y, float w, float h) {
         return Vector4{
-            x / kAtlasWidth,
-            y / kAtlasHeight,
-            (x + w) / kAtlasWidth,
-            (y + h) / kAtlasHeight};
+            x / static_cast<float>(kRailHudAtlasWidth),
+            y / static_cast<float>(kRailHudAtlasHeight),
+            (x + w) / static_cast<float>(kRailHudAtlasWidth),
+            (y + h) / static_cast<float>(kRailHudAtlasHeight)};
     };
     const Vector4 uvWhite = uv(0.0f, 112.0f, 8.0f, 8.0f);
     const auto clip = [&](float x, float y) {
@@ -7201,8 +7422,55 @@ void AppRunLoop::UpdateRailShooterFrame() {
         defenseResolutionInput,
         railEnemyAttackDefenseResolutionSettings_);
     EnemyAttackDefenseOutcomeFeedbackInput defenseFeedbackInput{};
-    defenseFeedbackInput.results =
-        railEnemyAttackDefenseResolutionSystem_.Frame().results;
+    std::array<EnemyAttackDefenseResult, 1> defenseProofResults{};
+    bool emitDefenseProof = false;
+    if (railDefenseUiProofEnabled_) {
+        // The proof playlist must keep advancing after the short encounter
+        // reaches Mission Complete, where gameplayDeltaTime intentionally stops.
+        railDefenseUiProofElapsedSeconds_ += (std::max)(0.0f, sessionDeltaTime);
+        // Leave a short capture lead-in so the proof can be recorded without
+        // window-management frames obscuring the three result treatments.
+        static constexpr std::array<float, 3> kProofTimes{
+            1.40f, 4.10f, 6.80f};
+        const bool individualProof = railDefenseUiProofVariant_ !=
+            CombatLoopDefenseUiProofVariant::Sequence;
+        const uint32_t proofCount = individualProof ? 1u :
+            static_cast<uint32_t>(kProofTimes.size());
+        const float proofTime = individualProof
+            ? 1.40f
+            : kProofTimes[(std::min)(
+                  railDefenseUiProofStage_, proofCount - 1u)];
+        if (railDefenseUiProofStage_ < proofCount &&
+            railDefenseUiProofElapsedSeconds_ >=
+                proofTime) {
+            const uint32_t proofIndex = individualProof
+                ? static_cast<uint32_t>(railDefenseUiProofVariant_) -
+                      static_cast<uint32_t>(
+                          CombatLoopDefenseUiProofVariant::Interrupt)
+                : railDefenseUiProofStage_;
+            EnemyAttackDefenseResult& proof = defenseProofResults.front();
+            proof.sequence = 100000u + proofIndex;
+            proof.outcome = EnemyAttackDefenseOutcome::Success;
+            proof.grade = proofIndex == 1
+                ? EnemyAttackDefenseGrade::Perfect
+                : EnemyAttackDefenseGrade::Good;
+            proof.scoreAwarded = proofIndex == 0
+                ? 216u : (proofIndex == 1 ? 210u : 160u);
+            proof.chainAfter = proofIndex + 1;
+            proof.accepted = true;
+            proof.method = proofIndex == 0
+                ? EnemyAttackDefenseMethod::Interrupt
+                : (proofIndex == 1
+                    ? EnemyAttackDefenseMethod::ShootDown
+                    : EnemyAttackDefenseMethod::LeanLeft);
+            emitDefenseProof = true;
+            ++railDefenseUiProofStage_;
+        }
+    }
+    defenseFeedbackInput.results = emitDefenseProof
+        ? std::span<const EnemyAttackDefenseResult>(defenseProofResults)
+        : std::span<const EnemyAttackDefenseResult>(
+            railEnemyAttackDefenseResolutionSystem_.Frame().results);
     defenseFeedbackInput.deltaTime = gameplayDeltaTime;
     defenseFeedbackInput.gameplayActive = grazeInput.gameplayActive;
     defenseFeedbackInput.settings =
@@ -8921,6 +9189,8 @@ void AppRunLoop::DispatchEnemyProjectilePresentation(
     if (!previewActive) {
         presentationInput.playerDamageResults =
             railShooterCollisionSystem_.PlayerDamageResults();
+        presentationInput.shootDownResults =
+            railShooterCollisionSystem_.ProjectileShootDown().Frame().results;
     }
     presentationInput.playerDistance = railShooterDistance_;
     presentationInput.playerLateralOffset = railShooterPlayerLateralOffset_;
@@ -8938,6 +9208,7 @@ void AppRunLoop::DispatchEnemyProjectilePresentation(
     vfxRenderInput.cameraRight = cameraRight;
     vfxRenderInput.cameraUp = cameraUp;
     vfxRenderInput.elapsedTime = railEnemyProjectilePresentationTime_;
+    vfxRenderInput.deltaTime = deltaTime;
     const RenderViewportMetrics projectileMetrics =
         ResolveRenderViewportMetrics(
             imguiLayer_.EditorViewportRenderTargetState(),
@@ -9019,12 +9290,34 @@ void AppRunLoop::DispatchEnemyAttackDefenseOutcomeFeedback() {
     for (const EnemyAttackDefenseOutcomeAudioCue& cue : feedback.audioCues) {
         audio::SoundHandle sound = railDefenseOutcomeFailedSound_;
         if (cue.outcome == EnemyAttackDefenseOutcome::Success) {
-            sound = cue.grade == EnemyAttackDefenseGrade::Perfect
-                ? railDefenseOutcomePerfectSound_
-                : railDefenseOutcomeSuccessSound_;
+            switch (cue.method) {
+            case EnemyAttackDefenseMethod::Interrupt:
+                sound = railDefenseInterruptSound_;
+                break;
+            case EnemyAttackDefenseMethod::ShootDown:
+                sound = railDefenseShootDownSound_;
+                break;
+            case EnemyAttackDefenseMethod::LeanLeft:
+            case EnemyAttackDefenseMethod::LeanRight:
+            case EnemyAttackDefenseMethod::Duck:
+                sound = railDefenseEvadeSound_;
+                break;
+            case EnemyAttackDefenseMethod::None:
+                sound = railDefenseOutcomeSuccessSound_;
+                break;
+            }
         }
         if (sound.IsValid() && cue.volume > 0.0f) {
             (void)audio_.PlaySpatial(sound, cue.volume, 0.0f, cue.pitch);
+        }
+        if (cue.outcome == EnemyAttackDefenseOutcome::Success &&
+            cue.grade == EnemyAttackDefenseGrade::Perfect &&
+            railDefenseOutcomePerfectSound_.IsValid()) {
+            (void)audio_.PlaySpatial(
+                railDefenseOutcomePerfectSound_,
+                cue.volume * 0.72f,
+                0.0f,
+                1.0f);
         }
     }
     if (feedback.cameraShake > 0.0f ||

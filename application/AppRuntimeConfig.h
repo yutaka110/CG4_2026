@@ -9,10 +9,31 @@ enum class AppStartupScene {
     MultiMaterialShowcase,
 };
 
+enum class CombatLoopDefenseUiProofVariant {
+    Disabled,
+    Sequence,
+    Interrupt,
+    ShootDown,
+    Evade,
+};
+
 AppStartupScene ParseAppStartupSceneArguments(
     int argumentCount,
     const wchar_t* const* arguments);
 AppStartupScene ResolveAppStartupSceneFromCommandLine();
+bool ParseCombatLoop10SecondModeArguments(
+    int argumentCount,
+    const wchar_t* const* arguments) noexcept;
+bool ResolveCombatLoop10SecondModeFromCommandLine();
+bool ParseCombatLoopDefenseUiProofArguments(
+    int argumentCount,
+    const wchar_t* const* arguments) noexcept;
+bool ResolveCombatLoopDefenseUiProofFromCommandLine();
+CombatLoopDefenseUiProofVariant ParseCombatLoopDefenseUiProofVariantArguments(
+    int argumentCount,
+    const wchar_t* const* arguments) noexcept;
+CombatLoopDefenseUiProofVariant
+ResolveCombatLoopDefenseUiProofVariantFromCommandLine();
 
 void ResetMultiMaterialShowcaseHumanoidPose(AppRuntimeState& runtimeState);
 float ResolveHumanoidMovementYaw(float moveX, float moveY) noexcept;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <unordered_map>
@@ -20,6 +21,36 @@ enum class EnemyAttackDefensePromptAction : uint8_t {
     Duck,
 };
 
+enum class EnemyAttackDefenseDecisionPhase : uint8_t {
+    EarlyWarning,
+    FinalCommit,
+    ProjectileInFlight,
+};
+
+enum class EnemyAttackDefenseDecisionStrategy : uint8_t {
+    PreventLaunch,
+    DestroyProjectile,
+    EvadeImpact,
+};
+
+enum class EnemyAttackDefenseDecisionAvailability : uint8_t {
+    Closed,
+    AvailableNow,
+    AfterLaunch,
+    AtImpact,
+};
+
+struct EnemyAttackDefenseDecisionOption final {
+    EnemyAttackDefensePromptAction action =
+        EnemyAttackDefensePromptAction::None;
+    EnemyAttackDefenseDecisionStrategy strategy =
+        EnemyAttackDefenseDecisionStrategy::PreventLaunch;
+    EnemyAttackDefenseDecisionAvailability availability =
+        EnemyAttackDefenseDecisionAvailability::Closed;
+    bool recommended = false;
+    bool actionSatisfied = false;
+};
+
 struct EnemyAttackDefensePresentationSettings final {
     bool enabled = true;
     size_t maximumVisiblePrompts = 3;
@@ -33,6 +64,11 @@ struct EnemyAttackDefensePresentationCue final {
         EnemyAttackDefensePromptAction::None;
     EnemyAttackDefenseResponse availableResponses =
         EnemyAttackDefenseResponse::None;
+    EnemyAttackDefenseDecisionPhase decisionPhase =
+        EnemyAttackDefenseDecisionPhase::EarlyWarning;
+    std::array<EnemyAttackDefenseDecisionOption, 3> decisionOptions{};
+    uint32_t decisionOptionCount = 0;
+    uint32_t availableNowCount = 0;
     EnemyAttackTelegraphPhase phase = EnemyAttackTelegraphPhase::None;
     Vector2 screenPosition{};
     Vector2 directionFromCenter{};
@@ -43,6 +79,7 @@ struct EnemyAttackDefensePresentationCue final {
     float pulse = 0.0f;
     bool onScreen = false;
     bool projectileInFlight = false;
+    bool hasMeaningfulChoice = false;
     bool actionSatisfied = false;
 };
 
@@ -88,3 +125,7 @@ private:
 };
 
 const char* ToString(EnemyAttackDefensePromptAction action) noexcept;
+const char* ToString(EnemyAttackDefenseDecisionPhase phase) noexcept;
+const char* ToString(EnemyAttackDefenseDecisionStrategy strategy) noexcept;
+const char* ToString(
+    EnemyAttackDefenseDecisionAvailability availability) noexcept;

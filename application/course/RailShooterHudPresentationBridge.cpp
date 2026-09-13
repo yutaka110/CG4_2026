@@ -6,8 +6,15 @@
 #include <cmath>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
 
 namespace {
+std::string Utf8(std::u8string_view text) {
+    return {
+        reinterpret_cast<const char*>(text.data()),
+        reinterpret_cast<const char*>(text.data() + text.size())};
+}
+
 float Smooth(float current, float target, float response, float deltaTime) {
     const float dt = (std::max)(0.0f, deltaTime);
     const float blend = 1.0f - std::exp(-(std::max)(0.1f, response) * dt);
@@ -106,43 +113,43 @@ void RailShooterHudPresentationBridge::Update(
     next.maximumLocks = runtime.maximumLocks;
     next.primaryWeapon = runtime.primaryWeapon;
 
-    next.healthText = "HP " + Whole(runtime.playerHealth) + "/" +
+    next.healthText = Utf8(u8"\u8010\u4e45 ") + Whole(runtime.playerHealth) + "/" +
         Whole(runtime.maximumPlayerHealth);
-    next.vehicleText = "CART " + Whole(runtime.vehicleIntegrity) + "/" +
+    next.vehicleText = Utf8(u8"\u8eca\u4f53 ") + Whole(runtime.vehicleIntegrity) + "/" +
         Whole(runtime.maximumVehicleIntegrity);
     next.speedText = Whole(runtime.speed) + " m/s";
-    next.scoreText = "SCORE " + std::to_string(runtime.score);
+    next.scoreText = Utf8(u8"\u5f97\u70b9 ") + std::to_string(runtime.score);
     next.comboText = runtime.combo > 1
-        ? "COMBO X" + std::to_string(runtime.combo)
+        ? Utf8(u8"\u9023\u7d9a ") + std::to_string(runtime.combo)
         : std::string{};
     next.waveText = runtime.totalWaves > 0
-        ? "WAVE " + std::to_string(runtime.completedWaves) + "/" +
+        ? Utf8(u8"\u6ce2 ") + std::to_string(runtime.completedWaves) + "/" +
             std::to_string(runtime.totalWaves)
-        : "WAVE --";
+        : Utf8(u8"\u6ce2 --");
     next.enemyText = !runtime.combatStatusText.empty()
         ? runtime.combatStatusText
         : runtime.activeEnemies > 0
-            ? "HOSTILES " + std::to_string(runtime.activeEnemies)
-            : "AREA CLEAR";
+            ? Utf8(u8"\u6575 ") + std::to_string(runtime.activeEnemies)
+            : Utf8(u8"\u5b89\u5168");
     next.grazeText = runtime.grazeChain > 0
-        ? "GRAZE X" + std::to_string(runtime.grazeChain)
-        : "GRAZE READY";
+        ? Utf8(u8"\u304b\u3059\u308a ") + std::to_string(runtime.grazeChain)
+        : Utf8(u8"\u304b\u3059\u308a \u6e96\u5099");
     if (runtime.primaryWeapon.available) {
         next.weaponText = runtime.primaryWeapon.unlimitedAmmo
-            ? "CANNON INF"
-            : "CANNON " + std::to_string(runtime.primaryWeapon.ammoInMagazine) +
+            ? Utf8(u8"\u4e3b\u7832 \u7121\u9650")
+            : Utf8(u8"\u4e3b\u7832 ") + std::to_string(runtime.primaryWeapon.ammoInMagazine) +
                 "/" + std::to_string(runtime.primaryWeapon.reserveAmmo);
-        if (runtime.primaryWeapon.overheated) next.weaponStatusText = "OVERHEAT";
-        else if (runtime.primaryWeapon.reloading) next.weaponStatusText = "RELOADING";
-        else next.weaponStatusText = "READY";
+        if (runtime.primaryWeapon.overheated) next.weaponStatusText = Utf8(u8"\u904e\u71b1");
+        else if (runtime.primaryWeapon.reloading) next.weaponStatusText = Utf8(u8"\u88c5\u586b\u4e2d");
+        else next.weaponStatusText = Utf8(u8"\u6e96\u5099");
     } else {
-        next.weaponText = "CANNON --";
+        next.weaponText = Utf8(u8"\u4e3b\u7832 --");
         next.weaponStatusText.clear();
     }
     if (next.threatWarning) {
         next.threatText = runtime.threatBand == ThreatResponseBand::Critical
-            ? "THREAT CRITICAL"
-            : "THREAT WARNING";
+            ? Utf8(u8"\u5371\u967a")
+            : Utf8(u8"\u8b66\u6212");
         if (runtime.nearbyThreats > 0) {
             next.threatText += " X" + std::to_string(runtime.nearbyThreats);
         }
