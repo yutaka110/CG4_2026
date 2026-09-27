@@ -189,6 +189,7 @@ bool IsOccluded(
     query.terrainEdits = input.terrainEdits;
     query.terrainPreview = input.terrainPreview;
     query.playerDistance = input.playerDistance;
+    query.includeVisualColumns = true;
     const RailAimHit hit = RailWorldRaycast::Query(query);
     return hit.hit &&
         !(hit.kind == RailAimHitKind::Enemy && hit.actorId == enemy.actorId);
@@ -221,7 +222,7 @@ EnemyAttackTelegraphReadabilityStyle ResolveEnemyAttackTelegraphReadabilityStyle
         style.tier = 0;
         break;
     case EnemyAttackTelegraphPhase::Tracking:
-        style.label = reinterpret_cast<const char*>(u8"\u63a5\u8fd1");
+        style.label = reinterpret_cast<const char*>(u8"\u4e88\u544a");
         style.primaryColor = {1.0f, 0.48f, 0.04f, 0.88f};
         style.glowAlpha = 0.24f;
         style.markerScale = 1.0f;
@@ -235,7 +236,7 @@ EnemyAttackTelegraphReadabilityStyle ResolveEnemyAttackTelegraphReadabilityStyle
             0.02f,
             0.94f + boundedPulse * 0.06f};
         style.glowAlpha = 0.38f;
-        style.markerScale = 1.42f;
+        style.markerScale = 1.12f;
         style.tier = 2;
         break;
     case EnemyAttackTelegraphPhase::Fired:
@@ -259,9 +260,9 @@ EnemyAttackTelegraphReadabilityStyle ResolveEnemyAttackTelegraphReadabilityStyle
 }
 
 std::string FormatEnemyAttackCountdown(float seconds) {
-    const float finiteSeconds = std::isfinite(seconds) ? seconds : 0.0f;
+    if (!std::isfinite(seconds) || seconds <= 0.0f) return {};
     const float roundedUp = std::ceil(
-        (std::clamp)(finiteSeconds, 0.0f, 9.9f) * 10.0f) / 10.0f;
+        (std::clamp)(seconds, 0.0f, 9.9f) * 10.0f) / 10.0f;
     const float readable = (std::max)(0.1f, roundedUp);
     char text[16]{};
     std::snprintf(text, sizeof(text), "%.1fs", readable);
@@ -298,6 +299,11 @@ void EnemyAttackTelegraphSystem::Update(
 
     for (const CourseEnemyActor& enemy : input.spawnRuntime->Enemies()) {
         if (enemy.actorId == 0 || enemy.desc.hitPoints <= 0.0f ||
+            enemy.behaviorState.engagementBandExitRequested ||
+            (enemy.entranceExitState.initialized &&
+             (enemy.entranceExitState.exitRequested ||
+              enemy.entranceExitState.phase == EnemyEntranceExitPhase::Exiting ||
+              enemy.entranceExitState.phase == EnemyEntranceExitPhase::Exited)) ||
             (enemy.combatState.initialized &&
              !enemy.combatState.canTelegraph)) {
             continue;
@@ -327,6 +333,11 @@ void EnemyAttackTelegraphSystem::Update(
         const bool warming = IsVisibilityWarmup(enemy);
         const bool behaviorDriven = enemy.behaviorState.initialized &&
             enemy.behaviorDefinition.commercialBehavior;
+        // A choreographed pass owns its full charge interval; the default HUD
+        // lead window must not hide the cue and deadlock presentation admission.
+        const float actorLeadSeconds = behaviorDriven
+            ? (std::max)(leadSeconds, enemy.behaviorDefinition.attackLeadSeconds)
+            : leadSeconds;
         if (behaviorDriven && !firedFlash &&
             (!enemy.behaviorState.attackIntentActive ||
              !enemy.attackState.tokenReserved ||
@@ -345,11 +356,14 @@ void EnemyAttackTelegraphSystem::Update(
             timeToFire = (std::max)(timeToFire, remainingWarmup);
         }
         const bool countdownReadable = behaviorDriven
-            ? enemy.behaviorState.attackIntentActive
-            : enemy.fireSafetyAllowed || warming ||
-                !input.spawnRuntime->FireSafetySettings().enabled;
+            ? enemy.behaviorState.attackIntentActive && enemy.fireEnvironmentReady && input.cameraAllowsAttack
+            : input.cameraAllowsAttack && (enemy.fireSafetyAllowed ||
+                !input.spawnRuntime->FireSafetySettings().enabled);
         if (!firedFlash &&
-            (!countdownReadable || timeToFire > leadSeconds)) {
+            (!countdownReadable || timeToFire <= 0.0f || timeToFire > actorLeadSeconds)) {
+            if (behaviorDriven && (!countdownReadable || timeToFire <= 0.0f)) {
+                input.spawnRuntime->InvalidateEnemyAttackWarning(enemy.actorId);
+            }
             continue;
         }
 
@@ -390,7 +404,7 @@ void EnemyAttackTelegraphSystem::Update(
                     : EnemyAttackTelegraphPhase::Tracking));
         cue.urgency = firedFlash
             ? 1.0f
-            : 1.0f - Clamp01(timeToFire / leadSeconds);
+            : 1.0f - Clamp01(timeToFire / actorLeadSeconds);
         cue.severity = Clamp01(
             PatternSeverity(enemy.desc.firePattern) +
             Clamp01(enemy.desc.bulletDamage / 40.0f) * 0.12f +
@@ -405,6 +419,16 @@ void EnemyAttackTelegraphSystem::Update(
         cue.directionFromCenter = projected.directionFromCenter;
         cue.onScreen = projected.onScreen;
         cue.behindCamera = projected.behind;
+        if (!cue.onScreen) {
+            input.spawnRuntime->InvalidateEnemyAttackWarning(enemy.actorId);
+            continue;
+        }
+        const auto sample = input.railPath->Evaluate(enemy.desc.spawnDistance + enemy.desc.distanceOffset);
+        const auto edge = ProjectThreat(Add(cue.worldPosition, Scale(sample.up, enemy.desc.radius)),
+            *input.viewProjection, input.viewportWidth, input.viewportHeight, 0.0f);
+        const float dx = edge.rawScreen.x - projected.rawScreen.x;
+        const float dy = edge.rawScreen.y - projected.rawScreen.y;
+        cue.bodyRadiusPixels = std::sqrt(dx * dx + dy * dy);
         cue.priority = cue.severity * 0.54f + cue.urgency * 0.46f +
             (cue.onScreen ? 0.0f : input.settings.offscreenPriorityBonus);
         cue.pulse = 0.5f + 0.5f * std::sin(
@@ -430,6 +454,7 @@ void EnemyAttackTelegraphSystem::Update(
     for (EnemyAttackTelegraphCue& cue : candidates) {
         if (frame_.cues.size() >= maximumVisible) {
             ++frame_.stats.prioritySuppressed;
+            input.spawnRuntime->InvalidateEnemyAttackWarning(cue.actorId);
             continue;
         }
         const CourseEnemyActor* enemy = nullptr;
@@ -447,11 +472,14 @@ void EnemyAttackTelegraphSystem::Update(
                 cue.occluded = IsOccluded(input, *enemy, cue.worldPosition);
             } else {
                 ++frame_.stats.visibilityBudgetExhausted;
+                input.spawnRuntime->InvalidateEnemyAttackWarning(cue.actorId);
+                continue;
             }
         }
         if (cue.occluded) {
             ++frame_.stats.occludedCues;
             if (input.settings.suppressOccluded) {
+                input.spawnRuntime->InvalidateEnemyAttackWarning(cue.actorId);
                 continue;
             }
         }

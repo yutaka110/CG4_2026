@@ -32,10 +32,10 @@ Vector3 NormalizeOr(Vector3 value, Vector3 fallback) noexcept {
 }
 float PhaseOpacity(EnemyAttackTelegraphPhase phase) noexcept {
     switch (phase) {
-    case EnemyAttackTelegraphPhase::Warming: return 0.34f;
-    case EnemyAttackTelegraphPhase::Tracking: return 0.52f;
-    case EnemyAttackTelegraphPhase::Imminent: return 0.92f;
-    case EnemyAttackTelegraphPhase::Fired: return 0.68f;
+    case EnemyAttackTelegraphPhase::Warming: return 0.12f;
+    case EnemyAttackTelegraphPhase::Tracking: return 0.20f;
+    case EnemyAttackTelegraphPhase::Imminent: return 0.42f;
+    case EnemyAttackTelegraphPhase::Fired: return 0.0f;
     case EnemyAttackTelegraphPhase::None: return 0.0f;
     }
     return 0.0f;
@@ -109,7 +109,9 @@ void EnemyAttackLaneTelegraphRenderer::Update(
             ++frame_.droppedByBudget;
             continue;
         }
-        if (cue.phase == EnemyAttackTelegraphPhase::None) continue;
+        if (cue.phase == EnemyAttackTelegraphPhase::None ||
+            cue.phase == EnemyAttackTelegraphPhase::Fired ||
+            !cue.onScreen || cue.occluded || !cue.hasLockedTarget) continue;
 
         const RailPathSample targetSample = input.railPath->Evaluate(
             cue.targetRailDistance);
@@ -155,25 +157,13 @@ void EnemyAttackLaneTelegraphRenderer::Update(
         proxy.flowPhase = std::fmod(
             input.elapsedTime * (0.62f + urgency * 1.10f), 1.0f);
         proxy.readabilityTier = style.tier;
-        proxy.directionMarkerCount = static_cast<uint32_t>((std::clamp)(
-            3 + static_cast<int>(std::round(urgency * 3.0f)), 3, 6));
+        proxy.directionMarkerCount = 1;
         proxy.projectileCount = (std::max)(1, cue.projectileCount);
 
         const LaneKey key{cue.actorId, cue.attackIntentSequence};
         ManagedMarkers& markers = managedMarkers_[key];
         markers.touchedRevision = revision;
         if (input.settings.effectRuntimeEnabled && input.effectRuntime != nullptr) {
-            if (markers.sourceInstanceId == 0) {
-                markers.sourceInstanceId = input.effectRuntime->PlayEffectWithParams(
-                    input.settings.markerEffectId,
-                    proxy.startWorld,
-                    proxy.color,
-                    {proxy.sourceRadius, proxy.sourceRadius, proxy.sourceRadius});
-                if (markers.sourceInstanceId != 0) {
-                    input.effectRuntime->SetEffectPreviewLoop(
-                        markers.sourceInstanceId, true);
-                }
-            }
             if (markers.targetInstanceId == 0) {
                 markers.targetInstanceId = input.effectRuntime->PlayEffectWithParams(
                     input.settings.markerEffectId,
@@ -212,7 +202,7 @@ void EnemyAttackLaneTelegraphRenderer::Update(
     frame_.revision = revision;
 }
 
-void EnemyAttackLaneTelegraphRenderer::AppendProductionWorldPrimitives(
+void EnemyAttackLaneTelegraphRenderer::AppendWorldPrimitives(
     ge3::debug::DebugDrawSystem& productionDraw) const {
     for (const EnemyAttackLaneTelegraphProxy& lane : frame_.lanes) {
         Vector4 faint = lane.color;
@@ -334,9 +324,30 @@ void EnemyAttackLaneTelegraphRenderer::AppendProductionWorldPrimitives(
     }
 }
 
-void EnemyAttackLaneTelegraphRenderer::AppendWorldPrimitives(
-    ge3::debug::DebugDrawSystem& debugDraw) const {
-    AppendProductionWorldPrimitives(debugDraw);
+void EnemyAttackLaneTelegraphRenderer::AppendProductionWorldPrimitives(
+    ge3::debug::DebugDrawSystem& draw) const {
+    for (const auto& lane : frame_.lanes) {
+        // The muzzle and first 78% of the flight corridor remain unpainted.
+        // Only a short arrival cue and a single footprint describe danger.
+        const Vector3 tail = Lerp(lane.startWorld, lane.targetWorld, 0.78f);
+        draw.AddLine(tail, lane.targetWorld, lane.color);
+        if (lane.targetEffectInstanceId == 0) {
+            draw.AddCircle(lane.targetWorld, lane.railRight, lane.railUp,
+                lane.targetRadius, lane.color, 16);
+        }
+        const Vector3 direction = NormalizeOr(Subtract(lane.targetWorld, tail), {0, 0, -1});
+        const Vector3 base = Subtract(lane.targetWorld, Scale(direction, lane.targetRadius * 0.70f));
+        const Vector3 wing = Scale(lane.railRight, lane.targetRadius * 0.35f);
+        draw.AddLine(Add(base, wing), lane.targetWorld, lane.color);
+        draw.AddLine(Subtract(base, wing), lane.targetWorld, lane.color);
+        if (lane.shape == EnemyAttackLaneShape::Fan) {
+            // Two boundaries communicate spread without drawing every bullet
+            // ray on top of the enemy, actual shots or one another.
+            const Vector3 spread = Scale(lane.railRight, lane.targetRadius * 2.4f);
+            draw.AddLine(tail, Add(lane.targetWorld, spread), lane.color);
+            draw.AddLine(tail, Subtract(lane.targetWorld, spread), lane.color);
+        }
+    }
 }
 
 bool EnemyAttackLaneTelegraphRenderer::WasSubmitted(

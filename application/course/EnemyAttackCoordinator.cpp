@@ -55,7 +55,11 @@ uint64_t MixSeed(uint32_t actorId, uint64_t intentSequence) noexcept {
 }
 
 bool ActorAvailable(const CourseEnemyActor& actor) noexcept {
-    return actor.desc.hitPoints > 0.0f && !actor.desc.suppressFire &&
+    return actor.fireEnvironmentReady && actor.desc.hitPoints > 0.0f && !actor.desc.suppressFire &&
+        (!(actor.behaviorDefinition.choreographedAttackPass ||
+           actor.behaviorDefinition.maintainForwardEngagementBand) ||
+         !actor.entranceExitState.initialized ||
+         !actor.entranceExitState.attackSuppressed) &&
         (!actor.combatState.initialized || actor.combatState.canFire);
 }
 } // namespace
@@ -306,6 +310,13 @@ bool EnemyAttackCoordinator::CancelActor(
     state.tokenReserved = false;
     state.telegraphPresented = false;
     actor.behaviorState.telegraphPresented = false;
+    if (reason == EnemyAttackCancelReason::ReservationExpired &&
+        actor.behaviorDefinition.choreographedAttackPass &&
+        actor.behaviorState.attackIntentActive) {
+        // Re-admission starts a new complete tell, never an overdue .1s cue.
+        actor.behaviorState.attackTimeRemaining = actor.behaviorDefinition.attackLeadSeconds;
+        actor.fireTimer = actor.behaviorState.attackTimeRemaining;
+    }
     state.recoveryRemaining = 0.0f;
     state.revision = ++revision_;
     ++frame_.cancelledThisFrame;

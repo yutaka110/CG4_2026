@@ -60,6 +60,7 @@ private:
     void RebuildArcTable();
 
     Vector3 EvaluateSegment(uint32_t segmentIndex, float t) const;
+    Vector3 EvaluateSegmentTangent(uint32_t segmentIndex, float t) const;
     Vector3 AutoTangentHandlePosition(uint32_t pointIndex, bool incoming) const;
     float EvaluateRadius(uint32_t segmentIndex, float t) const;
     float EvaluateSpeed(uint32_t segmentIndex, float t) const;

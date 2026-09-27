@@ -1,0 +1,7 @@
+# Guard-line-only: priority hull, stationary pose, visible charge, one volley.
+actor|spire_guard_leader|Spire Guard Leader|combat_assault_hull|1.30|46|12|1.0|0.48|0.16|1.0|soft_spread
+combat|1.10|0.30|42|soft_spread
+movement|18
+behavior|support|0.30|0.45|0.45|1.25|1.10|0.20|0.35|0|0|0|true
+engagement_band|true|30|46|66|12|2.2|34|10
+attack_pass|true|1.20|0.20

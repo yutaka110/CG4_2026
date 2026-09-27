@@ -413,6 +413,7 @@
     <ClCompile Include="application\course\EnemyEncounterBeatDefinition.cpp" />
     <ClCompile Include="application\course\EnemyEncounterPacingDirector.cpp" />
     <ClCompile Include="application\course\EnemyEncounterCameraCompositionBridge.cpp" />
+    <ClCompile Include="application\course\EncounterPerformanceScoreSystem.cpp" />
     <ClCompile Include="application\course\EnemyBehaviorSystem.cpp" />
     <ClCompile Include="application\course\EnemyFormationDefinition.cpp" />
     <ClCompile Include="application\course\EnemyFormationSystem.cpp" />
@@ -1396,6 +1397,7 @@
     <ClInclude Include="application\course\EnemyEncounterReadabilityDirector.h" />
     <ClInclude Include="application\course\EnemyEncounterBeatDefinition.h" />
     <ClInclude Include="application\course\EnemyEncounterPacingDirector.h" />
+    <ClInclude Include="application\course\EncounterPerformanceScoreSystem.h" />
     <ClInclude Include="application\course\EnemyEncounterCameraCompositionBridge.h" />
     <ClInclude Include="application\course\EnemyBehaviorSystem.h" />
     <ClInclude Include="application\course\EnemyFormationDefinition.h" />

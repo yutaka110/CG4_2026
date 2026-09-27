@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <fstream>
 #include <span>
@@ -75,6 +76,7 @@
 #include "course/EnemyEncounterReadabilityDirector.h"
 #include "course/EnemyEncounterPacingDirector.h"
 #include "course/EnemyEncounterCameraCompositionBridge.h"
+#include "course/EncounterPerformanceScoreSystem.h"
 #include "course/EnemyProjectilePresentationBridge.h"
 #include "course/EnemyProjectileScreenSpaceReadabilityPolicy.h"
 #include "course/EnemyProjectileVfxRenderer.h"
@@ -180,6 +182,7 @@ public:
         DXGI_FORMAT rtvFormat,
         DXGI_FORMAT dsvFormat);
     void RenderFrame();
+    bool HandleTitleScreenMessage(UINT message, WPARAM wParam, LPARAM lParam);
     void Shutdown();
 
 private:
@@ -448,6 +451,8 @@ private:
     EnemyEncounterReadabilitySettings
         railEnemyEncounterReadabilitySettings_{};
     EnemyEncounterPacingDirector railEnemyEncounterPacingDirector_{};
+    EncounterPerformanceScoreSystem railEncounterPerformanceScoreSystem_{};
+    EncounterPerformanceScoreSettings railEncounterPerformanceScoreSettings_{};
     EnemyEncounterCameraCompositionBridge
         railEnemyEncounterCameraCompositionBridge_{};
     EnemyProjectilePresentationBridge railEnemyProjectilePresentationBridge_{};
@@ -618,6 +623,8 @@ private:
     uint64_t editorSceneRuntimeLastReconcileAttemptRevision_ = 0;
     uint32_t railShooterFrameIndex_ = 0;
     float railWeaponHotReloadPollTimer_ = 0.0f;
+    std::chrono::steady_clock::time_point railShooterLastUpdateTime_{};
+    bool railShooterHasLastUpdateTime_ = false;
     uint64_t railAimAssistAppliedPresetRevision_ = 0;
     std::string railAimAssistAppliedPresetId_;
     bool railShooterInitialized_ = false;
@@ -791,6 +798,7 @@ private:
     editor::EditorPropertyEditSession courseObjectGizmoEditSession_{};
     bool previousCourseEditorLeftMouseDown_ = false;
     bool releaseShowcaseInitialized_ = false;
+    bool railTitleScreenVisible_ = false;
     bool releaseShowcaseTitleDirty_ = true;
     std::array<bool, 256> previousKeyDown_{};
     AppGamepadInput submissionGamepad_{};

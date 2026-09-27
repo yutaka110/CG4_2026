@@ -63,6 +63,9 @@ struct EnemyCombatActorPresentation final {
     float emissiveStrength = 0.0f;
     float silhouetteSpread = 1.0f;
     float weaponCharge = 0.0f;
+    // Presentation-only outline strength. This is raised during
+    // decision-critical states so bright terrain cannot erase the silhouette.
+    float contrastBackdropStrength = 0.0f;
     bool visible = false;
     bool commercialSilhouette = false;
     uint64_t sourceCombatRevision = 0;
@@ -98,6 +101,9 @@ struct EnemyCombatPresentationFrame final {
     std::vector<EnemyCombatPresentationVfxCommand> vfxCommands;
     uint32_t droppedAudioCues = 0;
     uint32_t droppedVfxCommands = 0;
+    float cameraShakeImpulse = 0.0f;
+    float cameraFovImpulseRadians = 0.0f;
+    float cameraRollImpulseRadians = 0.0f;
     uint64_t revision = 0;
 };
 

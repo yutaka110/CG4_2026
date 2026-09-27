@@ -1,0 +1,434 @@
+{
+  "schema": 1,
+  "date": "2026-09-27",
+  "scope": "All image, OBJ, MTL and TTF entries in RailSubmissionResources.json; not a license clearance for source code.",
+  "files": [
+    {
+      "file": "Resources/Editor/Fonts/MPLUSRounded1c-Medium.ttf",
+      "sha256": "adfde1b6bae58719c4e0144612a94232e72fc5ca655c4722165fe88d06521a70",
+      "status": "local_license_recorded",
+      "evidence": "Resources/Editor/Fonts/README.md and OFL-MPLUS.txt; preserve SIL OFL 1.1 notices.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/Editor/Fonts/MPLUSRounded1c-Regular.ttf",
+      "sha256": "b75708b53e45b06d17d470aeeca5b766e3d1b3999f03f13ec4eb863ca846c14c",
+      "status": "local_license_recorded",
+      "evidence": "Resources/Editor/Fonts/README.md and OFL-MPLUS.txt; preserve SIL OFL 1.1 notices.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/ball/ball.mtl",
+      "sha256": "ff1ec32c6e42eac08b00ef7b96e631f1bc87cfcda0fbf3df373a0aad63e86584",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/ball/ball.obj",
+      "sha256": "e8a03d1deaf53092a24ee186ae1500267412bd0316f4b2a683f160337fcb1ebe",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/beamRamp_lightning.png",
+      "sha256": "e1ff1ed6e58cd2a423293ce3081c722aa59da99abb31276c3863b37b119e73b8",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/circle.png",
+      "sha256": "05e87b80ad4e65ddc0904f91f8520bb22059ca05c053ec7f5c780118e1294012",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/circle2.png",
+      "sha256": "87d4b2f67ebefe993158937e2d5ae2ab49144cc102bae27a7271f5b2aeb40c97",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/common/neutralSurface.bmp",
+      "sha256": "cd567633fd944df4bbcb61ba46bd6d94f5f7669641ccf229f9811240367e7d61",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/CombatLaneRib/CombatLaneRib.obj",
+      "sha256": "1496d0b55619073f02be838dde0420d86910fa43ac5af10a401b649e732dc017",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/CombatShardGate/CombatShardGate.obj",
+      "sha256": "488131cf27cff996ab73957630dda50a58c70a544198fc8c80ebe619156bfb8a",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/CurvedCanyonWall/CurvedCanyonWall.obj",
+      "sha256": "4e69d3af996e7f84c29d0e738ca1bf11263138089889ccd1bb7e313329c95143",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/CurvedCanyonWall/organic_rock.mtl",
+      "sha256": "99203f498763d165e78e979c29edde3a0a35797af8cbc8b92dc5934b03bb4dc3",
+      "status": "generator_text_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/OrganicArchLarge/OrganicArchLarge.obj",
+      "sha256": "b5601af9949627cde18ab3589e0f361be94a2d32b6bb60e64890d3e94ff2f027",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/OrganicArchLarge/organic_rock.mtl",
+      "sha256": "99203f498763d165e78e979c29edde3a0a35797af8cbc8b92dc5934b03bb4dc3",
+      "status": "generator_text_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/RailHazardBlock/RailHazardBlock.bmp",
+      "sha256": "5097afa5709cdd7978e56f89cb91806314fab9581c5285977ce1167509973497",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/RailHazardBlock/RailHazardBlock.mtl",
+      "sha256": "02142512b7ff6af789c0f4ef9210d34e707c4a79659d0df56ed476c844e1e0fe",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/RailHazardBlock/RailHazardBlock.obj",
+      "sha256": "e12b488e2290661a9244d031bb9ff312050341b320abff137bcb59a3fe6bae26",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/RailHazardSolid/RailHazardSolid.bmp",
+      "sha256": "998596c4ccbf37453104ce9e83e9b16344013aace88cbfdfbca76198a19d0663",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/RailHazardSolid/RailHazardSolid.mtl",
+      "sha256": "d015d94cf8e0114216d6f6b84d2b30e062fa028e3b66b2bc9153248498d6c937",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/RailHazardSolid/RailHazardSolid.obj",
+      "sha256": "6cb4bb5ee1816479d880cf9d5c6b514104519fbf10dc310aa742b2947091e307",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/RibTunnelWall/RibTunnelWall.obj",
+      "sha256": "62a00f4469752a3895e1b05285bf5b0b39267fbd50c35df2c849f9e1dbb94fca",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/RibTunnelWall/rib_rock.mtl",
+      "sha256": "6b4e9defbcaf8deab9e98808cf19f84de5be770ae1ff78bb0a64f362a49519e4",
+      "status": "generator_text_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/RootSpireColumn/RootSpireColumn.obj",
+      "sha256": "b456bfdc9ae66027a134562f4b23843b221b1c95b20439ea7e61d9dedbfb08d8",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/RootSpireColumn/root_rock.mtl",
+      "sha256": "8f9bf97b69bc82f3f507ef674e9d49bbbc4f296cda78a40e424e0b3711f7f9d2",
+      "status": "generator_text_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/SpireBrokenBridgeArc/SpireBrokenBridgeArc.obj",
+      "sha256": "8baa386bc050e0b79c3819d8c201c1299e35ef78d67a89037f1fb2afecb99509",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/SpireBrokenBridgeArc/root_rock.mtl",
+      "sha256": "8f9bf97b69bc82f3f507ef674e9d49bbbc4f296cda78a40e424e0b3711f7f9d2",
+      "status": "generator_text_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/VistaHoleWall/VistaHoleWall.obj",
+      "sha256": "b30231981e944969b38033ca7fc048feabca017eac784b475009301aa2affd60",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/VistaHoleWall/vista_rock.mtl",
+      "sha256": "715789b51247f067554ca95a8198017c59015fe97565dcb976e119bda3835d16",
+      "status": "generator_text_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/materials/organic_rock_albedo.bmp",
+      "sha256": "ea277ce324d78b29a70c4a33a889722b87fbcbb144c33d8228a45d64e25c8d82",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/materials/rib_rock_albedo.bmp",
+      "sha256": "95c91fa10c77d6394fb9de6382a49c44b9de46a07874b9259fd374f7700fec3e",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/materials/root_rock_albedo.bmp",
+      "sha256": "b52cad3ede047940bda36bd3cf2ef7c736d29408173be908571f7aa8f325a1e2",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/course_meshes/materials/vista_rock_albedo.bmp",
+      "sha256": "887cc8cf3cd7ff4b7a90bc9c4d3d93b0cc4e305dad36793288bfac91ba09e90d",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/enemies/CombatAssault/CombatAssaultCore.obj",
+      "sha256": "d22cc378325716599f954b3872f7c763e970ff6a93a119c78a898bb511f8b91f",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/enemies/CombatAssault/CombatAssaultHull.obj",
+      "sha256": "7cb915906f769674e256971601344d0f458ad663e4e51d0fac586324aa4495ae",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/enemies/CombatAssault/CombatAssaultPod.obj",
+      "sha256": "af12b69e4f66029a3b29e134b82132789f04ed26d41235b15ffe4e17dcedc6c4",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/enemies/CombatInterceptor/CombatInterceptorHull.obj",
+      "sha256": "589f3151d3247288e99e9ac9b12056077787724fb07cce45ec1b1c1a3e92830a",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/enemies/CombatSniper/CombatSniperHull.obj",
+      "sha256": "d5c363ae5d25b496e65c5702b653f2fff72b43c6414bbdc32db523e38db9fc52",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/enemies/CombatTurret/CombatTurret.bmp",
+      "sha256": "d88a439b5f3de1f2fc075874b019638ca318e8c0a991c1c8ec5eaa78cebca193",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/enemies/CombatTurret/CombatTurret.mtl",
+      "sha256": "aaab51a5a9b2670b219ad9f3910c7e6a1bbbee3327fca6d19715de05a60f199b",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/enemies/CombatTurret/CombatTurret.obj",
+      "sha256": "a6d4febfad189f2d8036acbe7cc537bc168e6702f1ffea424f35f604b9f9b15c",
+      "status": "generator_byte_match",
+      "evidence": "SubmissionGeneratedAssetVerification.json; separate regeneration, text comparison normalizes line endings.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/gradationLine.png",
+      "sha256": "5f6126e5e67e4b8bb7d774f10b493489e3aec431a244adffd8c6e7f97ca7e331",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/iceShard.png",
+      "sha256": "56db71ac97f256dcb53fe3d0cf15898c863c77a83222022a0b024b0498e98861",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/rostock_laage_airport_4k.dds",
+      "sha256": "1ab268e59ddadaf64cbe10d905ad5125e6924e74f32582edb3154e25b8ba8814",
+      "status": "candidate_source_unconfirmed",
+      "evidence": "Official namesake has CC0 license; original download and DDS conversion not verified.",
+      "sourceUrls": [
+        "https://polyhaven.com/a/rostock_laage_airport",
+        "https://polyhaven.com/license"
+      ]
+    },
+    {
+      "file": "Resources/streakNoise.png",
+      "sha256": "54e5f53d72c7154feb2deb92a040b0a6912f717b5c43eb7d37cfc34d03e5956f",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/terrain/Rocks016_1K-JPG/Rocks016.png",
+      "sha256": "29420787a34d7a84c8101df3fdbec330c1ddcbcda5cd60818f2ecac331110521",
+      "status": "candidate_source_unconfirmed",
+      "evidence": "Official namesake has CC0 license; local identity not verified; archive request HTTP 403.",
+      "sourceUrls": [
+        "https://ambientcg.com/view?id=Rocks016",
+        "https://docs.ambientcg.com/license/"
+      ]
+    },
+    {
+      "file": "Resources/terrain/Rocks016_1K-JPG/Rocks016_1K-JPG_Color.jpg",
+      "sha256": "25dc8457d1c7b45fd764963cc6a93fdb55ef3b5a8e306ae397f25716e0d8cd71",
+      "status": "candidate_source_unconfirmed",
+      "evidence": "Official namesake has CC0 license; local identity not verified; archive request HTTP 403.",
+      "sourceUrls": [
+        "https://ambientcg.com/view?id=Rocks016",
+        "https://docs.ambientcg.com/license/"
+      ]
+    },
+    {
+      "file": "Resources/terrain/Rocks016_1K-JPG/Rocks016_1K-JPG_Displacement.jpg",
+      "sha256": "3c9273fc05dfdaa097cc9a37365f351a36092112252ee2ac8577b4f6b45f38b0",
+      "status": "candidate_source_unconfirmed",
+      "evidence": "Official namesake has CC0 license; local identity not verified; archive request HTTP 403.",
+      "sourceUrls": [
+        "https://ambientcg.com/view?id=Rocks016",
+        "https://docs.ambientcg.com/license/"
+      ]
+    },
+    {
+      "file": "Resources/terrain/Rocks016_1K-JPG/Rocks016_1K-JPG_NormalDX.jpg",
+      "sha256": "2fe70d60a9b7bafc5b685e400dea81606ec6f2dd38cdc01b34c96fba4c1f1fc6",
+      "status": "candidate_source_unconfirmed",
+      "evidence": "Official namesake has CC0 license; local identity not verified; archive request HTTP 403.",
+      "sourceUrls": [
+        "https://ambientcg.com/view?id=Rocks016",
+        "https://docs.ambientcg.com/license/"
+      ]
+    },
+    {
+      "file": "Resources/terrain/Rocks016_1K-JPG/Rocks016_1K-JPG_NormalGL.jpg",
+      "sha256": "2aaad954ae91ffc3bb8f11b02efd6168b6e6fd252a99b9067361651b46182bff",
+      "status": "candidate_source_unconfirmed",
+      "evidence": "Official namesake has CC0 license; local identity not verified; archive request HTTP 403.",
+      "sourceUrls": [
+        "https://ambientcg.com/view?id=Rocks016",
+        "https://docs.ambientcg.com/license/"
+      ]
+    },
+    {
+      "file": "Resources/terrain/Rocks016_1K-JPG/Rocks016_1K-JPG_Roughness.jpg",
+      "sha256": "9a62631ca9a76b59c5cfb00cb9dcd5af5a624bf0abbc0ff7015ada6a8d39a56b",
+      "status": "candidate_source_unconfirmed",
+      "evidence": "Official namesake has CC0 license; local identity not verified; archive request HTTP 403.",
+      "sourceUrls": [
+        "https://ambientcg.com/view?id=Rocks016",
+        "https://docs.ambientcg.com/license/"
+      ]
+    },
+    {
+      "file": "Resources/terrain/materials/textures/dry_strata_height.png",
+      "sha256": "b55ac891f962436aeafb2a51a90c52dd15183ded4a6997dd53a0a8ac668f422a",
+      "status": "generator_code_found",
+      "evidence": "tools/generate_terrain_pbr_maps.py; regeneration not checked (cv2 unavailable).",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/terrain/materials/textures/dry_strata_orm.png",
+      "sha256": "b89ab17ff29a0440e1b5afe798f532d603cd808d44e7cec0163eb1d483ae7a31",
+      "status": "generator_code_found",
+      "evidence": "tools/generate_terrain_pbr_maps.py; regeneration not checked (cv2 unavailable).",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/terrain/materials/textures/floor_sand_height.png",
+      "sha256": "682049dd92e787a13e908effbdf7068e33b3049297e962e752ad487c7d9275c7",
+      "status": "generator_code_found",
+      "evidence": "tools/generate_terrain_pbr_maps.py; regeneration not checked (cv2 unavailable).",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/terrain/materials/textures/floor_sand_orm.png",
+      "sha256": "de10ef8d66ff7e2100030819b9d5e64692bde0498ccface0146d56167dde01e2",
+      "status": "generator_code_found",
+      "evidence": "tools/generate_terrain_pbr_maps.py; regeneration not checked (cv2 unavailable).",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/terrain/materials/textures/wet_organic_height.png",
+      "sha256": "db21924dc8963076143bc39e2d096c0e8c7063b67533a065995b83f7b1525c60",
+      "status": "generator_code_found",
+      "evidence": "tools/generate_terrain_pbr_maps.py; regeneration not checked (cv2 unavailable).",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/terrain/materials/textures/wet_organic_orm.png",
+      "sha256": "528b9bedeb0fb5714c7dbe650cb156fb9f47f7342b34fd3f70dd580974b34e80",
+      "status": "generator_code_found",
+      "evidence": "tools/generate_terrain_pbr_maps.py; regeneration not checked (cv2 unavailable).",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/terrain/terrain_detail_normal.png",
+      "sha256": "4fdedef2440240480e86ecc948263e476b4680bf709d56b32b745704fd40f990",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    },
+    {
+      "file": "Resources/warpTunnelFlipbook.bmp",
+      "sha256": "954cb3a043cb76c5001154fc4f498d4eab666cafb6eb03d15c496d10b59239bf",
+      "status": "origin_unconfirmed",
+      "evidence": "No definitive author or license evidence found in inspected local files.",
+      "sourceUrls": []
+    }
+  ]
+}

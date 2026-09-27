@@ -235,6 +235,10 @@ const RailVehicleBodyCollisionFrame& RailVehicleBodyCollisionSystem::Update(
 
     if (profile_.includeDynamicObstacles && input.spawnRuntime != nullptr) {
         for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
+            // Damage resolves before the next runtime cleanup; a destroyed
+            // obstacle must stop blocking the vehicle in the same frame.
+            if (obstacle.age >= obstacle.desc.lifetime ||
+                (obstacle.desc.breakable && obstacle.desc.hitPoints <= 0.0f)) continue;
             const RailLocalPoint center{
                 obstacle.desc.spawnDistance + obstacle.desc.distanceOffset,
                 obstacle.desc.lateralOffset,

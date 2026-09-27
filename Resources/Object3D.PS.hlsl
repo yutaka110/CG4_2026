@@ -92,6 +92,9 @@ static float3 SafeNormalize(float3 v)
 
 static float EvaluateSpecular(float3 N, float3 L, float3 V, float shininess, int specularMode)
 {
+    // Authored matte stone/paint: keep diffuse lighting, without washing out
+    // fracture marks under the camera-facing spot light. 0/1 retain Phong/Blinn.
+    if (specularMode == 2) return 0.0f;
     float power = max(shininess, 1.0f);
     if (specularMode == 0)
     {

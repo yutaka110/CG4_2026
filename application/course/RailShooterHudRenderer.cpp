@@ -27,7 +27,8 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     next.viewportHeight = input.viewportHeight;
     next.revision = ++revision_;
     if (input.definition == nullptr || input.presentation == nullptr ||
-        !input.definition->enabled || !input.presentation->visible ||
+        (!input.showTitleScreen &&
+         (!input.definition->enabled || !input.presentation->visible)) ||
         input.viewportWidth < 320 || input.viewportHeight < 180) {
         frame_ = std::move(next);
         return;
@@ -79,6 +80,55 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         rect(x, y, w * (std::clamp)(value, 0.0f, 1.0f), h, color);
     };
 
+    if (input.showTitleScreen) {
+        // A self-contained title uses the existing font atlas and geometric
+        // shapes, so it adds no external artwork or texture dependencies.
+        const float s = (std::min)(width / 1600.0f, height / 900.0f);
+        const float cx = width * 0.5f;
+        const float top = (height - 900.0f * s) * 0.5f;
+        const Vector4 ink{0.018f, 0.034f, 0.048f, 1.0f};
+        const Vector4 cyan{0.24f, 0.83f, 0.90f, 1.0f};
+        const Vector4 white{0.91f, 0.96f, 0.97f, 1.0f};
+        const Vector4 secondary{0.57f, 0.70f, 0.76f, 1.0f};
+        rect(0.0f, 0.0f, width, height, ink);
+        // Stepped rail silhouettes frame the title without obscuring the text.
+        for (int i = 0; i < 12; ++i) {
+            const float depth = static_cast<float>(i) / 11.0f;
+            const float spread = (460.0f + depth * depth * 300.0f) * s;
+            const float y = top + (140.0f + i * 62.0f) * s;
+            const Vector4 rail{0.055f, 0.12f + depth * 0.05f, 0.16f, 1.0f};
+            rect(cx - spread, y, 4.0f * s, 48.0f * s, rail);
+            rect(cx + spread, y, 4.0f * s, 48.0f * s, rail);
+            rect(cx - spread - 18.0f * s, y, 40.0f * s, 3.0f * s, rail);
+            rect(cx + spread - 18.0f * s, y, 40.0f * s, 3.0f * s, rail);
+        }
+        rect(cx - 34.0f * s, top + 130.0f * s, 68.0f * s, 4.0f * s, cyan);
+        text("RAIL SHOOTING", cx, top + 185.0f * s, 0.85f * s,
+             secondary, RailShooterHudTextAlignment::Center);
+        text(Utf8(u8"\u30ec\u30fc\u30eb\u3067"), cx, top + 300.0f * s, 4.4f * s,
+             white, RailShooterHudTextAlignment::Center);
+        text(Utf8(u8"\u3042\u3070\u30ec\u30fc\u30eb"), cx, top + 405.0f * s, 4.4f * s,
+             cyan, RailShooterHudTextAlignment::Center);
+        text("RIDE THE RAILS. BREAK THROUGH.", cx, top + 457.0f * s,
+             0.85f * s, secondary, RailShooterHudTextAlignment::Center);
+        rect(cx - 220.0f * s, top + 516.0f * s, 440.0f * s, 70.0f * s,
+             Vector4{0.06f, 0.22f, 0.27f, 1.0f});
+        rect(cx - 220.0f * s, top + 516.0f * s, 4.0f * s, 70.0f * s, cyan);
+        text("ENTER  /  START GAME", cx, top + 561.0f * s, 1.18f * s,
+             white, RailShooterHudTextAlignment::Center);
+        text("ESC  /  EXIT", cx, top + 640.0f * s, 0.94f * s,
+             secondary, RailShooterHudTextAlignment::Center);
+        text("MOUSE: AIM   |   LMB: FIRE   |   RMB: HOLD LOCK / RELEASE", cx,
+             top + 761.0f * s, 0.78f * s, secondary,
+             RailShooterHudTextAlignment::Center);
+        text("WASD: MOVE   |   SHIFT / SPACE: DODGE   |   P: PAUSE", cx,
+             top + 799.0f * s, 0.78f * s, secondary,
+             RailShooterHudTextAlignment::Center);
+        next.visible = !next.commands.empty();
+        frame_ = std::move(next);
+        return;
+    }
+
     const Vector4 panel = WithOpacity(definition.panelColor, opacity);
     const Vector4 textColor = WithOpacity(definition.textColor, opacity);
     const Vector4 muted = WithOpacity(definition.mutedColor, opacity);
@@ -121,6 +171,22 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         text(Utf8(u8"\u6b8b\u6a5f ") + std::to_string(hud.retriesRemaining),
              x + panelWidth - 82.0f * scale,
              y + 18.0f * scale, 0.48f * scale, muted);
+    }
+
+    if (hud.showDamageNotice && hud.damageNoticeAlpha > 0.0f) {
+        // Keep the combat centre clear and place the explanation by health.
+        const float panelWidth = (std::min)(400.0f * scale, width - safe * 2.0f);
+        const float panelHeight = 76.0f * scale;
+        const float healthHeight = definition.showPlayerHealth && definition.showVehicleIntegrity
+            ? 112.0f : (definition.showPlayerHealth || definition.showVehicleIntegrity ? 65.0f : 0.0f);
+        const float y = safe + (healthHeight + 12.0f) * scale;
+        const float alpha = opacity * hud.damageNoticeAlpha;
+        rect(safe, y, panelWidth, panelHeight, {0.035f, 0.012f, 0.012f, alpha * 0.94f});
+        rect(safe, y, 4.0f * scale, panelHeight, {1.0f, 0.30f, 0.16f, alpha});
+        text(hud.damageNoticeText, safe + 14.0f * scale, y + 29.0f * scale,
+            0.78f * scale, {1.0f, 0.68f, 0.44f, alpha});
+        text(hud.damageHealthText, safe + 14.0f * scale, y + 57.0f * scale,
+            0.70f * scale, {0.96f, 0.96f, 0.96f, alpha});
     }
 
     if (definition.showWaveObjective) {
@@ -185,7 +251,19 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
             barBackground);
     }
 
-    if (definition.showThreat && hud.threatWarning) {
+    if (hud.showObstacleWarning) {
+        const float panelWidth = (std::min)(440.0f * scale, width - safe * 2.0f);
+        const float x = width * 0.5f - panelWidth * 0.5f;
+        const float y = safe + 74.0f * scale;
+        rect(x, y, panelWidth, 68.0f * scale, {0.045f, 0.025f, 0.008f, opacity * 0.96f});
+        rect(x, y, panelWidth, 3.0f * scale, warning);
+        text(hud.obstacleWarningText, width * 0.5f, y + 27.0f * scale,
+            0.76f * scale, warning, RailShooterHudTextAlignment::Center);
+        text(hud.obstacleActionText, width * 0.5f, y + 53.0f * scale,
+            0.72f * scale, textColor, RailShooterHudTextAlignment::Center);
+    }
+
+    if (definition.showThreat && hud.threatWarning && !hud.showObstacleWarning) {
         const float threatWidth = 320.0f * scale;
         const float x = width * 0.5f - threatWidth * 0.5f;
         const float y = safe + 77.0f * scale;
@@ -219,6 +297,13 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
              RailShooterHudTextAlignment::Center);
     }
 
+    // Keep the first-play controls available after removing the editor panels.
+    // ASCII is covered by the HUD atlas; the strip sits below the main panels.
+    if (width >= 960.0f) {
+        text("LMB: FIRE   RMB: HOLD LOCK / RELEASE   P: PAUSE   R: RETRY",
+            width * 0.5f, height - 10.0f * responsive, 0.52f * responsive,
+            textColor, RailShooterHudTextAlignment::Center);
+    }
     next.visible = !next.commands.empty();
     frame_ = std::move(next);
 }

@@ -1,0 +1,6 @@
+# Baseline combat loop multiplied into a staggered priority formation.
+wave|combat_expansion_assault_v|Vanguard Break
+formation|v|sweep_left|split_sides|false|6.2|1.8|8.0|10.0|0.72|0.82|0.10|16.0|12.0|0.72|18.0|13.0
+unitAsset|assault_lead|combat_loop_assault|assault_magenta_single|54|0|6|0|1.25|8.5|1.0|0.16|0.86|1.0
+unitAsset|assault_left|combat_loop_assault|assault_magenta_single|54|0|6|0|1.15|8.5|1.0|0.16|0.86|1.0
+unitAsset|assault_right|combat_loop_assault|assault_magenta_single|54|0|6|0|1.15|8.5|1.0|0.16|0.86|1.0

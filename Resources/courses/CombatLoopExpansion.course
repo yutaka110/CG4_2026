@@ -1,0 +1,79 @@
+# Production expansion of the proven ten-second combat loop.
+# editor-schema:13
+# Launch with: GE3.exe --combat-loop-expansion
+course|Combat Loop Expansion Route
+rail_track|mine_cart_standard
+
+# Forty seconds at a stable 12 units/second: three readable encounters,
+# each separated by a full recovery beat.
+rail|0.000|6.000|0.000|20.000|12.000|expansion-rail-start|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|0.000|7.000|160.000|19.000|12.000|expansion-rail-assault|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-5.000|9.000|320.000|18.000|12.000|expansion-rail-sniper|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|3.000|8.000|480.000|20.000|12.000|expansion-rail-interceptor|0|0.000|0.000|0.000|0.000|0.000|0.000
+
+camera|0.000|27.000|9.000|0.000|66.000|2.000|8.000|58.000|0.000|expansion-camera-start|1|1
+camera|132.000|29.000|10.000|-1.000|66.000|2.000|9.000|60.000|-1.000|expansion-camera-assault-out|1|1
+camera|264.000|31.000|11.000|1.000|68.000|2.500|10.000|62.000|1.500|expansion-camera-sniper-out|1|1
+camera|480.000|29.000|10.000|0.000|66.000|2.000|10.000|60.000|0.000|expansion-camera-end|1|1
+
+section|0.000|132.000|Vanguard Break|Formation Priority
+section|132.000|264.000|Shard Gate|Cover and Sniper
+section|264.000|480.000|Rib Gauntlet|Homing Encirclement
+
+# Continuous-play rhythm: each fight deliberately compresses time, then hands
+# control back through a short acceleration release. The finale is the longest
+# pressure window and exits on a clean speed-up instead of another hard stop.
+ride_speed_beat|expansion-speed-intro|0.000|12.000|Threat Approach|approach|0.960|-1.000|0.900|1.000|72.000|4.000|4.000|0|1|1|0
+ride_speed_beat|expansion-speed-assault|12.000|96.000|Vanguard Combat Hold|combat_hold|0.880|-1.000|0.880|1.180|64.000|6.000|8.000|1|1|1|0
+ride_speed_beat|expansion-speed-release-01|96.000|132.000|First Release|release_boost|1.180|-1.000|1.240|1.000|84.000|6.000|8.000|0|1|1|0
+ride_speed_beat|expansion-speed-gate|132.000|144.000|Shard Gate Brake|corner_brake|0.840|-1.000|0.820|1.280|58.000|4.000|4.000|2|1|1|0
+ride_speed_beat|expansion-speed-sniper|144.000|228.000|Echelon Combat Hold|combat_hold|0.860|-1.000|0.860|1.200|62.000|6.000|8.000|1|1|1|0
+ride_speed_beat|expansion-speed-release-02|228.000|264.000|Second Release|release_boost|1.160|-1.000|1.220|1.000|84.000|6.000|8.000|0|1|1|0
+ride_speed_beat|expansion-speed-ribs|264.000|276.000|Rib Entry Brake|corner_brake|0.820|-1.000|0.800|1.300|56.000|4.000|4.000|2|1|1|0
+ride_speed_beat|expansion-speed-interceptors|276.000|392.000|Ring Finale Hold|combat_hold|0.900|-1.000|0.900|1.180|64.000|8.000|10.000|1|1|1|0
+ride_speed_beat|expansion-speed-exit|392.000|480.000|Final Release|exit_boost|1.220|-1.000|1.300|1.000|90.000|10.000|12.000|0|1|1|0
+
+# Difficulty curve: encounter one exposes one attacker, encounter two permits a
+# two-part cross-pressure decision, and encounter three sustains three threats.
+# Readability requirements rise with pressure so difficulty never comes from
+# hiding the tell. These same authored budgets drive encounter-clear rewards.
+encounter_beat|expansion-beat-assault|expansion-assault|Vanguard Priority|combat_expansion_assault_v|12.000|96.000|18.000|0.500|1.100|0.650|1.300|1.300|6.200|0.850|2.500|0.720|1|1.250|-|0.780|0.680|2.000|1.200|10|1|0|1|1|0
+encounter_beat|expansion-beat-sniper|expansion-sniper|Shard Crossfire|combat_expansion_sniper_echelon|144.000|228.000|12.000|0.450|1.000|0.800|1.500|1.500|7.000|1.000|3.000|0.780|2|2.150|-|0.880|0.800|3.500|2.400|10|1|0|1|1|0
+encounter_beat|expansion-beat-interceptor|expansion-interceptor|Homing Ring Finale|combat_expansion_interceptor_ring|276.000|384.000|12.000|0.350|0.800|0.550|1.000|1.400|6.000|1.300|2.500|0.820|3|2.050|-|0.940|0.840|2.500|2.000|10|1|1|1|1|0
+
+# A continuous dark value structure keeps warm telegraphs above both enemies
+# and rock silhouettes. Each encounter shifts hue without changing readability.
+lighting|0.000|expansion_assault_contrast|50.000|1.000|0.680|0.400|1.700|-0.350|-0.600|0.720|0.030|0.042|0.065|0.070|0.095|0.150|0.180|55.000|430.000|0.190|0.100|0.100|0.780|0.110|0.180
+lighting|132.000|expansion_sniper_contrast|50.000|0.900|0.520|0.360|1.180|-0.420|-0.540|0.730|0.028|0.030|0.050|0.085|0.065|0.105|0.170|54.000|390.000|0.180|0.050|0.040|0.880|0.080|0.130
+lighting|264.000|expansion_interceptor_contrast|50.000|0.500|0.700|1.000|1.120|-0.300|-0.650|0.690|0.022|0.032|0.055|0.050|0.085|0.145|0.180|50.000|360.000|0.190|0.050|0.035|0.900|0.100|0.160
+
+# Dark material values keep distant openings and pale procedural rock below
+# projectile white, preserving headroom for telegraphs and success flashes.
+terrain_material|0.000|expansion_assault_umber|48.000|0.560|0.440|0.360|0.620|1.080|1.120|1.020|0.070|0.760|0.620|0.620|1.080|1.020|1.140|0.080
+terrain_material|132.000|expansion_sniper_slate|48.000|0.420|0.380|0.360|0.500|1.160|1.200|1.080|0.060|0.720|0.560|0.680|1.120|1.060|1.180|0.060
+terrain_material|264.000|expansion_interceptor_obsidian|48.000|0.280|0.320|0.400|0.440|1.180|1.240|1.100|0.050|0.780|0.600|0.720|1.160|1.080|1.220|0.045
+
+# Silhouette landmarks establish three distinct arenas without stealing the
+# center aiming lane from enemies and projectile telegraphs.
+terrain|20.000|hero_landmark|expansion-assault-left-wall|curved_canyon_wall|-25.000|8.000|52.000|4.000|13.000|16.000|0.000|12.000|-6.000|none|12|80.000|190.000|expansion-terrain-01|1|1
+terrain|48.000|hero_landmark|expansion-assault-right-wall|curved_canyon_wall|26.000|9.000|56.000|4.000|14.000|17.000|0.000|-11.000|5.000|none|12|80.000|190.000|expansion-terrain-02|1|1
+terrain|116.000|hero_landmark|expansion-shard-left-spire|root_spire_column|-21.000|10.000|74.000|4.000|14.000|4.000|0.000|9.000|-4.000|none|20|120.000|250.000|expansion-terrain-03|1|1
+terrain|176.000|hero_landmark|expansion-sniper-left-wall|root_spire_column|-23.000|11.000|58.000|4.000|18.000|5.000|0.000|8.000|-4.000|none|14|90.000|200.000|expansion-terrain-04|1|1
+terrain|204.000|hero_landmark|expansion-sniper-right-wall|root_spire_column|24.000|12.000|60.000|4.000|19.000|5.000|0.000|-7.000|3.000|none|14|90.000|200.000|expansion-terrain-05|1|1
+terrain|252.000|hero_landmark|expansion-rib-mouth-left|curved_canyon_wall|-23.000|8.000|70.000|4.000|12.000|10.000|0.000|8.000|-5.000|none|20|120.000|250.000|expansion-terrain-06|1|1
+terrain|330.000|hero_landmark|expansion-rib-sweep-right|curved_canyon_wall|23.000|8.000|64.000|4.000|12.000|10.000|0.000|-8.000|5.000|none|18|120.000|230.000|expansion-terrain-07|1|1
+terrain|380.000|vista_background|expansion-vista-exit-spire|root_spire_column|25.000|20.000|60.000|5.000|18.000|4.000|0.000|-12.000|2.000|none|0|160.000|220.000|expansion-terrain-08|1|1
+
+# Encounter 1: staggered V formation teaches target priority.
+event|12.000|enemy_wave|combat_expansion_assault_v|V formation: break the lead attacker before the wings commit|expansion-event-assault|1|1
+
+# Encounter 2: the center shard can be destroyed or avoided while the echelon
+# sniper asks the player to decide between route safety and an interrupt.
+event|132.000|obstacle|combat_shard_gate|break the shard or move around it|expansion-event-shard|1|1
+event|144.000|enemy_wave|combat_expansion_sniper_echelon|echelon escort: interrupt the long orange aim|expansion-event-sniper|1|1
+
+# Encounter 3: twin solid ribs compress the safe lane before homing attackers
+# dive into a ring, making movement direction and projectile interception matter.
+event|264.000|obstacle|combat_lane_rib_left|left rib closes the outside lane|expansion-event-rib-left|1|1
+event|264.000|obstacle|combat_lane_rib_right|right rib closes the outside lane|expansion-event-rib-right|1|1
+event|276.000|enemy_wave|combat_expansion_interceptor_ring|ring dive: commit to dodge or shoot down homing rounds|expansion-event-interceptor|1|1

@@ -254,6 +254,7 @@
 #include "../course/CourseEventDispatcher.h"
 #include "../course/EnemyWaveAsset.h"
 #include "../course/CourseActorAsset.h"
+#include "../course/ObstacleAsset.h"
 #include "../course/CourseMeshRenderQueue.h"
 #include "../course/CourseSpawnRuntime.h"
 #include "../course/CourseRuntimeProgramAsset.h"
@@ -304,6 +305,7 @@
 #include "../course/EnemyEncounterReadabilityDirector.h"
 #include "../course/EnemyEncounterPacingDirector.h"
 #include "../course/EnemyEncounterCameraCompositionBridge.h"
+#include "../course/EncounterPerformanceScoreSystem.h"
 #include "../course/EnemyProjectilePresentationBridge.h"
 #include "../course/EnemyProjectileRenderer.h"
 #include "../course/EnemyProjectileVfxRenderer.h"
@@ -17701,6 +17703,18 @@ void TestAppStartupSceneArguments(RegressionRunner& runner) {
             !ParseCombatLoop10SecondModeArguments(0, nullptr),
         "the focused encounter switch should require an exact, valid argument");
 
+    const wchar_t* combatLoopExpansionArguments[] = {
+        L"GE3.exe",
+        L"--combat-loop-expansion",
+    };
+    runner.Expect(
+        ParseAppStartupSceneArguments(2, combatLoopExpansionArguments) ==
+                AppStartupScene::RailShooter &&
+            ParseCombatLoopExpansionModeArguments(
+                2, combatLoopExpansionArguments) &&
+            !ParseCombatLoopExpansionModeArguments(2, combatLoopNearMatch),
+        "the expansion switch should select only the reproducible three-encounter Rail Shooter route");
+
     const wchar_t* defenseUiProofArguments[] = {
         L"GE3.exe",
         L"--combat-loop-ui-proof",
@@ -17756,6 +17770,13 @@ void TestTenSecondCombatLoopEncounter(RegressionRunner& runner) {
         course.events.size() == 1 && enemyWaveCount == 1 &&
             course.events.front().id == "combat_loop_10s",
         "focused course should contain exactly one combat-loop enemy wave and no unrelated events");
+    runner.Expect(
+        course.lightingPresets.size() == 1 &&
+            course.lightingPresets.front().clearColor.x < 0.08f &&
+            course.lightingPresets.front().openingGlowStrength <= 0.12f &&
+            course.lightingPresets.front().foregroundSilhouetteStrength >=
+                0.75f,
+        "combat-loop course should author a dark opening and strong foreground separation for its warm priority target");
 
     EnemyWaveAsset wave{};
     const bool waveLoaded = wave.LoadFromFile(
@@ -17770,10 +17791,25 @@ void TestTenSecondCombatLoopEncounter(RegressionRunner& runner) {
         "Resources/courses/actors/combat_loop_assault.actor", &error);
     runner.Expect(
         actorLoaded && actor.behaviorDefinition.commercialBehavior &&
+            actor.meshId == "combat_assault_hull" &&
             actor.behaviorDefinition.requireTelegraphPresentation &&
+            actor.behaviorDefinition.maintainForwardEngagementBand &&
+            actor.behaviorDefinition.engagementBandDisengageForwardDistance <
+                actor.behaviorDefinition.engagementBandMinimumForwardDistance &&
             actor.behaviorDefinition.attackLeadSeconds >= 1.20f &&
             actor.behaviorDefinition.attackCooldownSeconds >= kEncounterSeconds,
-        "combat-loop actor should require a readable warning and allow only one committed attack in ten seconds");
+        "combat-loop actor should hold a readable forward band, require a visible warning, and allow only one committed attack in ten seconds");
+    const ModelData assaultHull = LoadObjFile_Assimp(
+        "Resources/enemies/CombatAssault", "CombatAssaultHull.obj");
+    const ModelData assaultPod = LoadObjFile_Assimp(
+        "Resources/enemies/CombatAssault", "CombatAssaultPod.obj");
+    const ModelData assaultCore = LoadObjFile_Assimp(
+        "Resources/enemies/CombatAssault", "CombatAssaultCore.obj");
+    runner.Expect(
+        !assaultHull.vertices.empty() && !assaultHull.indices.empty() &&
+            !assaultPod.vertices.empty() && !assaultPod.indices.empty() &&
+            !assaultCore.vertices.empty() && !assaultCore.indices.empty(),
+        "combat-loop assault should own indexed hull, side-pod and weapon-core production meshes instead of a generic sphere");
     if (!waveLoaded || !actorLoaded) {
         return;
     }
@@ -17806,7 +17842,7 @@ void TestTenSecondCombatLoopEncounter(RegressionRunner& runner) {
         CourseEventDispatcher dispatcher{};
         RailPath rail{};
         course.ApplyToRailPath(rail);
-        const Matrix4x4 viewProjection = MakeIdentity4x4();
+        Matrix4x4 viewProjection = MakeIdentity4x4();
         EnemyAttackTelegraphSystem warningSystem{};
         EnemyAttackLaneTelegraphRenderer warningRenderer{};
         EnemyAttackDefensePresentationBridge defensePresentation{};
@@ -17827,6 +17863,10 @@ void TestTenSecondCombatLoopEncounter(RegressionRunner& runner) {
             safety.cameraAllowsEnemyFire = true;
             safety.cameraStableForAiming = true;
             safety.cameraHardTransition = false;
+            Matrix4x4 cameraWorld = MakeAffineMatrix({1.0f, 1.0f, 1.0f}, Vector3{},
+                {0.0f, 6.0f, safety.playerDistance - 24.0f});
+            viewProjection = Multiply(Inverse(cameraWorld), MakePerspectiveFovMatrix(
+                0.9424778f, 1280.0f / 720.0f, 0.1f, 1000.0f));
             runtime.Update(kFixedDeltaSeconds, safety);
             result.maximumEnemies = (std::max)(
                 result.maximumEnemies, runtime.ActiveEnemyCount());
@@ -17857,7 +17897,7 @@ void TestTenSecondCombatLoopEncounter(RegressionRunner& runner) {
                 result.readableTrackingWarning =
                     result.readableTrackingWarning ||
                     (cue.phase == EnemyAttackTelegraphPhase::Tracking &&
-                     style.label == Utf8ForTest(u8"\u63a5\u8fd1") &&
+                     style.label == Utf8ForTest(u8"\u4e88\u544a") &&
                      FormatEnemyAttackCountdown(cue.timeToFire).ends_with("s"));
                 result.readableImminentWarning =
                     result.readableImminentWarning ||
@@ -18001,6 +18041,243 @@ void TestTenSecondCombatLoopEncounter(RegressionRunner& runner) {
             std::abs(replay.firstVolleySeconds - first.firstVolleySeconds) <
                 kFixedDeltaSeconds * 0.5f,
         "replaying the focused encounter at fixed input should reproduce identical threat and volley timing");
+}
+
+void TestCombatLoopEnemyFormationTerrainExpansion(RegressionRunner& runner) {
+    CourseAsset course{};
+    std::string error;
+    const bool courseLoaded = course.LoadFromFile(
+        "Resources/courses/CombatLoopExpansion.course", &error);
+    runner.Expect(
+        courseLoaded && course.IsValid(),
+        "combat-loop expansion course should load as a valid production rail");
+    if (!courseLoaded || !course.IsValid()) {
+        return;
+    }
+
+    const size_t waveEventCount = static_cast<size_t>(std::count_if(
+        course.events.begin(), course.events.end(),
+        [](const CourseEventMarker& event) {
+            return event.type == "enemy_wave";
+        }));
+    const size_t obstacleEventCount = static_cast<size_t>(std::count_if(
+        course.events.begin(), course.events.end(),
+        [](const CourseEventMarker& event) {
+            return event.type == "obstacle";
+        }));
+    runner.Expect(
+        waveEventCount == 3 && obstacleEventCount == 3 &&
+            course.sections.size() == 3 &&
+            course.terrainPlacements.size() >= 8 &&
+            course.lightingPresets.size() == 3 &&
+            course.terrainMaterialPresets.size() == 3 &&
+            course.rideSpeedBeats.size() == 9 &&
+            course.encounterBeats.size() == 3,
+        "expansion route should author three combat grammars, two terrain decisions, and distinct arena compositions");
+
+    const bool difficultyCurveAuthored =
+        course.encounterBeats.size() == 3 &&
+        course.encounterBeats[0].maximumConcurrentAttackers == 1 &&
+        course.encounterBeats[1].maximumConcurrentAttackers == 2 &&
+        course.encounterBeats[2].maximumConcurrentAttackers == 3 &&
+        course.encounterBeats[0].maximumThreatBudget <
+            course.encounterBeats[1].maximumThreatBudget &&
+        course.encounterBeats[2].maximumThreatBudget >
+            course.encounterBeats[0].maximumThreatBudget &&
+        course.encounterBeats[2].maximumThreatBudget <
+            course.encounterBeats[1].maximumThreatBudget &&
+        course.encounterBeats[0].requiredReadableRatio <=
+            course.encounterBeats[1].requiredReadableRatio &&
+        course.encounterBeats[1].requiredReadableRatio <=
+            course.encounterBeats[2].requiredReadableRatio;
+    const size_t combatHolds = static_cast<size_t>(std::count_if(
+        course.rideSpeedBeats.begin(), course.rideSpeedBeats.end(),
+        [](const RailRideSpeedBeatDefinition& beat) {
+            return beat.type == RailRideSpeedBeatType::CombatHold &&
+                beat.speedMultiplier < 1.0f;
+        }));
+    const size_t releases = static_cast<size_t>(std::count_if(
+        course.rideSpeedBeats.begin(), course.rideSpeedBeats.end(),
+        [](const RailRideSpeedBeatDefinition& beat) {
+            return (beat.type == RailRideSpeedBeatType::ReleaseBoost ||
+                    beat.type == RailRideSpeedBeatType::ExitBoost) &&
+                beat.speedMultiplier > 1.0f;
+        }));
+    runner.Expect(
+        difficultyCurveAuthored && combatHolds == 3 && releases == 3,
+        "three encounters should broaden threat grammar while the homing finale caps sustainable pressure and alternates combat holds with releases");
+
+    EnemyWaveAsset assaultWave{};
+    EnemyWaveAsset sniperWave{};
+    EnemyWaveAsset interceptorWave{};
+    const bool wavesLoaded = assaultWave.LoadFromFile(
+        "Resources/courses/waves/combat_expansion_assault_v.wave", &error) &&
+        sniperWave.LoadFromFile(
+            "Resources/courses/waves/combat_expansion_sniper_echelon.wave", &error) &&
+        interceptorWave.LoadFromFile(
+            "Resources/courses/waves/combat_expansion_interceptor_ring.wave", &error);
+    runner.Expect(
+        wavesLoaded && assaultWave.units.size() == 3 &&
+            sniperWave.units.size() == 3 &&
+            interceptorWave.units.size() == 4 &&
+            assaultWave.formationDefinition.has_value() &&
+            assaultWave.formationDefinition->pattern == EnemyFormationPattern::V &&
+            sniperWave.formationDefinition.has_value() &&
+            sniperWave.formationDefinition->pattern ==
+                EnemyFormationPattern::EchelonRight &&
+            interceptorWave.formationDefinition.has_value() &&
+            interceptorWave.formationDefinition->pattern ==
+                EnemyFormationPattern::Ring &&
+            assaultWave.formationDefinition->attackStaggerSeconds >= 0.70f &&
+            sniperWave.formationDefinition->attackStaggerSeconds >= 0.80f &&
+            interceptorWave.formationDefinition->attackStaggerSeconds >= 1.05f,
+        "expansion waves should provide V, echelon, and ring silhouettes with deliberate attack staggering");
+    if (!wavesLoaded) {
+        return;
+    }
+
+    CourseActorAsset sniperActor{};
+    CourseActorAsset interceptorActor{};
+    const bool actorsLoaded = sniperActor.LoadFromFile(
+        "Resources/courses/actors/combat_expansion_sniper.actor", &error) &&
+        interceptorActor.LoadFromFile(
+            "Resources/courses/actors/combat_expansion_interceptor.actor", &error);
+    runner.Expect(
+        actorsLoaded && sniperActor.meshId == "combat_sniper_hull" &&
+            sniperActor.behaviorDefinition.archetype ==
+                EnemyBehaviorArchetype::Sniper &&
+            sniperActor.behaviorDefinition.attackLeadSeconds >= 1.50f &&
+            interceptorActor.meshId == "combat_interceptor_hull" &&
+            interceptorActor.behaviorDefinition.archetype ==
+                EnemyBehaviorArchetype::Interceptor &&
+            sniperActor.bulletPatternId == "sniper_predictive_single" &&
+            interceptorActor.bulletPatternId == "combat_expansion_homing_single" &&
+            sniperActor.behaviorDefinition.maintainForwardEngagementBand &&
+            interceptorActor.behaviorDefinition.maintainForwardEngagementBand &&
+            sniperActor.behaviorDefinition.engagementBandMinimumForwardDistance <
+                sniperActor.behaviorDefinition.engagementBandPreferredForwardDistance &&
+            sniperActor.behaviorDefinition.engagementBandPreferredForwardDistance <
+                sniperActor.behaviorDefinition.engagementBandMaximumForwardDistance &&
+            interceptorActor.behaviorDefinition.engagementBandMinimumForwardDistance <
+                interceptorActor.behaviorDefinition.engagementBandPreferredForwardDistance &&
+            interceptorActor.behaviorDefinition.engagementBandPreferredForwardDistance <
+                interceptorActor.behaviorDefinition.engagementBandMaximumForwardDistance,
+        "sniper and interceptor assets should differ in silhouette, behavior, decision timing, and authored forward engagement bands");
+
+    const ModelData sniperHull = LoadObjFile_Assimp(
+        "Resources/enemies/CombatSniper", "CombatSniperHull.obj");
+    const ModelData interceptorHull = LoadObjFile_Assimp(
+        "Resources/enemies/CombatInterceptor", "CombatInterceptorHull.obj");
+    const ModelData shardGate = LoadObjFile_Assimp(
+        "Resources/course_meshes/CombatShardGate", "CombatShardGate.obj");
+    const ModelData laneRib = LoadObjFile_Assimp(
+        "Resources/course_meshes/CombatLaneRib", "CombatLaneRib.obj");
+    runner.Expect(
+        !sniperHull.indices.empty() && !interceptorHull.indices.empty() &&
+            !shardGate.indices.empty() && !laneRib.indices.empty(),
+        "expanded enemies and terrain gimmicks should own indexed production silhouettes");
+
+    ObstacleAsset gateAsset{};
+    ObstacleAsset leftRibAsset{};
+    ObstacleAsset rightRibAsset{};
+    const bool obstaclesLoaded = gateAsset.LoadFromFile(
+        "Resources/courses/obstacles/combat_shard_gate.obstacle", &error) &&
+        leftRibAsset.LoadFromFile(
+            "Resources/courses/obstacles/combat_lane_rib_left.obstacle", &error) &&
+        rightRibAsset.LoadFromFile(
+            "Resources/courses/obstacles/combat_lane_rib_right.obstacle", &error);
+    runner.Expect(
+        obstaclesLoaded && gateAsset.breakable &&
+            gateAsset.meshId == "combat_shard_gate" &&
+            !leftRibAsset.breakable && !rightRibAsset.breakable &&
+            leftRibAsset.lateralOffset < 0.0f &&
+            rightRibAsset.lateralOffset > 0.0f,
+        "terrain expansion should distinguish a shootable center gate from a non-shootable movement corridor");
+
+    CourseSpawnRuntime runtime{};
+    CourseEventDispatcher dispatcher{};
+    dispatcher.Dispatch(course.events, runtime, course.events.back().distance);
+    runtime.Update(1.0f / 60.0f);
+    const EnemyFormationFrame& formationFrame =
+        runtime.EnemyFormations().Frame();
+    runner.Expect(
+        runtime.ActiveEnemyCount() == 10 &&
+            runtime.ActiveObstacleCount() == 3 &&
+            formationFrame.formations == 3 &&
+            formationFrame.members == 10 &&
+            formationFrame.correctedMembers > 0,
+        "runtime dispatch should preserve all three formation contracts and terrain decisions");
+
+    EncounterPerformanceScoreSystem score;
+    EnemyEncounterPacingFrame scorePacing{};
+    scorePacing.active = true;
+    scorePacing.activeBeatGuid = course.encounterBeats[0].editorGuid;
+    scorePacing.encounterId = course.encounterBeats[0].encounterId;
+    scorePacing.definition = course.encounterBeats[0];
+    scorePacing.eligibleActors = 3;
+    scorePacing.events.push_back({
+        EnemyEncounterPacingEventKind::BeatStarted,
+        course.encounterBeats[0].editorGuid,
+        course.encounterBeats[0].encounterId});
+    score.Update({&scorePacing, {}, {}, {}, {}, true});
+    scorePacing.events.clear();
+    std::array<EnemyCombatEvent, 3> defeats{};
+    for (size_t i = 0; i < defeats.size(); ++i) {
+        defeats[i].kind = EnemyCombatEventKind::Defeated;
+        defeats[i].actorId = static_cast<uint32_t>(i + 1);
+        defeats[i].waveId = course.encounterBeats[0].waveGuid;
+    }
+    score.Update({&scorePacing, defeats, {}, {}, {}, true});
+    const uint32_t defeatReward = score.ResultsThisFrame().empty()
+        ? 0u : score.ResultsThisFrame().front().scoreAwarded;
+    scorePacing.active = false;
+    scorePacing.events.push_back({
+        EnemyEncounterPacingEventKind::PhaseChanged,
+        course.encounterBeats[0].editorGuid,
+        course.encounterBeats[0].encounterId,
+        EnemyEncounterBeatPhase::Recovery,
+        EnemyEncounterBeatPhase::ExitResolve});
+    score.Update({&scorePacing, {}, {}, {}, {}, true});
+    const bool cleanClearRewarded =
+        score.ResultsThisFrame().size() == 1 &&
+        score.ResultsThisFrame().front().kind ==
+            EncounterPerformanceScoreKind::CleanClear &&
+        score.ResultsThisFrame().front().fullSweep &&
+        score.ResultsThisFrame().front().scoreAwarded > defeatReward &&
+        score.State().chain == 5;
+    runner.Expect(
+        defeatReward > 0 && cleanClearRewarded,
+        "performance scoring should reward every defeat, preserve chain through recovery, and return a larger no-damage full-sweep clear bonus");
+
+    scorePacing = {};
+    scorePacing.active = true;
+    scorePacing.activeBeatGuid = course.encounterBeats[1].editorGuid;
+    scorePacing.encounterId = course.encounterBeats[1].encounterId;
+    scorePacing.definition = course.encounterBeats[1];
+    scorePacing.eligibleActors = 3;
+    scorePacing.events.push_back({
+        EnemyEncounterPacingEventKind::BeatStarted,
+        course.encounterBeats[1].editorGuid,
+        course.encounterBeats[1].encounterId});
+    score.Update({&scorePacing, {}, {}, {}, {}, true});
+    std::array<PlayerDamageResult, 1> damage{};
+    damage.front().accepted = true;
+    damage.front().appliedDamage = 10.0f;
+    scorePacing.events.clear();
+    score.Update({&scorePacing, {}, {}, {}, damage, true});
+    const bool damageBrokeRunChain = score.State().chain == 0;
+    scorePacing.active = false;
+    scorePacing.events.push_back({
+        EnemyEncounterPacingEventKind::BeatCompleted,
+        course.encounterBeats[1].editorGuid,
+        course.encounterBeats[1].encounterId});
+    score.Update({&scorePacing, {}, {}, {}, {}, true});
+    runner.Expect(
+        damageBrokeRunChain && score.ResultsThisFrame().size() == 1 &&
+            score.ResultsThisFrame().front().kind ==
+                EncounterPerformanceScoreKind::EncounterClear &&
+            score.State().chain == 1,
+        "accepted player damage should break the run combo and downgrade the next encounter reward from clean clear to normal clear");
 }
 
 void TestMultiMaterialShowcasePresentationDefaults(RegressionRunner& runner) {
@@ -18712,7 +18989,7 @@ void TestEnemyAttackTelegraphSystem(RegressionRunner& runner) {
         ResolveEnemyAttackTelegraphReadabilityStyle(
             EnemyAttackTelegraphPhase::Fired, 1.0f);
     runner.Expect(
-        trackingStyle.label == Utf8ForTest(u8"\u63a5\u8fd1") &&
+        trackingStyle.label == Utf8ForTest(u8"\u4e88\u544a") &&
             imminentStyle.label == Utf8ForTest(u8"\u5371\u967a") &&
             firedStyle.label == Utf8ForTest(u8"\u767a\u5c04") &&
             trackingStyle.tier < imminentStyle.tier &&
@@ -18720,7 +18997,10 @@ void TestEnemyAttackTelegraphSystem(RegressionRunner& runner) {
             trackingStyle.markerScale < imminentStyle.markerScale &&
             trackingStyle.primaryColor.y > imminentStyle.primaryColor.y &&
             FormatEnemyAttackCountdown(1.21f) == "1.3s" &&
-            FormatEnemyAttackCountdown(0.01f) == "0.1s",
+            FormatEnemyAttackCountdown(0.01f) == "0.1s" &&
+            FormatEnemyAttackCountdown(0.0f).empty() &&
+            FormatEnemyAttackCountdown(-1.0f).empty() &&
+            FormatEnemyAttackCountdown((std::numeric_limits<float>::quiet_NaN)()).empty(),
         "attack warning phases should be distinguishable by text, shape scale, tier, phase color and a real seconds countdown");
 
     CourseSpawnRuntime runtime;
@@ -18799,16 +19079,9 @@ void TestEnemyAttackTelegraphSystem(RegressionRunner& runner) {
     telegraph.Update(input);
     const EnemyAttackTelegraphFrame& offscreenFrame = telegraph.Frame();
     runner.Expect(
-        offscreenFrame.cues.size() == 1 &&
-            !offscreenFrame.cues.front().onScreen &&
-            offscreenFrame.cues.front().phase ==
-                EnemyAttackTelegraphPhase::Tracking &&
-            offscreenFrame.cues.front().screenPosition.x >=
-                input.settings.safeAreaPixels &&
-            offscreenFrame.cues.front().screenPosition.x <=
-                static_cast<float>(kWidth) - input.settings.safeAreaPixels &&
+        offscreenFrame.cues.empty() &&
             !hasEvent(offscreenFrame, EnemyAttackTelegraphEventKind::Fired),
-        "offscreen threats should clamp to the HUD safe area without replaying an old fire sequence after reset");
+        "offscreen enemies must not leave a countdown or replay an old fired flash after reset");
 
     runtime.MutableEnemies().front().desc.lateralOffset = 0.0f;
     CourseObstacleActorDesc occluder{};
@@ -19148,6 +19421,26 @@ void TestGameSessionPresentationAndRetry(RegressionRunner& runner) {
         presentation.Frame().cues.empty(),
         "presentation bridge should consume every session event sequence exactly once");
 
+    session.AddScore(500, "encounter_clean_clear_full_sweep");
+    presentationInput.state = &session.State();
+    presentation.Update(presentationInput);
+    const std::string earnedHeadline = presentation.Frame().hud.headline;
+    session.RegisterCheckpoint(20.0f, "post_encounter_section");
+    presentationInput.state = &session.State();
+    presentation.Update(presentationInput);
+    runner.Expect(
+        earnedHeadline == Utf8ForTest(u8"\u7121\u50b7\u7a81\u7834") &&
+            presentation.Frame().hud.showBanner &&
+            presentation.Frame().hud.headline == earnedHeadline &&
+            std::any_of(
+                presentation.Frame().cues.begin(),
+                presentation.Frame().cues.end(),
+                [](const GameSessionPresentationCue& cue) {
+                    return cue.kind ==
+                        GameSessionPresentationCueKind::Checkpoint;
+                }),
+        "earned Encounter reward banner should survive an immediately following checkpoint while checkpoint feedback still plays");
+
     CourseAsset course{};
     course.name = "Retry Coordinator Course";
     CourseRuntime courseRuntime;
@@ -19366,6 +19659,226 @@ void TestPlayerDamageAuthorityAndPresentation(RegressionRunner& runner) {
             presentation.Frame().vfxCommands.back().effectId ==
                 lethal.request.impactEffectId,
         "PlayerDamagePresentationBridge should derive HUD flash, camera, haptic, audio and VFX from DamageResult only");
+}
+
+void TestSubmissionObstacleReadability(RegressionRunner& runner) {
+    std::string error;
+    CourseAsset course;
+    WeaponDefinitionAsset weapon;
+    const bool loaded = course.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course", &error) &&
+        weapon.LoadFromFile("Resources/weapons/rail_pulse_cannon.weapon", &error);
+    runner.Expect(loaded, "submission hazard course and pulse weapon must load");
+    if (!loaded) return;
+    RailPath rail;
+    rail.SetControlPoints(course.railPoints);
+    const auto body = RailVehicleDefinition::MineCartDefaults();
+    const auto mesh = LoadObjFile_Assimp("Resources/course_meshes/RailHazardBlock", "RailHazardBlock.obj");
+    Vector3 low{100, 100, 100}, high{-100, -100, -100};
+    for (const auto& v : mesh.vertices) {
+        low.x = (std::min)(low.x, v.position.x); high.x = (std::max)(high.x, v.position.x);
+        low.y = (std::min)(low.y, v.position.y); high.y = (std::max)(high.y, v.position.y);
+        low.z = (std::min)(low.z, v.position.z); high.z = (std::max)(high.z, v.position.z);
+    }
+    runner.Expect(mesh.indices.size() > 36 && low.x == -1 && low.y == -1 && low.z == -1 &&
+        high.x == 1 && high.y == 1 && high.z == 1,
+        "faceted hazard mesh must preserve collision bounds instead of becoming an oversized decoration");
+    const auto solid = LoadObjFile_Assimp("Resources/course_meshes/RailHazardSolid", "RailHazardSolid.obj");
+    const auto turret = LoadObjFile_Assimp("Resources/enemies/CombatTurret", "CombatTurret.obj");
+    runner.Expect(!solid.indices.empty() && !turret.indices.empty(),
+        "solid stone and twin-barrel turret must load as indexed production meshes");
+    for (const auto* asset : {&mesh, &solid, &turret}) {
+        for (const auto& part : asset->subMeshes) {
+            const auto& material = asset->materials.at(part.materialIndex);
+            runner.Expect(!material.textureFilePath.empty() &&
+                std::filesystem::exists(material.textureFilePath) &&
+                material.textureFilePath.find("monsterBall") == std::string::npos,
+                "every submitted hazard submesh must resolve its own palette instead of a demo texture");
+        }
+        for (const auto& vertex : asset->vertices) {
+            runner.Expect(std::abs(vertex.position.x) <= 1.001f &&
+                std::abs(vertex.position.y) <= 1.001f && std::abs(vertex.position.z) <= 1.001f,
+                "hazard geometry and fracture details must remain inside authored local bounds");
+        }
+    }
+    for (const char* name : {"cliff_turret", "cliff_turret_light", "spire_anchor_turret", "visibility_turret", "gatekeeper_boss"}) {
+        CourseActorAsset actor;
+        runner.Expect(actor.LoadFromFile(std::string("Resources/courses/actors/") + name + ".actor", &error) &&
+            actor.meshId == "combat_turret",
+            "stationary turrets must not fall back to animated demo cubes");
+    }
+    GameSessionRuntimeState session{};
+    session.gameplaySimulationEnabled = true;
+    RailVehicleRuntimeState vehicle{};
+    vehicle.initialized = true;
+    vehicle.speed = 32.0f;
+    RailShooterHudRuntimeModel hud;
+    RailShooterHudRuntimeInput hudInput{};
+    hudInput.gameplayVisible = true; hudInput.session = &session;
+    hudInput.vehicleDefinition = &body; hudInput.vehicle = &vehicle;
+    int obstacles = 0, blockers = 0;
+    for (const auto& event : course.events) {
+        if (event.type != "obstacle") continue;
+        CourseSpawnRuntime runtime;
+        CourseEventDispatcher dispatcher;
+        dispatcher.Dispatch({event}, runtime, event.distance);
+        runner.Expect(runtime.Obstacles().size() == 1, "each authored hazard event must spawn one obstacle");
+        if (runtime.Obstacles().empty()) continue;
+        ++obstacles;
+        const auto actor = runtime.Obstacles().front();
+        const auto& d = actor.desc;
+        runner.Expect(d.meshId == (d.breakable ? "rail_hazard_block" : "rail_hazard_solid") &&
+            IsCourseMeshRenderEligible(CourseMeshRenderKind::Obstacle, d.meshId),
+            "submission obstacles must use the renderable collision-matching mesh");
+        const bool blocks = std::abs(d.lateralOffset) <= d.halfExtents.x + body.collisionHalfExtents.x &&
+            std::abs(d.verticalOffset - body.bodyVerticalOffset) <= d.halfExtents.y + body.collisionHalfExtents.y;
+        const float centerDistance = d.spawnDistance + d.distanceOffset;
+        vehicle.distance = event.distance; vehicle.previousDistance = event.distance;
+        hudInput.spawnRuntime = &runtime;
+        hud.Update(hudInput);
+        runner.Expect(hud.Frame().obstacleApproaching == blocks,
+            "approach notice must warn about blocking hazards and exclude safe side/overhead placements");
+        RailVehicleBodyCollisionSystem collision;
+        RailVehicleBodyCollisionInput collisionInput{};
+        collisionInput.vehicleDefinition = &body; collisionInput.vehicleState = &vehicle;
+        collisionInput.spawnRuntime = &runtime; collisionInput.railPath = &rail;
+        vehicle.previousDistance = centerDistance - 20; vehicle.distance = centerDistance + 20;
+        runner.Expect(collision.Update(collisionInput).contact == blocks,
+            "production body sweep must agree with safe lanes and blocking hazard classification");
+        if (!blocks) continue;
+        ++blockers;
+        const int shots = static_cast<int>(std::ceil(d.hitPoints / weapon.definition.baseDamage));
+        const float fireTime = (shots - 1) * weapon.definition.shotInterval;
+        const float gap = d.distanceOffset - d.halfExtents.z - body.collisionHalfExtents.z;
+        const float lead = gap / (32.0f - d.forwardSpeed);
+        const float fastestLead = gap / (body.maximumSpeed - d.forwardSpeed);
+        runner.Expect(d.breakable && lead > 2.0f && fastestLead > 0.5f + fireTime &&
+            lead < d.lifetime, "central hazards must allow reaction plus destruction even at maximum cart speed");
+        vehicle.distance = event.distance; vehicle.previousDistance = event.distance;
+        hud.Update(hudInput);
+        runner.Expect(std::abs(hud.Frame().obstacleTimeToContact - lead) < 0.01f,
+            "approach countdown must include obstacle motion and both collision extents");
+        auto definition = RailShooterHudDefinitionAsset::Defaults();
+        RailShooterHudPresentationBridge presentation;
+        presentation.Update({&definition, &hud.Frame(), nullptr, 0.016f});
+        RailShooterHudRenderer renderer;
+        renderer.Update({&definition, &presentation.Frame(), 1280, 720});
+        runner.Expect(presentation.Frame().showObstacleWarning &&
+            presentation.Frame().obstacleActionText.find(Utf8ForTest(u8"撃って破壊")) != std::string::npos &&
+            std::any_of(renderer.Frame().commands.begin(), renderer.Frame().commands.end(),
+                [&](const auto& c) { return c.text == presentation.Frame().obstacleWarningText; }),
+            "blocking hazards must render the contact countdown and destruction instruction");
+        const auto start = rail.Evaluate(event.distance);
+        const auto target = rail.Evaluate(centerDistance);
+        RailAimState aim{};
+        aim.valid = true; aim.maxDistance = weapon.definition.range;
+        const auto offset = [](const RailPathSample& s, float lateral, float vertical, float forward) {
+            return Vector3{s.position.x + s.right.x * lateral + s.up.x * vertical + s.tangent.x * forward,
+                s.position.y + s.right.y * lateral + s.up.y * vertical + s.tangent.y * forward,
+                s.position.z + s.right.z * lateral + s.up.z * vertical + s.tangent.z * forward};
+        };
+        aim.worldRayOrigin = offset(start, 0, 2.8f, 1.8f);
+        const Vector3 point = offset(target, d.lateralOffset, d.verticalOffset, 0);
+        const Vector3 delta{point.x - aim.worldRayOrigin.x, point.y - aim.worldRayOrigin.y, point.z - aim.worldRayOrigin.z};
+        const float length = std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+        aim.worldRayDirection = {delta.x / length, delta.y / length, delta.z / length};
+        RailWorldRaycastInput query{};
+        query.aim = &aim; query.railPath = &rail; query.spawnRuntime = &runtime;
+        query.course = &course; query.playerDistance = event.distance; query.includeProceduralTerrain = false;
+        const auto hit = RailWorldRaycast::Query(query);
+        runner.Expect(hit.hit && hit.actorId == actor.actorId && hit.kind == RailAimHitKind::Obstacle,
+            "central blockers must be in weapon range with an unobstructed ray through authored terrain at spawn");
+        CourseActorDamageReceiver receiver;
+        DamageResult result{};
+        for (int i = 0; i < shots; ++i) {
+            WeaponHitRequest request{};
+            request.shotId = i + 1; request.targetActorId = actor.actorId;
+            request.hitKind = RailAimHitKind::Obstacle; request.baseDamage = weapon.definition.baseDamage;
+            request.rayOrigin = aim.worldRayOrigin; request.rayDirection = aim.worldRayDirection;
+            request.hitPoint = hit.position; request.hitNormal = hit.normal; request.hitDistance = hit.distance;
+            result = receiver.Apply(runtime, &course, request);
+        }
+        hud.Update(hudInput);
+        vehicle.previousDistance = centerDistance - 20; vehicle.distance = centerDistance + 20;
+        runner.Expect(result.destroyed && !hud.Frame().obstacleApproaching &&
+            !collision.Update(collisionInput).contact,
+            "destroying an obstacle must clear the warning and body collision before deferred cleanup");
+        runtime.MutableObstacles().front().desc.hitPoints = d.hitPoints;
+        runtime.MutableObstacles().front().age = d.lifetime;
+        vehicle.distance = event.distance;
+        hud.Update(hudInput);
+        runner.Expect(!hud.Frame().obstacleApproaching && !collision.Update(collisionInput).contact,
+            "expired obstacles must not retain notices or collision before deferred cleanup");
+    }
+    runner.Expect(obstacles == 7 && blockers == 2, "submission route must retain seven hazards and two shootable blockers");
+    for (const auto& placement : course.terrainPlacements) {
+        if (placement.layer != CourseTerrainLayer::GameplayCollision ||
+            placement.collisionMode == CourseTerrainCollisionMode::None) continue;
+        runner.Expect(placement.meshId == "rail_hazard_solid" && placement.rotation.x == 0 &&
+            placement.rotation.y == 0 && placement.rotation.z == 0,
+            "solid terrain visuals must agree with rail-local collision boxes");
+        RailVehicleBodyCollisionSystem collision;
+        RailVehicleBodyCollisionInput input{};
+        input.vehicleDefinition = &body; input.vehicleState = &vehicle; input.railPath = &rail;
+        CourseAsset single; single.terrainPlacements.push_back(placement); input.course = &single;
+        vehicle.previousDistance = placement.distance + placement.forwardOffset - 30;
+        vehicle.distance = placement.distance + placement.forwardOffset + 30;
+        runner.Expect(!collision.Update(input).contact,
+            "indestructible authored terrain must leave the rail-bound cart a safe passage");
+    }
+}
+
+void TestPlayerDamageNotice(RegressionRunner& runner) {
+    PlayerDamageSystem damage;
+    damage.Reset(100.0f, 100.0f);
+    PlayerHitRequest request;
+    request.kind = PlayerHitKind::TerrainContact;
+    request.rawDamage = 20.0f;
+    const PlayerDamageResult hit = damage.Submit(request);
+    PlayerDamagePresentationBridge bridge;
+    bridge.Update({std::span{&hit, 1}, 0.016f, true});
+    RailShooterHudDefinitionAsset definition = RailShooterHudDefinitionAsset::Defaults();
+    RailShooterHudRuntimeFrame runtime;
+    runtime.visible = true;
+    RailShooterHudPresentationBridge hud;
+    hud.Update({&definition, &runtime, nullptr, 0.016f, &bridge.Frame()});
+    RailShooterHudRenderer renderer;
+    renderer.Update({&definition, &hud.Frame(), 1280, 720});
+    const auto& notice = hud.Frame();
+    const bool drawn = std::any_of(renderer.Frame().commands.begin(), renderer.Frame().commands.end(),
+        [&](const auto& command) { return command.text == notice.damageNoticeText; });
+    runner.Expect(notice.showDamageNotice && !notice.damageNoticeLethal &&
+        notice.damageNoticeText.find(Utf8ForTest(u8"地形との衝突")) != std::string::npos &&
+        notice.damageNoticeText.find("-20") != std::string::npos &&
+        notice.damageHealthText.find("100 -> 80") != std::string::npos && drawn,
+        "accepted contact damage must render its cause and authoritative health loss beside the HUD");
+    bridge.Update({std::span{&hit, 1}, 1.0f, true});
+    runner.Expect(bridge.Frame().audioCues.empty() && bridge.Frame().damageNoticeRemainingSeconds == 2.0f,
+        "replayed results must not retrigger feedback or extend a damage notice");
+    bridge.Update({{}, 10.0f, false});
+    runner.Expect(bridge.Frame().showDamageNotice && bridge.Frame().damageNoticeRemainingSeconds == 2.0f,
+        "pause must preserve the remaining damage notice time");
+    const auto rejected = damage.Submit(request);
+    bridge.Update({std::span{&rejected, 1}, 2.1f, true});
+    runner.Expect(!bridge.Frame().showDamageNotice && !rejected.accepted,
+        "invulnerability rejections must not create or refresh damage notices");
+    damage.Update(1.0f);
+    request.kind = PlayerHitKind::EnemyProjectile;
+    request.rawDamage = 1000.0f;
+    const auto lethal = damage.Submit(request);
+    bridge.Update({std::span{&lethal, 1}, 0.016f, true});
+    bridge.Update({{}, 10.0f, false});
+    hud.Update({&definition, &runtime, nullptr, 0.016f, &bridge.Frame()});
+    runner.Expect(hud.Frame().damageNoticeLethal && hud.Frame().showDamageNotice &&
+        hud.Frame().damageNoticeText.find(Utf8ForTest(u8"敗因: 敵弾")) != std::string::npos &&
+        hud.Frame().damageNoticeText.find("-80") != std::string::npos &&
+        hud.Frame().damageHealthText.find("80 -> 0") != std::string::npos,
+        "defeat/result must retain the real final hit, using applied damage instead of overkill");
+    bridge.Reset();
+    hud.Update({&definition, &runtime, nullptr, 0.016f, &bridge.Frame()});
+    runner.Expect(!hud.Frame().showDamageNotice, "retry must clear the previous defeat cause");
+    bridge.Update({std::span{&hit, 1}, 0.016f, true});
+    runner.Expect(bridge.Frame().showDamageNotice,
+        "retry must allow sequence numbers restored from a checkpoint");
 }
 
 void TestRailPlayerMovementAndDodge(RegressionRunner& runner) {
@@ -19925,6 +20438,15 @@ void TestRailShooterHudPipeline(RegressionRunner& runner) {
             containsText("CHECKPOINT") &&
             renderFrame.commands.size() <= definition.maximumDrawCommands,
         "HUD renderer should emit a resolution-aware bounded command frame containing all priority combat information");
+
+    const RailShooterHudPresentationFrame uninitializedHud{};
+    renderer.Update({&definition, &uninitializedHud, 1280, 720, true});
+    runner.Expect(renderer.Frame().visible && containsText("START GAME") &&
+                      !containsText("CHECKPOINT"),
+        "Title must render before the gameplay HUD initializes and replace combat information");
+    renderer.Update({&definition, &uninitializedHud, 1280, 720, false});
+    runner.Expect(!renderer.Frame().visible && renderer.Frame().commands.empty(),
+        "Leaving the title must not retain menu commands in an inactive HUD");
 
     runtimeModel.Reset();
     presentationBridge.Reset();
@@ -21122,6 +21644,143 @@ void TestEnemyCombatStateMachine(RegressionRunner& runner) {
         "death presentation completion should retire and prune the enemy deterministically");
 }
 
+void TestEnemyWarningFireEligibility(RegressionRunner& runner) {
+    RailPath rail;
+    rail.SetControlPoints({
+        {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
+        {{0.0f, 0.0f, 200.0f}, 18.0f, 32.0f}});
+    const Matrix4x4 vp = MakePerspectiveFovMatrix(1.04719755f, 1.6666667f, 0.1f, 1000.0f);
+    CourseSpawnRuntime runtime;
+    runtime.MutableFireSafetySettings().minVisibleBeforeFire = 0.0f;
+    CourseEnemyActorDesc desc{};
+    desc.actorAssetId = "warning_eligibility_fixture";
+    desc.spawnDistance = 75.0f;
+    desc.lifetime = 60.0f;
+    desc.firstShotDelay = 0.02f;
+    desc.combatDefinition = EnemyCombatDefinition::CommercialStandard();
+    desc.combatDefinition.spawnDurationSeconds = 0.0f;
+    desc.combatDefinition.engageDurationSeconds = 0.0f;
+    desc.combatDefinition.telegraphLeadSeconds = 0.4f;
+    desc.behaviorDefinition = EnemyBehaviorDefinition::Commercial(EnemyBehaviorArchetype::Sniper);
+    desc.behaviorDefinition.entryDurationSeconds = 0.01f;
+    desc.behaviorDefinition.positioningDurationSeconds = 0.01f;
+    desc.behaviorDefinition.aimingDurationSeconds = 0.01f;
+    desc.behaviorDefinition.attackLeadSeconds = 0.4f;
+    runtime.SpawnEnemyActor(desc);
+    CourseAsset course{};
+    CourseEnemyFireSafetyFrameInput safety{};
+    safety.railPath = &rail;
+    safety.viewProjection = &vp;
+    safety.hasCameraPosition = true;
+    safety.course = &course;
+    EnemyAttackTelegraphFrameInput input{};
+    input.spawnRuntime = &runtime;
+    input.railPath = &rail;
+    input.viewProjection = &vp;
+    input.course = &course;
+    input.viewportWidth = 1000;
+    input.viewportHeight = 600;
+    input.settings.requireWorldVisibility = true;
+    EnemyAttackTelegraphSystem warning;
+    EnemyAttackDefensePresentationBridge prompts;
+    EnemyAttackDefensePresentationInput promptInput{};
+    promptInput.runtime = &runtime;
+    promptInput.telegraph = &warning.Frame();
+    promptInput.gameplayActive = true;
+    auto present = [&]() {
+        warning.Update(input);
+        for (const auto& cue : warning.Frame().cues) {
+            runtime.MarkEnemyAttackTelegraphPresented(cue.actorId, cue.attackIntentSequence);
+        }
+        prompts.Update(promptInput);
+    };
+    for (int step = 0; step < 8 && !runtime.Enemies().front().attackState.tokenReserved; ++step) {
+        runtime.Update(0.02f, safety);
+    }
+    runner.Expect(runtime.Enemies().front().attackState.tokenReserved,
+        "an eligible fixture must acquire an attack reservation");
+    if (!runtime.Enemies().front().attackState.tokenReserved) return;
+    for (int gate = 0; gate < 7; ++gate) {
+        present();
+        runtime.Update(0.24f, safety);
+        runtime.Update(0.04f, safety);
+        present();
+        runner.Expect(runtime.Enemies().front().behaviorState.attackTimeRemaining > 0.0f &&
+            runtime.Enemies().front().behaviorState.attackTimeRemaining < 0.15f &&
+            !warning.Frame().cues.empty(),
+            "a presented eligible warning must count down before the chosen gate is lost");
+        auto& actor = runtime.MutableEnemies().front();
+        const float lateral = actor.desc.lateralOffset;
+        const float authoredLateral = actor.behaviorState.authoredLateralOffset;
+        if (gate == 0) actor.desc.suppressFire = true;
+        if (gate == 1) { safety.cameraAllowsEnemyFire = false; input.cameraAllowsAttack = false; }
+        if (gate == 2) {
+            actor.desc.lateralOffset = 150.0f;
+            actor.behaviorState.authoredLateralOffset = 150.0f;
+        }
+        if (gate == 3) {
+            CourseTerrainPlacement pillar{};
+            pillar.layer = CourseTerrainLayer::HeroLandmark;
+            pillar.meshId = "root_spire_column";
+            pillar.distance = 35.0f;
+            pillar.scale = {8.0f, 8.0f, 3.0f};
+            pillar.collisionMode = CourseTerrainCollisionMode::None;
+            course.terrainPlacements.push_back(pillar);
+            RailAimState aim{};
+            aim.valid = true;
+            aim.worldRayOrigin = {};
+            aim.worldRayDirection = {0.0f, 0.0f, 1.0f};
+            aim.maxDistance = 75.0f;
+            RailWorldRaycastInput query{};
+            query.aim = &aim;
+            query.railPath = &rail;
+            query.course = &course;
+            query.includeProceduralTerrain = false;
+            runner.Expect(!RailWorldRaycast::Query(query).hit,
+                "a decorative column must not become gameplay weapon collision");
+            query.includeVisualColumns = true;
+            runner.Expect(RailWorldRaycast::Query(query).hit,
+                "the same visible column must hide an attack warning");
+            course.terrainPlacements.front().cullAheadDistance = 1.0f;
+            runner.Expect(!RailWorldRaycast::Query(query).hit,
+                "a culled decorative column must not block a visible attack warning");
+            course.terrainPlacements.front().cullAheadDistance = 360.0f;
+        }
+        if (gate == 4) { actor.screenPresenceEvaluated = true; actor.screenPresenceAttackAllowed = false; }
+        if (gate == 5) { actor.encounterPacingEvaluated = true; actor.encounterPacingAttackAllowed = false; }
+        if (gate == 6) safety.playerDistance = 1000.0f;
+        runtime.Update(0.13f, safety);
+        present();
+        runner.Expect(runtime.Enemies().front().fireSequence == 0 &&
+            runtime.Bullets().empty() && warning.Frame().cues.empty() &&
+            prompts.Frame().cues.empty() &&
+            !runtime.Enemies().front().attackState.tokenReserved &&
+            !runtime.Enemies().front().behaviorState.telegraphPresented &&
+            runtime.Enemies().front().behaviorState.attackTimeRemaining >= 0.39f,
+            "loss of firing gate " + std::to_string(gate) +
+            " must cancel the warning immediately, preserve the full lead and prevent projectile emission");
+        actor.desc.suppressFire = false;
+        safety.cameraAllowsEnemyFire = true;
+        input.cameraAllowsAttack = true;
+        actor.desc.lateralOffset = lateral;
+        actor.behaviorState.authoredLateralOffset = authoredLateral;
+        course.terrainPlacements.clear();
+        actor.screenPresenceEvaluated = false;
+        actor.encounterPacingEvaluated = false;
+        safety.playerDistance = 0.0f;
+        runtime.Update(0.02f, safety);
+        present();
+        runner.Expect(runtime.Enemies().front().attackState.tokenReserved &&
+            runtime.Enemies().front().behaviorState.attackTimeRemaining >= 0.39f &&
+            !warning.Frame().cues.empty(),
+            "restoring a firing gate must start a fresh full warning, never an overdue .1s cue");
+    }
+    runtime.Update(0.21f, safety);
+    runtime.Update(0.20f, safety);
+    runner.Expect(runtime.Enemies().front().fireSequence == 1 && !runtime.Bullets().empty(),
+        "a restored, acknowledged warning must commit exactly one real volley after the complete lead");
+}
+
 void TestEnemyBehaviorSystem(RegressionRunner& runner) {
     constexpr uint32_t kWidth = 1000;
     constexpr uint32_t kHeight = 600;
@@ -21183,9 +21842,9 @@ void TestEnemyBehaviorSystem(RegressionRunner& runner) {
     runtime.Update(0.21f);
     runner.Expect(
         runtime.Enemies().front().fireSequence == 0 &&
-            runtime.Enemies().front().behaviorState.attackTimeRemaining <= 0.0f &&
+            runtime.Enemies().front().behaviorState.attackTimeRemaining >= 0.19f &&
             !runtime.Enemies().front().behaviorState.telegraphPresented,
-        "an elapsed commercial attack intent must fail closed until Telegraph presents that exact sequence");
+        "an unpresented commercial warning must retain its full lead instead of counting down invisibly");
 
     const Matrix4x4 viewProjection = MakePerspectiveFovMatrix(
         3.14159265358979323846f / 3.0f,
@@ -21215,7 +21874,7 @@ void TestEnemyBehaviorSystem(RegressionRunner& runner) {
             cue.actorId, cue.attackIntentSequence),
         "a visible Telegraph cue should acknowledge its matching Coordinator reservation and Behavior intent atomically");
 
-    runtime.Update(0.01f);
+    runtime.Update(0.21f);
     const CourseEnemyActor& committed = runtime.Enemies().front();
     const std::vector<EnemyBehaviorEvent> commitEvents =
         runtime.EnemyBehavior().ConsumeEvents();
@@ -21251,6 +21910,441 @@ void TestEnemyBehaviorSystem(RegressionRunner& runner) {
             std::abs(committed.desc.lateralOffset -
                 committed.behaviorState.authoredLateralOffset) > 0.0001f,
         "Behavior movement should drive authoritative rail-local position and presentation-only bank without changing combat ownership");
+
+    CourseSpawnRuntime bandRuntime;
+    bandRuntime.MutableFireSafetySettings().enabled = false;
+    CourseEnemyActorDesc bandEnemy{};
+    bandEnemy.actorAssetId = "regression_band_interceptor";
+    bandEnemy.sourcePlacementGuid = "band-placement";
+    bandEnemy.waveId = "band-wave";
+    bandEnemy.spawnDistance = 130.0f;
+    bandEnemy.forwardSpeed = 6.5f;
+    bandEnemy.lifetime = 20.0f;
+    bandEnemy.hitPoints = 30.0f;
+    bandEnemy.combatDefinition = EnemyCombatDefinition::CommercialStandard();
+    bandEnemy.combatDefinition.spawnDurationSeconds = 0.0f;
+    bandEnemy.combatDefinition.engageDurationSeconds = 0.0f;
+    bandEnemy.behaviorDefinition = EnemyBehaviorDefinition::Commercial(
+        EnemyBehaviorArchetype::Interceptor);
+    bandEnemy.behaviorDefinition.definitionId = "regression_forward_band";
+    bandEnemy.behaviorDefinition.entryDurationSeconds = 0.01f;
+    bandEnemy.behaviorDefinition.positioningDurationSeconds = 0.01f;
+    bandEnemy.behaviorDefinition.aimingDurationSeconds = 0.01f;
+    bandEnemy.behaviorDefinition.maintainForwardEngagementBand = true;
+    bandEnemy.behaviorDefinition.engagementBandMinimumForwardDistance = 24.0f;
+    bandEnemy.behaviorDefinition.engagementBandPreferredForwardDistance = 42.0f;
+    bandEnemy.behaviorDefinition.engagementBandMaximumForwardDistance = 62.0f;
+    bandEnemy.behaviorDefinition.engagementBandDisengageForwardDistance = 10.0f;
+    bandEnemy.behaviorDefinition.engagementBandPositionGain = 2.2f;
+    bandEnemy.behaviorDefinition.engagementBandMaximumCorrectionSpeed = 34.0f;
+    bandEnemy.behaviorDefinition.engagementBandVelocityResponse = 9.0f;
+    bandRuntime.SpawnEnemyActor(bandEnemy);
+
+    CourseEnemyFireSafetyFrameInput bandSafety{};
+    bandSafety.playerDistance = 90.0f;
+    constexpr float kBandDeltaTime = 0.016f;
+    for (uint32_t frame = 0; frame < 180; ++frame) {
+        bandSafety.playerDistance += 20.0f * kBandDeltaTime;
+        bandRuntime.Update(kBandDeltaTime, bandSafety);
+    }
+    const CourseEnemyActor& heldInFront = bandRuntime.Enemies().front();
+    const EnemyBehaviorFrame& heldFrame = bandRuntime.EnemyBehavior().Frame();
+    runner.Expect(
+        heldInFront.behaviorState.engagementBandForwardDistance >= 24.0f &&
+            heldInFront.behaviorState.engagementBandForwardDistance <= 62.0f &&
+            heldInFront.behaviorState.engagementBandAttackAllowed &&
+            heldInFront.desc.distanceOffset > 30.0f &&
+            heldFrame.engagementBandActors == 1 &&
+            heldInFront.behaviorState.engagementBandVelocity > 18.0f,
+        "forward engagement control should match cart speed and hold a slower authored enemy inside its readable attack band"
+        " (forward=" + std::to_string(
+            heldInFront.behaviorState.engagementBandForwardDistance) +
+        ", offset=" + std::to_string(heldInFront.desc.distanceOffset) +
+        ", allowed=" + std::to_string(
+            heldInFront.behaviorState.engagementBandAttackAllowed) +
+        ", actors=" + std::to_string(heldFrame.engagementBandActors) +
+        ", velocity=" + std::to_string(
+            heldInFront.behaviorState.engagementBandVelocity) + ")");
+
+    const float actorDistance = heldInFront.desc.spawnDistance +
+        heldInFront.desc.distanceOffset;
+    bandSafety.playerDistance = actorDistance - 5.0f;
+    bandRuntime.Update(kBandDeltaTime, bandSafety);
+    const CourseEnemyActor& overtaken = bandRuntime.Enemies().front();
+    runner.Expect(
+        overtaken.behaviorState.engagementBandExitRequested &&
+            !overtaken.behaviorState.engagementBandAttackAllowed &&
+            !overtaken.behaviorState.attackIntentActive &&
+            overtaken.behaviorState.state == EnemyBehaviorState::Retreating &&
+            overtaken.entranceExitState.phase == EnemyEntranceExitPhase::Exiting &&
+            overtaken.entranceExitState.attackSuppressed &&
+            !overtaken.entranceExitState.targetable &&
+            bandRuntime.EnemyBehavior().Frame().engagementBandForcedExits == 1 &&
+            !bandRuntime.EnemyBehavior().CanCommitAttack(overtaken),
+        "an enemy overtaken past the disengage threshold should cancel its attack and enter a non-targetable authored exit in the same frame");
+}
+
+void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
+    const char* waveIds[]{"intro_scout_pair", "intro_lockon_line",
+        "drone_intro_v", "first_contact_split", "first_contact_combo_ladder"};
+    RailPath rail;
+    rail.SetControlPoints({{{0, 0, 0}, 18, 12}, {{0, 0, 1200}, 18, 24}});
+    const Matrix4x4 projection = MakePerspectiveFovMatrix(
+        1.1f, 1280.0f / 720.0f, 0.1f, 2000.0f);
+    constexpr float dt = 1.0f / 60.0f;
+    for (const char* waveId : waveIds) {
+        CourseSpawnRuntime runtime;
+        runtime.MutableFireSafetySettings().enabled = false;
+        CourseEventDispatcher dispatcher;
+        CourseEventMarker event{};
+        event.type = "enemy_wave";
+        event.id = waveId;
+        event.distance = 100.0f;
+        dispatcher.Dispatch({event}, runtime, event.distance);
+        const size_t count = runtime.Enemies().size();
+        bool assetsEnabled = count > 0;
+        for (const auto& actor : runtime.Enemies()) {
+            assetsEnabled = assetsEnabled && actor.behaviorDefinition.maintainForwardEngagementBand &&
+                !actor.behaviorDefinition.choreographedAttackPass &&
+                actor.desc.formationDefinition.exitStyle == EnemyExitStyle::SplitSides;
+        }
+        bool forwardSafe = true, exitsSafe = true, warningsCleared = true;
+        uint32_t exits = 0, shots = 0;
+        EnemyAttackTelegraphSystem telegraph;
+        EnemyCombatPresentationBridge presentation;
+        EnemyAttackDefensePresentationBridge defensePresentation;
+        CourseEnemyFireSafetyFrameInput safety{};
+        safety.playerDistance = event.distance;
+        safety.railPath = &rail;
+        safety.hasCameraPosition = true;
+        for (uint32_t frame = 0; frame < 660; ++frame) {
+            safety.playerDistance += (frame < 120 ? 12.0f : frame < 300 ? 17.0f : 24.0f) * dt;
+            safety.cameraPosition = rail.Evaluate(safety.playerDistance - 24.0f).position;
+            runtime.Update(dt, safety);
+            EnemyCombatPresentationInput presentationInput{};
+            presentationInput.runtime = &runtime;
+            presentationInput.railPath = &rail;
+            presentationInput.deltaTime = dt;
+            presentation.Update(presentationInput);
+            for (const auto& actor : runtime.Enemies()) {
+                forwardSafe = forwardSafe && actor.desc.spawnDistance + actor.desc.distanceOffset -
+                    safety.playerDistance >= actor.behaviorDefinition.engagementBandMinimumForwardDistance - 0.001f;
+                shots += actor.attackState.committedThisFrame ? 1 : 0;
+                if (actor.entranceExitState.phase == EnemyEntranceExitPhase::Exiting) {
+                    const auto* visual = presentation.FindActor(actor.actorId);
+                    const float side = actor.behaviorState.authoredLateralOffset < -0.1f ? -1.0f : 1.0f;
+                    exitsSafe = exitsSafe && !actor.behaviorState.attackIntentActive &&
+                        !actor.attackState.tokenReserved && !actor.targetingState.solutionLocked &&
+                        actor.entranceExitState.attackSuppressed && !actor.entranceExitState.targetable &&
+                        actor.entranceExitState.appliedLateralOffset * side > 0.0f &&
+                        visual != nullptr && visual->weaponCharge == 0.0f;
+                }
+            }
+            for (const auto& event : runtime.EnemyEntranceExit().Frame().events) {
+                if (event.kind == EnemyEntranceExitEventKind::ExitStarted) ++exits;
+            }
+            EnemyAttackTelegraphFrameInput warning{};
+            warning.spawnRuntime = &runtime;
+            warning.railPath = &rail;
+            warning.viewProjection = &projection;
+            warning.viewportWidth = 1280;
+            warning.viewportHeight = 720;
+            warning.deltaTime = dt;
+            warning.settings.requireWorldVisibility = false;
+            telegraph.Update(warning);
+            EnemyAttackDefensePresentationInput defenseInput{};
+            defenseInput.runtime = &runtime;
+            defenseInput.telegraph = &telegraph.Frame();
+            defenseInput.deltaTime = dt;
+            defensePresentation.Update(defenseInput);
+            for (const auto& cue : defensePresentation.Frame().cues) {
+                for (const auto& actor : runtime.Enemies()) {
+                    if (actor.actorId == cue.actorId) {
+                        warningsCleared = warningsCleared && !actor.entranceExitState.exitRequested;
+                    }
+                }
+            }
+            for (const auto& cue : telegraph.Frame().cues) {
+                for (const auto& actor : runtime.Enemies()) {
+                    if (actor.actorId == cue.actorId) {
+                        warningsCleared = warningsCleared && !actor.entranceExitState.exitRequested;
+                    }
+                }
+                runtime.MarkEnemyAttackTelegraphPresented(cue.actorId, cue.attackIntentSequence);
+            }
+        }
+        runner.Expect(assetsEnabled && forwardSafe && exitsSafe && warningsCleared &&
+            exits == count && shots > 0 && runtime.Enemies().empty(),
+            std::string(waveId) + " must hold its early threats ahead through acceleration, still fire, "
+                "and retire every survivor sideways without attack tokens or warning cues"
+                " (count=" + std::to_string(count) + ", exits=" + std::to_string(exits) +
+                ", shots=" + std::to_string(shots) + ", forward=" + std::to_string(forwardSafe) +
+                ", safeExit=" + std::to_string(exitsSafe) + ", warnings=" + std::to_string(warningsCleared) + ")");
+    }
+
+    // Force camera overlap with an admitted threat. Spatial protection must
+    // clear even a pending fired flash, not just future attack requests.
+    CourseSpawnRuntime runtime;
+    CourseEventDispatcher dispatcher;
+    CourseEventMarker event{};
+    event.type = "enemy_wave";
+    event.id = "intro_scout_pair";
+    event.distance = 100.0f;
+    dispatcher.Dispatch({event}, runtime, event.distance);
+    CourseEnemyFireSafetyFrameInput safety{};
+    safety.playerDistance = event.distance;
+    safety.railPath = &rail;
+    runtime.Update(dt, safety);
+    auto& actor = runtime.MutableEnemies().front();
+    const auto worldPosition = [&](const CourseEnemyActor& enemy) {
+        const auto sample = rail.Evaluate(enemy.desc.spawnDistance + enemy.desc.distanceOffset);
+        return Vector3{sample.position.x + sample.right.x * enemy.desc.lateralOffset + sample.up.x * enemy.desc.verticalOffset,
+            sample.position.y + sample.right.y * enemy.desc.lateralOffset + sample.up.y * enemy.desc.verticalOffset,
+            sample.position.z + sample.right.z * enemy.desc.lateralOffset + sample.up.z * enemy.desc.verticalOffset};
+    };
+    safety.cameraPosition = worldPosition(actor);
+    safety.hasCameraPosition = true;
+    actor.behaviorState.attackIntentActive = true;
+    actor.behaviorState.telegraphPresented = true;
+    actor.attackState.tokenReserved = true;
+    actor.targetingState.solutionLocked = true;
+    actor.bulletsEmittedThisFrame = 1;
+    runtime.EnforceEnemyEngagementClearance(safety);
+    const Vector3 safePosition = worldPosition(actor);
+    const float cameraDistance = std::sqrt(
+        std::pow(safePosition.x - safety.cameraPosition.x, 2.0f) +
+        std::pow(safePosition.y - safety.cameraPosition.y, 2.0f) +
+        std::pow(safePosition.z - safety.cameraPosition.z, 2.0f));
+    EnemyAttackTelegraphSystem telegraph;
+    EnemyAttackTelegraphFrameInput warning{};
+    warning.spawnRuntime = &runtime;
+    warning.railPath = &rail;
+    warning.viewProjection = &projection;
+    warning.viewportWidth = 1280;
+    warning.viewportHeight = 720;
+    warning.settings.requireWorldVisibility = false;
+    telegraph.Update(warning);
+    runner.Expect(cameraDistance >= 12.0f + actor.desc.radius &&
+        actor.entranceExitState.exitRequested && !actor.behaviorState.attackIntentActive &&
+        !actor.attackState.tokenReserved && !actor.targetingState.solutionLocked &&
+        std::none_of(telegraph.Frame().cues.begin(), telegraph.Frame().cues.end(),
+            [&](const auto& cue) { return cue.actorId == actor.actorId; }),
+        "actual camera overlap must enforce radius-aware clearance and cancel all warnings including fired flashes");
+    runtime.Update(dt, safety);
+    const Vector3 nextSafePosition = worldPosition(runtime.Enemies().front());
+    const float nextCameraDistance = std::sqrt(
+        std::pow(nextSafePosition.x - safety.cameraPosition.x, 2.0f) +
+        std::pow(nextSafePosition.y - safety.cameraPosition.y, 2.0f) +
+        std::pow(nextSafePosition.z - safety.cameraPosition.z, 2.0f));
+    runner.Expect(nextCameraDistance >= 12.0f + runtime.Enemies().front().desc.radius &&
+        std::abs(runtime.Enemies().front().behaviorState.safetyLateralOffset) > 0.01f,
+        "an emergency outward correction must persist across Behavior/formation updates instead of snapping back into the camera");
+
+    // Rail evaluation clamps at the endpoint: a positive arc-distance offset
+    // must not trick the guard into placing an enemy inside the cart itself.
+    safety.playerDistance = rail.Length();
+    safety.hasCameraPosition = true;
+    safety.cameraPosition = rail.Evaluate(rail.Length()).position;
+    runtime.Update(dt, safety);
+    bool endpointSafe = true;
+    const auto end = rail.Evaluate(rail.Length()).position;
+    for (const auto& enemy : runtime.Enemies()) {
+        const auto p = worldPosition(enemy);
+        const float distance = std::sqrt(std::pow(p.x - end.x, 2.0f) +
+            std::pow(p.y - end.y - safety.playerVerticalOffset, 2.0f) + std::pow(p.z - end.z, 2.0f));
+        endpointSafe = endpointSafe && distance >= 18.0f + enemy.desc.radius &&
+            enemy.entranceExitState.exitRequested && !runtime.EnemyBehavior().CanCommitAttack(enemy);
+    }
+    runner.Expect(endpointSafe && !runtime.Enemies().empty(),
+        "rail endpoint/large seek must preserve physical cart clearance and prevent emergency-corrected threats from firing");
+}
+
+void TestSpireGuardAttackPassChoreography(RegressionRunner& runner) {
+    EnemyWaveAsset wave{};
+    CourseActorAsset legacyWing{};
+    std::string error;
+    const bool loaded = wave.LoadFromFile(
+        "Resources/courses/waves/spire_guard_line.wave", &error) &&
+        legacyWing.LoadFromFile("Resources/courses/actors/spire_interceptor.actor", &error);
+    runner.Expect(loaded && wave.units.size() == 3 &&
+        wave.units[0].actorAssetId == "spire_guard_leader" &&
+        wave.units[1].actorAssetId == "spire_guard_left" &&
+        wave.units[2].actorAssetId == "spire_guard_right" &&
+        wave.formationDefinition.has_value() &&
+        wave.formationDefinition->maximumCorrection == 0.0f &&
+        !legacyWing.behaviorDefinition.choreographedAttackPass &&
+        !legacyWing.behaviorDefinition.maintainForwardEngagementBand,
+        "guard-only assets should stage leader/left/right without modifying other spire waves or pulling a stationary aimer through cohesion");
+    if (!loaded || wave.units.size() != 3) return;
+    for (const EnemyWaveUnit& unit : wave.units) {
+        CourseActorAsset asset{};
+        runner.Expect(asset.LoadFromFile(
+            "Resources/courses/actors/" + unit.actorAssetId + ".actor", &error) &&
+            asset.behaviorDefinition.choreographedAttackPass &&
+            asset.behaviorDefinition.maintainForwardEngagementBand &&
+            asset.behaviorDefinition.attackLeadSeconds >= 1.25f &&
+            asset.meshId != "ball", "each guard should own a dedicated silhouette and full forward-band charge contract");
+    }
+    struct PassResult {
+        std::vector<uint32_t> shotOrder;
+        std::vector<uint32_t> shotSizes;
+        float poseForward[3]{};
+        float firstCue[3]{};
+        bool poseSeen[3]{};
+        bool exitSeen[3]{};
+        bool brightCore[3]{};
+        bool stablePose = true;
+        bool waitingCoreQuiet = true;
+        bool safeExit = true;
+        bool frontBand = true;
+        bool queuePreservesWarning = true;
+        bool freshReservationFull = true;
+        uint64_t lastToken[3]{};
+        uint32_t reservations = 0;
+        uint32_t maximumPosing = 0;
+        bool emptyAtEnd = false;
+    };
+    const auto simulate = [&](int mode) {
+        PassResult result{};
+        CourseSpawnRuntime runtime;
+        CourseEventDispatcher dispatcher;
+        CourseEventMarker event{};
+        event.type = "enemy_wave";
+        event.id = "spire_guard_line";
+        event.distance = 100.0f;
+        dispatcher.Dispatch({event}, runtime, event.distance);
+        RailPath rail;
+        rail.SetControlPoints({{{0, 0, 0}, 18, 32}, {{0, 0, 500}, 18, 32}});
+        const Matrix4x4 projection = MakePerspectiveFovMatrix(
+            1.1f, 1280.0f / 720.0f, 0.1f, 1000.0f);
+        EnemyAttackTelegraphSystem telegraph;
+        EnemyCombatPresentationBridge presentation;
+        constexpr float dt = 1.0f / 60.0f;
+        CourseEnemyFireSafetyFrameInput safety{};
+        safety.playerDistance = event.distance;
+        for (uint32_t frame = 0; frame < 720; ++frame) {
+            const float elapsed = (frame + 1) * dt;
+            // A speed-up must not turn the stationary attack pose into a flyby.
+            safety.playerDistance += (elapsed < 4.0f ? 18.0f : 21.0f) * dt;
+            if (mode == 2 && frame == 60) {
+                for (auto& actor : runtime.MutableEnemies()) {
+                    if (actor.actorId == 1) actor.desc.hitPoints = 0.0f;
+                }
+            }
+            safety.cameraAllowsEnemyFire = mode != 3 || elapsed >= 5.40f;
+            runtime.EnemyAttacks().MutableSettings().maximumConcurrentAttackers =
+                mode == 1 && elapsed < 3.0f ? 0 : 3;
+            runtime.Update(dt, safety);
+            EnemyCombatPresentationInput presentationInput{};
+            presentationInput.runtime = &runtime;
+            presentationInput.railPath = &rail;
+            presentationInput.deltaTime = dt;
+            presentation.Update(presentationInput);
+            uint32_t posing = 0;
+            for (const CourseEnemyActor& actor : runtime.Enemies()) {
+                if (actor.actorId < 1 || actor.actorId > 3) continue;
+                const size_t index = actor.actorId - 1;
+                const auto& behavior = actor.behaviorState;
+                const bool posed = behavior.state == EnemyBehaviorState::Aiming ||
+                    behavior.state == EnemyBehaviorState::RequestingAttack;
+                const auto* visual = presentation.FindActor(actor.actorId);
+                if (actor.attackState.tokenReserved && actor.attackState.tokenId != result.lastToken[index]) {
+                    result.lastToken[index] = actor.attackState.tokenId;
+                    ++result.reservations;
+                    result.freshReservationFull = result.freshReservationFull &&
+                        behavior.attackTimeRemaining >= 1.24f;
+                }
+                if (posed) {
+                    ++posing;
+                    if (!result.poseSeen[index]) {
+                        result.poseSeen[index] = true;
+                        result.poseForward[index] = behavior.engagementBandForwardDistance;
+                    }
+                    result.stablePose = result.stablePose &&
+                        std::abs(behavior.behaviorLateralOffset) < 0.001f &&
+                        std::abs(behavior.behaviorVerticalOffset) < 0.001f &&
+                        std::abs(behavior.presentationBankRadians) < 0.001f &&
+                        std::abs(behavior.engagementBandForwardDistance -
+                            result.poseForward[index]) < 0.80f &&
+                        visual != nullptr && std::abs(visual->verticalOffset) < 0.001f;
+                    result.frontBand = result.frontBand && behavior.engagementBandAttackAllowed;
+                    if (visual != nullptr && behavior.attackIntentActive &&
+                        actor.attackState.tokenReserved && visual->weaponCharge >= 0.75f &&
+                        visual->emissiveStrength >= 3.0f) result.brightCore[index] = true;
+                } else if (behavior.state == EnemyBehaviorState::Positioning && visual != nullptr) {
+                    result.waitingCoreQuiet = result.waitingCoreQuiet && visual->weaponCharge == 0.0f;
+                }
+                if (behavior.attackIntentActive && !actor.attackState.tokenReserved) {
+                    result.queuePreservesWarning = result.queuePreservesWarning &&
+                        behavior.attackTimeRemaining >= 1.24f;
+                }
+                if (actor.attackState.committedThisFrame) {
+                    result.shotOrder.push_back(actor.actorId);
+                    result.shotSizes.push_back(actor.bulletsEmittedThisFrame);
+                }
+                if (actor.entranceExitState.phase == EnemyEntranceExitPhase::Exiting) {
+                    result.exitSeen[index] = true;
+                    const float exitSide = behavior.authoredLateralOffset < -0.1f ? -1.0f : 1.0f;
+                    result.safeExit = result.safeExit && !behavior.attackIntentActive &&
+                        actor.entranceExitState.attackSuppressed &&
+                        !actor.entranceExitState.targetable &&
+                        actor.entranceExitState.appliedLateralOffset * exitSide > 0.0f;
+                }
+            }
+            result.maximumPosing = (std::max)(result.maximumPosing, posing);
+            EnemyAttackTelegraphFrameInput warning{};
+            warning.spawnRuntime = &runtime;
+            warning.railPath = &rail;
+            warning.viewProjection = &projection;
+            warning.playerDistance = safety.playerDistance;
+            warning.deltaTime = dt;
+            warning.viewportWidth = 1280;
+            warning.viewportHeight = 720;
+            warning.settings.requireWorldVisibility = false;
+            warning.settings.suppressOccluded = false;
+            // Keep the production default .90s: per-actor 1.25s must still show.
+            telegraph.Update(warning);
+            for (const auto& cue : telegraph.Frame().cues) {
+                if (cue.actorId < 1 || cue.actorId > 3 || cue.phase == EnemyAttackTelegraphPhase::Fired) continue;
+                const size_t index = cue.actorId - 1;
+                if (result.firstCue[index] == 0.0f) result.firstCue[index] = cue.timeToFire;
+                runtime.MarkEnemyAttackTelegraphPresented(cue.actorId, cue.attackIntentSequence);
+            }
+        }
+        result.emptyAtEnd = runtime.Enemies().empty();
+        return result;
+    };
+    const PassResult normal = simulate(0);
+    runner.Expect(normal.shotOrder == std::vector<uint32_t>{1, 2, 3} &&
+        normal.shotSizes == std::vector<uint32_t>{3, 2, 2} && normal.emptyAtEnd,
+        "guard choreography should fire exactly one leader/left/right volley and complete all authored exits");
+    runner.Expect(normal.maximumPosing == 1 && normal.stablePose && normal.frontBand,
+        "only one guard may aim/charge; its rail-relative pose must stay still through cart acceleration");
+    runner.Expect(normal.waitingCoreQuiet &&
+        std::all_of(std::begin(normal.brightCore), std::end(normal.brightCore), [](bool v) { return v; }) &&
+        std::all_of(std::begin(normal.firstCue), std::end(normal.firstCue), [](float v) { return v >= 1.24f; }),
+        "waiting escorts must remain dim while each admitted muzzle visibly charges under a complete warning interval");
+    runner.Expect(normal.safeExit &&
+        std::all_of(std::begin(normal.exitSeen), std::end(normal.exitSeen), [](bool v) { return v; }),
+        "fired guards must exit to their own side without retargeting or re-firing after formation reindexing");
+    const PassResult queued = simulate(1);
+    runner.Expect(queued.queuePreservesWarning && queued.maximumPosing == 1 &&
+        queued.shotOrder == std::vector<uint32_t>{1, 2, 3} && queued.emptyAtEnd &&
+        std::all_of(std::begin(queued.firstCue), std::end(queued.firstCue), [](float v) { return v >= 1.24f; }),
+        "global threat-budget waiting must preserve the full charge warning and sequential one-pass lifecycle");
+    const PassResult interrupted = simulate(2);
+    runner.Expect(interrupted.shotOrder == std::vector<uint32_t>{2, 3} &&
+        interrupted.shotSizes == std::vector<uint32_t>{2, 2} &&
+        interrupted.maximumPosing == 1 && interrupted.safeExit && interrupted.emptyAtEnd,
+        "defeating the leader before its shot should yield the next turn and preserve left/right exit sides after pruning");
+    const PassResult expired = simulate(3);
+    runner.Expect(expired.reservations == 3 && expired.freshReservationFull &&
+        expired.shotOrder == std::vector<uint32_t>{1, 2, 3} && expired.emptyAtEnd,
+        "camera-blocked enemies must not reserve attacks; resumption must retain a complete warning"
+        " (reservations=" + std::to_string(expired.reservations) +
+        ", full=" + std::to_string(expired.freshReservationFull) +
+        ", shots=" + std::to_string(expired.shotOrder.size()) +
+        ", empty=" + std::to_string(expired.emptyAtEnd) + ")");
 }
 
 void TestEnemyFormationAndEntranceExit(RegressionRunner& runner) {
@@ -21632,6 +22726,35 @@ void TestEnemyEncounterBeatPacingCameraAndAuthoring(
             directed.modeKind == RailCameraDirectorMode::Combat,
         "Camera Composition Bridge should convert Beat intent into a bounded Combat camera request without owning the camera transform or inheriting a Cinematic fire block");
 
+    CourseSpawnRuntime soloRuntime;
+    CourseEnemyActorDesc soloEnemy = enemy;
+    soloEnemy.waveId = "solo-hero-wave";
+    soloEnemy.spawnDistance = 96.0f;
+    soloEnemy.lateralOffset = 0.0f;
+    soloEnemy.verticalOffset = 3.0f;
+    soloRuntime.SpawnEnemyActor(soloEnemy);
+    RailCameraDirector neutralDirector;
+    RailCameraDirector soloDirector;
+    RailCameraDirectorFrameInput neutralInput{};
+    neutralInput.course = &loaded;
+    neutralInput.railPath = &rail;
+    neutralInput.distance = 80.0f;
+    neutralInput.deltaTime = 0.10f;
+    neutralInput.viewportWidth = 1280;
+    neutralInput.viewportHeight = 720;
+    RailCameraDirectorFrameInput soloInput = neutralInput;
+    soloInput.spawnRuntime = &soloRuntime;
+    const RailCameraDirectorFrame neutralFrame =
+        neutralDirector.Evaluate(neutralInput);
+    const RailCameraDirectorFrame soloFrame = soloDirector.Evaluate(soloInput);
+    runner.Expect(
+        soloFrame.encounterFramingSingleThreatFocus > 0.99f &&
+            soloFrame.rig.fovY < neutralFrame.rig.fovY &&
+            soloFrame.rig.backDistance < neutralFrame.rig.backDistance &&
+            soloFrame.encounterFramingReason ==
+                "single threat hero framing",
+        "one priority enemy should receive a comfortable hero composition with tighter FOV and camera pull-in instead of multi-enemy wide framing");
+
     runtime.MutableEnemies().clear();
     pacing.Update(pacingInput); // Attack -> Recovery.
     pacing.Update(pacingInput); // Recovery -> ExitResolve.
@@ -21778,7 +22901,7 @@ void TestEnemyAttackCoordinationAndExecution(RegressionRunner& runner) {
         restored.MarkEnemyAttackTelegraphPresented(
             firstCue.actorId, firstCue.attackIntentSequence),
         "the reserved attack should accept its exact Telegraph acknowledgement");
-    restored.Update(0.01f);
+    restored.Update(0.13f);
     const auto committedActor = std::find_if(
         restored.Enemies().begin(), restored.Enemies().end(),
         [](const CourseEnemyActor& actor) { return actor.fireSequence == 1; });
@@ -22530,6 +23653,8 @@ void TestEnemyProjectileCommercialVisualPipeline(RegressionRunner& runner) {
     cue.targetRailDistance = 70.0f;
     cue.targetLateralOffset = 3.0f;
     cue.targetVerticalOffset = 4.0f;
+    cue.onScreen = true;
+    cue.hasLockedTarget = true;
     telegraph.cues.push_back(cue);
 
     EnemyAttackLaneTelegraphRenderer laneRenderer;
@@ -22553,11 +23678,17 @@ void TestEnemyProjectileCommercialVisualPipeline(RegressionRunner& runner) {
             laneRenderer.Frame().lanes.front().color.y < 0.20f &&
             std::abs(laneRenderer.Frame().lanes.front().targetWorld.x - 3.0f) <
                 0.001f &&
-            laneRenderer.Frame().lanes.front().targetRadius > 0.72f &&
+            laneRenderer.Frame().lanes.front().targetRadius < 0.72f &&
             laneRenderer.Frame().lanes.front().convergenceRadius <
                 laneRenderer.Frame().lanes.front().targetRadius * 0.35f &&
-            laneRenderer.Frame().lanes.front().directionMarkerCount >= 5,
-        "lane telegraph renderer should convert locked targets into red imminent lanes with converging impact rings and directional chevrons");
+            laneRenderer.Frame().lanes.front().directionMarkerCount == 1 &&
+            laneRenderer.Frame().lanes.front().sourceEffectInstanceId == 0,
+        "lane telegraph must use one compact impact marker, one direction cue and no source ring");
+    telegraph.cues.front().phase = EnemyAttackTelegraphPhase::Fired;
+    laneRenderer.Update(laneInput);
+    runner.Expect(laneRenderer.Frame().lanes.empty() &&
+        !laneRenderer.WasSubmitted(cue.actorId, cue.attackIntentSequence),
+        "firing must clear prediction geometry so the real projectile becomes the visual focus");
 }
 
 void TestMountedDefenseResponseContract(RegressionRunner& runner) {
@@ -22666,6 +23797,12 @@ void TestMountedDefenseResponseContract(RegressionRunner& runner) {
     defenseCue.urgency = 0.5f;
     defenseCue.pulse = 0.75f;
     telegraph.cues.push_back(defenseCue);
+    // The previous intent was interrupted. This fixture represents a new,
+    // eligible reservation rather than a stale UI cue for that canceled shot.
+    actor.attackState.tokenReserved = true;
+    actor.attackState.intentSequence = 22;
+    actor.behaviorState.attackIntentActive = true;
+    actor.behaviorState.attackIntentSequence = 22;
     EnemyAttackDefensePresentationBridge defensePresentation;
     EnemyAttackDefensePresentationInput defenseInput{};
     defenseInput.telegraph = &telegraph;
@@ -23061,7 +24198,10 @@ void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
             spawn->materialColor.w >= 0.15f &&
             spawn->bodyScale.y > spawn->bodyScale.x &&
             spawn->commercialSilhouette &&
+            spawn->contrastBackdropStrength >= 0.34f &&
             spawn->emissiveStrength > 3.0f &&
+            bridge.Frame().cameraShakeImpulse >= 0.10f &&
+            bridge.Frame().cameraFovImpulseRadians < 0.0f &&
             bridge.Frame().audioCues.size() == 1 &&
             bridge.Frame().audioCues.front().kind ==
                 EnemyCombatPresentationAudioCueKind::Spawn &&
@@ -23084,12 +24224,12 @@ void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
             telegraph->animation == EnemyCombatAnimationState::Telegraph &&
             telegraph->materialColor.x > telegraph->materialColor.z &&
             telegraph->scaleMultiplier >= 1.0f &&
-            telegraph->weaponCharge >= 0.18f &&
-            telegraph->emissiveStrength > 1.0f &&
-            bridge.Frame().vfxCommands.size() == 1 &&
-            std::string(bridge.Frame().vfxCommands.front().effectName) ==
-                "enemy_charge_pulse",
-        "telegraph combat state should produce a readable warm charging pose and actor-centered pulse without changing authoritative transforms");
+            telegraph->weaponCharge == 0.0f &&
+            telegraph->contrastBackdropStrength >= 0.34f &&
+            telegraph->emissiveStrength <= 0.5f &&
+            bridge.Frame().cameraShakeImpulse == 0.0f &&
+            bridge.Frame().vfxCommands.empty(),
+        "combat telegraph phase alone must not charge a gun, pulse or shake before an eligible readable attack intent");
 
     runtime.MutableEnemies().front().fireSequence += 1;
     runtime.Update(0.01f);
@@ -23122,7 +24262,10 @@ void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
         attack != nullptr &&
             attack->animation == EnemyCombatAnimationState::Attack &&
             attack->bodyScale.z > attack->bodyScale.x &&
+            attack->contrastBackdropStrength >= 0.89f &&
             attack->emissiveStrength >= 4.0f &&
+            bridge.Frame().cameraShakeImpulse >= 0.22f &&
+            bridge.Frame().cameraFovImpulseRadians > 0.0f &&
             bridge.Frame().vfxCommands.size() == 1 &&
             std::string(bridge.Frame().vfxCommands.front().cueId) ==
                 "enemy_combat_muzzle" &&
@@ -23170,7 +24313,9 @@ void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
             reaction->flashStrength > 0.9f &&
             reaction->materialColor.x > reaction->materialColor.y &&
             reaction->bodyScale.y > reaction->bodyScale.x &&
+            reaction->contrastBackdropStrength > 0.42f &&
             reaction->emissiveStrength > 4.0f &&
+            bridge.Frame().cameraShakeImpulse >= 0.16f &&
             bridge.Frame().audioCues.size() == 1 &&
             bridge.Frame().audioCues.front().kind ==
                 EnemyCombatPresentationAudioCueKind::HitReact &&
@@ -23193,6 +24338,8 @@ void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
                 "enemy_combat_death" &&
             std::string(bridge.Frame().vfxCommands.front().effectName) ==
                 "enemy_death_burst" &&
+            bridge.Frame().cameraShakeImpulse >= 0.42f &&
+            bridge.Frame().cameraFovImpulseRadians < 0.0f &&
             death->silhouetteSpread > 1.0f &&
             death->coreColor.x > death->coreColor.z,
         "lethal DamageResult should break the compound silhouette apart through an orange core, staged destruction burst and spatial death cue");
@@ -23203,7 +24350,10 @@ void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
     runner.Expect(
         bridge.FindActor(actorId) != nullptr &&
             bridge.Frame().audioCues.empty() &&
-            bridge.Frame().vfxCommands.empty(),
+            bridge.Frame().vfxCommands.empty() &&
+            bridge.Frame().cameraShakeImpulse == 0.0f &&
+            bridge.Frame().cameraFovImpulseRadians == 0.0f &&
+            bridge.Frame().cameraRollImpulseRadians == 0.0f,
         "paused presentation should retain model state but suppress one-shot audio and VFX dispatch");
 }
 
@@ -28139,6 +29289,224 @@ void TestCourseMultiViewElevationConstraintSuite(RegressionRunner& runner) {
 
 } // namespace
 
+// Exercise the production director with screen-space bounds, independently of
+// GPU rendering, including the low tunnel shot that previously hid the lane.
+void TestVehicleCameraFraming(RegressionRunner& runner) {
+    CourseAsset course;
+    course.railPoints = {{{0.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 300.0f}}};
+    CourseCameraKey key;
+    key.backDistance = 6.0f;
+    key.verticalOffset = 1.0f;
+    key.fovY = 1.08f;
+    course.cameraKeys.push_back(key);
+    RailPath rail;
+    rail.SetControlPoints(course.railPoints);
+    RailCameraDirectorFrameInput input;
+    input.course = &course;
+    input.railPath = &rail;
+    input.distance = 50.0f;
+    input.viewportWidth = 1600;
+    input.viewportHeight = 900;
+    input.deltaTime = 1.0f / 60.0f;
+    const auto setBounds = [](RailCameraDirectorFrameInput& target, const RailPathSample& sample) {
+        for (size_t index = 0; index < target.vehicleBoundsCorners.size(); ++index) {
+            const float x = (index & 1) ? 2.4f : -2.4f;
+            const float y = 1.4f + ((index & 2) ? 2.0f : -2.0f);
+            const float z = (index & 4) ? 4.0f : -4.0f;
+            target.vehicleBoundsCorners[index] = {
+                sample.position.x + sample.right.x*x + sample.up.x*y + sample.tangent.x*z,
+                sample.position.y + sample.right.y*x + sample.up.y*y + sample.tangent.y*z,
+                sample.position.z + sample.right.z*x + sample.up.z*y + sample.tangent.z*z};
+        }
+    };
+    setBounds(input, rail.Evaluate(input.distance));
+    RailCameraDirector unguarded;
+    const auto before = unguarded.Evaluate(input);
+    input.vehicleFramingActive = true;
+    RailCameraDirector guarded;
+    const auto after = guarded.Evaluate(input);
+    runner.Expect(after.vehicleFramingSafe && after.vehicleScreenTop >= 0.62f &&
+        after.vehicleScreenWidth <= 0.36f && after.vehicleFramingPullback > 0.0f &&
+        after.vehicleFramingLift > 0.0f && before.vehicleFramingPullback == 0.0f &&
+        std::abs(after.fovY-before.fovY) < 0.0001f &&
+        std::abs(after.gameplayForward.y-before.gameplayForward.y) < 0.0001f,
+        "close low camera must frame the cart below the combat lane without a FOV or aim-direction jump");
+    course.cameraKeys.front().backDistance = 28.0f;
+    course.cameraKeys.front().verticalOffset = 16.0f;
+    RailCameraDirectorFrame released;
+    for (int i = 0; i < 180; ++i) released = guarded.Evaluate(input);
+    runner.Expect(released.vehicleFramingSafe &&
+        released.vehicleFramingPullback < 0.01f && released.vehicleFramingLift < 0.01f,
+        "framing correction must decay when the authored camera is clear");
+    guarded.Reset();
+    input.vehicleFramingActive = false;
+    const auto reset = guarded.Evaluate(input);
+    runner.Expect(reset.vehicleFramingPullback == 0.0f && reset.vehicleFramingLift == 0.0f,
+        "retry and preview without a vehicle must not inherit framing offsets");
+
+    CourseAsset production;
+    std::string error;
+    if (!production.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course", &error)) {
+        runner.Expect(false, "production camera course should load");
+        return;
+    }
+    rail.SetControlPoints(production.railPoints);
+    input.course = &production;
+    input.vehicleFramingActive = true;
+    // Cover entry, the complete tunnel and the reveal exit at three frame rates.
+    for (const int fps : {30, 60, 120}) {
+        RailCameraDirector director;
+        input.deltaTime = 1.0f / static_cast<float>(fps);
+        bool safe = true;
+        float firstUnsafeDistance = -1.0f;
+        float minimumTop = 1.0f;
+        float maximumWidth = 0.0f;
+        for (float distance = 600.0f; distance <= 1100.0f;
+             distance += 17.0f * input.deltaTime) {
+            input.distance = distance;
+            input.section = production.FindSection(distance);
+            auto sample = rail.Evaluate(distance);
+            // A 10-degree bank stresses the conservative rendered envelope.
+            const Vector3 right = sample.right;
+            sample.right = {right.x*0.984808f + sample.up.x*0.173648f,
+                right.y*0.984808f + sample.up.y*0.173648f,
+                right.z*0.984808f + sample.up.z*0.173648f};
+            sample.up = {sample.up.x*0.984808f - right.x*0.173648f,
+                sample.up.y*0.984808f - right.y*0.173648f,
+                sample.up.z*0.984808f - right.z*0.173648f};
+            setBounds(input, sample);
+            const auto frame = director.Evaluate(input);
+            if (!frame.vehicleFramingSafe && firstUnsafeDistance < 0.0f)
+                firstUnsafeDistance = distance;
+            minimumTop = (std::min)(minimumTop, frame.vehicleScreenTop);
+            maximumWidth = (std::max)(maximumWidth, frame.vehicleScreenWidth);
+            safe = safe && frame.vehicleFramingSafe &&
+                std::isfinite(frame.position.x) && std::isfinite(frame.position.y) &&
+                std::isfinite(frame.position.z);
+        }
+        runner.Expect(safe, "production tunnel entry/exit must keep the banked cart below the aim lane: fps=" +
+            std::to_string(fps) + " firstUnsafeDistance=" + std::to_string(firstUnsafeDistance) +
+            " minTop=" + std::to_string(minimumTop) + " maxWidth=" + std::to_string(maximumWidth));
+    }
+}
+
+void TestCameraMotionContinuity(RegressionRunner& runner) {
+    std::ofstream metrics("logs/camera_motion_continuity.log", std::ios::trunc);
+    bool continuousSections = true;
+    const auto separation = [](const Vector3& a, const Vector3& b) {
+        const float x = a.x-b.x, y = a.y-b.y, z = a.z-b.z;
+        return std::sqrt(x*x+y*y+z*z);
+    };
+    CourseAsset course;
+    course.railPoints = {{{0, 0, 0}}, {{0, 0, 100}}, {{0, 0, 200}}, {{0, 0, 300}}};
+    CourseCameraKey key;
+    key.backDistance = 6.0f;
+    key.verticalOffset = 1.0f;
+    key.fovY = 1.08f;
+    course.cameraKeys.push_back(key);
+    CourseSection beforeSection{0, 130, "A", "test"};
+    CourseSection afterSection{130, 300, "B", "test"};
+    RailPath rail;
+    rail.SetControlPoints(course.railPoints);
+    for (const int fps : {30, 60, 120}) {
+        for (const bool framing : {false, true}) {
+            RailCameraDirector director, reference;
+            reference.MutableSegmentTransitionSettings().enabled = false;
+            RailCameraDirectorFrameInput input;
+            input.course = &course;
+            input.railPath = &rail;
+            input.deltaTime = 1.0f / fps;
+            input.viewportWidth = 1600;
+            input.viewportHeight = 900;
+            input.vehicleFramingActive = framing;
+            float maxError = 0.0f;
+            float maxTargetError = 0.0f;
+            // Both sections have the same rig: crossing their boundary should
+            // leave motion unchanged, including an active cart framing guard.
+            for (int i = 0; i < fps*3; ++i) {
+                input.distance = 110.0f + 20.0f*i/fps;
+                input.section = input.distance < 130.0f ? &beforeSection : &afterSection;
+                const auto sample = rail.Evaluate(input.distance);
+                for (size_t c = 0; c < input.vehicleBoundsCorners.size(); ++c) {
+                    input.vehicleBoundsCorners[c] = {sample.position.x + ((c&1) ? 2.4f : -2.4f),
+                        sample.position.y + 1.4f + ((c&2) ? 2.0f : -2.0f),
+                        sample.position.z + ((c&4) ? 4.0f : -4.0f)};
+                }
+                const auto actual = director.Evaluate(input);
+                const auto expected = reference.Evaluate(input);
+                maxError = (std::max)(maxError, separation(actual.position, expected.position));
+                maxTargetError = (std::max)(maxTargetError, separation(actual.target, expected.target));
+            }
+            metrics << "fps=" << fps << " framing=" << framing << " maxPositionError=" << maxError
+                << " maxTargetError=" << maxTargetError << '\n';
+            continuousSections = continuousSections && maxError < 0.01f && maxTargetError < 0.01f;
+            director.Reset();
+            reference.Reset();
+            runner.Expect(separation(director.Evaluate(input).position, reference.Evaluate(input).position) < 0.01f,
+                "retry must discard the previous transition pose and anchors");
+        }
+    }
+    CourseAsset production;
+    std::string error;
+    runner.Expect(production.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course", &error),
+        "camera continuity production course must load");
+    rail.SetControlPoints(production.railPoints);
+    float maxTangentJump = 0.0f;
+    for (uint32_t i = 1; i < rail.SegmentCount(); ++i) {
+        const auto left = rail.EvaluateSegmentAt(i-1, 1.0f);
+        const auto right = rail.EvaluateSegmentAt(i, 0.0f);
+        maxTangentJump = (std::max)(maxTangentJump, separation(left.tangent, right.tangent));
+        const float seam = rail.SegmentStartDistance(i);
+        maxTangentJump = (std::max)(maxTangentJump,
+            separation(rail.Evaluate(seam - 0.001f).tangent, rail.Evaluate(seam + 0.001f).tangent));
+    }
+    metrics << "maxTangentJump=" << maxTangentJump << '\n';
+    metrics.flush();
+    runner.Expect(continuousSections, "identical section rigs must retain motion; see logs/camera_motion_continuity.log");
+    runner.Expect(maxTangentJump < 0.001f,
+        "smooth authored rail joins must not snap the camera basis: maxTangentJump=" + std::to_string(maxTangentJump));
+
+    // A constant composition must also be transported in the rotating rail
+    // basis, even if the next section interrupts an unfinished transition.
+    course.railPoints = production.railPoints;
+    RailCameraDirector curved, curvedReference;
+    curvedReference.MutableSegmentTransitionSettings().enabled = false;
+    RailCameraDirectorFrameInput curvedInput;
+    curvedInput.course = &course;
+    curvedInput.railPath = &rail;
+    curvedInput.deltaTime = 1.0f / 60.0f;
+    float curvedError = 0.0f;
+    for (int i = 0; i < 360; ++i) {
+        curvedInput.distance = 420.0f + i*0.3f;
+        curvedInput.section = (i/12)%2 ? &afterSection : &beforeSection;
+        const auto actual = curved.Evaluate(curvedInput);
+        const auto expected = curvedReference.Evaluate(curvedInput);
+        curvedError = (std::max)(curvedError, separation(actual.position, expected.position));
+        curvedError = (std::max)(curvedError, separation(actual.target, expected.target));
+    }
+    metrics << "interruptedCurvedTransitionError=" << curvedError << '\n';
+    runner.Expect(curvedError < 0.01f, "interrupted transitions must track curved rail position and aim");
+
+    RailPathControlPoint a{{0, 0, 0}}, b{{10, 5, 30}}, c{{0, 10, 70}};
+    b.tangentMode = RailPathTangentMode::Mirrored;
+    b.incomingTangent = {-4, -2, -8};
+    b.outgoingTangent = {4, 2, 8};
+    rail.SetControlPoints({a, b, c});
+    runner.Expect(separation(rail.EvaluateSegmentAt(0, 1).tangent,
+        rail.EvaluateSegmentAt(1, 0).tangent) < 0.0001f,
+        "analytic tangents must preserve mirrored manual handles at mixed Auto/Bezier joins");
+    b.tangentMode = RailPathTangentMode::Broken;
+    b.outgoingTangent = {-4, 2, 8};
+    rail.SetControlPoints({a, b, c});
+    runner.Expect(separation(rail.EvaluateSegmentAt(0, 1).tangent,
+        rail.EvaluateSegmentAt(1, 0).tangent) > 0.5f,
+        "intentionally broken handles must retain their authored turn");
+    rail.SetControlPoints({a, a});
+    const auto degenerate = rail.EvaluateSegmentAt(0, 1);
+    runner.Expect(std::isfinite(degenerate.tangent.x) && std::isfinite(degenerate.tangent.z),
+        "zero-length segments must keep a finite fallback basis");
+}
+
 int RunEditorCoreRegressionTests() {
     std::ofstream log("editor_core_regression.log", std::ios::trunc);
     if (!log) {
@@ -28147,6 +29515,10 @@ int RunEditorCoreRegressionTests() {
 
     RegressionRunner runner(log);
     const std::vector<RegressionCase> tests{
+        {"submission obstacle readability and clearance", [&]() { TestSubmissionObstacleReadability(runner); }},
+        {"player damage cause notice", [&]() { TestPlayerDamageNotice(runner); }},
+        {"vehicle camera framing", [&]() { TestVehicleCameraFraming(runner); }},
+        {"camera motion continuity", [&]() { TestCameraMotionContinuity(runner); }},
         {"transaction stack undo/redo", [&]() { TestTransactionStack(runner); }},
         {"domain independent transaction commands", [&]() { TestDomainIndependentTransactionCommands(runner); }},
         {"transaction core dependency boundary", [&]() { TestTransactionCoreDependencyBoundary(runner); }},
@@ -28260,6 +29632,9 @@ int RunEditorCoreRegressionTests() {
         {"app startup scene arguments", [&]() { TestAppStartupSceneArguments(runner); }},
         {"ten second combat loop encounter", [&]() {
              TestTenSecondCombatLoopEncounter(runner);
+         }},
+        {"combat loop enemy formation terrain expansion", [&]() {
+             TestCombatLoopEnemyFormationTerrainExpansion(runner);
          }},
         {"multi material showcase presentation defaults", [&]() {
              TestMultiMaterialShowcasePresentationDefaults(runner);
@@ -28379,7 +29754,10 @@ int RunEditorCoreRegressionTests() {
          {"rail world shot routing", [&]() { TestRailWorldShotRouting(runner); }},
          {"weapon damage reception", [&]() { TestWeaponDamageReception(runner); }},
          {"enemy combat state machine", [&]() { TestEnemyCombatStateMachine(runner); }},
+         {"enemy warning fire eligibility", [&]() { TestEnemyWarningFireEligibility(runner); }},
          {"enemy behavior system", [&]() { TestEnemyBehaviorSystem(runner); }},
+         {"intro enemy forward clearance and exit", [&]() { TestIntroEnemyForwardClearanceAndExit(runner); }},
+         {"spire guard attack pass choreography", [&]() { TestSpireGuardAttackPassChoreography(runner); }},
          {"enemy formation and entrance exit", [&]() {
               TestEnemyFormationAndEntranceExit(runner);
           }},

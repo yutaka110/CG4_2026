@@ -1,0 +1,5 @@
+# Destructible center-lane terrain: shoot through or evade around it.
+obstacle|combat_shard_gate|Combat Shard Gate|combat_shard_gate|9.0|3.4|4.2|1.5|0.92|0.34|0.10|1.0
+placement|38|0|1|0
+breakable|true|72
+vfx|rock_break_dust

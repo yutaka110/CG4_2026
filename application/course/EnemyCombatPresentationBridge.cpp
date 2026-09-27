@@ -118,6 +118,7 @@ void ApplyProceduralAnimation(
     output.flashStrength = Saturate(state.hitFlash);
     output.emissiveStrength = 0.35f;
     output.silhouetteSpread = settings.dronePodSpread;
+    output.contrastBackdropStrength = 0.28f;
     output.commercialSilhouette =
         actor.combatDefinition.commercialStateMachine;
     output.sourceCombatRevision = state.revision;
@@ -148,6 +149,7 @@ void ApplyProceduralAnimation(
         output.materialColor = {0.34f, 0.82f, 1.0f, spawnAlpha};
         output.coreColor = {0.82f, 0.98f, 1.0f, spawnAlpha};
         output.emissiveStrength = 3.4f - reveal * 2.1f;
+        output.contrastBackdropStrength = 0.34f + reveal * 0.12f;
         break;
     }
     case EnemyCombatPhase::Engaging:
@@ -160,6 +162,7 @@ void ApplyProceduralAnimation(
             1.0f + pulse * 0.04f};
         output.coreColor = {0.34f, 0.88f, 1.0f, state.presentationAlpha};
         output.emissiveStrength = 0.75f + pulse * 0.55f;
+        output.contrastBackdropStrength = 0.42f;
         break;
     case EnemyCombatPhase::Telegraphing: {
         const float heartbeat = 0.5f + 0.5f * std::sin(ambientPhase * 5.6f);
@@ -180,6 +183,8 @@ void ApplyProceduralAnimation(
             state.presentationAlpha};
         output.coreColor = {1.0f, 0.90f, 0.42f, state.presentationAlpha};
         output.emissiveStrength = 1.2f + output.weaponCharge * 2.8f;
+        output.contrastBackdropStrength =
+            0.54f + output.weaponCharge * 0.30f;
         break;
     }
     case EnemyCombatPhase::Attacking: {
@@ -200,6 +205,7 @@ void ApplyProceduralAnimation(
         output.coreColor = {1.0f, 1.0f, 0.86f, state.presentationAlpha};
         output.weaponCharge = 1.0f - progress;
         output.emissiveStrength = 4.8f * (1.0f - progress) + 0.8f;
+        output.contrastBackdropStrength = 0.90f;
         break;
     }
     case EnemyCombatPhase::Recovering:
@@ -211,6 +217,7 @@ void ApplyProceduralAnimation(
             1.0f - pulse * 0.10f};
         output.weaponCharge = (1.0f - progress) * 0.28f;
         output.coreColor = {0.74f, 0.80f, 1.0f, state.presentationAlpha};
+        output.contrastBackdropStrength = 0.48f;
         break;
     case EnemyCombatPhase::HitReact: {
         const float decay = 1.0f - progress;
@@ -229,6 +236,7 @@ void ApplyProceduralAnimation(
             state.presentationAlpha};
         output.coreColor = {1.0f, 1.0f, 1.0f, state.presentationAlpha};
         output.emissiveStrength = 4.5f * decay;
+        output.contrastBackdropStrength = 0.78f * decay + 0.42f;
         break;
     }
     case EnemyCombatPhase::Dying:
@@ -249,6 +257,7 @@ void ApplyProceduralAnimation(
             state.presentationAlpha};
         output.coreColor = {1.0f, 0.82f, 0.22f, state.presentationAlpha};
         output.emissiveStrength = 2.0f + (1.0f - state.deathProgress) * 3.0f;
+        output.contrastBackdropStrength = 0.94f;
         break;
     case EnemyCombatPhase::Retired:
         output.visible = false;
@@ -256,7 +265,64 @@ void ApplyProceduralAnimation(
         output.bodyScale = {};
         output.materialColor.w = 0.0f;
         output.coreColor.w = 0.0f;
+        output.contrastBackdropStrength = 0.0f;
         break;
+    }
+    if (actor.behaviorDefinition.choreographedAttackPass &&
+        state.phase != EnemyCombatPhase::Spawning &&
+        state.phase != EnemyCombatPhase::HitReact &&
+        state.phase != EnemyCombatPhase::Dying &&
+        state.phase != EnemyCombatPhase::Retired) {
+        // Combat may remain in Telegraphing while waiting for an admitted
+        // Behavior intent. Waiting escorts must not look like charging guns.
+        const EnemyBehaviorRuntimeState& behavior = actor.behaviorState;
+        output.animation = EnemyCombatAnimationState::Engage;
+        output.forwardOffset = 0.0f;
+        output.lateralOffset = 0.0f;
+        output.verticalOffset = 0.0f;
+        output.rotationOffset = {};
+        output.bodyScale = {1.0f, 1.0f, 1.0f};
+        output.scaleMultiplier = 1.0f;
+        output.materialColor = {0.60f, 0.78f, 0.94f, state.presentationAlpha};
+        output.coreColor = {0.12f, 0.40f, 0.62f, state.presentationAlpha};
+        output.weaponCharge = 0.0f;
+        output.emissiveStrength = 0.50f;
+        output.silhouetteSpread = settings.dronePodSpread;
+        output.contrastBackdropStrength = 0.48f;
+        if (behavior.state == EnemyBehaviorState::Aiming ||
+            behavior.state == EnemyBehaviorState::RequestingAttack) {
+            const float pose = behavior.state == EnemyBehaviorState::Aiming
+                ? SmoothStep(behavior.stateElapsedSeconds /
+                    actor.behaviorDefinition.aimingDurationSeconds) : 1.0f;
+            const float charge = behavior.state == EnemyBehaviorState::RequestingAttack &&
+                actor.attackState.tokenReserved
+                ? Saturate(1.0f - behavior.attackTimeRemaining /
+                    (std::max)(0.05f, actor.behaviorDefinition.attackLeadSeconds))
+                : 0.0f;
+            output.animation = EnemyCombatAnimationState::Telegraph;
+            output.animationNormalizedTime = charge;
+            output.rotationOffset.x = -0.12f * pose;
+            output.bodyScale = {1.0f + 0.12f * pose,
+                1.0f - 0.14f * pose, 1.0f + 0.10f * pose};
+            output.silhouetteSpread *= 1.0f + 0.18f * pose;
+            output.weaponCharge = 0.08f * pose + 0.92f * charge;
+            output.coreColor = {1.0f, 0.38f + 0.60f * charge,
+                0.06f + 0.76f * charge, state.presentationAlpha};
+            output.emissiveStrength = 0.8f + charge * 3.6f;
+            output.contrastBackdropStrength = 0.62f + charge * 0.20f;
+        } else if (behavior.state == EnemyBehaviorState::Evading) {
+            const float recoil = 1.0f - Saturate(behavior.stateElapsedSeconds /
+                actor.behaviorDefinition.attackPassRecoilSeconds);
+            output.animation = EnemyCombatAnimationState::Recover;
+            output.forwardOffset = settings.attackRecoilDistance * recoil;
+            output.rotationOffset.x = -0.10f * recoil;
+            output.weaponCharge = recoil;
+            output.coreColor = {1.0f, 0.98f, 0.82f, state.presentationAlpha};
+            output.emissiveStrength = 0.6f + recoil * 4.2f;
+        } else if (behavior.state == EnemyBehaviorState::Retreating) {
+            output.animation = EnemyCombatAnimationState::Recover;
+            output.coreColor = {0.08f, 0.26f, 0.44f, state.presentationAlpha};
+        }
     }
     if (actor.behaviorState.initialized &&
         actor.behaviorDefinition.commercialBehavior) {
@@ -287,6 +353,37 @@ void ApplyProceduralAnimation(
             output.emissiveStrength = (std::max)(
                 output.emissiveStrength, 4.8f);
         }
+    }
+    if (actor.behaviorDefinition.commercialBehavior &&
+        state.phase != EnemyCombatPhase::Spawning &&
+        state.phase != EnemyCombatPhase::Attacking &&
+        state.phase != EnemyCombatPhase::HitReact &&
+        state.phase != EnemyCombatPhase::Dying && state.phase != EnemyCombatPhase::Retired &&
+        !actor.attackState.committedThisFrame &&
+        actor.behaviorState.state != EnemyBehaviorState::Evading) {
+        const bool charging = actor.fireEnvironmentReady &&
+            actor.behaviorState.attackIntentActive && actor.attackState.tokenReserved &&
+            actor.behaviorState.telegraphPresented;
+        const float charge = charging ? Saturate(1.0f - actor.behaviorState.attackTimeRemaining /
+            (std::max)(0.05f, actor.behaviorDefinition.attackLeadSeconds)) : 0.0f;
+        output.weaponCharge = charging ? 0.12f + 0.88f * charge : 0.0f;
+        output.emissiveStrength = charging ? 0.85f + 3.8f * charge : 0.5f;
+        output.coreColor = charging
+            ? Vector4{1.0f, 0.40f + 0.58f * charge, 0.06f + 0.72f * charge, output.materialColor.w}
+            : Vector4{0.10f, 0.26f, 0.36f, output.materialColor.w};
+        output.contrastBackdropStrength = charging ? 0.62f + 0.18f * charge : 0.38f;
+    }
+    if (actor.behaviorDefinition.maintainForwardEngagementBand &&
+        (actor.behaviorState.engagementBandExitRequested ||
+         actor.entranceExitState.exitRequested) &&
+        state.phase != EnemyCombatPhase::Dying && state.phase != EnemyCombatPhase::Retired) {
+        // Departure is not another charge-up. Combat's pending Telegraphing
+        // phase must not leave an apparently armed muzzle on a canceled threat.
+        output.animation = EnemyCombatAnimationState::Recover;
+        output.weaponCharge = 0.0f;
+        output.emissiveStrength = 0.5f;
+        output.coreColor = {0.08f, 0.30f, 0.42f, output.materialColor.w};
+        output.contrastBackdropStrength = 0.22f;
     }
     if (actor.entranceExitState.initialized) {
         output.scaleMultiplier *= actor.entranceExitState.presentationScale;
@@ -355,6 +452,9 @@ void EnemyCombatPresentationBridge::Update(
     frame_.vfxCommands.clear();
     frame_.droppedAudioCues = 0;
     frame_.droppedVfxCommands = 0;
+    frame_.cameraShakeImpulse = 0.0f;
+    frame_.cameraFovImpulseRadians = 0.0f;
+    frame_.cameraRollImpulseRadians = 0.0f;
 
     if (!input.settings.enabled || input.runtime == nullptr ||
         input.railPath == nullptr || input.railPath->Length() <= 0.0f) {
@@ -386,7 +486,48 @@ void EnemyCombatPresentationBridge::Update(
         for (const EnemyCombatEvent* event : prioritized) {
             const CourseEnemyActor* actor = FindEnemy(*input.runtime, event->actorId);
             if (actor == nullptr) continue;
+            if (event->kind == EnemyCombatEventKind::TelegraphStarted &&
+                actor->behaviorDefinition.commercialBehavior &&
+                !(actor->fireEnvironmentReady && actor->behaviorState.attackIntentActive &&
+                  actor->behaviorState.telegraphPresented && actor->attackState.tokenReserved)) {
+                continue;
+            }
             const SpatialMix mix = BuildSpatialMix(*actor, input);
+            const float rollSign = (actor->actorId & 1u) != 0u ? 1.0f : -1.0f;
+            switch (event->kind) {
+            case EnemyCombatEventKind::Spawned:
+                frame_.cameraShakeImpulse = (std::max)(
+                    frame_.cameraShakeImpulse, 0.10f);
+                frame_.cameraFovImpulseRadians -= 0.006f;
+                frame_.cameraRollImpulseRadians += rollSign * 0.003f;
+                break;
+            case EnemyCombatEventKind::TelegraphStarted:
+                frame_.cameraShakeImpulse = (std::max)(
+                    frame_.cameraShakeImpulse, 0.06f);
+                frame_.cameraFovImpulseRadians -= 0.004f;
+                break;
+            case EnemyCombatEventKind::AttackCommitted:
+                frame_.cameraShakeImpulse = (std::max)(
+                    frame_.cameraShakeImpulse, 0.22f);
+                frame_.cameraFovImpulseRadians += 0.008f;
+                frame_.cameraRollImpulseRadians += rollSign * 0.006f;
+                break;
+            case EnemyCombatEventKind::HitReacted:
+                frame_.cameraShakeImpulse = (std::max)(
+                    frame_.cameraShakeImpulse, 0.16f);
+                frame_.cameraFovImpulseRadians -= 0.004f;
+                frame_.cameraRollImpulseRadians -= rollSign * 0.005f;
+                break;
+            case EnemyCombatEventKind::Defeated:
+                frame_.cameraShakeImpulse = (std::max)(
+                    frame_.cameraShakeImpulse, 0.42f);
+                frame_.cameraFovImpulseRadians -= 0.014f;
+                frame_.cameraRollImpulseRadians += rollSign * 0.012f;
+                break;
+            case EnemyCombatEventKind::Engaged:
+            case EnemyCombatEventKind::Retired:
+                break;
+            }
             EnemyCombatPresentationAudioCue cue{};
             cue.actorId = actor->actorId;
             cue.worldPosition = mix.position;
@@ -439,7 +580,9 @@ void EnemyCombatPresentationBridge::Update(
                 actor->combatDefinition.commercialStateMachine;
             const bool chargeVfx =
                 event->kind == EnemyCombatEventKind::TelegraphStarted &&
-                actor->combatDefinition.commercialStateMachine;
+                actor->combatDefinition.commercialStateMachine &&
+                actor->fireEnvironmentReady && actor->behaviorState.attackIntentActive &&
+                actor->behaviorState.telegraphPresented && actor->attackState.tokenReserved;
             const bool attackVfx =
                 event->kind == EnemyCombatEventKind::AttackCommitted &&
                 actor->combatDefinition.commercialStateMachine;

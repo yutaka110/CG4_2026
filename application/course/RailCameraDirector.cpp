@@ -425,6 +425,8 @@ const char* ToRailCameraLookAtPolicyString(RailCameraLookAtPolicy policy) {
 }
 
 void RailCameraDirector::Reset() {
+    vehicleFramingPullback_ = 0.0f;
+    vehicleFramingLift_ = 0.0f;
     smoothedRig_ = {};
     lastFrame_ = {};
     hasSmoothedRig_ = false;
@@ -443,6 +445,11 @@ void RailCameraDirector::Reset() {
     smoothedLookAtTarget_ = {};
     hasSmoothedLookAtTarget_ = false;
     segmentTransitionStartFrame_ = {};
+    previousTransitionFrame_ = {};
+    previousTransitionCameraAnchor_ = {};
+    previousTransitionTargetAnchor_ = {};
+    segmentTransitionCameraAnchor_ = {};
+    segmentTransitionTargetAnchor_ = {};
     hasSegmentTransitionStartFrame_ = false;
     currentSectionSignature_.clear();
     previousSectionSignature_.clear();
@@ -616,9 +623,14 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
         frame.authoredEncounterFocusWeight = focusWeight;
     }
     ApplyCompositionSafety(frame, input, cameraSample, frame.mode);
+    ApplySegmentTransitionPolish(frame, input, frame.mode);
+    previousTransitionFrame_ = frame;
+    previousTransitionCameraAnchor_ = cameraSample;
+    previousTransitionTargetAnchor_ = lookSample;
+    ApplyVehicleFraming(frame, input, cameraSample);
+    // Collision and sight checks must inspect the corrected/transitioned pose.
     ApplyCameraCollisionProtection(frame, input, cameraSample, frame.mode);
     ApplyLineOfSightSafety(frame, input, frame.mode);
-    ApplySegmentTransitionPolish(frame, input, frame.mode);
 
     frame.gameplayPosition = frame.position;
     frame.gameplayTarget = frame.target;
@@ -664,9 +676,108 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
     frame.fovY = frame.rig.fovY;
     frame.modeKind = ClassifyMode(frame.mode);
     frame.railSpeed = input.railSpeed > 0.0f ? input.railSpeed : cameraSample.speed;
+    MeasureVehicleFraming(frame, input);
     UpdateComfortMetrics(frame, input);
     lastFrame_ = frame;
     return frame;
+}
+
+void RailCameraDirector::MeasureVehicleFraming(
+    RailCameraDirectorFrame& frame,
+    const RailCameraDirectorFrameInput& input) const {
+    if (!input.vehicleFramingActive) return;
+    const float aspect = input.viewportHeight > 0 && input.viewportWidth > 0
+        ? static_cast<float>(input.viewportWidth) / input.viewportHeight
+        : 16.0f / 9.0f;
+    float left = 1.0e6f;
+    float right = -1.0e6f;
+    frame.vehicleScreenTop = 1.0f;
+    for (const Vector3& corner : input.vehicleBoundsCorners) {
+        const auto projected = ProjectCompositionPoint(frame, corner, aspect);
+        if (!projected.inFront || projected.forwardDistance <= input.nearClipDistance) {
+            frame.vehicleFramingSafe = false;
+            return;
+        }
+        left = (std::min)(left, projected.normalized.x);
+        right = (std::max)(right, projected.normalized.x);
+        frame.vehicleScreenTop = (std::min)(frame.vehicleScreenTop,
+            (1.0f - projected.normalized.y) * 0.5f);
+    }
+    frame.vehicleScreenWidth = (right - left) * 0.5f;
+    // Allow a small presentation-shake margin beyond the correction target.
+    frame.vehicleFramingSafe = frame.vehicleScreenTop >= 0.62f &&
+        frame.vehicleScreenWidth <= 0.36f;
+}
+
+void RailCameraDirector::ApplyVehicleFraming(
+    RailCameraDirectorFrame& frame,
+    const RailCameraDirectorFrameInput& input,
+    const RailPathSample& cameraSample) {
+    if (!input.vehicleFramingActive) {
+        vehicleFramingPullback_ = 0.0f;
+        vehicleFramingLift_ = 0.0f;
+        return;
+    }
+    const Vector3 forward = NormalizeOr(
+        Subtract(frame.target, frame.position), cameraSample.tangent);
+    const Vector3 rolledUp = RotateAroundAxis(cameraSample.up, forward, frame.rig.roll);
+    const Vector3 right = NormalizeOr(Cross(rolledUp, forward), cameraSample.right);
+    const Vector3 up = NormalizeOr(Cross(forward, right), rolledUp);
+    const float aspect = input.viewportWidth > 0 && input.viewportHeight > 0
+        ? static_cast<float>(input.viewportWidth) / input.viewportHeight
+        : 16.0f / 9.0f;
+    const float tanY = std::tan((std::max)(0.05f, frame.rig.fovY) * 0.5f);
+    const float tanX = tanY * (std::max)(0.25f, aspect);
+    // Move along the view axes without changing aim direction or zooming FOV.
+    // A bounded search keeps the body below 65% of the screen and under 34%
+    // of its width. The authored rig remains responsible for normal framing.
+    const auto fitsWidth = [&](float pullback) {
+        float left = 1.0e6f;
+        float rightEdge = -1.0e6f;
+        for (const Vector3& corner : input.vehicleBoundsCorners) {
+            const Vector3 delta = Subtract(corner, frame.position);
+            const float depth = Dot(delta, forward) + pullback;
+            if (depth <= (std::max)(1.0f, input.nearClipDistance * 2.0f)) {
+                return false;
+            }
+            const float x = Dot(delta, right) / (depth * tanX);
+            left = (std::min)(left, x);
+            rightEdge = (std::max)(rightEdge, x);
+        }
+        return (rightEdge - left) * 0.5f <= 0.34f;
+    };
+    float pullback = 0.0f;
+    if (!fitsWidth(0.0f)) {
+        float low = 0.0f;
+        float high = 12.0f;
+        // Sub-millimetre search avoids visible quarter-unit camera steps.
+        for (int iteration = 0; iteration < 14; ++iteration) {
+            const float mid = (low + high) * 0.5f;
+            if (fitsWidth(mid)) high = mid;
+            else low = mid;
+        }
+        pullback = high;
+    }
+    const float decay = std::exp(-(std::max)(0.0f, input.deltaTime) * 4.0f);
+    // Resolve occlusion immediately; return to the authored rig gradually.
+    vehicleFramingPullback_ = (std::max)(pullback, vehicleFramingPullback_ * decay);
+    float lift = 0.0f;
+    for (const Vector3& corner : input.vehicleBoundsCorners) {
+        const Vector3 delta = Subtract(corner, frame.position);
+        const float depth = Dot(delta, forward) + vehicleFramingPullback_;
+        lift = (std::max)(lift, Dot(delta, up) + 0.30f * tanY * depth);
+    }
+    vehicleFramingLift_ = (std::max)(
+        (std::clamp)(lift, 0.0f, 8.0f), vehicleFramingLift_ * decay);
+    const Vector3 correction = Add(
+        Scale(forward, -vehicleFramingPullback_), Scale(up, vehicleFramingLift_));
+    frame.position = Add(frame.position, correction);
+    frame.target = Add(frame.target, correction);
+    frame.baseTarget = Add(frame.baseTarget, correction);
+    frame.forward = forward;
+    frame.up = rolledUp;
+    frame.vehicleFramingPullback = vehicleFramingPullback_;
+    frame.vehicleFramingLift = vehicleFramingLift_;
 }
 
 CourseCameraKey RailCameraDirector::SmoothRig(const CourseCameraKey& target, float deltaTime) {
@@ -711,6 +822,7 @@ void RailCameraDirector::ApplyEncounterFramingRules(
     frame.encounterFramingBlend = encounterFramingBlend_;
     frame.encounterFramingFovOffsetDeg = 0.0f;
     frame.encounterFramingThreatSpread = 0.0f;
+    frame.encounterFramingSingleThreatFocus = 0.0f;
     frame.encounterFramingRemaining = encounterFramingHoldRemaining_;
     frame.encounterFramingEnemyCount = 0;
     frame.encounterFramingBossCount = 0;
@@ -778,8 +890,16 @@ void RailCameraDirector::ApplyEncounterFramingRules(
         ? (std::clamp)(encounterFramingSettings_.bossFocusBoost, 0.0f, 1.0f)
         : 0.0f;
     const float entryPressure = encounterFramingHoldRemaining_ > 0.0f ? 0.55f : 0.0f;
+    const float singleThreatPressure =
+        frame.encounterFramingEnemyCount == 1 &&
+        frame.encounterFramingBossCount == 0 &&
+        spread <= encounterFramingSettings_.enemySpreadForFullWide * 0.25f
+        ? 1.0f
+        : 0.0f;
+    frame.encounterFramingSingleThreatFocus = singleThreatPressure;
     float targetBlend = (std::max)((std::max)(enemyPressure, spreadPressure), bossPressure);
     targetBlend = (std::max)(targetBlend, entryPressure);
+    targetBlend = (std::max)(targetBlend, singleThreatPressure);
 
     if (!hasRuntimeThreat && encounterFramingHoldRemaining_ <= 0.0f) {
         targetBlend = 0.0f;
@@ -801,17 +921,34 @@ void RailCameraDirector::ApplyEncounterFramingRules(
     }
 
     const bool bossFocus = frame.encounterFramingBossCount > 0;
+    const float widePressure = (std::max)(enemyPressure, spreadPressure);
     const float fovExpand =
-        (encounterFramingSettings_.fovExpandDeg * (std::max)(enemyPressure, spreadPressure) +
+        (encounterFramingSettings_.fovExpandDeg * widePressure +
             encounterFramingSettings_.bossFovExpandDeg * bossPressure +
-            encounterFramingSettings_.fovExpandDeg * 0.35f * entryPressure) *
+            encounterFramingSettings_.fovExpandDeg * 0.35f * entryPressure -
+            encounterFramingSettings_.singleThreatFovTightenDeg *
+                singleThreatPressure) *
         encounterFramingBlend_;
     rig.fovY = (std::clamp)(
         rig.fovY + Degrees(fovExpand),
         Degrees(34.0f),
         Degrees((std::max)(40.0f, encounterFramingSettings_.maxFovDeg)));
-    rig.lookAheadDistance += encounterFramingSettings_.lookAheadBoost * encounterFramingBlend_;
-    rig.backDistance += encounterFramingSettings_.backDistanceBoost * encounterFramingBlend_;
+    const float lookAheadOffset =
+        (encounterFramingSettings_.lookAheadBoost *
+             (widePressure + bossPressure + entryPressure * 0.35f) -
+         encounterFramingSettings_.singleThreatLookAheadReduction *
+             singleThreatPressure) *
+        encounterFramingBlend_;
+    const float backDistanceOffset =
+        (encounterFramingSettings_.backDistanceBoost *
+             (widePressure + bossPressure + entryPressure * 0.35f) -
+         encounterFramingSettings_.singleThreatBackDistancePullIn *
+             singleThreatPressure) *
+        encounterFramingBlend_;
+    rig.lookAheadDistance = (std::max)(
+        0.0f, rig.lookAheadDistance + lookAheadOffset);
+    rig.backDistance = (std::max)(
+        0.25f, rig.backDistance + backDistanceOffset);
     rig.lateralOffset *= 1.0f -
         (std::clamp)(encounterFramingSettings_.lateralDampen * encounterFramingBlend_, 0.0f, 0.95f);
     rig.roll *= 1.0f -
@@ -822,6 +959,8 @@ void RailCameraDirector::ApplyEncounterFramingRules(
         frame.encounterFramingReason = encounterFramingReason_;
     } else if (bossFocus) {
         frame.encounterFramingReason = "boss threat framing";
+    } else if (singleThreatPressure > 0.0f) {
+        frame.encounterFramingReason = "single threat hero framing";
     } else if (spreadPressure >= enemyPressure) {
         frame.encounterFramingReason = "wide enemy spread";
     } else {
@@ -1659,7 +1798,9 @@ void RailCameraDirector::BeginSegmentTransitionIfNeeded(const RailCameraDirector
     if (lastFrame_.mode.empty()) {
         hasSegmentTransitionStartFrame_ = false;
     } else {
-        segmentTransitionStartFrame_ = lastFrame_;
+        segmentTransitionStartFrame_ = previousTransitionFrame_;
+        segmentTransitionCameraAnchor_ = previousTransitionCameraAnchor_;
+        segmentTransitionTargetAnchor_ = previousTransitionTargetAnchor_;
         hasSegmentTransitionStartFrame_ = true;
     }
 }
@@ -1701,18 +1842,29 @@ void RailCameraDirector::ApplySegmentTransitionPolish(
         return LerpVector3(from, to, t);
     };
 
+    // Blend compositions in moving rail frames. Blending from a frozen world
+    // position briefly stops the camera, then accelerates it to catch the cart.
+    const auto transport = [](const Vector3& point, const RailPathSample& from, const RailPathSample& to) {
+        const Vector3 offset = Subtract(point, from.position);
+        return Add(to.position, Add(Add(
+            Scale(to.right, Dot(offset, from.right)),
+            Scale(to.up, Dot(offset, from.up))),
+            Scale(to.tangent, Dot(offset, from.tangent))));
+    };
+    const auto cameraAnchor = input.railPath->Evaluate(input.distance);
+    const auto targetAnchor = input.railPath->Evaluate(input.distance + frame.rig.lookAheadDistance);
     frame.position = blendVectorWithLimit(
-        segmentTransitionStartFrame_.position,
+        transport(segmentTransitionStartFrame_.position, segmentTransitionCameraAnchor_, cameraAnchor),
         frame.position,
         blend,
         positionBlendLimit);
     frame.target = blendVectorWithLimit(
-        segmentTransitionStartFrame_.target,
+        transport(segmentTransitionStartFrame_.target, segmentTransitionTargetAnchor_, targetAnchor),
         frame.target,
         blend,
         targetBlendLimit);
     frame.rig.fovY = Lerp(
-        segmentTransitionStartFrame_.fovY,
+        segmentTransitionStartFrame_.rig.fovY,
         frame.rig.fovY,
         Lerp(blend, 1.0f, 1.0f - (std::clamp)(segmentTransitionSettings_.fovBlendStrength, 0.0f, 1.0f)));
     frame.rig.roll = Lerp(
@@ -1923,6 +2075,10 @@ void RailCameraDirector::UpdateComfortMetrics(
         if (frame.comfortReason == "stable" || frame.comfortReason == "initial frame") {
             frame.comfortReason = "composition safety: " + frame.compositionReason;
         }
+    }
+    if (!frame.vehicleFramingSafe) {
+        frame.allowEnemyFire = false;
+        frame.comfortReason = "vehicle obscures combat view";
     }
     if (lineOfSightSettings_.blockEnemyFireWhenOccluded && !frame.lineOfSightSafeForAiming) {
         frame.allowEnemyFire = false;

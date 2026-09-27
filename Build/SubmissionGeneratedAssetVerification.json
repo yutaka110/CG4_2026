@@ -1,0 +1,161 @@
+{
+  "method": "Regenerated into separate directory from repository scripts; compared exact bytes; excludes generated GUID sidecars.",
+  "files": [
+    {
+      "file": "Resources/common/neutralSurface.bmp",
+      "regeneratedExactly": true,
+      "sha256": "cd567633fd944df4bbcb61ba46bd6d94f5f7669641ccf229f9811240367e7d61",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/CurvedCanyonWall/CurvedCanyonWall.obj",
+      "regeneratedExactly": true,
+      "sha256": "4e69d3af996e7f84c29d0e738ca1bf11263138089889ccd1bb7e313329c95143",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/CurvedCanyonWall/organic_rock.mtl",
+      "regeneratedExactly": false,
+      "sha256": "99203f498763d165e78e979c29edde3a0a35797af8cbc8b92dc5934b03bb4dc3",
+      "regeneratedTextMatches": true
+    },
+    {
+      "file": "Resources/course_meshes/materials/organic_rock_albedo.bmp",
+      "regeneratedExactly": true,
+      "sha256": "ea277ce324d78b29a70c4a33a889722b87fbcbb144c33d8228a45d64e25c8d82",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/materials/rib_rock_albedo.bmp",
+      "regeneratedExactly": true,
+      "sha256": "95c91fa10c77d6394fb9de6382a49c44b9de46a07874b9259fd374f7700fec3e",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/materials/root_rock_albedo.bmp",
+      "regeneratedExactly": true,
+      "sha256": "b52cad3ede047940bda36bd3cf2ef7c736d29408173be908571f7aa8f325a1e2",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/materials/vista_rock_albedo.bmp",
+      "regeneratedExactly": true,
+      "sha256": "887cc8cf3cd7ff4b7a90bc9c4d3d93b0cc4e305dad36793288bfac91ba09e90d",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/OrganicArchLarge/OrganicArchLarge.obj",
+      "regeneratedExactly": true,
+      "sha256": "b5601af9949627cde18ab3589e0f361be94a2d32b6bb60e64890d3e94ff2f027",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/OrganicArchLarge/organic_rock.mtl",
+      "regeneratedExactly": false,
+      "sha256": "99203f498763d165e78e979c29edde3a0a35797af8cbc8b92dc5934b03bb4dc3",
+      "regeneratedTextMatches": true
+    },
+    {
+      "file": "Resources/course_meshes/RailHazardBlock/RailHazardBlock.bmp",
+      "regeneratedExactly": true,
+      "sha256": "5097afa5709cdd7978e56f89cb91806314fab9581c5285977ce1167509973497",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/RailHazardBlock/RailHazardBlock.mtl",
+      "regeneratedExactly": true,
+      "sha256": "02142512b7ff6af789c0f4ef9210d34e707c4a79659d0df56ed476c844e1e0fe",
+      "regeneratedTextMatches": true
+    },
+    {
+      "file": "Resources/course_meshes/RailHazardBlock/RailHazardBlock.obj",
+      "regeneratedExactly": true,
+      "sha256": "e12b488e2290661a9244d031bb9ff312050341b320abff137bcb59a3fe6bae26",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/RailHazardSolid/RailHazardSolid.bmp",
+      "regeneratedExactly": true,
+      "sha256": "998596c4ccbf37453104ce9e83e9b16344013aace88cbfdfbca76198a19d0663",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/RailHazardSolid/RailHazardSolid.mtl",
+      "regeneratedExactly": true,
+      "sha256": "d015d94cf8e0114216d6f6b84d2b30e062fa028e3b66b2bc9153248498d6c937",
+      "regeneratedTextMatches": true
+    },
+    {
+      "file": "Resources/course_meshes/RailHazardSolid/RailHazardSolid.obj",
+      "regeneratedExactly": true,
+      "sha256": "6cb4bb5ee1816479d880cf9d5c6b514104519fbf10dc310aa742b2947091e307",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/RibTunnelWall/RibTunnelWall.obj",
+      "regeneratedExactly": true,
+      "sha256": "62a00f4469752a3895e1b05285bf5b0b39267fbd50c35df2c849f9e1dbb94fca",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/RibTunnelWall/rib_rock.mtl",
+      "regeneratedExactly": false,
+      "sha256": "6b4e9defbcaf8deab9e98808cf19f84de5be770ae1ff78bb0a64f362a49519e4",
+      "regeneratedTextMatches": true
+    },
+    {
+      "file": "Resources/course_meshes/RootSpireColumn/RootSpireColumn.obj",
+      "regeneratedExactly": true,
+      "sha256": "b456bfdc9ae66027a134562f4b23843b221b1c95b20439ea7e61d9dedbfb08d8",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/RootSpireColumn/root_rock.mtl",
+      "regeneratedExactly": false,
+      "sha256": "8f9bf97b69bc82f3f507ef674e9d49bbbc4f296cda78a40e424e0b3711f7f9d2",
+      "regeneratedTextMatches": true
+    },
+    {
+      "file": "Resources/course_meshes/SpireBrokenBridgeArc/root_rock.mtl",
+      "regeneratedExactly": false,
+      "sha256": "8f9bf97b69bc82f3f507ef674e9d49bbbc4f296cda78a40e424e0b3711f7f9d2",
+      "regeneratedTextMatches": true
+    },
+    {
+      "file": "Resources/course_meshes/SpireBrokenBridgeArc/SpireBrokenBridgeArc.obj",
+      "regeneratedExactly": true,
+      "sha256": "8baa386bc050e0b79c3819d8c201c1299e35ef78d67a89037f1fb2afecb99509",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/VistaHoleWall/VistaHoleWall.obj",
+      "regeneratedExactly": true,
+      "sha256": "b30231981e944969b38033ca7fc048feabca017eac784b475009301aa2affd60",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/course_meshes/VistaHoleWall/vista_rock.mtl",
+      "regeneratedExactly": false,
+      "sha256": "715789b51247f067554ca95a8198017c59015fe97565dcb976e119bda3835d16",
+      "regeneratedTextMatches": true
+    },
+    {
+      "file": "Resources/enemies/CombatTurret/CombatTurret.bmp",
+      "regeneratedExactly": true,
+      "sha256": "d88a439b5f3de1f2fc075874b019638ca318e8c0a991c1c8ec5eaa78cebca193",
+      "regeneratedTextMatches": null
+    },
+    {
+      "file": "Resources/enemies/CombatTurret/CombatTurret.mtl",
+      "regeneratedExactly": true,
+      "sha256": "aaab51a5a9b2670b219ad9f3910c7e6a1bbbee3327fca6d19715de05a60f199b",
+      "regeneratedTextMatches": true
+    },
+    {
+      "file": "Resources/enemies/CombatTurret/CombatTurret.obj",
+      "regeneratedExactly": true,
+      "sha256": "a6d4febfad189f2d8036acbe7cc537bc168e6702f1ffea424f35f604b9f9b15c",
+      "regeneratedTextMatches": null
+    }
+  ]
+}

@@ -22,6 +22,9 @@ struct RailWorldRaycastInput {
     float playerDistance = 0.0f;
     float collisionPadding = 0.0f;
     bool includeProceduralTerrain = true;
+    // Visibility-only query: solid decorative columns can hide a warning,
+    // without becoming weapon/projectile collision surfaces.
+    bool includeVisualColumns = false;
 };
 
 class RailWorldRaycast {

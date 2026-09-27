@@ -1,0 +1,5 @@
+# Mirrored side rib leaves a readable central dodge corridor.
+obstacle|combat_lane_rib_right|Combat Lane Rib Right|combat_lane_rib|5.0|2.0|4.0|1.4|0.07|0.12|0.18|1.0
+placement|38|8.5|1|0
+breakable|false|999
+vfx|ceiling_dust_trail

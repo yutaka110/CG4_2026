@@ -46,9 +46,21 @@ struct EnemyBehaviorDefinition final {
     float movementFrequency = 0.72f;
     float forwardMotionScale = 1.0f;
     float maximumBankRadians = 0.28f;
+    float engagementBandMinimumForwardDistance = 24.0f;
+    float engagementBandPreferredForwardDistance = 46.0f;
+    float engagementBandMaximumForwardDistance = 68.0f;
+    float engagementBandDisengageForwardDistance = 10.0f;
+    float engagementBandPositionGain = 2.0f;
+    float engagementBandMaximumCorrectionSpeed = 30.0f;
+    float engagementBandVelocityResponse = 8.0f;
+    // Single-volley encounter choreography. Delays do not extend the warning.
+    float attackPassStartDelaySeconds = 0.0f;
+    float attackPassRecoilSeconds = 0.20f;
     bool commercialBehavior = false;
     bool movementEnabled = true;
     bool requireTelegraphPresentation = true;
+    bool maintainForwardEngagementBand = false;
+    bool choreographedAttackPass = false;
 
     static EnemyBehaviorDefinition LegacyDirect();
     static EnemyBehaviorDefinition Commercial(
@@ -68,16 +80,23 @@ struct EnemyBehaviorRuntimeState final {
     float behaviorForwardOffset = 0.0f;
     float behaviorLateralOffset = 0.0f;
     float behaviorVerticalOffset = 0.0f;
+    // Persistent outward clearance correction for emergency side departure.
+    float safetyLateralOffset = 0.0f;
     float presentationYawRadians = 0.0f;
     float presentationPitchRadians = 0.0f;
     float presentationBankRadians = 0.0f;
     float deterministicPhase = 0.0f;
+    float engagementBandForwardDistance = 0.0f;
+    float engagementBandVelocity = 0.0f;
+    float attackPassHoldForwardDistance = 0.0f;
     uint64_t attackIntentSequence = 0;
     uint64_t committedAttackSequence = 0;
     uint64_t revision = 0;
     bool initialized = false;
     bool attackIntentActive = false;
     bool telegraphPresented = false;
+    bool engagementBandAttackAllowed = true;
+    bool engagementBandExitRequested = false;
 };
 
 struct EnemyAttackIntent final {
@@ -119,6 +138,10 @@ struct EnemyBehaviorFrame final {
     uint32_t movingActors = 0;
     uint32_t waitingForTelegraph = 0;
     uint32_t readyAttacks = 0;
+    uint32_t engagementBandActors = 0;
+    uint32_t engagementBandCorrections = 0;
+    uint32_t engagementBandSuppressedAttacks = 0;
+    uint32_t engagementBandForcedExits = 0;
     uint64_t revision = 0;
 };
 
@@ -150,12 +173,15 @@ private:
     void ApplyMovement(
         CourseEnemyActor& actor,
         float deltaTime,
-        float playerDistance);
+        float playerDistance,
+        float playerForwardSpeed);
     void QueueEvent(CourseEnemyActor& actor, EnemyBehaviorEventKind kind);
 
     EnemyBehaviorFrame frame_{};
     std::vector<EnemyBehaviorEvent> pendingEvents_;
     uint64_t revision_ = 0;
+    float previousPlayerDistance_ = 0.0f;
+    bool hasPreviousPlayerDistance_ = false;
 };
 
 EnemyBehaviorDefinition ResolveEnemyBehaviorDefinition(

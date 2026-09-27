@@ -104,6 +104,44 @@ bool CourseActorAsset::LoadFromFile(const std::string& path, std::string* errorM
                 }
                 return false;
             }
+        } else if (parts[0] == "engagement_band") {
+            if (parts.size() < 9) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "Invalid engagement_band row at line " +
+                        std::to_string(lineNumber);
+                }
+                return false;
+            }
+            loaded.behaviorDefinition.maintainForwardEngagementBand =
+                ParseBoolOr(parts, 1, false);
+            loaded.behaviorDefinition.engagementBandMinimumForwardDistance =
+                ParseFloatOr(parts, 2, 24.0f);
+            loaded.behaviorDefinition.engagementBandPreferredForwardDistance =
+                ParseFloatOr(parts, 3, 46.0f);
+            loaded.behaviorDefinition.engagementBandMaximumForwardDistance =
+                ParseFloatOr(parts, 4, 68.0f);
+            loaded.behaviorDefinition.engagementBandDisengageForwardDistance =
+                ParseFloatOr(parts, 5, 10.0f);
+            loaded.behaviorDefinition.engagementBandPositionGain =
+                ParseFloatOr(parts, 6, 2.0f);
+            loaded.behaviorDefinition.engagementBandMaximumCorrectionSpeed =
+                ParseFloatOr(parts, 7, 30.0f);
+            loaded.behaviorDefinition.engagementBandVelocityResponse =
+                ParseFloatOr(parts, 8, 8.0f);
+        } else if (parts[0] == "attack_pass") {
+            if (parts.size() != 4 || loaded.behaviorDefinition.definitionId.empty()) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = "attack_pass requires a preceding behavior row and enabled/start-delay/recoil values at line " +
+                        std::to_string(lineNumber);
+                }
+                return false;
+            }
+            loaded.behaviorDefinition.choreographedAttackPass =
+                ParseBoolOr(parts, 1, false);
+            loaded.behaviorDefinition.attackPassStartDelaySeconds =
+                ParseFloatOr(parts, 2, 0.0f);
+            loaded.behaviorDefinition.attackPassRecoilSeconds =
+                ParseFloatOr(parts, 3, 0.20f);
         } else if (errorMessage != nullptr) {
             *errorMessage = "Unknown actor asset row at line " + std::to_string(lineNumber) + ": " + parts[0];
             return false;
@@ -118,6 +156,15 @@ bool CourseActorAsset::LoadFromFile(const std::string& path, std::string* errorM
     }
     if (loaded.displayName.empty()) {
         loaded.displayName = loaded.id;
+    }
+    if (!loaded.behaviorDefinition.definitionId.empty()) {
+        std::string behaviorError;
+        if (!loaded.behaviorDefinition.Validate(&behaviorError)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = "Invalid actor behavior: " + behaviorError;
+            }
+            return false;
+        }
     }
 
     *this = std::move(loaded);

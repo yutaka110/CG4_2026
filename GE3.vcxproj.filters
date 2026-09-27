@@ -1067,6 +1067,9 @@
     <ClCompile Include="application\course\EnemyEncounterCameraCompositionBridge.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\EncounterPerformanceScoreSystem.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\EnemyBehaviorSystem.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
@@ -1829,6 +1832,9 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\EnemyEncounterPacingDirector.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\EncounterPerformanceScoreSystem.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\EnemyEncounterCameraCompositionBridge.h">

@@ -37,7 +37,7 @@ struct EnemyAttackTelegraphSettings {
     float firedFlashSeconds = 0.18f;
     float safeAreaPixels = 48.0f;
     float offscreenPriorityBonus = 0.10f;
-    uint32_t maximumVisibleCues = 8;
+    uint32_t maximumVisibleCues = 3;
     uint32_t maximumVisibilityQueries = 12;
 };
 
@@ -72,6 +72,7 @@ struct EnemyAttackTelegraphCue {
     float targetLateralOffset = 0.0f;
     float targetVerticalOffset = 0.0f;
     float predictedFlightSeconds = 0.0f;
+    float bodyRadiusPixels = 12.0f;
     float urgency = 0.0f;
     float severity = 0.0f;
     float priority = 0.0f;
@@ -116,7 +117,7 @@ struct EnemyAttackTelegraphFrame {
 };
 
 struct EnemyAttackTelegraphFrameInput {
-    const CourseSpawnRuntime* spawnRuntime = nullptr;
+    CourseSpawnRuntime* spawnRuntime = nullptr;
     const RailPath* railPath = nullptr;
     const Matrix4x4* viewProjection = nullptr;
     const CourseAsset* course = nullptr;
@@ -128,6 +129,7 @@ struct EnemyAttackTelegraphFrameInput {
     float deltaTime = 0.016f;
     uint32_t viewportWidth = 0;
     uint32_t viewportHeight = 0;
+    bool cameraAllowsAttack = true;
     EnemyAttackTelegraphSettings settings{};
 };
 

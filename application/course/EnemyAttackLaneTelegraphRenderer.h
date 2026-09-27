@@ -21,12 +21,12 @@ enum class EnemyAttackLaneShape : unsigned char {
 struct EnemyAttackLaneTelegraphRendererSettings final {
     bool enabled = true;
     bool effectRuntimeEnabled = true;
-    size_t maximumVisibleLanes = 8;
+    size_t maximumVisibleLanes = 3;
     float baseLaneWidth = 0.34f;
     float fanEndpointSpacing = 2.6f;
-    float targetMarkerRadius = 0.72f;
+    float targetMarkerRadius = 0.52f;
     float sourceMarkerRadius = 0.48f;
-    float imminentScale = 1.35f;
+    float imminentScale = 1.10f;
     std::string markerEffectId = "enemy_attack_lane_marker";
 };
 

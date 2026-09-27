@@ -14,5 +14,9 @@ camera|0.000|24.000|7.000|0.000|64.000|2.000|8.000|54.000|0.000|combat-loop-came
 camera|280.000|24.000|7.000|0.000|64.000|2.000|8.000|54.000|0.000|combat-loop-camera-end|1|1
 section|0.000|280.000|10-Second Combat Loop|Combat Lab
 
+# Dark cobalt atmosphere keeps the warm priority target readable through the
+# cave opening without flattening the foreground rock values.
+lighting|0.000|combat_loop_contrast|1.000|1.000|0.680|0.380|1.850|-0.350|-0.600|0.720|0.035|0.045|0.065|0.080|0.105|0.160|0.180|60.000|420.000|0.180|0.100|0.120|0.780|0.120|0.160
+
 # At 12 units/second this dispatches exactly one second after a clean start.
 event|12.000|enemy_wave|combat_loop_10s|one telegraphed assault, one decision, one result|combat-loop-wave-event|1|1

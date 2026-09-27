@@ -200,7 +200,7 @@ void DrawMaterialSettingsControlsPanel(
         -100.0f, 100.0f);
 
     ImGui::SeparatorText("Scene Objects");
-    ImGui::Checkbox("Show Monster Ball", &runtimeState.useMonsterBall);
+    ImGui::Checkbox("Show Neutral Sphere", &runtimeState.useMonsterBall);
     ImGui::SameLine();
     ImGui::Checkbox("Show Animated Cube", &runtimeState.showAnimatedCube);
     ImGui::SameLine();

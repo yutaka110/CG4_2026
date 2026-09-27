@@ -76,7 +76,11 @@ void EntranceOffset(const EnemyFormationDefinition& definition,
 void ExitOffset(const EnemyFormationDefinition& definition,
                 const CourseEnemyActor& actor, float progress,
                 float& forward, float& lateral, float& vertical) {
-    const float side = (actor.formationState.slotIndex & 1u) != 0u ? -1.0f : 1.0f;
+    // A departing wing keeps its authored side when a defeated/pruned leader
+    // causes formation indices to be reassigned.
+    const float side = actor.behaviorDefinition.maintainForwardEngagementBand
+        ? (actor.behaviorState.authoredLateralOffset < -0.1f ? -1.0f : 1.0f)
+        : ((actor.formationState.slotIndex & 1u) != 0u ? -1.0f : 1.0f);
     forward = 0.0f; lateral = 0.0f; vertical = 0.0f;
     switch (definition.exitStyle) {
     case EnemyExitStyle::ForwardBreak:
@@ -156,7 +160,8 @@ void EnemyEntranceExitDirector::Update(
             formationExitRequests_.contains(formationId);
         if (!explicitlyAuthored &&
             runtime.EnemyFormations().FindDefinition(formationId) == nullptr &&
-            !explicitlyRequested) {
+            !explicitlyRequested &&
+            !actor.behaviorDefinition.maintainForwardEngagementBand) {
             continue;
         }
         const EnemyFormationDefinition definition = Definition(actor, runtime);

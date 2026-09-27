@@ -7,6 +7,8 @@
 #include "CourseCollisionSystem.h"
 #include "CourseGameplayWaveRuntimeBridge.h"
 #include "CourseSpawnRuntime.h"
+#include "EncounterPerformanceScoreSystem.h"
+#include "EnemyEncounterPacingDirector.h"
 #include "GameSessionSystem.h"
 #include "GrazeScoreSystem.h"
 #include "RailDodgeSystem.h"
@@ -31,6 +33,8 @@ struct GameSessionRetryCoordinatorBinding final {
     GrazeScoreSystem* grazeScore = nullptr;
     RailVehicleMountedEvasionSystem* mountedEvasion = nullptr;
     RailVehicleDamageCoordinator* vehicleDamageCoordinator = nullptr;
+    EnemyEncounterPacingDirector* encounterPacing = nullptr;
+    EncounterPerformanceScoreSystem* encounterScore = nullptr;
 };
 
 struct GameSessionRetryCheckpoint final {
@@ -54,6 +58,10 @@ struct GameSessionRetryCheckpoint final {
     bool hasMountedEvasionRuntime = false;
     RailVehicleDamageRuntimeState vehicleDamage;
     bool hasVehicleDamageRuntime = false;
+    EnemyEncounterPacingCheckpoint encounterPacing;
+    bool hasEncounterPacingRuntime = false;
+    EncounterPerformanceScoreRuntimeState encounterScore;
+    bool hasEncounterScoreRuntime = false;
 };
 
 enum class GameSessionRetryStatus : uint8_t {
@@ -69,6 +77,8 @@ enum class GameSessionRetryStatus : uint8_t {
     GrazeRuntimeMismatch,
     MountedEvasionRuntimeMismatch,
     VehicleDamageRuntimeMismatch,
+    EncounterPacingRuntimeMismatch,
+    EncounterScoreRuntimeMismatch,
 };
 
 struct GameSessionRetryResult final {

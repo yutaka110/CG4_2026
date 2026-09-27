@@ -16,8 +16,12 @@
 #include "EnemyEntranceExitDirector.h"
 #include "EnemyTargetingSystem.h"
 #include "utils/math/Vector.h"
+#include "utils/math/MathUtils.h"
 
 class EffectRuntime;
+struct CourseAsset;
+struct TerrainGenerationSettings;
+class TerrainEditLayer;
 
 enum class CourseEnemyFirePattern {
     Single,
@@ -44,6 +48,16 @@ struct CourseEnemyFireSafetyFrameInput {
     float playerVerticalOffset = 4.0f;
     float deltaTime = 0.016f;
     std::string cameraReason = "stable";
+    // Optional spatial context. Headless/editor-authored previews retain the
+    // rail-distance guard even when no camera pose is available.
+    const RailPath* railPath = nullptr;
+    Vector3 cameraPosition{};
+    bool hasCameraPosition = false;
+    const Matrix4x4* viewProjection = nullptr;
+    const CourseAsset* course = nullptr;
+    const TerrainGenerationSettings* terrainSettings = nullptr;
+    const TerrainEditLayer* terrainEdits = nullptr;
+    const TerrainEditLayer* terrainPreview = nullptr;
 };
 
 struct CourseEnemyFireSafetyStats {
@@ -140,6 +154,8 @@ struct CourseEnemyActor {
     EnemyTargetingRuntimeState targetingState{};
     EnemyFormationMemberRuntimeState formationState{};
     EnemyEntranceExitRuntimeState entranceExitState{};
+    // Environment eligibility is independent of the readable warning timer.
+    bool fireEnvironmentReady = true;
     float age = 0.0f;
     float fireTimer = 0.0f;
     float fireVisibleTime = 0.0f;
@@ -192,6 +208,8 @@ public:
         bool restoreProjectiles = false);
     void Update(float deltaTime);
     void Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput);
+    void EnforceEnemyEngagementClearance(const CourseEnemyFireSafetyFrameInput& safetyInput);
+    bool InvalidateEnemyAttackWarning(uint32_t actorId);
 
     void SpawnEnemyActor(CourseEnemyActorDesc desc);
     void SpawnObstacle(CourseObstacleActorDesc desc);
@@ -252,6 +270,7 @@ public:
 private:
     friend class EnemyAttackExecutionSystem;
     bool CanEnemyFire(CourseEnemyActor& enemy, const CourseEnemyFireSafetyFrameInput& safetyInput, float dt);
+    bool UpdateEnemyFireEnvironment(CourseEnemyActor& enemy, const CourseEnemyFireSafetyFrameInput& safetyInput, float dt);
     uint32_t EmitEnemyBullets(const CourseEnemyActor& enemy);
 
     std::vector<CourseEnemyActor> enemies_;

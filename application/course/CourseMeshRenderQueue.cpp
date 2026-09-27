@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string_view>
 
 namespace {
 Vector3 Add(const Vector3& a, const Vector3& b) {
@@ -178,6 +179,9 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
     }
 
     const Matrix4x4 viewProjection = Multiply(viewMatrix, projMatrix);
+    Matrix4x4 cameraView = viewMatrix;
+    const Matrix4x4 cameraWorld = Inverse(cameraView);
+    const Vector3 cameraPosition{cameraWorld.m[3][0], cameraWorld.m[3][1], cameraWorld.m[3][2]};
 
     // Gameplay targets are submitted before scenery and decorative debris so
     // a saturated fixed-capacity queue can never make enemies disappear.
@@ -186,8 +190,12 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
         railPath,
         models,
         viewProjection,
+        cameraPosition,
         enemyPresentation,
         enemyReadability);
+
+    // Collidable obstacles must not lose their draw slots to scenery.
+    AddObstacleInstances(runtime, railPath, models, viewProjection);
 
     if (course != nullptr) {
         for (const CourseTerrainPlacement& placement : course->terrainPlacements) {
@@ -227,6 +235,14 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
                 continue;
             }
 
+            if (placement.meshId == "rail_hazard_solid" && item->materialData != nullptr) {
+                item->materialData->color = {1.0f, 1.0f, 1.0f, 1.0f};
+                item->materialData->enableLighting = true;
+                item->materialData->shininess = 1.0f;
+                item->materialData->environmentCoefficient = 0.0f;
+                item->materialData->specularMode = 2; // Diffuse-only stone.
+                item->useMaterialOverride = true;
+            }
             const Vector3 center = ResolveRailLocal(
                 railPath,
                 placement.distance,
@@ -249,7 +265,16 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
             viewProjection);
     }
 
+}
+
+void CourseMeshRenderQueue::AddObstacleInstances(
+    const CourseSpawnRuntime& runtime,
+    const RailPath& railPath,
+    std::span<const CourseMeshModelBinding> models,
+    const Matrix4x4& viewProjection) {
     for (const CourseObstacleActor& obstacle : runtime.Obstacles()) {
+        if (obstacle.age >= obstacle.desc.lifetime ||
+            (obstacle.desc.breakable && obstacle.desc.hitPoints <= 0.0f)) continue;
         if (!IsCourseMeshRenderEligible(
                 CourseMeshRenderKind::Obstacle,
                 obstacle.desc.meshId)) {
@@ -283,6 +308,17 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
             continue;
         }
 
+        if (item->materialData != nullptr) {
+            item->materialData->color = obstacle.desc.color;
+            item->materialData->enableLighting = true;
+            const bool stone = obstacle.desc.meshId == "rail_hazard_block" ||
+                obstacle.desc.meshId == "rail_hazard_solid";
+            item->materialData->shininess = stone ? 1.0f : (obstacle.desc.breakable ? 12.0f : 4.0f);
+            item->materialData->environmentCoefficient = stone ? 0.0f : (obstacle.desc.breakable ? 0.28f : 0.12f);
+            item->materialData->specularMode = stone ? 2 : (obstacle.desc.breakable ? 1 : 0);
+            item->useMaterialOverride = true;
+        }
+
         const Vector3 center = ResolveRailLocal(
             railPath,
             obstacle.desc.spawnDistance,
@@ -305,6 +341,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
     const RailPath& railPath,
     std::span<const CourseMeshModelBinding> models,
     const Matrix4x4& viewProjection,
+    const Vector3& cameraPosition,
     const EnemyCombatPresentationBridge* enemyPresentation,
     const EnemyEncounterReadabilityDirector* enemyReadability) {
     for (const CourseEnemyActor& enemy : runtime.Enemies()) {
@@ -391,6 +428,9 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             const float alpha = enemy.combatState.initialized
                 ? enemy.combatState.presentationAlpha
                 : 1.0f;
+            // A pooled item may have been an unlit charging muzzle/outline in
+            // the previous frame, especially as a guard departs.
+            item->materialData->enableLighting = true;
             Vector4 materialColor = presentation != nullptr
                 ? presentation->materialColor
                 : Vector4{1.0f, 1.0f, 1.0f, alpha};
@@ -420,11 +460,26 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                     0.16f,
                     0.58f)
                 : 0.16f;
+            if (enemy.desc.meshId == "combat_turret") {
+                item->materialData->environmentCoefficient = 0.025f;
+                item->materialData->specularMode = 2; // Matte painted armour.
+            }
             item->useMaterialOverride = true;
         }
         const Vector3 bodyScale = presentation != nullptr
             ? presentation->bodyScale
             : Vector3{1.0f, 1.0f, 1.0f};
+        const bool dedicatedAssault =
+            enemy.desc.meshId == "combat_assault_hull";
+        const bool dedicatedSniper =
+            enemy.desc.meshId == "combat_sniper_hull";
+        const bool dedicatedInterceptor =
+            enemy.desc.meshId == "combat_interceptor_hull";
+        const bool dedicatedCombatHull = dedicatedAssault ||
+            dedicatedSniper || dedicatedInterceptor;
+        const float dedicatedHeightScale = dedicatedAssault
+            ? 1.45f
+            : (dedicatedSniper ? 1.16f : 1.0f);
         WriteItemTransform(
             *item,
             model.rootLocal,
@@ -432,7 +487,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 baseScale * (std::max)(0.01f, enemy.desc.localScale.x) *
                     (std::max)(0.01f, bodyScale.x),
                 baseScale * (std::max)(0.01f, enemy.desc.localScale.y) *
-                    (std::max)(0.01f, bodyScale.y),
+                    (std::max)(0.01f, bodyScale.y) * dedicatedHeightScale,
                 baseScale * (std::max)(0.01f, enemy.desc.localScale.z) *
                     (std::max)(0.01f, bodyScale.z),
             },
@@ -445,6 +500,72 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             !presentation->visible) {
             continue;
         }
+
+        // A slightly enlarged copy of the bespoke hull sits just behind the
+        // actor. Only its thin navy edge remains visible, separating the
+        // silhouette from a bright cave exit without showing an artificial
+        // screen-space plate.
+        if (presentation->contrastBackdropStrength > 0.01f) {
+            const Vector3 fromCamera{center.x - cameraPosition.x,
+                center.y - cameraPosition.y, center.z - cameraPosition.z};
+            const float cameraDistance = std::sqrt(fromCamera.x * fromCamera.x +
+                fromCamera.y * fromCamera.y + fromCamera.z * fromCamera.z);
+            const Vector3 outlineDirection = cameraDistance > 0.001f
+                ? Scale(fromCamera, 1.0f / cameraDistance) : sample.tangent;
+            CourseMeshRenderItem* backdrop = AllocateItem();
+            if (backdrop != nullptr) {
+                backdrop->kind = CourseMeshRenderKind::Enemy;
+                backdrop->name = enemy.desc.role + "/contrast-outline";
+                backdrop->meshId = model.name;
+                backdrop->sourceActorId = enemy.actorId;
+                backdrop->modelIndex = modelIndex;
+                backdrop->sortDistance = sample.distance + baseScale * 0.10f;
+                backdrop->visible = model.loaded &&
+                    backdrop->transformData != nullptr;
+                if (backdrop->visible) {
+                    if (backdrop->materialData != nullptr) {
+                        const float strength = (std::clamp)(
+                            presentation->contrastBackdropStrength,
+                            0.0f,
+                            1.0f);
+                        backdrop->materialData->color = {
+                            0.008f,
+                            0.018f,
+                            0.042f,
+                            (std::clamp)(0.70f + strength * 0.22f,
+                                         0.70f,
+                                         0.92f)};
+                        backdrop->materialData->enableLighting = false;
+                        backdrop->materialData->shininess = 1.0f;
+                        backdrop->materialData->environmentCoefficient = 0.02f;
+                        backdrop->materialData->specularMode = 0;
+                        backdrop->useMaterialOverride = true;
+                    }
+                    WriteItemTransform(
+                        *backdrop,
+                        model.rootLocal,
+                        {
+                            baseScale *
+                                (std::max)(0.01f, enemy.desc.localScale.x) *
+                                (std::max)(0.01f, bodyScale.x) * 1.06f,
+                            baseScale *
+                                (std::max)(0.01f, enemy.desc.localScale.y) *
+                                (std::max)(0.01f, bodyScale.y) *
+                                dedicatedHeightScale * 1.06f,
+                            baseScale *
+                                (std::max)(0.01f, enemy.desc.localScale.z) *
+                                (std::max)(0.01f, bodyScale.z) * 1.04f,
+                        },
+                        rotation,
+                        Add(center, Scale(outlineDirection, baseScale * 0.14f)),
+                        viewProjection);
+                }
+            }
+        }
+
+        // The turret mesh already owns its base, twin barrels and muzzle cores.
+        // Generic drone parts would replicate whole turrets at either side.
+        if (enemy.desc.meshId == "combat_turret") continue;
 
         const float spread = baseScale * (std::max)(
             0.45f, presentation->silhouetteSpread);
@@ -461,19 +582,25 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             const Vector3& rotationOffset,
             const Vector4& color,
             float shininess,
-            float environmentCoefficient) {
+            float environmentCoefficient,
+            uint32_t partModelIndex) {
+            const CourseMeshModelBinding& partModel = models[partModelIndex];
             CourseMeshRenderItem* part = AllocateItem();
             if (part == nullptr) return;
             part->kind = CourseMeshRenderKind::Enemy;
             part->name = enemy.desc.role + suffix;
-            part->meshId = model.name;
+            part->meshId = partModel.name;
             part->sourceActorId = enemy.actorId;
-            part->modelIndex = modelIndex;
+            part->modelIndex = partModelIndex;
             part->sortDistance = sample.distance;
-            part->visible = model.loaded && part->transformData != nullptr;
+            part->visible = partModel.loaded && part->transformData != nullptr;
             if (!part->visible) return;
             if (part->materialData != nullptr) {
                 part->materialData->color = color;
+                // Reset this on every pooled part, including non-pass actors.
+                part->materialData->enableLighting =
+                    !(enemy.behaviorDefinition.choreographedAttackPass &&
+                      std::string_view{suffix} == "/weapon-core");
                 part->materialData->shininess = shininess;
                 part->materialData->environmentCoefficient =
                     environmentCoefficient;
@@ -482,12 +609,21 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             }
             WriteItemTransform(
                 *part,
-                model.rootLocal,
+                partModel.rootLocal,
                 scale,
                 Add(rotation, rotationOffset),
                 position,
                 viewProjection);
         };
+
+        // Expansion archetypes retain the proven animated pod/core language,
+        // while their dedicated hulls carry the at-a-glance type silhouette.
+        const uint32_t podModelIndex = dedicatedCombatHull
+            ? ResolveModelIndex(models, "combat_assault_pod", "ball")
+            : modelIndex;
+        const uint32_t coreModelIndex = dedicatedCombatHull
+            ? ResolveModelIndex(models, "combat_assault_core", "ball")
+            : modelIndex;
 
         const Vector3 podAdvance = Scale(sample.tangent, -baseScale * 0.08f);
         const Vector3 podLift = Scale(sample.up, baseScale * 0.08f);
@@ -498,10 +634,25 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             Add(center, Scale(sample.right, spread)),
             Add(podAdvance, podLift));
         const float podRecoil = presentation->weaponCharge * baseScale * 0.14f;
-        const Vector3 podScale{
-            baseScale * 0.42f,
-            baseScale * 0.30f,
-            baseScale * (0.54f + presentation->weaponCharge * 0.12f)};
+        const Vector3 podScale = dedicatedAssault
+            ? Vector3{
+                  baseScale * 0.96f,
+                  baseScale * 1.10f,
+                  baseScale * (0.78f + presentation->weaponCharge * 0.16f)}
+            : dedicatedSniper
+            ? Vector3{
+                  baseScale * 0.34f,
+                  baseScale * 0.62f,
+                  baseScale * (1.08f + presentation->weaponCharge * 0.18f)}
+            : dedicatedInterceptor
+            ? Vector3{
+                  baseScale * 1.02f,
+                  baseScale * 0.48f,
+                  baseScale * (0.68f + presentation->weaponCharge * 0.14f)}
+            : Vector3{
+                  baseScale * 0.42f,
+                  baseScale * 0.30f,
+                  baseScale * (0.54f + presentation->weaponCharge * 0.12f)};
         addDronePart(
             "/left-pod",
             Add(leftPodPosition, Scale(sample.tangent, podRecoil)),
@@ -509,7 +660,8 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             {0.0f, 0.0f, -0.16f - presentation->weaponCharge * 0.12f},
             podColor,
             9.0f + presentation->emissiveStrength * 2.0f,
-            0.28f);
+            0.28f,
+            podModelIndex);
         addDronePart(
             "/right-pod",
             Add(rightPodPosition, Scale(sample.tangent, podRecoil)),
@@ -517,7 +669,8 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             {0.0f, 0.0f, 0.16f + presentation->weaponCharge * 0.12f},
             podColor,
             9.0f + presentation->emissiveStrength * 2.0f,
-            0.28f);
+            0.28f,
+            podModelIndex);
 
         const Vector3 corePosition = Add(
             Add(center, Scale(sample.tangent, -baseScale * 0.78f)),
@@ -537,7 +690,8 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             (std::clamp)(
                 0.42f + presentation->emissiveStrength * 0.045f,
                 0.42f,
-                0.72f));
+                0.72f),
+            coreModelIndex);
     }
 }
 

@@ -1,0 +1,6 @@
+# Mixed escort line makes the long-lead sniper the readable priority target.
+wave|combat_expansion_sniper_echelon|Shard Gate Marksmen
+formation|echelon_right|rise|split_sides|false|5.8|2.0|7.5|9.0|0.82|0.86|0.12|18.0|11.0|0.78|20.0|14.0
+unitAsset|sniper_priority|combat_expansion_sniper|sniper_predictive_single|58|0|7|0|1.25|9.0|1.0|0.62|0.06|1.0
+unitAsset|assault_escort_a|combat_loop_assault|assault_magenta_single|58|0|7|0|1.05|8.2|1.0|0.16|0.86|1.0
+unitAsset|assault_escort_b|combat_loop_assault|assault_magenta_single|58|0|7|0|1.05|8.2|1.0|0.16|0.86|1.0

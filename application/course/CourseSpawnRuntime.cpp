@@ -1,4 +1,5 @@
 #include "CourseSpawnRuntime.h"
+#include "RailWorldRaycast.h"
 
 #include "../EffectRuntime.h"
 
@@ -7,6 +8,9 @@
 #include <utility>
 
 namespace {
+constexpr float kMinimumEnemyCartClearance = 18.0f;
+constexpr float kMinimumEnemyCameraClearance = 12.0f;
+constexpr float kEnemyPresentationClearancePadding = 2.0f;
 Vector3 Add(const Vector3& a, const Vector3& b) {
     return {a.x + b.x, a.y + b.y, a.z + b.z};
 }
@@ -119,12 +123,21 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     combatInput.deltaTime = dt;
     combatInput.playerDistance = safetyInput.playerDistance;
     enemyCombatSystem_.Update(*this, combatInput);
+    for (CourseEnemyActor& enemy : enemies_) {
+        enemy.fireEnvironmentReady = UpdateEnemyFireEnvironment(enemy, safetyInput, dt);
+        if (!enemy.fireEnvironmentReady) {
+            InvalidateEnemyAttackWarning(enemy.actorId);
+        }
+    }
     EnemyBehaviorFrameInput behaviorInput{};
     behaviorInput.deltaTime = dt;
     behaviorInput.playerDistance = safetyInput.playerDistance;
     enemyBehaviorSystem_.Update(*this, behaviorInput);
     enemyFormationSystem_.Update(*this, dt);
     enemyEntranceExitDirector_.Update(*this, dt);
+    // Check the final staged pose, not just Behavior's pre-formation position.
+    EnforceEnemyEngagementClearance(safetyInput);
+    fireSafetyStats_ = {};
 
     for (CourseEnemyActor& enemy : enemies_) {
         ++fireSafetyStats_.activeEnemies;
@@ -136,7 +149,7 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
             enemy.desc.distanceOffset += enemy.desc.forwardSpeed * dt;
             enemy.fireTimer -= dt;
         }
-        const bool canFire = CanEnemyFire(enemy, safetyInput, dt);
+        const bool canFire = CanEnemyFire(enemy, safetyInput, 0.0f);
         while (!behaviorDriven && enemy.fireTimer <= 0.0f &&
                enemy.age < enemy.desc.lifetime) {
             if (!canFire) {
@@ -184,7 +197,142 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     PruneDestroyedActors();
 }
 
+void CourseSpawnRuntime::EnforceEnemyEngagementClearance(
+    const CourseEnemyFireSafetyFrameInput& input) {
+    const auto dot = [](const Vector3& a, const Vector3& b) {
+        return a.x * b.x + a.y * b.y + a.z * b.z;
+    };
+    const auto subtract = [](const Vector3& a, const Vector3& b) {
+        return Vector3{a.x - b.x, a.y - b.y, a.z - b.z};
+    };
+    for (CourseEnemyActor& actor : enemies_) {
+        const auto& definition = actor.behaviorDefinition;
+        auto& behavior = actor.behaviorState;
+        auto& staging = actor.entranceExitState;
+        if (!definition.maintainForwardEngagementBand ||
+            actor.desc.hitPoints <= 0.0f ||
+            actor.combatState.phase == EnemyCombatPhase::Dying ||
+            actor.combatState.phase == EnemyCombatPhase::Retired) continue;
+
+        // Hard floor survives sudden acceleration and additive staging. The
+        // correction is also stored in Behavior so BeginFrame cannot undo it.
+        const float forward = actor.desc.spawnDistance + actor.desc.distanceOffset -
+            input.playerDistance;
+        const float correction = (std::max)(
+            0.0f, definition.engagementBandMinimumForwardDistance - forward);
+        actor.desc.distanceOffset += correction;
+        behavior.integratedForwardOffset += correction;
+        behavior.engagementBandForwardDistance = forward + correction;
+
+        bool unsafeSpatialPose = false;
+        if (input.railPath != nullptr && input.railPath->Length() > 0.0f) {
+            const RailPath& rail = *input.railPath;
+            const Vector3 position = ResolveRailLocal(rail, actor.desc.spawnDistance,
+                actor.desc.distanceOffset, actor.desc.lateralOffset, actor.desc.verticalOffset);
+            const Vector3 cart = ResolveRailLocal(rail, input.playerDistance, 0.0f,
+                input.playerLateralOffset, input.playerVerticalOffset);
+            const float scale = (std::max)({1.0f, std::abs(actor.desc.localScale.x),
+                std::abs(actor.desc.localScale.y), std::abs(actor.desc.localScale.z)});
+            // Pods/backdrop and presentation-only recoil extend beyond the
+            // collision sphere; reserve room for those visuals as well.
+            const float radius = actor.desc.radius * scale * 2.0f +
+                kEnemyPresentationClearancePadding;
+            const float cartClearance = (std::max)(kMinimumEnemyCartClearance,
+                definition.engagementBandDisengageForwardDistance) + radius;
+            const float cameraClearance = kMinimumEnemyCameraClearance + radius;
+            const Vector3 toCart = subtract(position, cart);
+            const Vector3 toCamera = subtract(position, input.cameraPosition);
+            unsafeSpatialPose = dot(toCart, toCart) < cartClearance * cartClearance ||
+                (input.hasCameraPosition &&
+                 dot(toCamera, toCamera) < cameraClearance * cameraClearance);
+            if (unsafeSpatialPose) {
+                // Arc distance alone is insufficient at a tight bend or rail
+                // endpoint. Move outward to the safe side of BOTH exclusion
+                // spheres and cancel the attack; never push through the cart.
+                const float side = behavior.authoredLateralOffset < -0.1f ? -1.0f : 1.0f;
+                const Vector3 direction = Scale(rail.Evaluate(
+                    actor.desc.spawnDistance + actor.desc.distanceOffset).right, side);
+                const auto outwardShift = [&](const Vector3& offset, float clearance) {
+                    const float projection = dot(offset, direction);
+                    const float discriminant = projection * projection -
+                        dot(offset, offset) + clearance * clearance;
+                    return discriminant >= 0.0f
+                        ? (std::max)(0.0f, -projection + std::sqrt(discriminant)) : 0.0f;
+                };
+                float shift = outwardShift(toCart, cartClearance);
+                if (input.hasCameraPosition) {
+                    shift = (std::max)(shift, outwardShift(toCamera, cameraClearance));
+                }
+                actor.desc.lateralOffset += side * (shift + 0.05f);
+                behavior.safetyLateralOffset += side * (shift + 0.05f);
+                enemyEntranceExitDirector_.RequestActorExit(actor.actorId);
+                staging.initialized = true;
+                if (staging.phase != EnemyEntranceExitPhase::Exiting &&
+                    staging.phase != EnemyEntranceExitPhase::Exited) {
+                    staging.phase = EnemyEntranceExitPhase::Exiting;
+                    staging.phaseElapsedSeconds = 0.0f;
+                    staging.presentationAlpha = 1.0f;
+                    staging.presentationScale = 1.0f;
+                }
+                staging.exitRequested = true;
+            }
+        }
+        const bool departing = behavior.engagementBandExitRequested ||
+            (staging.initialized && (staging.exitRequested ||
+             staging.phase == EnemyEntranceExitPhase::Exiting ||
+             staging.phase == EnemyEntranceExitPhase::Exited));
+        if (departing || unsafeSpatialPose) {
+            behavior.attackIntentActive = false;
+            behavior.telegraphPresented = false;
+            behavior.attackTimeRemaining = 0.0f;
+            behavior.engagementBandAttackAllowed = false;
+            behavior.engagementBandExitRequested = true;
+            behavior.state = EnemyBehaviorState::Retreating;
+            staging.attackSuppressed = true;
+            staging.targetable = false;
+            actor.fireTimer = definition.attackCooldownSeconds;
+            enemyAttackCoordinator_.CancelActor(actor, EnemyAttackCancelReason::ActorUnavailable);
+            actor.targetingState.solutionLocked = false;
+        }
+    }
+}
+
 bool CourseSpawnRuntime::CanEnemyFire(
+    CourseEnemyActor& enemy,
+    const CourseEnemyFireSafetyFrameInput& safetyInput,
+    float dt) {
+    enemy.fireEnvironmentReady = UpdateEnemyFireEnvironment(enemy, safetyInput, dt);
+    if (!enemy.fireEnvironmentReady) {
+        InvalidateEnemyAttackWarning(enemy.actorId);
+        return false;
+    }
+    if (enemy.behaviorState.initialized &&
+        enemy.behaviorDefinition.commercialBehavior &&
+        !enemyBehaviorSystem_.CanCommitAttack(enemy)) {
+        enemy.fireSafetyAllowed = false;
+        enemy.fireSafetyReason = enemy.behaviorState.attackIntentActive
+            ? "behavior awaiting readable warning countdown"
+            : "behavior has no attack intent";
+        return false;
+    }
+    return true;
+}
+
+bool CourseSpawnRuntime::InvalidateEnemyAttackWarning(uint32_t actorId) {
+    for (CourseEnemyActor& enemy : enemies_) {
+        if (enemy.actorId != actorId || !enemy.behaviorState.attackIntentActive) continue;
+        auto& state = enemy.behaviorState;
+        state.telegraphPresented = false;
+        state.attackTimeRemaining = (std::max)(0.05f, enemy.behaviorDefinition.attackLeadSeconds);
+        enemy.fireTimer = state.attackTimeRemaining;
+        enemy.targetingState.solutionLocked = false;
+        enemyAttackCoordinator_.CancelActor(enemy, EnemyAttackCancelReason::ActorUnavailable);
+        return true;
+    }
+    return false;
+}
+
+bool CourseSpawnRuntime::UpdateEnemyFireEnvironment(
     CourseEnemyActor& enemy,
     const CourseEnemyFireSafetyFrameInput& safetyInput,
     float dt) {
@@ -193,6 +341,7 @@ bool CourseSpawnRuntime::CanEnemyFire(
         enemy.entranceExitState.attackSuppressed;
     if (enemy.desc.suppressFire || entranceExitSuppressesFire ||
         (enemy.combatState.initialized && !enemy.combatState.canFire)) {
+        enemy.fireVisibleTime = 0.0f;
         enemy.fireSafetyAllowed = false;
         enemy.fireSafetyReason = enemy.desc.suppressFire
             ? "actor fire suppressed"
@@ -202,20 +351,69 @@ bool CourseSpawnRuntime::CanEnemyFire(
         fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;
         return false;
     }
-    if (enemy.behaviorState.initialized &&
-        enemy.behaviorDefinition.commercialBehavior &&
-        !enemyBehaviorSystem_.CanCommitAttack(enemy)) {
-        enemy.fireSafetyAllowed = false;
-        enemy.fireSafetyReason = enemy.behaviorState.attackIntentActive
-            ? enemy.behaviorState.telegraphPresented
-                ? "behavior attack countdown"
-                : "behavior waiting for telegraph presentation"
-            : "behavior has no attack intent";
-        fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;
-        return false;
+    // Never admit an attack solely through an offscreen HUD indicator.
+    if (safetyInput.railPath != nullptr && safetyInput.viewProjection != nullptr) {
+        const Vector3 world = ResolveRailLocal(*safetyInput.railPath,
+            enemy.desc.spawnDistance, enemy.desc.distanceOffset,
+            enemy.desc.lateralOffset, enemy.desc.verticalOffset);
+        const auto& m = safetyInput.viewProjection->m;
+        const float x = world.x * m[0][0] + world.y * m[1][0] + world.z * m[2][0] + m[3][0];
+        const float y = world.x * m[0][1] + world.y * m[1][1] + world.z * m[2][1] + m[3][1];
+        const float z = world.x * m[0][2] + world.y * m[1][2] + world.z * m[2][2] + m[3][2];
+        const float w = world.x * m[0][3] + world.y * m[1][3] + world.z * m[2][3] + m[3][3];
+        if (w <= 0.0001f || z < 0.0f || z > w ||
+            std::abs(x) >= w * 0.90f || std::abs(y) >= w * 0.90f) {
+            enemy.fireVisibleTime = 0.0f;
+            enemy.fireSafetyAllowed = false;
+            enemy.fireSafetyReason = "offscreen / warning safe-area gate";
+            ++fireSafetyStats_.blockedByVisibilityTime;
+            fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;
+            return false;
+        }
+    }
+    // Check current geometry before decrementing the warning and again at
+    // the final staged pose before execution. HUD-only LOS is one frame late.
+    if (enemy.behaviorDefinition.commercialBehavior && enemy.behaviorState.attackIntentActive &&
+        safetyInput.railPath != nullptr && safetyInput.hasCameraPosition &&
+        (safetyInput.course != nullptr || safetyInput.terrainSettings != nullptr || !obstacles_.empty())) {
+        const Vector3 world = ResolveRailLocal(*safetyInput.railPath,
+            enemy.desc.spawnDistance, enemy.desc.distanceOffset,
+            enemy.desc.lateralOffset, enemy.desc.verticalOffset);
+        const Vector3 delta{world.x - safetyInput.cameraPosition.x,
+            world.y - safetyInput.cameraPosition.y, world.z - safetyInput.cameraPosition.z};
+        const float distance = std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+        if (distance > 0.001f) {
+            RailAimState aim{};
+            aim.valid = true;
+            aim.worldRayOrigin = safetyInput.cameraPosition;
+            aim.worldRayDirection = Scale(delta, 1.0f / distance);
+            aim.maxDistance = distance + enemy.desc.radius;
+            aim.aimDistance = aim.maxDistance;
+            aim.worldAimPoint = world;
+            RailWorldRaycastInput query{};
+            query.aim = &aim;
+            query.railPath = safetyInput.railPath;
+            query.spawnRuntime = this;
+            query.course = safetyInput.course;
+            query.terrainSettings = safetyInput.terrainSettings;
+            query.terrainEdits = safetyInput.terrainEdits;
+            query.terrainPreview = safetyInput.terrainPreview;
+            query.playerDistance = safetyInput.playerDistance;
+            query.includeVisualColumns = true;
+            const RailAimHit hit = RailWorldRaycast::Query(query);
+            if (hit.hit && !(hit.kind == RailAimHitKind::Enemy && hit.actorId == enemy.actorId)) {
+                enemy.fireVisibleTime = 0.0f;
+                enemy.fireSafetyAllowed = false;
+                enemy.fireSafetyReason = "warning line-of-sight blocked";
+                ++fireSafetyStats_.blockedByVisibilityTime;
+                fireSafetyStats_.lastBlockedReason = enemy.fireSafetyReason;
+                return false;
+            }
+        }
     }
     if (enemy.screenPresenceEvaluated &&
         !enemy.screenPresenceAttackAllowed) {
+        enemy.fireVisibleTime = 0.0f;
         enemy.fireSafetyAllowed = false;
         enemy.fireSafetyReason = "screen presence exposure gate";
         ++fireSafetyStats_.blockedByVisibilityTime;
@@ -224,6 +422,7 @@ bool CourseSpawnRuntime::CanEnemyFire(
     }
     if (enemy.encounterPacingEvaluated &&
         !enemy.encounterPacingAttackAllowed) {
+        enemy.fireVisibleTime = 0.0f;
         enemy.fireSafetyAllowed = false;
         enemy.fireSafetyReason = "encounter pacing phase gate";
         ++fireSafetyStats_.blockedByVisibilityTime;

@@ -79,6 +79,15 @@ bool GameSessionRetryCoordinator::CaptureCheckpoint(
         captured.vehicleDamage = binding_.vehicleDamageCoordinator->State();
         captured.hasVehicleDamageRuntime = true;
     }
+    if (binding_.encounterPacing != nullptr) {
+        captured.encounterPacing =
+            binding_.encounterPacing->CaptureCheckpoint();
+        captured.hasEncounterPacingRuntime = true;
+    }
+    if (binding_.encounterScore != nullptr) {
+        captured.encounterScore = binding_.encounterScore->State();
+        captured.hasEncounterScoreRuntime = true;
+    }
     checkpoint_ = std::move(captured);
     if (errorMessage != nullptr) errorMessage->clear();
     return true;
@@ -176,6 +185,33 @@ GameSessionRetryResult GameSessionRetryCoordinator::Retry(
         return lastResult_;
     }
     binding_.spawnRuntime->RestoreCheckpoint(checkpoint_.spawn, false);
+    if (checkpoint_.hasEncounterPacingRuntime &&
+        (binding_.encounterPacing == nullptr ||
+         !binding_.encounterPacing->RestoreCheckpoint(
+             checkpoint_.encounterPacing,
+             *binding_.course,
+             &validationError))) {
+        lastResult_.status =
+            GameSessionRetryStatus::EncounterPacingRuntimeMismatch;
+        lastResult_.message = validationError.empty()
+            ? "Encounter pacing director is unavailable."
+            : validationError;
+        SetError(errorMessage, lastResult_.message);
+        return lastResult_;
+    }
+    if (checkpoint_.hasEncounterScoreRuntime &&
+        (binding_.encounterScore == nullptr ||
+         !binding_.encounterScore->RestoreState(
+             checkpoint_.encounterScore,
+             &validationError))) {
+        lastResult_.status =
+            GameSessionRetryStatus::EncounterScoreRuntimeMismatch;
+        lastResult_.message = validationError.empty()
+            ? "Encounter performance score system is unavailable."
+            : validationError;
+        SetError(errorMessage, lastResult_.message);
+        return lastResult_;
+    }
     if (checkpoint_.hasWaveCheckpoint &&
         !binding_.waveRuntime->RestoreCheckpoint(checkpoint_.wave, &validationError)) {
         // All compatibility checks were completed before Session::Retry. This
@@ -266,6 +302,10 @@ const char* ToString(GameSessionRetryStatus status) {
         return "MountedEvasionRuntimeMismatch";
     case GameSessionRetryStatus::VehicleDamageRuntimeMismatch:
         return "VehicleDamageRuntimeMismatch";
+    case GameSessionRetryStatus::EncounterPacingRuntimeMismatch:
+        return "EncounterPacingRuntimeMismatch";
+    case GameSessionRetryStatus::EncounterScoreRuntimeMismatch:
+        return "EncounterScoreRuntimeMismatch";
     }
     return "Unknown";
 }

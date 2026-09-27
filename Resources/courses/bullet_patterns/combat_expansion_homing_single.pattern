@@ -1,0 +1,5 @@
+# Finale-specific homing round. Its trajectory remains demanding, while the
+# lower contact damage lets one missed decision teach instead of ending a run.
+# pattern|id|displayName|type|bulletCount|lateralSpreadSpeed|verticalSpreadSpeed|bulletRadius|bulletLifetime|damage|r|g|b|a
+pattern|combat_expansion_homing_single|Combat Expansion Homing Single|single|1|0|0|0.44|5.8|7|1.0|0.08|0.94|1.0
+projectile|enemy_interceptor_homing

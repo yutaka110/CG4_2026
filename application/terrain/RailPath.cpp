@@ -127,11 +127,7 @@ RailPathSample RailPath::EvaluateSegmentAt(uint32_t segmentIndex, float normaliz
     }
     const float t = (std::clamp)(normalizedT, 0.0f, 1.0f);
     sample.position = EvaluateSegment(segmentIndex, t);
-    const float beforeT = (std::max)(0.0f, t - 0.01f);
-    const float afterT = (std::min)(1.0f, t + 0.01f);
-    sample.tangent = NormalizeOr(
-        Subtract(EvaluateSegment(segmentIndex, afterT), EvaluateSegment(segmentIndex, beforeT)),
-        {0.0f, 0.0f, 1.0f});
+    sample.tangent = EvaluateSegmentTangent(segmentIndex, t);
     sample.right = NormalizeOr(Cross({0.0f, 1.0f, 0.0f}, sample.tangent), {1.0f, 0.0f, 0.0f});
     sample.up = NormalizeOr(Cross(sample.tangent, sample.right), {0.0f, 1.0f, 0.0f});
     sample.corridorRadius = EvaluateRadius(segmentIndex, t);
@@ -178,8 +174,7 @@ RailPathSample RailPath::Evaluate(float distance) const {
     const float t = (wrappedDistance - segmentStart) / segmentLength;
 
     sample.position = EvaluateSegment(segmentIndex, t);
-    const Vector3 ahead = EvaluateSegment(segmentIndex, (std::min)(t + 0.02f, 1.0f));
-    sample.tangent = NormalizeOr(Subtract(ahead, sample.position), {0.0f, 0.0f, 1.0f});
+    sample.tangent = EvaluateSegmentTangent(segmentIndex, t);
     sample.right = NormalizeOr(Cross({0.0f, 1.0f, 0.0f}, sample.tangent), {1.0f, 0.0f, 0.0f});
     sample.up = NormalizeOr(Cross(sample.tangent, sample.right), {0.0f, 1.0f, 0.0f});
     sample.corridorRadius = EvaluateRadius(segmentIndex, t);
@@ -247,6 +242,22 @@ Vector3 RailPath::EvaluateSegment(uint32_t segmentIndex, float t) const {
         TangentHandlePosition(i2, true),
         controlPoints_[i2].position,
         clampedT);
+}
+
+Vector3 RailPath::EvaluateSegmentTangent(uint32_t segmentIndex, float t) const {
+    // Auto handles describe the same cubic as Catmull-Rom. Differentiate it
+    // analytically: a clipped forward difference changes direction at joins
+    // and loses precision when the remaining distance to an endpoint is tiny.
+    const Vector3 p0 = controlPoints_[segmentIndex].position;
+    const Vector3 p1 = TangentHandlePosition(segmentIndex, false);
+    const Vector3 p2 = TangentHandlePosition(segmentIndex + 1, true);
+    const Vector3 p3 = controlPoints_[segmentIndex + 1].position;
+    const float u = 1.0f - t;
+    const Vector3 derivative = Add(Add(
+        Scale(Subtract(p1, p0), 3.0f*u*u),
+        Scale(Subtract(p2, p1), 6.0f*u*t)),
+        Scale(Subtract(p3, p2), 3.0f*t*t));
+    return NormalizeOr(derivative, NormalizeOr(Subtract(p3, p0), {0.0f, 0.0f, 1.0f}));
 }
 
 Vector3 RailPath::AutoTangentHandlePosition(uint32_t pointIndex, bool incoming) const {

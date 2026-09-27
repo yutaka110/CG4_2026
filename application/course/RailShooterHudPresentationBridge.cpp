@@ -1,6 +1,7 @@
 #include "RailShooterHudPresentationBridge.h"
 
 #include "GameSessionPresentationBridge.h"
+#include "PlayerDamagePresentationBridge.h"
 
 #include <algorithm>
 #include <cmath>
@@ -155,6 +156,42 @@ void RailShooterHudPresentationBridge::Update(
         }
     } else {
         next.threatText.clear();
+    }
+
+    next.showObstacleWarning = runtime.obstacleApproaching;
+    next.obstacleWarningText.clear();
+    next.obstacleActionText.clear();
+    if (runtime.obstacleApproaching) {
+        std::ostringstream seconds;
+        seconds << std::fixed << std::setprecision(1) << runtime.obstacleTimeToContact;
+        next.obstacleWarningText = Utf8(u8"正面の障害物  接触まで ") + seconds.str() + "s";
+        next.obstacleActionText = runtime.approachingObstacleBreakable
+            ? Utf8(u8"撃って破壊  耐久 ") + Whole(runtime.approachingObstacleHealth)
+            : Utf8(u8"破壊不可  衝突注意");
+    }
+
+    next.showDamageNotice = false;
+    next.damageNoticeLethal = false;
+    next.damageNoticeAlpha = 0.0f;
+    next.damageNoticeText.clear();
+    next.damageHealthText.clear();
+    if (input.playerDamage != nullptr && input.playerDamage->showDamageNotice) {
+        const auto& damage = input.playerDamage->lastDamage;
+        std::string cause;
+        switch (damage.request.kind) {
+        case PlayerHitKind::EnemyProjectile: cause = Utf8(u8"敵弾"); break;
+        case PlayerHitKind::ObstacleContact: cause = Utf8(u8"障害物との衝突"); break;
+        case PlayerHitKind::TerrainContact: cause = Utf8(u8"地形との衝突"); break;
+        case PlayerHitKind::ScriptedHazard: cause = Utf8(u8"危険地帯"); break;
+        }
+        next.showDamageNotice = true;
+        next.damageNoticeLethal = damage.lethal;
+        next.damageNoticeAlpha = damage.lethal ? 1.0f : (std::clamp)(
+            input.playerDamage->damageNoticeRemainingSeconds / 0.4f, 0.0f, 1.0f);
+        next.damageNoticeText = (damage.lethal ? Utf8(u8"敗因: ") : Utf8(u8"被害: ")) +
+            cause + "  -" + Whole(damage.appliedDamage);
+        next.damageHealthText = Utf8(u8"耐久 ") + Whole(damage.hitPointsBefore) +
+            " -> " + Whole(damage.hitPointsAfter);
     }
 
     next.showBanner = false;

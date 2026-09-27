@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <sstream>
 #include <utility>
@@ -285,6 +286,8 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
 
     if (!input.externalBodyCollisionAuthority) {
         for (const CourseObstacleActor& obstacle : runtime.Obstacles()) {
+            if (obstacle.age >= obstacle.desc.lifetime ||
+                (obstacle.desc.breakable && obstacle.desc.hitPoints <= 0.0f)) continue;
             if (!PlayerOverlapsObstacle(player_, obstacle)) {
                 continue;
             }
@@ -364,6 +367,22 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
 PlayerDamageResult CourseCollisionSystem::SubmitPlayerHit(
     const PlayerHitRequest& request) {
     const PlayerDamageResult result = playerDamageSystem_.Submit(request);
+    if (result.accepted && result.appliedDamage > 0.0f) {
+        // Body contacts arrive after Update/LogFrameStats; record at the
+        // shared acceptance boundary so those hits cannot disappear from logs.
+        std::ofstream log = app::OpenRotatingLog("logs/player_damage.log");
+        if (log) {
+            log << "[PlayerDamage] sequence=" << result.sequence
+                << " kind=" << ToString(request.kind)
+                << " source=" << std::quoted(request.sourceId)
+                << " actor=" << request.sourceActorId
+                << " distance=" << request.railDistance
+                << " damage=" << result.appliedDamage
+                << " hpBefore=" << result.hitPointsBefore
+                << " hpAfter=" << result.hitPointsAfter
+                << " lethal=" << result.lethal << '\n';
+        }
+    }
     player_.hitPoints = playerDamageSystem_.State().hitPoints;
     player_.maximumHitPoints = playerDamageSystem_.State().maximumHitPoints;
     player_.invulnerabilityTime =

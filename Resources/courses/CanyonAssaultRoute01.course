@@ -57,8 +57,8 @@ camera|120.000|22.000|6.000|0.000|60.000|2.000|10.000|52.000|0.000|6f1e600a26299
 camera|240.000|20.000|6.000|-2.000|58.000|2.000|10.000|50.000|-3.000|9281a8c28b4d367ddc1cd98c5faed60d|1|0
 camera|420.000|18.000|5.000|4.000|54.000|1.000|12.000|49.000|4.000|cd6fdacb7583235a1c689ca662bb7cea|1|0
 camera|610.000|17.000|5.000|-4.000|56.000|1.000|12.000|51.000|-5.000|3e44fbc6cb7049088b3902cd16916598|1|0
-camera|720.000|11.500|2.800|0.000|46.000|0.000|14.000|61.000|0.000|583b3602f15b04ef4fc2629f36de2cff|1|0
-camera|930.000|12.500|3.200|0.000|50.000|1.000|14.000|63.000|-2.000|bc68fcafc2974fd1816ab42084a75b3e|1|0
+camera|720.000|21.000|8.000|0.000|46.000|0.000|14.000|61.000|0.000|583b3602f15b04ef4fc2629f36de2cff|1|0
+camera|930.000|22.000|8.000|0.000|50.000|1.000|14.000|63.000|-2.000|bc68fcafc2974fd1816ab42084a75b3e|1|0
 camera|980.000|20.000|7.000|-5.000|72.000|4.000|18.000|62.000|-7.000|1e58c1f3868f14aa61ce0c31e2b6caba|1|0
 camera|1280.000|24.000|7.000|4.000|64.000|3.000|10.000|50.000|5.000|83ff51a13afd34db4cc8d454443513ab|1|0
 camera|1680.000|16.000|4.000|0.000|48.000|1.000|16.000|66.000|0.000|5f3d7917922ffbc67b6336a1ae9b4416|1|0
@@ -99,16 +99,16 @@ terrain|15.000|hero_landmark|intro_left_silhouette_wall|curved_canyon_wall|-48.0
 terrain|40.000|vista_background|intro_far_hole_wall_left|vista_hole_wall|46.000|58.000|980.000|58.000|46.000|5.000|0.000|10.000|2.000|none|0|260.000|820.000|53bd9fee62bafe1cf7c1476ec85b902c|1|0
 terrain|55.000|hero_landmark|intro_right_silhouette_wall|curved_canyon_wall|50.000|12.000|105.000|8.000|24.000|32.000|0.000|-14.000|6.000|none|12|90.000|280.000|7c050a2de61385168f6a8e7c8eca8926|1|0
 terrain|115.000|hero_landmark|intro_organic_arch_gate|organic_arch_large|0.000|38.000|330.000|34.000|52.000|7.000|0.000|0.000|0.000|none|20|220.000|640.000|8407fb57ea6855d6fd60fa56c7809ae6|1|0
-terrain|155.000|vista_background|intro_mist_spire_stack|root_spire_column|12.000|62.000|1060.000|36.000|72.000|6.000|0.000|-8.000|-3.000|none|0|260.000|860.000|cc90d58f752a9d15e051d803661391c5|1|0
+terrain|155.000|vista_background|intro_mist_spire_stack|root_spire_column|78.000|62.000|1060.000|16.000|60.000|6.000|0.000|-8.000|-3.000|none|0|260.000|860.000|cc90d58f752a9d15e051d803661391c5|1|0
 terrain|430.000|hero_landmark|crossfire_left_curved_wall|curved_canyon_wall|-32.000|10.000|70.000|7.000|18.000|18.000|0.000|12.000|-8.000|none|10|140.000|180.000|33a013dc651040981b20a20928b24148|1|0
 terrain|520.000|hero_landmark|crossfire_right_curved_wall|curved_canyon_wall|34.000|12.000|80.000|7.000|20.000|20.000|0.000|-10.000|8.000|none|10|140.000|180.000|3a6ac3292e7b5ac2b7b0f65079310272|1|0
 terrain|735.000|hero_landmark|tunnel_mouth_rib_crown|rib_tunnel_wall|0.000|13.000|84.000|16.000|12.000|6.000|0.000|0.000|0.000|none|20|180.000|300.000|6d4cde1b48870c23c4abb338557dfa93|1|0
-terrain|776.000|gameplay_collision|tunnel_left_collision_wall|animated_cube|-12.000|2.000|18.000|2.000|7.000|8.000|0.000|6.000|0.000|proxy|30|80.000|220.000|45d9c591e19c63670f47682858231397|1|0
-terrain|828.000|gameplay_collision|tunnel_right_collision_wall|animated_cube|12.000|2.000|18.000|2.000|7.000|8.000|0.000|-6.000|0.000|proxy|30|80.000|220.000|c0348c6de6f14c994984eb9a37c8a0c9|1|0
+terrain|776.000|gameplay_collision|tunnel_left_collision_wall|rail_hazard_solid|-12.000|2.000|18.000|2.000|7.000|8.000|0.000|0.000|0.000|proxy|30|80.000|220.000|45d9c591e19c63670f47682858231397|1|0
+terrain|828.000|gameplay_collision|tunnel_right_collision_wall|rail_hazard_solid|12.000|2.000|18.000|2.000|7.000|8.000|0.000|0.000|0.000|proxy|30|80.000|220.000|c0348c6de6f14c994984eb9a37c8a0c9|1|0
 terrain|875.000|hero_landmark|rib_tunnel_interior_sweep|rib_tunnel_wall|0.000|4.000|130.000|22.000|7.000|12.000|0.000|0.000|0.000|none|20|180.000|300.000|efb07c65f83feb8e7f9fd8bebf7fc29e|1|0
 terrain|980.000|vista_background|spire_far_hole_wall|vista_hole_wall|64.000|42.000|760.000|32.000|34.000|5.000|0.000|-18.000|0.000|none|0|420.000|220.000|fb97314af78e7d0949f3fe90c6eda019|1|0
-terrain|1010.000|hero_landmark|falling_spire_root_column|root_spire_column|-6.000|30.000|160.000|13.000|42.000|8.000|0.000|4.000|0.000|none|20|220.000|220.000|dc754a6307251c41fca0302421687a71|1|0
-terrain|1085.000|gameplay_collision|spire_debris_collision_lane|animated_cube|0.000|4.000|30.000|5.000|3.000|8.000|0.000|0.000|0.000|proxy|30|90.000|240.000|8e236597c8e324c0fa59d399bcde7170|1|0
+terrain|1010.000|hero_landmark|falling_spire_root_column|root_spire_column|-36.000|30.000|160.000|9.000|42.000|8.000|0.000|4.000|0.000|none|20|220.000|220.000|dc754a6307251c41fca0302421687a71|1|0
+terrain|1085.000|gameplay_collision|spire_debris_collision_lane|rail_hazard_solid|11.000|4.000|30.000|5.000|3.000|8.000|0.000|0.000|0.000|proxy|30|90.000|240.000|8e236597c8e324c0fa59d399bcde7170|1|0
 terrain|1160.000|hero_landmark|spire_broken_bridge_arc|spire_broken_bridge_arc|20.000|18.000|120.000|18.000|5.000|5.000|0.000|-28.000|10.000|none|20|220.000|420.000|31ca95c29e6d8cbe2975b58caaaace6e|1|0
 terrain|1265.000|vista_background|gatekeeper_shadow_wall|vista_hole_wall|0.000|36.000|520.000|40.000|32.000|5.000|0.000|0.000|0.000|none|0|480.000|300.000|9e55defd28bbbac0621028296320abb0|1|0
 
@@ -121,8 +121,8 @@ rock_cluster|1085.000|spire_falling_event_debris|spire_broken_bridge_arc|ceiling
 rock_cluster|1265.000|gatekeeper_far_silhouette_rocks|vista_hole_wall|vista_wall|vista_silhouette|4|1.100|2.400|72.000|20.000|64.000|54.000|300.000|360.000|0.000|0.000|0.000|-|9e4ceda2dc25a77bd735d07a144d3b4b|1|0
 
 # Distance-driven cinematic lighting and fog presets.
-lighting|0.000|intro_backlit_mist|0.000|1.000|0.680|0.500|2.550|-0.500|-0.420|0.760|0.080|0.070|0.070|0.400|0.360|0.340|0.320|260.000|1850.000|0.110|0.460|0.740|1.020|0.120|0.080
-lighting|180.000|first_contact_readability|80.000|1.000|0.680|0.460|2.650|-0.420|-0.500|0.740|0.200|0.180|0.170|0.450|0.390|0.360|0.420|170.000|1320.000|0.200|0.420|0.720|0.680|0.200|0.160
+lighting|0.000|intro_backlit_mist|0.000|1.000|0.680|0.500|2.150|-0.500|-0.420|0.760|0.080|0.070|0.070|0.400|0.360|0.340|0.320|260.000|1850.000|0.110|0.220|0.300|1.020|0.120|0.080
+lighting|180.000|first_contact_readability|80.000|1.000|0.680|0.460|2.200|-0.420|-0.500|0.740|0.120|0.110|0.100|0.450|0.390|0.360|0.420|170.000|1320.000|0.200|0.240|0.320|0.680|0.200|0.160
 lighting|420.000|crossfire_side_rim|120.000|1.000|0.620|0.400|3.100|-0.680|-0.360|0.620|0.160|0.140|0.140|0.440|0.340|0.300|0.440|150.000|1080.000|0.230|0.500|0.820|0.820|0.200|0.160
 lighting|720.000|tunnel_compression|90.000|0.740|0.840|1.000|1.700|-0.220|-0.700|0.480|0.060|0.070|0.090|0.260|0.300|0.360|0.320|65.000|720.000|0.340|0.220|0.340|0.880|0.360|0.300
 lighting|980.000|falling_spire_dust_wall|120.000|1.000|0.660|0.460|2.550|-0.580|-0.320|0.770|0.140|0.120|0.110|0.480|0.390|0.340|0.420|185.000|1220.000|0.200|0.420|0.640|1.000|0.240|0.120
@@ -135,10 +135,10 @@ camera_shot_preset|crossfire_wall_scrape_preset|Wall Scrape|-2.000|-1.000|5.000|
 camera_shot_preset|escape_speed_widen_preset|Escape Speed|-6.000|-2.000|0.000|20.000|-1.000|8.000|9.000|0.000|0.160
 camera_shot_preset|falling_spire_reveal_preset|Falling Spire Reveal|8.000|5.000|-6.000|22.000|4.000|8.000|3.000|-4.000|0.180
 camera_shot_preset|final_gate_silhouette_hold_preset|Final Gate Silhouette|4.000|2.000|5.000|12.000|2.000|8.000|-4.000|2.000|0.100
-camera_shot_preset|first_contact_readable_lane_preset|Combat Readability|2.000|1.000|1.000|10.000|0.000|3.000|-3.000|1.000|0.040
+camera_shot_preset|first_contact_readable_lane_preset|Combat Readability|2.000|1.000|0.000|10.000|0.000|3.000|-3.000|0.000|0.020
 camera_shot_preset|gatekeeper_shadow_pass_preset|Boss Shadow Pass|6.000|2.000|4.000|18.000|3.000|6.000|-5.000|4.000|0.220
 camera_shot_preset|intro_arch_reveal_preset|Arch Reveal|10.000|8.000|0.000|28.000|4.000|14.000|7.000|-1.000|0.040
-camera_shot_preset|tunnel_dive_compression_preset|Tunnel Compression|-4.000|-2.000|0.000|-10.000|-1.000|6.000|7.000|0.000|0.180
+camera_shot_preset|tunnel_dive_compression_preset|Tunnel Compression|0.000|0.000|0.000|-10.000|-1.000|6.000|3.000|0.000|0.080
 
 # Camera blend assets define distance blends and easing for shot presets.
 camera_blend_asset|boss_linear_36_44|36.000|44.000|linear|1.000
@@ -162,7 +162,7 @@ camera_shot|2110.000|2380.000|final_gate_silhouette_hold|-|0.000|0.000|0.000|0.0
 
 # Terrain material presets drive authored rock color and detail by distance.
 terrain_material|0.000|intro_wet_organic_rock|0.000|0.460|0.390|0.350|0.540|1.220|1.280|1.160|0.120|1.480|1.180|0.720|1.480|1.340|1.280|0.050
-terrain_material|180.000|first_contact_readable_strata|80.000|0.860|0.740|0.620|0.860|0.980|1.020|0.920|0.090|1.020|0.820|0.420|1.120|1.020|0.920|0.200
+terrain_material|180.000|first_contact_readable_strata|80.000|0.860|0.740|0.620|0.740|0.700|1.020|0.920|0.090|0.850|0.500|0.420|1.120|1.020|0.920|0.200
 terrain_material|420.000|crossfire_dark_wall_rim|120.000|0.680|0.560|0.500|0.780|1.180|1.260|1.120|0.090|1.420|1.020|0.600|1.280|1.160|1.060|0.140
 terrain_material|720.000|tunnel_cold_ribs|90.000|0.480|0.520|0.620|0.620|1.320|1.420|1.180|0.070|1.580|1.180|0.620|1.460|1.300|1.100|0.100
 terrain_material|980.000|spire_dust_chalk|120.000|0.720|0.580|0.480|0.720|1.180|1.100|0.960|0.070|1.180|0.960|0.580|1.140|1.080|1.080|0.080

@@ -9,6 +9,9 @@ void PlayerDamagePresentationBridge::Reset() {
     hapticLow_ = 0.0f;
     hapticHigh_ = 0.0f;
     hapticRemainingSeconds_ = 0.0f;
+    lastDamage_ = {};
+    damageNoticeRemainingSeconds_ = 0.0f;
+    lastPresentedSequence_ = 0;
     revision_ = 0;
 }
 
@@ -28,10 +31,18 @@ void PlayerDamagePresentationBridge::Update(
         hapticHigh_ = 0.0f;
     }
 
+    if (input.gameplayActive && !lastDamage_.lethal) {
+        damageNoticeRemainingSeconds_ = (std::max)(
+            0.0f, damageNoticeRemainingSeconds_ - dt);
+    }
     frame_ = {};
     if (input.gameplayActive) {
         for (const PlayerDamageResult& result : input.results) {
             if (!result.accepted || result.appliedDamage <= 0.0f) continue;
+            if (result.sequence != 0 && result.sequence <= lastPresentedSequence_) continue;
+            lastPresentedSequence_ = result.sequence;
+            lastDamage_ = result;
+            damageNoticeRemainingSeconds_ = 3.0f;
             const float normalizedDamage = (std::clamp)(
                 result.appliedDamage / 30.0f,
                 0.0f,
@@ -102,6 +113,10 @@ void PlayerDamagePresentationBridge::Update(
             frame_.lethal = frame_.lethal || result.lethal;
         }
     }
+    frame_.lastDamage = lastDamage_;
+    frame_.damageNoticeRemainingSeconds = damageNoticeRemainingSeconds_;
+    frame_.showDamageNotice = lastDamage_.accepted &&
+        (lastDamage_.lethal || damageNoticeRemainingSeconds_ > 0.0f);
     frame_.screenFlashIntensity = flashIntensity_;
     frame_.screenFlashColor = frame_.lethal
         ? Vector4{1.0f, 0.08f, 0.04f, 1.0f}

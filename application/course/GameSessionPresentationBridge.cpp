@@ -34,6 +34,7 @@ void GameSessionPresentationBridge::Reset(uint64_t consumedThroughSequence) {
     bannerHeadline_.clear();
     bannerDetail_.clear();
     bannerColor_ = {};
+    encounterRewardBannerProtected_ = false;
     flashRemaining_ = 0.0f;
     flashDuration_ = 0.0f;
     flashColor_ = {};
@@ -51,6 +52,9 @@ void GameSessionPresentationBridge::Update(
         ? (std::clamp)(input.deltaTime, 0.0f, 0.1f)
         : 0.0f;
     bannerRemaining_ = (std::max)(0.0f, bannerRemaining_ - dt);
+    if (bannerRemaining_ <= 0.0f) {
+        encounterRewardBannerProtected_ = false;
+    }
     flashRemaining_ = (std::max)(0.0f, flashRemaining_ - dt);
     hapticRemaining_ = (std::max)(0.0f, hapticRemaining_ - dt);
 
@@ -181,7 +185,16 @@ void GameSessionPresentationBridge::ConsumeEvent(
         cue.cameraShake = 0.08f;
         cue.hapticHigh = 0.20f;
         cue.hapticDurationSeconds = 0.08f;
-        SetBanner("CHECKPOINT", event.subjectId, Amber(), settings.bannerDurationSeconds);
+        // A checkpoint commonly lands immediately after an Encounter clear.
+        // Keep the earned score result readable instead of replacing it a few
+        // frames later with lower-priority route bookkeeping.
+        if (!encounterRewardBannerProtected_) {
+            SetBanner(
+                Utf8(u8"\u533a\u9593\u901a\u904e"),
+                "",
+                Amber(),
+                settings.bannerDurationSeconds * 0.72f);
+        }
         break;
     case GameSessionEventType::PlayerDamaged:
         cue.kind = GameSessionPresentationCueKind::PlayerDamaged;
@@ -205,7 +218,31 @@ void GameSessionPresentationBridge::ConsumeEvent(
         flashDuration_ = 0.18f;
         flashRemaining_ = flashDuration_;
         break;
-    case GameSessionEventType::ScoreChanged:
+    case GameSessionEventType::ScoreChanged: {
+        const std::string scoreText = "+" + std::to_string(
+            static_cast<uint32_t>((std::max)(0.0f, std::round(event.value))));
+        if (event.subjectId.starts_with("encounter_clean_clear")) {
+            SetBanner(
+                Utf8(u8"\u7121\u50b7\u7a81\u7834"),
+                event.subjectId.ends_with("full_sweep")
+                    ? scoreText + "  " + Utf8(u8"\u5168\u6ec5")
+                    : scoreText,
+                Green(),
+                settings.bannerDurationSeconds * 1.25f);
+            encounterRewardBannerProtected_ = true;
+        } else if (event.subjectId.starts_with("encounter_clear")) {
+            SetBanner(
+                Utf8(u8"\u533a\u9593\u7a81\u7834"),
+                event.subjectId.ends_with("full_sweep")
+                    ? scoreText + "  " + Utf8(u8"\u5168\u6ec5")
+                    : scoreText,
+                Cyan(),
+                settings.bannerDurationSeconds);
+            encounterRewardBannerProtected_ = true;
+        }
+        emit = false;
+        break;
+    }
     case GameSessionEventType::ComboChanged:
         emit = false;
         break;

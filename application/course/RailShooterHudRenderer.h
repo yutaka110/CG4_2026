@@ -36,6 +36,7 @@ struct RailShooterHudRenderInput final {
     const RailShooterHudPresentationFrame* presentation = nullptr;
     uint32_t viewportWidth = 0;
     uint32_t viewportHeight = 0;
+    bool showTitleScreen = false;
 };
 
 struct RailShooterHudRenderFrame final {

@@ -245,6 +245,27 @@ void EnemyAttackDefensePresentationBridge::Update(
     for (auto it = tracked_.begin(); it != tracked_.end();) {
         TrackedCue& tracked = it->second;
         const bool projectileInFlight = liveProjectileOwners.contains(it->first);
+        const bool departingOwner = std::any_of(
+            input.runtime->Enemies().begin(), input.runtime->Enemies().end(),
+            [&](const CourseEnemyActor& actor) {
+                return actor.actorId == it->first &&
+                    (actor.behaviorState.engagementBandExitRequested ||
+                     actor.entranceExitState.exitRequested);
+            });
+        const bool validWarningOwner = std::any_of(
+            input.runtime->Enemies().begin(), input.runtime->Enemies().end(),
+            [&](const CourseEnemyActor& actor) {
+                return actor.actorId == it->first &&
+                    (!actor.behaviorDefinition.commercialBehavior ||
+                     (actor.fireEnvironmentReady && actor.behaviorState.attackIntentActive &&
+                      actor.attackState.tokenReserved));
+            });
+        if ((departingOwner || !validWarningOwner || !touched.contains(it->first)) && !projectileInFlight) {
+            // Do not retain a canceled enemy warning for the anti-flicker
+            // grace period. An actual shot in flight remains a valid threat.
+            it = tracked_.erase(it);
+            continue;
+        }
         if (!touched.contains(it->first) && projectileInFlight) {
             tracked.cue.projectileInFlight = true;
             tracked.cue.phase = EnemyAttackTelegraphPhase::Fired;
@@ -261,13 +282,6 @@ void EnemyAttackDefensePresentationBridge::Update(
             tracked.cue.color = ColorFor(tracked.cue.primaryAction);
             BuildDecisionOptions(tracked.cue, input.mountedDefense);
             ++next.projectilePrompts;
-        } else if (!touched.contains(it->first)) {
-            tracked.graceRemaining -= (std::clamp)(
-                input.deltaTime, 0.0f, 0.25f);
-            if (tracked.graceRemaining <= 0.0f) {
-                it = tracked_.erase(it);
-                continue;
-            }
         }
         if (tracked.cue.primaryAction != EnemyAttackDefensePromptAction::None) {
             ++next.candidates;

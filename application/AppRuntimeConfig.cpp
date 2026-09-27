@@ -74,6 +74,7 @@ AppStartupScene ParseAppStartupSceneArguments(
         const std::wstring_view argument(arguments[argumentIndex]);
         if (argument == L"--rail-shooter" ||
             argument == L"--combat-loop-10s" ||
+            argument == L"--combat-loop-expansion" ||
             argument == L"--combat-loop-ui-proof" ||
             argument == L"--combat-loop-ui-proof=interrupt" ||
             argument == L"--combat-loop-ui-proof=shootdown" ||
@@ -132,6 +133,34 @@ bool ResolveCombatLoop10SecondModeFromCommandLine() {
 
     const bool enabled =
         ParseCombatLoop10SecondModeArguments(argumentCount, arguments);
+    LocalFree(arguments);
+    return enabled;
+}
+
+bool ParseCombatLoopExpansionModeArguments(
+    int argumentCount,
+    const wchar_t* const* arguments) noexcept {
+    if (argumentCount <= 1 || arguments == nullptr) {
+        return false;
+    }
+    for (int argumentIndex = 1; argumentIndex < argumentCount; ++argumentIndex) {
+        if (arguments[argumentIndex] != nullptr &&
+            std::wstring_view(arguments[argumentIndex]) ==
+                L"--combat-loop-expansion") {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ResolveCombatLoopExpansionModeFromCommandLine() {
+    int argumentCount = 0;
+    LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
+    if (arguments == nullptr) {
+        return false;
+    }
+    const bool enabled =
+        ParseCombatLoopExpansionModeArguments(argumentCount, arguments);
     LocalFree(arguments);
     return enabled;
 }

@@ -443,8 +443,21 @@ RailAimHit RailWorldRaycast::Query(const RailWorldRaycastInput& input) {
              ++index) {
             const CourseTerrainPlacement& placement =
                 input.course->terrainPlacements[index];
-            if (placement.layer != CourseTerrainLayer::GameplayCollision ||
-                placement.collisionMode == CourseTerrainCollisionMode::None) {
+            const float defaultBehind = placement.layer == CourseTerrainLayer::GameplayCollision
+                ? 70.0f : (placement.layer == CourseTerrainLayer::VistaBackground ? 420.0f : 180.0f);
+            const float defaultAhead = placement.layer == CourseTerrainLayer::GameplayCollision
+                ? 220.0f : (placement.layer == CourseTerrainLayer::VistaBackground ? 760.0f : 360.0f);
+            const float behind = placement.cullBehindDistance >= 0.0f
+                ? placement.cullBehindDistance : defaultBehind;
+            const float ahead = placement.cullAheadDistance >= 0.0f
+                ? placement.cullAheadDistance : defaultAhead;
+            const float presentationDelta = placement.distance - input.playerDistance;
+            const bool visualColumn = input.includeVisualColumns &&
+                placement.meshId == "root_spire_column" &&
+                presentationDelta >= -behind && presentationDelta <= ahead;
+            if (!visualColumn &&
+                (placement.layer != CourseTerrainLayer::GameplayCollision ||
+                 placement.collisionMode == CourseTerrainCollisionMode::None)) {
                 continue;
             }
             const float railDistance = placement.distance + placement.forwardOffset;

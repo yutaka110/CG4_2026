@@ -5,8 +5,10 @@
 #include "GrazeScoreSystem.h"
 #include "RailVehicleMovementSystem.h"
 #include "WeaponFireSystem.h"
+#include "CourseSpawnRuntime.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 float Ratio(float value, float maximum) noexcept {
@@ -96,6 +98,32 @@ void RailShooterHudRuntimeModel::Update(
         if (next.courseLength <= 0.0f) {
             next.courseProgressNormalized =
                 (std::clamp)(input.vehicle->normalizedProgress, 0.0f, 1.0f);
+        }
+    }
+
+    if (next.gameplayActive && input.spawnRuntime != nullptr &&
+        input.vehicleDefinition != nullptr && input.vehicle != nullptr && input.vehicle->initialized) {
+        const auto& vehicle = *input.vehicle;
+        const auto& body = *input.vehicleDefinition;
+        float nearestContact = 5.0f;
+        for (const auto& actor : input.spawnRuntime->Obstacles()) {
+            const auto& obstacle = actor.desc;
+            if (obstacle.hitPoints <= 0.0f || actor.age >= obstacle.lifetime ||
+                std::abs(obstacle.lateralOffset) > obstacle.halfExtents.x + body.collisionHalfExtents.x ||
+                std::abs(obstacle.verticalOffset - body.bodyVerticalOffset) >
+                    obstacle.halfExtents.y + body.collisionHalfExtents.y) continue;
+            const float relativeSpeed = vehicle.speed - obstacle.forwardSpeed;
+            const float centreGap = obstacle.spawnDistance + obstacle.distanceOffset - vehicle.distance;
+            const float extent = obstacle.halfExtents.z + body.collisionHalfExtents.z;
+            if (relativeSpeed <= 0.01f || centreGap < -extent) continue;
+            const float time = (std::max)(0.0f, (centreGap - extent) / relativeSpeed);
+            if (time > nearestContact || time >= obstacle.lifetime - actor.age) continue;
+            nearestContact = time;
+            next.obstacleApproaching = true;
+            next.approachingObstacleBreakable = obstacle.breakable;
+            next.obstacleTimeToContact = time;
+            next.approachingObstacleHealth = obstacle.hitPoints;
+            next.approachingObstacleActorId = actor.actorId;
         }
     }
 

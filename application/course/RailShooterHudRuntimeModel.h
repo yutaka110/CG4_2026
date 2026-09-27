@@ -13,6 +13,7 @@ struct RailVehicleDefinition;
 struct RailVehicleRuntimeState;
 struct WeaponDefinition;
 struct WeaponRuntimeState;
+class CourseSpawnRuntime;
 
 struct RailShooterHudWeaponSnapshot final {
     bool available = false;
@@ -47,9 +48,15 @@ struct RailShooterHudRuntimeInput final {
     const EnemyEncounterReadabilityFrame* encounterReadability = nullptr;
     uint32_t lockCount = 0;
     uint32_t maximumLocks = 0;
+    const CourseSpawnRuntime* spawnRuntime = nullptr;
 };
 
 struct RailShooterHudRuntimeFrame final {
+    bool obstacleApproaching = false;
+    bool approachingObstacleBreakable = false;
+    float obstacleTimeToContact = 0.0f;
+    float approachingObstacleHealth = 0.0f;
+    uint32_t approachingObstacleActorId = 0;
     bool visible = false;
     bool gameplayActive = false;
     GameSessionPhase sessionPhase = GameSessionPhase::Uninitialized;

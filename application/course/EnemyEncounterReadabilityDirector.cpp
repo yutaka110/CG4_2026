@@ -179,7 +179,8 @@ void EnemyEncounterReadabilityDirector::Update(
                     dt * (std::max)(0.0f,
                         input.settings.exposureDecayPerSecond));
         }
-        const bool attackReady = tracked.readableExposureSeconds >=
+        const bool attackReady = center.onScreen && presence.screenReadable &&
+            tracked.readableExposureSeconds >=
             (std::max)(0.0f,
                 input.settings.minimumAttackExposureSeconds);
         actor.screenPresenceEvaluated = input.gameplayActive;

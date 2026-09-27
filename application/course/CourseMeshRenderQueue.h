@@ -78,11 +78,17 @@ public:
     size_t VisibleCount() const { return visibleCount_; }
 
 private:
+    void AddObstacleInstances(
+        const CourseSpawnRuntime& runtime,
+        const RailPath& railPath,
+        std::span<const CourseMeshModelBinding> models,
+        const Matrix4x4& viewProjection);
     void AddEnemyInstances(
         const CourseSpawnRuntime& runtime,
         const RailPath& railPath,
         std::span<const CourseMeshModelBinding> models,
         const Matrix4x4& viewProjection,
+        const Vector3& cameraPosition,
         const EnemyCombatPresentationBridge* enemyPresentation,
         const EnemyEncounterReadabilityDirector* enemyReadability);
     void AddCourseDebrisInstances(

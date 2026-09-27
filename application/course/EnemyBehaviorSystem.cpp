@@ -73,6 +73,33 @@ float SeverityForArchetype(EnemyBehaviorArchetype archetype) noexcept {
     }
     return 0.5f;
 }
+
+bool HasAttackPassTurn(
+    const CourseEnemyActor& actor, const CourseSpawnRuntime& runtime) {
+    // Entry must finish before a readable stationary pose can begin.
+    if (actor.entranceExitState.initialized &&
+        actor.entranceExitState.phase != EnemyEntranceExitPhase::Active) {
+        return false;
+    }
+    for (const CourseEnemyActor& peer : runtime.Enemies()) {
+        if (peer.actorId == actor.actorId || peer.desc.waveId != actor.desc.waveId ||
+            !peer.behaviorDefinition.choreographedAttackPass ||
+            peer.desc.hitPoints <= 0.0f ||
+            peer.combatState.phase == EnemyCombatPhase::Dying ||
+            peer.combatState.phase == EnemyCombatPhase::Retired) continue;
+        const EnemyBehaviorState peerState = peer.behaviorState.state;
+        if (peerState == EnemyBehaviorState::Aiming ||
+            peerState == EnemyBehaviorState::RequestingAttack ||
+            peerState == EnemyBehaviorState::Evading) return false;
+        // Preserve leader/left/right order even if a preceding actor is still
+        // establishing its band. A defeated or departing actor yields its turn.
+        if (peerState != EnemyBehaviorState::Retreating &&
+            peerState != EnemyBehaviorState::Disabled &&
+            peer.behaviorDefinition.attackPassStartDelaySeconds <
+                actor.behaviorDefinition.attackPassStartDelaySeconds) return false;
+    }
+    return true;
+}
 } // namespace
 
 EnemyBehaviorDefinition EnemyBehaviorDefinition::LegacyDirect() {
@@ -181,8 +208,36 @@ bool EnemyBehaviorDefinition::Validate(std::string* errorMessage) const {
         !FiniteNonNegative(verticalAmplitude) ||
         !FiniteNonNegative(movementFrequency) ||
         !FiniteNonNegative(forwardMotionScale) ||
-        !FiniteNonNegative(maximumBankRadians)) {
+        !FiniteNonNegative(maximumBankRadians) ||
+        !FiniteNonNegative(engagementBandMinimumForwardDistance) ||
+        !FiniteNonNegative(engagementBandPreferredForwardDistance) ||
+        !FiniteNonNegative(engagementBandMaximumForwardDistance) ||
+        !FiniteNonNegative(engagementBandDisengageForwardDistance) ||
+        !FiniteNonNegative(engagementBandPositionGain) ||
+        !FiniteNonNegative(engagementBandMaximumCorrectionSpeed) ||
+        !FiniteNonNegative(engagementBandVelocityResponse) ||
+        !FiniteNonNegative(attackPassStartDelaySeconds) ||
+        !FiniteNonNegative(attackPassRecoilSeconds)) {
         SetError(errorMessage, "EnemyBehaviorDefinition contains an invalid value.");
+        return false;
+    }
+    if (maintainForwardEngagementBand &&
+        (!(engagementBandDisengageForwardDistance <
+                engagementBandMinimumForwardDistance) ||
+         !(engagementBandMinimumForwardDistance <
+                engagementBandPreferredForwardDistance) ||
+         !(engagementBandPreferredForwardDistance <
+                engagementBandMaximumForwardDistance) ||
+         engagementBandPositionGain <= 0.0f ||
+         engagementBandMaximumCorrectionSpeed <= 0.0f ||
+         engagementBandVelocityResponse <= 0.0f)) {
+        SetError(errorMessage, "EnemyBehaviorDefinition engagement band is invalid.");
+        return false;
+    }
+    if (choreographedAttackPass &&
+        (!commercialBehavior || !maintainForwardEngagementBand ||
+         aimingDurationSeconds <= 0.0f || attackPassRecoilSeconds <= 0.0f)) {
+        SetError(errorMessage, "Attack pass requires commercial forward-band behavior and positive pose/recoil durations.");
         return false;
     }
     return true;
@@ -222,6 +277,8 @@ void EnemyBehaviorSystem::Reset() {
     frame_ = {};
     pendingEvents_.clear();
     revision_ = 0;
+    previousPlayerDistance_ = 0.0f;
+    hasPreviousPlayerDistance_ = false;
 }
 
 void EnemyBehaviorSystem::InitializeActor(CourseEnemyActor& actor) {
@@ -237,6 +294,13 @@ void EnemyBehaviorSystem::InitializeActor(CourseEnemyActor& actor) {
     state.attackCooldownRemaining = (std::max)(
         actor.desc.firstShotDelay,
         actor.behaviorDefinition.positioningDurationSeconds);
+    if (actor.behaviorDefinition.choreographedAttackPass) {
+        state.attackCooldownRemaining = (std::max)(
+            state.attackCooldownRemaining,
+            actor.behaviorDefinition.attackPassStartDelaySeconds);
+    }
+    state.engagementBandVelocity =
+        actor.desc.forwardSpeed * actor.behaviorDefinition.forwardMotionScale;
     state.state = actor.behaviorDefinition.commercialBehavior
         ? EnemyBehaviorState::Dormant
         : EnemyBehaviorState::Aiming;
@@ -250,6 +314,19 @@ void EnemyBehaviorSystem::Update(
     const float dt = std::isfinite(input.deltaTime)
         ? (std::clamp)(input.deltaTime, 0.0f, 0.25f)
         : 0.0f;
+    const float playerDistance = std::isfinite(input.playerDistance)
+        ? input.playerDistance : 0.0f;
+    float playerForwardSpeed = 0.0f;
+    if (hasPreviousPlayerDistance_ && dt > 0.0001f) {
+        const float distanceDelta = playerDistance - previousPlayerDistance_;
+        const float discontinuityThreshold = (std::max)(24.0f, dt * 96.0f);
+        if (distanceDelta >= 0.0f && distanceDelta <= discontinuityThreshold) {
+            playerForwardSpeed = (std::clamp)(
+                distanceDelta / dt, 0.0f, 72.0f);
+        }
+    }
+    previousPlayerDistance_ = playerDistance;
+    hasPreviousPlayerDistance_ = true;
     for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
         if (!actor.behaviorState.initialized) InitializeActor(actor);
         EnemyBehaviorRuntimeState& state = actor.behaviorState;
@@ -272,7 +349,21 @@ void EnemyBehaviorSystem::Update(
         }
         const bool combatSpawning = actor.combatState.initialized &&
             actor.combatState.phase == EnemyCombatPhase::Spawning;
+        if (definition.maintainForwardEngagementBand &&
+            ((actor.entranceExitState.initialized && actor.entranceExitState.exitRequested) ||
+             state.engagementBandExitRequested)) {
+            state.attackIntentActive = false;
+            state.telegraphPresented = false;
+            state.attackTimeRemaining = 0.0f;
+            state.engagementBandExitRequested = true;
+            EnterState(actor, EnemyBehaviorState::Retreating);
+        }
         if (combatSpawning) {
+            // Spawning visuals must follow the cart too; otherwise a delayed
+            // entrance can already be overtaken when combat becomes active.
+            if (definition.maintainForwardEngagementBand) {
+                ApplyMovement(actor, dt, playerDistance, playerForwardSpeed);
+            }
             state.state = EnemyBehaviorState::Dormant;
             state.stateElapsedSeconds = 0.0f;
             actor.fireTimer = (std::max)(actor.fireTimer, definition.attackLeadSeconds);
@@ -294,22 +385,38 @@ void EnemyBehaviorSystem::Update(
             break;
         case EnemyBehaviorState::Positioning:
             if (state.stateElapsedSeconds >= definition.positioningDurationSeconds &&
-                state.attackCooldownRemaining <= 0.0f) {
+                state.attackCooldownRemaining <= 0.0f &&
+                (!definition.maintainForwardEngagementBand ||
+                    state.engagementBandAttackAllowed) &&
+                (!definition.choreographedAttackPass ||
+                    HasAttackPassTurn(actor, runtime))) {
                 EnterState(actor, EnemyBehaviorState::Aiming);
             }
             break;
         case EnemyBehaviorState::Aiming:
-            if (state.stateElapsedSeconds >= definition.aimingDurationSeconds) {
+            if (state.stateElapsedSeconds >= definition.aimingDurationSeconds &&
+                (!definition.maintainForwardEngagementBand ||
+                    state.engagementBandAttackAllowed)) {
                 BeginAttackIntent(actor);
             }
             break;
         case EnemyBehaviorState::RequestingAttack:
-            state.attackTimeRemaining = (std::max)(
-                0.0f, state.attackTimeRemaining - dt);
+            // Queuing must never consume the readable charge-up interval.
+            if (actor.fireEnvironmentReady &&
+                actor.attackState.tokenReserved && state.telegraphPresented) {
+                state.attackTimeRemaining = (std::max)(
+                    0.0f, state.attackTimeRemaining - dt);
+            }
             actor.fireTimer = state.attackTimeRemaining;
             break;
         case EnemyBehaviorState::Evading:
-            if (state.stateElapsedSeconds >= definition.evadeDurationSeconds) {
+            if (definition.choreographedAttackPass &&
+                state.stateElapsedSeconds >= definition.attackPassRecoilSeconds) {
+                EnterState(actor, EnemyBehaviorState::Retreating);
+                runtime.EnemyEntranceExit().RequestActorExit(actor.actorId);
+                state.engagementBandExitRequested = true;
+            } else if (!definition.choreographedAttackPass &&
+                state.stateElapsedSeconds >= definition.evadeDurationSeconds) {
                 EnterState(actor, EnemyBehaviorState::Repositioning);
             }
             break;
@@ -324,7 +431,31 @@ void EnemyBehaviorSystem::Update(
             break;
         }
 
-        ApplyMovement(actor, dt, input.playerDistance);
+        ApplyMovement(actor, dt, playerDistance, playerForwardSpeed);
+        if (definition.maintainForwardEngagementBand) {
+            ++frame_.engagementBandActors;
+            if (!state.engagementBandAttackAllowed &&
+                state.attackIntentActive) {
+                if (CancelAttackIntent(actor, 0.18f)) {
+                    ++frame_.engagementBandSuppressedAttacks;
+                }
+            }
+            if (!state.engagementBandExitRequested &&
+                state.engagementBandForwardDistance <=
+                    definition.engagementBandDisengageForwardDistance) {
+                state.attackIntentActive = false;
+                state.telegraphPresented = false;
+                state.attackTimeRemaining = 0.0f;
+                actor.fireTimer = (std::max)(
+                    actor.fireTimer, definition.attackCooldownSeconds);
+                EnterState(actor, EnemyBehaviorState::Retreating,
+                    EnemyBehaviorEventKind::StateChanged);
+                runtime.EnemyEntranceExit().RequestActorExit(actor.actorId);
+                state.engagementBandExitRequested = true;
+                ++frame_.engagementBandForcedExits;
+                state.revision = ++revision_;
+            }
+        }
         if (state.attackIntentActive) {
             EnemyAttackIntent intent{};
             intent.actorId = actor.actorId;
@@ -370,7 +501,9 @@ bool EnemyBehaviorSystem::CanCommitAttack(
     const EnemyBehaviorDefinition& definition = actor.behaviorDefinition;
     const EnemyBehaviorRuntimeState& state = actor.behaviorState;
     if (!definition.commercialBehavior) return true;
-    return state.attackIntentActive && state.attackTimeRemaining <= 0.0f &&
+    return actor.fireEnvironmentReady && state.attackIntentActive && state.attackTimeRemaining <= 0.0f &&
+        (!definition.maintainForwardEngagementBand ||
+            state.engagementBandAttackAllowed) &&
         (!definition.requireTelegraphPresentation || state.telegraphPresented);
 }
 
@@ -421,6 +554,10 @@ void EnemyBehaviorSystem::EnterState(
     EnemyBehaviorEventKind eventKind) {
     EnemyBehaviorRuntimeState& state = actor.behaviorState;
     if (state.state == newState) return;
+    if (newState == EnemyBehaviorState::Aiming &&
+        actor.behaviorDefinition.choreographedAttackPass) {
+        state.attackPassHoldForwardDistance = state.engagementBandForwardDistance;
+    }
     state.state = newState;
     state.stateElapsedSeconds = 0.0f;
     QueueEvent(actor, eventKind);
@@ -442,12 +579,47 @@ void EnemyBehaviorSystem::BeginAttackIntent(CourseEnemyActor& actor) {
 void EnemyBehaviorSystem::ApplyMovement(
     CourseEnemyActor& actor,
     float deltaTime,
-    float playerDistance) {
-    (void)playerDistance;
+    float playerDistance,
+    float playerForwardSpeed) {
     EnemyBehaviorRuntimeState& state = actor.behaviorState;
     const EnemyBehaviorDefinition& definition = actor.behaviorDefinition;
-    state.integratedForwardOffset +=
-        actor.desc.forwardSpeed * definition.forwardMotionScale * deltaTime;
+    if (definition.maintainForwardEngagementBand) {
+        const float baseForwardDistance = actor.desc.spawnDistance +
+            state.authoredForwardOffset + state.integratedForwardOffset -
+            playerDistance;
+        const bool holdingPose = definition.choreographedAttackPass &&
+            state.attackPassHoldForwardDistance > 0.0f &&
+            (state.state == EnemyBehaviorState::Aiming ||
+             state.state == EnemyBehaviorState::RequestingAttack ||
+             state.state == EnemyBehaviorState::Evading ||
+             state.state == EnemyBehaviorState::Retreating);
+        const float desiredForwardDistance = holdingPose
+            ? state.attackPassHoldForwardDistance
+            : definition.engagementBandPreferredForwardDistance;
+        const float error = desiredForwardDistance - baseForwardDistance;
+        const float correction = (std::clamp)(
+            error * definition.engagementBandPositionGain,
+            -definition.engagementBandMaximumCorrectionSpeed,
+            definition.engagementBandMaximumCorrectionSpeed);
+        const float targetVelocity = (std::clamp)(
+            playerForwardSpeed + correction,
+            0.0f,
+            playerForwardSpeed +
+                definition.engagementBandMaximumCorrectionSpeed);
+        const float velocityBlend = 1.0f - std::exp(
+            -definition.engagementBandVelocityResponse * deltaTime);
+        state.engagementBandVelocity +=
+            (targetVelocity - state.engagementBandVelocity) *
+            (std::clamp)(velocityBlend, 0.0f, 1.0f);
+        state.integratedForwardOffset +=
+            state.engagementBandVelocity * deltaTime;
+        if (std::abs(correction) > 0.10f) {
+            ++frame_.engagementBandCorrections;
+        }
+    } else {
+        state.integratedForwardOffset +=
+            actor.desc.forwardSpeed * definition.forwardMotionScale * deltaTime;
+    }
     const float entryBlend = definition.entryDurationSeconds > 0.0f
         ? SmoothStep(actor.age / definition.entryDurationSeconds)
         : 1.0f;
@@ -456,7 +628,7 @@ void EnemyBehaviorSystem::ApplyMovement(
     float lateral = 0.0f;
     float vertical = 0.0f;
     float forward = 0.0f;
-    if (definition.movementEnabled) {
+    if (definition.movementEnabled && !definition.choreographedAttackPass) {
         switch (definition.archetype) {
         case EnemyBehaviorArchetype::Assault:
             lateral = std::sin(phase) * definition.lateralAmplitude;
@@ -491,7 +663,8 @@ void EnemyBehaviorSystem::ApplyMovement(
             break;
         }
     }
-    if (state.state == EnemyBehaviorState::Evading) {
+    if (state.state == EnemyBehaviorState::Evading &&
+        !definition.choreographedAttackPass) {
         const float evadeProgress = actor.behaviorDefinition.evadeDurationSeconds > 0.0f
             ? Saturate(state.stateElapsedSeconds /
                 actor.behaviorDefinition.evadeDurationSeconds)
@@ -509,12 +682,32 @@ void EnemyBehaviorSystem::ApplyMovement(
         -std::cos(phase) * definition.maximumBankRadians,
         -definition.maximumBankRadians,
         definition.maximumBankRadians);
+    if (definition.choreographedAttackPass) {
+        state.presentationYawRadians = 0.0f;
+        state.presentationPitchRadians = 0.0f;
+        state.presentationBankRadians = 0.0f;
+        if (state.state == EnemyBehaviorState::Retreating) {
+            const float side = state.authoredLateralOffset < -0.1f ? -1.0f : 1.0f;
+            const float bank = SmoothStep(state.stateElapsedSeconds / 0.35f);
+            state.presentationBankRadians = -side * bank * 0.55f;
+            state.presentationYawRadians = side * bank * 0.24f;
+        }
+    }
     actor.desc.distanceOffset = state.authoredForwardOffset +
         state.integratedForwardOffset + state.behaviorForwardOffset;
     actor.desc.lateralOffset = state.authoredLateralOffset +
-        state.behaviorLateralOffset;
+        state.behaviorLateralOffset + state.safetyLateralOffset;
     actor.desc.verticalOffset = state.authoredVerticalOffset +
         state.behaviorVerticalOffset;
+    state.engagementBandForwardDistance =
+        actor.desc.spawnDistance + actor.desc.distanceOffset - playerDistance;
+    state.engagementBandAttackAllowed =
+        !definition.maintainForwardEngagementBand ||
+        (state.engagementBandForwardDistance >=
+                definition.engagementBandMinimumForwardDistance &&
+         state.engagementBandForwardDistance <=
+                definition.engagementBandMaximumForwardDistance &&
+         !state.engagementBandExitRequested);
 }
 
 void EnemyBehaviorSystem::QueueEvent(

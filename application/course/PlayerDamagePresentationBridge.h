@@ -37,6 +37,11 @@ struct PlayerDamageVfxCommand final {
 };
 
 struct PlayerDamagePresentationFrame final {
+    // Retained separately from one-frame audio/VFX. A lethal notice survives
+    // the Defeat -> Result transition until retry/reset.
+    PlayerDamageResult lastDamage{};
+    float damageNoticeRemainingSeconds = 0.0f;
+    bool showDamageNotice = false;
     std::vector<PlayerDamageAudioCue> audioCues;
     std::vector<PlayerDamageVfxCommand> vfxCommands;
     float screenFlashIntensity = 0.0f;
@@ -83,5 +88,8 @@ private:
     float hapticLow_ = 0.0f;
     float hapticHigh_ = 0.0f;
     float hapticRemainingSeconds_ = 0.0f;
+    PlayerDamageResult lastDamage_{};
+    float damageNoticeRemainingSeconds_ = 0.0f;
+    uint64_t lastPresentedSequence_ = 0;
     uint64_t revision_ = 0;
 };

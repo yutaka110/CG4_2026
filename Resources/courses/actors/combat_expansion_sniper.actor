@@ -1,0 +1,6 @@
+# Long vertical silhouette and long lead communicate a precision threat.
+actor|combat_expansion_sniper|Combat Expansion Sniper|combat_sniper_hull|1.25|38|9.0|1.0|0.62|0.06|1.0|sniper_predictive_single
+combat|8.00|0.46|60|sniper_predictive_single
+movement|0.8
+behavior|sniper|0.30|0.48|0.56|1.55|8.00|0.24|0.42|0.70|0.34|0.30|true
+engagement_band|true|34|52|72|14|1.8|28|7

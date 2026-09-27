@@ -79,6 +79,10 @@ StyleCopReport.xml
 !Resources/**/*.meta
 *.obj
 !Resources/tests/MultiMaterial/MultiMaterial.obj
+# Runtime Wavefront models are assets, not compiler object files.
+!/Resources/ball/ball.obj
+!/Resources/course_meshes/**/*.obj
+!/Resources/enemies/**/*.obj
 *.iobj
 *.pch
 *.pdb
@@ -366,6 +370,8 @@ MigrationBackup/
 FodyWeavers.xsd
 
 # Project-local capture and Codex working files
+/.codex_video_review/
+/.codex_video_review_*/
 capture/
 cache/
 .codex/

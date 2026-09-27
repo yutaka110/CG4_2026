@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -149,6 +150,12 @@ struct RailCameraEncounterFramingSettings {
     float bossFocusBoost = 0.42f;
     float fovExpandDeg = 5.0f;
     float bossFovExpandDeg = 3.0f;
+    // One authored priority threat needs a hero shot, not the multi-target
+    // wide framing used for a formation. These values tighten without
+    // bypassing the shared comfort and collision passes.
+    float singleThreatFovTightenDeg = 5.5f;
+    float singleThreatBackDistancePullIn = 1.45f;
+    float singleThreatLookAheadReduction = 2.0f;
     float maxFovDeg = 76.0f;
     float lookAheadBoost = 4.0f;
     float backDistanceBoost = 2.0f;
@@ -158,6 +165,9 @@ struct RailCameraEncounterFramingSettings {
 };
 
 struct RailCameraDirectorFrameInput {
+    // Conservative rendered vehicle bounds, including bank and suspension.
+    bool vehicleFramingActive = false;
+    std::array<Vector3, 8> vehicleBoundsCorners{};
     const CourseAsset* course = nullptr;
     const RailPath* railPath = nullptr;
     const CourseSection* section = nullptr;
@@ -206,6 +216,11 @@ struct RailCameraDirectorFrameInput {
 };
 
 struct RailCameraDirectorFrame {
+    float vehicleFramingPullback = 0.0f;
+    float vehicleFramingLift = 0.0f;
+    float vehicleScreenTop = 1.0f;
+    float vehicleScreenWidth = 0.0f;
+    bool vehicleFramingSafe = true;
     CourseCameraKey rig{};
     // Stable gameplay camera captured before presentation-only shake. Weapon
     // aim and target projection must use these values.
@@ -244,6 +259,7 @@ struct RailCameraDirectorFrame {
     float encounterFramingBlend = 0.0f;
     float encounterFramingFovOffsetDeg = 0.0f;
     float encounterFramingThreatSpread = 0.0f;
+    float encounterFramingSingleThreatFocus = 0.0f;
     float encounterFramingRemaining = 0.0f;
     float cinematicShotWeight = 0.0f;
     float authoredEncounterCompositionWeight = 0.0f;
@@ -313,6 +329,13 @@ public:
     RailCameraEncounterFramingSettings& MutableEncounterFramingSettings() { return encounterFramingSettings_; }
 
 private:
+    void ApplyVehicleFraming(
+        RailCameraDirectorFrame& frame,
+        const RailCameraDirectorFrameInput& input,
+        const RailPathSample& cameraSample);
+    void MeasureVehicleFraming(
+        RailCameraDirectorFrame& frame,
+        const RailCameraDirectorFrameInput& input) const;
     CourseCameraKey SmoothRig(const CourseCameraKey& target, float deltaTime);
     float UpdateAimFocusBlend(const RailCameraDirectorFrameInput& input);
     void ApplyAimFocusStabilization(
@@ -361,6 +384,8 @@ private:
     void UpdateComfortMetrics(RailCameraDirectorFrame& frame, const RailCameraDirectorFrameInput& input);
 
     CourseCameraKey smoothedRig_{};
+    float vehicleFramingPullback_ = 0.0f;
+    float vehicleFramingLift_ = 0.0f;
     RailCameraComfortSettings comfortSettings_{};
     RailCameraAimFocusSettings aimFocusSettings_{};
     RailCameraLookAtSettings lookAtSettings_{};
@@ -388,6 +413,13 @@ private:
     Vector3 smoothedLookAtTarget_{};
     bool hasSmoothedLookAtTarget_ = false;
     RailCameraDirectorFrame segmentTransitionStartFrame_{};
+    // Cache before vehicle/collision/shake corrections, which run once after
+    // transition blending. Anchors keep the old composition moving on the rail.
+    RailCameraDirectorFrame previousTransitionFrame_{};
+    RailPathSample previousTransitionCameraAnchor_{};
+    RailPathSample previousTransitionTargetAnchor_{};
+    RailPathSample segmentTransitionCameraAnchor_{};
+    RailPathSample segmentTransitionTargetAnchor_{};
     bool hasSegmentTransitionStartFrame_ = false;
     std::string currentSectionSignature_;
     std::string previousSectionSignature_;

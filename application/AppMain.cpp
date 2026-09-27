@@ -291,9 +291,7 @@ AppFrameRenderer frameRenderer;
 	audio.Initialize();
 
 
-    audio::SoundHandle alarmSound = audio.LoadSound("Resources/Alarm01.wav");
-
-	audio.Play(alarmSound);
+    // No classroom alarm sample on startup; gameplay audio owns playback.
 	DebugCamera debugCamera;
 	debugCamera.Initialize();
 
@@ -334,6 +332,10 @@ AppFrameRenderer frameRenderer;
 		DXGI_FORMAT_D24_UNORM_S8_UINT);
 	while (msg.message != WM_QUIT) {
 		if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+			if (msg.hwnd == hwnd &&
+				runLoop.HandleTitleScreenMessage(msg.message, msg.wParam, msg.lParam)) {
+				continue;
+			}
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
 		}

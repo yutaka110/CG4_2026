@@ -1762,6 +1762,10 @@ namespace {
         instance.animator.playing = true;
         instance.animator.speed = 1.0f;
 
+        // Teaching/demo models are optional and omitted from the rail package.
+        if (!std::filesystem::is_regular_file(std::filesystem::path(directory) / filename)) {
+            return false;
+        }
         instance.model = LoadObjFile_Assimp(directory, filename);
         instance.animation = LoadAnimationFile(directory, filename);
         if (instance.model.vertices.empty() ||
@@ -2121,7 +2125,7 @@ bool AppSceneResources::Initialize(
     // Texture 2譫・
     // slot 1, 2 繧剃ｽｿ逕ｨ・・lot 0 縺ｯ ImGui 逕ｨ縺ｮ蜑肴署・・
     // =========================================================
-    DirectX::ScratchImage mipImages = AppRenderResources::LoadTexture("resources/monsterBall.png");
+    DirectX::ScratchImage mipImages = AppRenderResources::LoadTexture("Resources/common/neutralSurface.bmp");
     const DirectX::TexMetadata& metadata = mipImages.GetMetadata();
     textureResource = AppRenderResources::CreateTextureResource(device, metadata);
     AppRenderResources::UploadTextureData(
@@ -2374,7 +2378,7 @@ bool AppSceneResources::Initialize(
         flatNormalTextureSrvHandleCPU);
 
     const std::string circle2TexturePath =
-        std::filesystem::exists("Resources/circle2.png") ? "Resources/circle2.png" : "resources/monsterBall.png";
+        std::filesystem::exists("Resources/circle2.png") ? "Resources/circle2.png" : "Resources/common/neutralSurface.bmp";
     DirectX::ScratchImage circle2Images = AppRenderResources::LoadTexture(circle2TexturePath);
     const DirectX::TexMetadata& circle2Metadata = circle2Images.GetMetadata();
     circle2TextureResource = AppRenderResources::CreateTextureResource(device, circle2Metadata);
@@ -2454,7 +2458,7 @@ bool AppSceneResources::Initialize(
     const std::string animatedCubeTexturePath =
         std::filesystem::exists("Resources/AnimatedCube/AnimatedCube_BaseColor.png")
             ? "Resources/AnimatedCube/AnimatedCube_BaseColor.png"
-            : "resources/monsterBall.png";
+            : "Resources/common/neutralSurface.bmp";
     DirectX::ScratchImage animatedCubeImages =
         AppRenderResources::LoadTexture(animatedCubeTexturePath);
     const DirectX::TexMetadata& animatedCubeMetadata = animatedCubeImages.GetMetadata();
@@ -2508,7 +2512,7 @@ bool AppSceneResources::Initialize(
 
     registerExistingVfxTexture(
         "default",
-        "Resources/monsterBall.png",
+        "Resources/common/neutralSurface.bmp",
         textureResource,
         textureSrvHandleCPU,
         textureSrvHandleGPU,
@@ -2516,7 +2520,7 @@ bool AppSceneResources::Initialize(
         metadata);
     registerExistingVfxTexture(
         "monsterBall",
-        "Resources/monsterBall.png",
+        "Resources/common/neutralSurface.bmp",
         textureResource2,
         textureSrvHandleCPU2,
         textureSrvHandleGPU2,
@@ -2926,8 +2930,10 @@ bool AppSceneResources::Initialize(
     // =========================================================
     // AnimatedCube model and animation
     // =========================================================
-    animatedCubeData = LoadObjFile_Assimp("Resources/AnimatedCube", "AnimatedCube.gltf");
-    animatedCubeAnimation = LoadAnimationFile("Resources/AnimatedCube", "AnimatedCube.gltf");
+    if (std::filesystem::is_regular_file("Resources/AnimatedCube/AnimatedCube.gltf")) {
+        animatedCubeData = LoadObjFile_Assimp("Resources/AnimatedCube", "AnimatedCube.gltf");
+        animatedCubeAnimation = LoadAnimationFile("Resources/AnimatedCube", "AnimatedCube.gltf");
+    }
     if (!animatedCubeData.vertices.empty() && !animatedCubeData.indices.empty()) {
         animatedCubeMesh = CreateGpuMeshResource(
             device,
@@ -2983,6 +2989,9 @@ bool AppSceneResources::Initialize(
         return terrainAlbedoTextureSrvHandleGPU.ptr != 0 ? terrainAlbedoTextureSrvHandleGPU : textureSrvHandleGPU2;
     };
     auto registerCourseMesh = [&](const char* name, const char* directory, const char* filename, const char* textureName) {
+        if (!std::filesystem::is_regular_file(std::filesystem::path(directory) / filename)) {
+            return;
+        }
         ModelData courseMeshData = LoadObjFile_Assimp(directory, filename);
         if (courseMeshData.vertices.empty() || courseMeshData.indices.empty()) {
             OutputDebugStringA(("[AppSceneResources] Course mesh has no indexed data: " + std::string(name) + "\n").c_str());
@@ -3015,6 +3024,56 @@ bool AppSceneResources::Initialize(
     registerCourseMesh("curved_canyon_wall", "Resources/course_meshes/CurvedCanyonWall", "CurvedCanyonWall.obj", "courseOrganicRock");
     registerCourseMesh("vista_hole_wall", "Resources/course_meshes/VistaHoleWall", "VistaHoleWall.obj", "courseVistaRock");
     registerCourseMesh("spire_broken_bridge_arc", "Resources/course_meshes/SpireBrokenBridgeArc", "SpireBrokenBridgeArc.obj", "courseRootRock");
+    registerCourseMesh(
+        "combat_assault_hull",
+        "Resources/enemies/CombatAssault",
+        "CombatAssaultHull.obj",
+        "default");
+    registerCourseMesh(
+        "combat_assault_pod",
+        "Resources/enemies/CombatAssault",
+        "CombatAssaultPod.obj",
+        "default");
+    registerCourseMesh(
+        "combat_assault_core",
+        "Resources/enemies/CombatAssault",
+        "CombatAssaultCore.obj",
+        "default");
+    registerCourseMesh(
+        "combat_sniper_hull",
+        "Resources/enemies/CombatSniper",
+        "CombatSniperHull.obj",
+        "default");
+    registerCourseMesh(
+        "combat_interceptor_hull",
+        "Resources/enemies/CombatInterceptor",
+        "CombatInterceptorHull.obj",
+        "default");
+    registerCourseMesh(
+        "combat_shard_gate",
+        "Resources/course_meshes/CombatShardGate",
+        "CombatShardGate.obj",
+        "courseRootRock");
+    registerCourseMesh(
+        "rail_hazard_block",
+        "Resources/course_meshes/RailHazardBlock",
+        "RailHazardBlock.obj",
+        "courseRootRock");
+    registerCourseMesh(
+        "rail_hazard_solid",
+        "Resources/course_meshes/RailHazardSolid",
+        "RailHazardSolid.obj",
+        "courseRootRock");
+    registerCourseMesh(
+        "combat_turret",
+        "Resources/enemies/CombatTurret",
+        "CombatTurret.obj",
+        "courseRootRock");
+    registerCourseMesh(
+        "combat_lane_rib",
+        "Resources/course_meshes/CombatLaneRib",
+        "CombatLaneRib.obj",
+        "courseRibRock");
     registerCourseMesh(
         "multi_material_demo",
         "Resources/tests/MultiMaterial",

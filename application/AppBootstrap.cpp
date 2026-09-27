@@ -20,7 +20,7 @@ bool AppBootstrap::Initialize(HINSTANCE hInstance) {
     std::filesystem::create_directory("logs");
 
     eng::platform::WindowDesc desc;
-    desc.title = u"LE2B_17_タケイ_ユタカ";
+    desc.title = u"レールであばレール";
     desc.width = 1280;
     desc.height = 720;
 

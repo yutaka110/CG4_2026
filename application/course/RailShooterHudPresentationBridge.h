@@ -7,12 +7,14 @@
 #include "RailShooterHudRuntimeModel.h"
 
 struct GameSessionPresentationFrame;
+struct PlayerDamagePresentationFrame;
 
 struct RailShooterHudPresentationInput final {
     const RailShooterHudDefinitionAsset* definition = nullptr;
     const RailShooterHudRuntimeFrame* runtime = nullptr;
     const GameSessionPresentationFrame* sessionPresentation = nullptr;
     float deltaTime = 0.0f;
+    const PlayerDamagePresentationFrame* playerDamage = nullptr;
 };
 
 struct RailShooterHudPresentationFrame final {
@@ -57,6 +59,14 @@ struct RailShooterHudPresentationFrame final {
     bool showBanner = false;
     float bannerAlpha = 0.0f;
     Vector4 bannerColor{};
+    bool showDamageNotice = false;
+    bool damageNoticeLethal = false;
+    float damageNoticeAlpha = 0.0f;
+    std::string damageNoticeText;
+    std::string damageHealthText;
+    bool showObstacleWarning = false;
+    std::string obstacleWarningText;
+    std::string obstacleActionText;
 
     RailShooterHudWeaponSnapshot primaryWeapon{};
 };

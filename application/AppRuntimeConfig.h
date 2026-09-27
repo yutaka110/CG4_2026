@@ -25,6 +25,10 @@ bool ParseCombatLoop10SecondModeArguments(
     int argumentCount,
     const wchar_t* const* arguments) noexcept;
 bool ResolveCombatLoop10SecondModeFromCommandLine();
+bool ParseCombatLoopExpansionModeArguments(
+    int argumentCount,
+    const wchar_t* const* arguments) noexcept;
+bool ResolveCombatLoopExpansionModeFromCommandLine();
 bool ParseCombatLoopDefenseUiProofArguments(
     int argumentCount,
     const wchar_t* const* arguments) noexcept;

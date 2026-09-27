@@ -117,6 +117,7 @@ private:
     std::string bannerHeadline_;
     std::string bannerDetail_;
     GameSessionPresentationColor bannerColor_{};
+    bool encounterRewardBannerProtected_ = false;
     float flashRemaining_ = 0.0f;
     float flashDuration_ = 0.0f;
     GameSessionPresentationColor flashColor_{};
