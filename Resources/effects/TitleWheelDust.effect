@@ -1,0 +1,29 @@
+# Original title-only, world-space wheel dust. Bounded one-shot emission.
+name = title_wheel_dust
+lifetime = 0.72
+blend = alpha
+layer = additive
+renderQueue = 3050
+color = 1,1,1,1
+size = 1,1,1
+
+component = particle
+name = title_wheel_dust_puff
+technique = ParticleAdditive
+blend = alpha
+texture = circle2
+duration = 0.72
+color = 0.52,0.39,0.23,0.14
+size = 0.38,0.25,0.38
+particle.lifetime = 0.65
+particle.emissive = 0.65
+particle.spawnCount = 2
+particle.spawnFrequency = 0
+particle.spawnRadius = 0.18
+particle.randomRotation = 1
+particle.noiseStrength = 0.08
+particle.pulseSpeed = 0
+particle.scaleYMin = 0.65
+particle.scaleYMax = 1.10
+particle.depthFadeSoftness = 0.4
+particle.edgeSoftness = 0.7

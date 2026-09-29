@@ -89,8 +89,10 @@ void RailVehicleActor::Update(const RailVehicleActorInput& input) {
         frame_.position.x += collision.bodyTranslationWorld.x;
         frame_.position.y += collision.bodyTranslationWorld.y;
         frame_.position.z += collision.bodyTranslationWorld.z;
-        frame_.visualBankDegrees += collision.bodyBankDegrees;
-        frame_.visualPitchDegrees += collision.bodyPitchDegrees;
+        const float bankLimit = (std::max)(22.0f,std::abs(frame_.visualBankDegrees));
+        const float pitchLimit = (std::max)(12.0f,std::abs(frame_.visualPitchDegrees));
+        frame_.visualBankDegrees = (std::clamp)(frame_.visualBankDegrees + collision.bodyBankDegrees,-bankLimit,bankLimit);
+        frame_.visualPitchDegrees = (std::clamp)(frame_.visualPitchDegrees + collision.bodyPitchDegrees,-pitchLimit,pitchLimit);
         frame_.visualYawDegrees += collision.bodyYawDegrees;
         frame_.sourceCollisionFeedbackRevision = collision.revision;
     }

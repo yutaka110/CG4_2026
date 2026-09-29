@@ -1,4 +1,5 @@
-#pragma once
+﻿#pragma once
+#include "course/RailTitleScene.h"
 
 #include <Windows.h>
 #include <array>
@@ -526,6 +527,7 @@ private:
     D3D12_VERTEX_BUFFER_VIEW railLockOnHudAtlasVertexBufferView_{};
     uint32_t railLockOnHudAtlasVertexCount_ = 0;
     bool railLockOnHudAtlasReady_ = false;
+    bool railTitleLogoReady_ = false;
     Microsoft::WRL::ComPtr<ID3D12Resource> submissionHudVertexResource_;
     RailHudAtlasVertex* submissionHudMappedVertices_ = nullptr;
     D3D12_VERTEX_BUFFER_VIEW submissionHudVertexBufferView_{};
@@ -799,6 +801,25 @@ private:
     bool previousCourseEditorLeftMouseDown_ = false;
     bool releaseShowcaseInitialized_ = false;
     bool railTitleScreenVisible_ = false;
+    float railTitleGameplayFade_ = 0.0f;
+    DirectionalLight railTitleSavedLight_{};
+    PointLight railTitleSavedPointLight_{};
+    SpotLight railTitleSavedSpotLight_{};
+    std::array<float,4> railTitleSavedClearColor_{};
+    bool railTitleSavedSkybox_ = false;
+    bool railTitleSavedBackdrop_ = false;
+    audio::SoundHandle railTitleAmbience_{};
+    bool railTitleAmbiencePlaying_ = false;
+    float railTitleAudioGain_ = 0.0f;
+    float railTitleDustTimer_ = 0.0f;
+    std::vector<uint32_t> railTitleDustIds_;
+    RailTitleScene railTitleScene_;
+    CourseSpawnRuntime railTitleEmptySpawns_;
+    int railTitleMenuSelection_ = 0;
+    bool railTitleControlsVisible_ = false;
+    bool railTitleSavedTerrainEnabled_ = true;
+    bool railTitleHasLastUpdate_ = false;
+    std::chrono::steady_clock::time_point railTitleLastUpdate_{};
     bool releaseShowcaseTitleDirty_ = true;
     std::array<bool, 256> previousKeyDown_{};
     AppGamepadInput submissionGamepad_{};

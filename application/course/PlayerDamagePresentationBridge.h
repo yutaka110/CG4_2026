@@ -64,6 +64,8 @@ struct PlayerDamagePresentationInput final {
     std::span<const PlayerDamageResult> results;
     float deltaTime = 0.0f;
     bool gameplayActive = true;
+    bool suppressCameraFeedback = false;
+    bool vehicleOwnsImpactPresentation = false;
 };
 
 // Converts authoritative PlayerDamageResult records into bounded one-frame

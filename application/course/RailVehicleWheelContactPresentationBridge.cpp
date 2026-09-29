@@ -86,6 +86,12 @@ void RailVehicleWheelContactPresentationBridge::Update(
         wheel.axleCenter = Add(
             contactPositions[index], Scale(contacts.up, input.settings.wheelRadius));
         wheel.suspensionOffset = suspensionOffsets[index];
+        if (input.collisionFeedback != nullptr) {
+            // A wheel hops above the rail; it never sinks through its contact.
+            const float lift = (std::clamp)(input.collisionFeedback->wheelLiftOffsets[index],0.0f,0.12f);
+            wheel.axleCenter = Add(wheel.axleCenter,Scale(contacts.up,lift));
+            wheel.suspensionOffset += lift;
+        }
         wheel.color = input.settings.color;
         wheel.worldMatrix = MakeWheelWorld(
             contacts.right, contacts.up, contacts.forward, wheel.axleCenter,

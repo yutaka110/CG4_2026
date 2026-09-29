@@ -1,4 +1,4 @@
 wave|intro_scout_pair|Intro Scout Pair
-formation|authored|from_ahead|split_sides|true|7|1.4|8|0|0|0.65|0.06|12|8|0.90|18|28
-unitAsset|scout_left|drone_scout|single_tutorial|38|-5|4|1.0|1.0|8|0.55|0.78|1.0|1.0
-unitAsset|scout_right|drone_scout|single_tutorial|46|5|4|1.0|1.0|8|0.55|0.78|1.0|1.0
+formation|authored|from_ahead|split_sides|true|7|1.4|8|0|0|0.60|0.08|22|8|1.0|12|28
+unitAsset|scout_left|drone_scout|assault_magenta_single|52|-5|4|1.0|1.0|16|0.55|0.78|1.0|1.0
+unitAsset|scout_right|drone_scout|assault_magenta_single|52|5|4|1.0|1.0|16|0.55|0.78|1.0|1.0

@@ -2,12 +2,14 @@
 
 #include <cstdint>
 #include <string>
+#include <array>
 
 #include "RailShooterHudDefinitionAsset.h"
 #include "RailShooterHudRuntimeModel.h"
 
 struct GameSessionPresentationFrame;
 struct PlayerDamagePresentationFrame;
+struct RailVehicleCollisionFeedbackFrame;
 
 struct RailShooterHudPresentationInput final {
     const RailShooterHudDefinitionAsset* definition = nullptr;
@@ -15,6 +17,7 @@ struct RailShooterHudPresentationInput final {
     const GameSessionPresentationFrame* sessionPresentation = nullptr;
     float deltaTime = 0.0f;
     const PlayerDamagePresentationFrame* playerDamage = nullptr;
+    const RailVehicleCollisionFeedbackFrame* vehicleDamage = nullptr;
 };
 
 struct RailShooterHudPresentationFrame final {
@@ -26,6 +29,10 @@ struct RailShooterHudPresentationFrame final {
 
     float playerHealthNormalized = 0.0f;
     float vehicleIntegrityNormalized = 0.0f;
+    float playerHealthTrail = 0.0f;
+    float vehicleIntegrityTrail = 0.0f;
+    // Left, right, ahead, behind. Screen-edge markers never cover the reticle.
+    std::array<float,4> damageDirectionAlpha{};
     float courseProgressNormalized = 0.0f;
     float speedNormalized = 0.0f;
     float threatNormalized = 0.0f;
@@ -47,6 +54,8 @@ struct RailShooterHudPresentationFrame final {
     std::string vehicleText;
     std::string speedText;
     std::string scoreText;
+    std::string scoreGainText;
+    float scoreGainAlpha = 0.0f;
     std::string comboText;
     std::string waveText;
     std::string enemyText;
@@ -85,5 +94,10 @@ private:
     RailShooterHudPresentationFrame frame_{};
     bool initialized_ = false;
     float elapsedSeconds_ = 0.0f;
+    float scoreGainRemaining_ = 0.0f;
+    uint64_t displayedScoreGain_ = 0;
     uint64_t revision_ = 0;
+    std::array<float,2> damageTrailHold_{};
+    std::array<float,4> damageDirectionRemaining_{};
+    uint64_t lastVehicleDamageSequence_ = 0;
 };

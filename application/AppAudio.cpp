@@ -45,3 +45,8 @@ bool AppAudio::PlaySpatial(
 void AppAudio::Unload(audio::SoundHandle handle) {
     audioSystem_.UnloadSound(handle);
 }
+
+void AppAudio::Stop(audio::SoundHandle handle) { audioSystem_.Stop(handle); }
+void AppAudio::SetPlayback(audio::SoundHandle handle, float volume, float pitch) {
+    audioSystem_.SetPlayback(handle,volume,pitch);
+}

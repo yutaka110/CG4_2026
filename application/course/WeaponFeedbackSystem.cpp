@@ -92,7 +92,7 @@ void ConfigurePresentation(WeaponFeedbackEvent& event) {
         break;
     case HitFeedbackKind::NormalHit:
         event.intensity = 0.45f + damageIntensity * 0.25f;
-        event.hudDuration = 0.15f;
+        event.hudDuration = 0.18f;
         event.cameraShake = 0.20f + damageIntensity * 0.10f;
         event.hitStopSeconds = 0.015f + damageIntensity * 0.015f;
         event.controllerLowFrequency = 0.22f + damageIntensity * 0.16f;
@@ -136,7 +136,7 @@ void ConfigurePresentation(WeaponFeedbackEvent& event) {
         break;
     case HitFeedbackKind::Destroyed:
         event.intensity = 1.0f;
-        event.hudDuration = 0.24f;
+        event.hudDuration = 0.40f;
         event.cameraShake = 0.48f + damageIntensity * 0.16f;
         event.hitStopSeconds = 0.055f + damageIntensity * 0.025f;
         event.controllerLowFrequency = 0.82f;

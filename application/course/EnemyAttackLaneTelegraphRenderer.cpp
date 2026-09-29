@@ -363,6 +363,16 @@ bool EnemyAttackLaneTelegraphRenderer::WasSubmitted(
         });
 }
 
+void EnemyAttackLaneTelegraphRenderer::CancelActor(uint32_t actorId, EffectRuntime* runtime) {
+    std::erase_if(frame_.lanes,[actorId](const auto& lane) { return lane.actorId == actorId; });
+    for (auto it=managedMarkers_.begin();it!=managedMarkers_.end();) {
+        if (it->first.actorId == actorId) {
+            StopMarkers(it->second,runtime);
+            it=managedMarkers_.erase(it);
+        } else ++it;
+    }
+}
+
 void EnemyAttackLaneTelegraphRenderer::StopMarkers(
     ManagedMarkers& markers,
     EffectRuntime* runtime) {

@@ -1,4 +1,4 @@
-#include "Object3d.hlsli"
+﻿#include "Object3d.hlsli"
 
 // ------------------------------------------------------------
 // Material / Light
@@ -94,7 +94,7 @@ static float EvaluateSpecular(float3 N, float3 L, float3 V, float shininess, int
 {
     // Authored matte stone/paint: keep diffuse lighting, without washing out
     // fracture marks under the camera-facing spot light. 0/1 retain Phong/Blinn.
-    if (specularMode == 2) return 0.0f;
+    if (specularMode >= 2) return 0.0f;
     float power = max(shininess, 1.0f);
     if (specularMode == 0)
     {
@@ -120,6 +120,19 @@ PixelShaderOutput main(VertexShaderOutput input)
 
     float3 baseRgb = texColor.rgb * gMaterial.color.rgb;
     float baseA = texColor.a * gMaterial.color.a;
+
+    // Title landscape only. Keep silhouette/large forms while limiting the
+    // lighting range; point/spot highlights must not turn stone into glitter.
+    if (gMaterial.specularMode == 6) {
+        float3 N = SafeNormalize(input.normal);
+        float3 L = SafeNormalize(-gDirectionalLight.direction);
+        float facing = saturate(dot(N, L) * 0.5f + 0.5f);
+        float shade = lerp(0.62f, 0.82f, facing);
+        float haze = smoothstep(40.0f, 220.0f, length(cameraWorldPosition-input.worldPosition)) * 0.68f;
+        float3 hazeColor = float3(0.30f, 0.36f, 0.40f);
+        output.color = float4(lerp(baseRgb * shade, hazeColor, haze), baseA);
+        return output;
+    }
 
     float3 outRgb = baseRgb;
 
@@ -243,6 +256,23 @@ PixelShaderOutput main(VertexShaderOutput input)
         outRgb += environmentColor * gMaterial.environmentCoefficient;
     }
 
+    // Enemy presentation modes: retain volume in shadow and separate the rim
+    // from rock. These modes never alter depth or collision geometry.
+    if (gMaterial.specularMode == 3 || gMaterial.specularMode == 4)
+    {
+        float3 N = SafeNormalize(input.normal);
+        float3 V = SafeNormalize(cameraWorldPosition - input.worldPosition);
+        float rim = pow(1.0f - saturate(abs(dot(N, V))), 2.5f);
+        outRgb = max(outRgb, baseRgb * 0.62f + float3(0.06f, 0.035f, 0.02f));
+        outRgb += float3(1.0f, 0.48f, 0.12f) * rim * 0.85f;
+        // A confirmed hit flashes even on a dark texture, not just its specular.
+        if (gMaterial.specularMode == 4)
+            outRgb = lerp(outRgb, float3(1.4f, 1.3f, 1.1f), 0.88f);
+    }
+    // Small turret muzzle cores use their own light colour, independent of
+    // the sphere's texture or scene lighting. The owning attack gates them.
+    if (gMaterial.specularMode == 5)
+        outRgb = gMaterial.color.rgb * 1.6f;
     output.color = float4(outRgb, baseA);
     return output;
 }

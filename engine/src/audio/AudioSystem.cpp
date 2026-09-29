@@ -545,6 +545,16 @@ bool AudioSystem::PlaySpatial(
     return true;
 }
 
+void AudioSystem::SetPlayback(SoundHandle handle, float volume, float pitch) {
+    if (!IsHandleAlive(handle) || !std::isfinite(volume) || !std::isfinite(pitch)) return;
+    for(auto& active : activeVoices_) {
+        if(active.sound.index == handle.index && active.sound.generation == handle.generation && active.voice) {
+            active.voice->SetVolume((std::clamp)(volume,0.0f,1.0f));
+            active.voice->SetFrequencyRatio((std::clamp)(pitch,0.5f,2.0f));
+        }
+    }
+}
+
 void AudioSystem::Stop(SoundHandle handle) {
     for (size_t i = 0; i < activeVoices_.size();) {
         if (activeVoices_[i].sound.index == handle.index &&

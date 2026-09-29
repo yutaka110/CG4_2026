@@ -9,6 +9,7 @@
 #include "utils/math/Vector.h"
 
 class CourseSpawnRuntime;
+namespace ge3::debug { class DebugDrawSystem; }
 
 enum class EnemyCombatAnimationState : uint8_t {
     Spawn,
@@ -73,6 +74,9 @@ struct EnemyCombatActorPresentation final {
     uint64_t sourceAttackRevision = 0;
     bool attackTokenReserved = false;
     bool attackCommittedThisFrame = false;
+    bool turret = false;
+    bool turretMuzzleActive = false;
+    Vector3 turretWorldRotation{};
 };
 
 struct EnemyCombatPresentationAudioCue final {
@@ -95,7 +99,15 @@ struct EnemyCombatPresentationVfxCommand final {
     float lifetime = 0.4f;
 };
 
+struct EnemyDestructionBurst final {
+    uint32_t actorId = 0;
+    Vector3 worldPosition{};
+    float radius = 1.0f;
+    float age = 0.0f;
+};
+
 struct EnemyCombatPresentationFrame final {
+    std::vector<EnemyDestructionBurst> destructionBursts;
     std::vector<EnemyCombatActorPresentation> actors;
     std::vector<EnemyCombatPresentationAudioCue> audioCues;
     std::vector<EnemyCombatPresentationVfxCommand> vfxCommands;
@@ -124,6 +136,7 @@ class EnemyCombatPresentationBridge final {
 public:
     void Reset();
     void Update(const EnemyCombatPresentationInput& input);
+    void AppendDestructionPrimitives(ge3::debug::DebugDrawSystem& draw) const;
 
     const EnemyCombatPresentationFrame& Frame() const noexcept { return frame_; }
     const EnemyCombatActorPresentation* FindActor(uint32_t actorId) const noexcept;

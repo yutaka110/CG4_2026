@@ -1,5 +1,3 @@
-wave|cliff_crossfire_left|Left Cliff Crossfire
-unitAsset|cliff_turret|cliff_turret|spread_crossfire|18|-24|10|0|1.8|12|1.0|0.18|0.12|1.0
-unitAsset|cliff_turret|cliff_turret|spread_crossfire|38|-30|12|0|1.8|12|1.0|0.18|0.12|1.0
-unitAsset|crossing_drone|drone_basic|single_red|48|-18|7|7|1.2|8|1.0|0.38|0.18|1.0
-unitAsset|crossing_drone|drone_basic|single_red|56|-9|5|7|1.2|8|1.0|0.38|0.18|1.0
+wave|cliff_crossfire_left|First Turret Intercept
+# One visible priority target teaches charge-up interruption before mixed encounters.
+unitAsset|cliff_turret|cliff_turret|turret_readable_spread|90|-8|3|0|2.6|14|1.0|0.18|0.12|1.0

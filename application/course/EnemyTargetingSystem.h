@@ -23,7 +23,13 @@ struct EnemyTargetingRuntimeState final {
     float predictedFlightSeconds = 0.0f;
     bool initialized = false;
     bool solutionLocked = false;
+    // Smoothed turret head direction in rail coordinates (lateral, up, forward).
+    Vector3 turretAimDirection{0.0f, 0.0f, -1.0f};
 };
+
+// Shared by the turret model and projectile spawn. Imported barrels point -Z.
+Vector3 ResolveTurretAimDirection(const CourseEnemyActor& actor);
+Vector3 ResolveTurretMuzzleRailPosition(const CourseEnemyActor& actor, float barrelSide);
 
 struct EnemyTargetingFrameInput final {
     float deltaTime = 0.0f;

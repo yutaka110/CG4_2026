@@ -1,6 +1,6 @@
 wave|first_contact_combo_ladder|First Contact Combo Ladder
-formation|authored|from_ahead|split_sides|true|7|1.4|8|0|0|0.65|0.06|12|8|0.90|18|28
-unitAsset|ladder_low_left|drone_scout|single_tutorial|30|-6|3|2.0|1.0|8|0.60|0.85|1.0|1.0
-unitAsset|ladder_mid_center|drone_basic|single_red|46|0|5|2.0|1.15|9|1.0|0.34|0.20|1.0
-unitAsset|ladder_high_right|drone_scout|single_tutorial|62|7|8|2.0|1.0|8|0.60|0.85|1.0|1.0
-unitAsset|ladder_leader_exit|drone_leader|soft_spread|82|0|6|1.5|1.3|10|1.0|0.48|0.16|1.0
+formation|authored|from_ahead|split_sides|true|7|1.4|8|0|0|0.60|0.08|22|8|1.0|12|28
+unitAsset|ladder_low_left|drone_scout|assault_magenta_single|52|-6|3|2.0|1.0|16|0.60|0.85|1.0|1.0
+unitAsset|ladder_mid_center|drone_basic|assault_magenta_single|52|0|5|2.0|1.15|16|1.0|0.34|0.20|1.0
+unitAsset|ladder_high_right|drone_scout|assault_magenta_single|62|7|8|2.0|1.0|16|0.60|0.85|1.0|1.0
+unitAsset|ladder_leader_exit|drone_leader|assault_magenta_single|82|-6|8|1.5|1.3|16|1.0|0.48|0.16|1.0

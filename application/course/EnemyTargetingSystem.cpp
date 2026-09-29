@@ -5,6 +5,31 @@
 #include <algorithm>
 #include <cmath>
 
+namespace {
+Vector3 Unit(Vector3 v) {
+    const float length = std::sqrt(v.x*v.x+v.y*v.y+v.z*v.z);
+    return length > 0.0001f ? Vector3{v.x/length,v.y/length,v.z/length} : Vector3{0,0,-1};
+}
+}
+
+Vector3 ResolveTurretAimDirection(const CourseEnemyActor& actor) {
+    const auto& target = actor.targetingState;
+    return Unit({target.targetLateralOffset-actor.desc.lateralOffset,
+        target.targetVerticalOffset-actor.desc.verticalOffset-0.1598f*actor.desc.radius,
+        target.targetDistance-actor.desc.spawnDistance-actor.desc.distanceOffset});
+}
+
+Vector3 ResolveTurretMuzzleRailPosition(const CourseEnemyActor& actor, float barrelSide) {
+    const Vector3 forward = ResolveTurretAimDirection(actor);
+    const Vector3 right = Unit({-forward.z,0,forward.x});
+    const Vector3 up{right.y*forward.z-right.z*forward.y,
+        right.z*forward.x-right.x*forward.z,right.x*forward.y-right.y*forward.x};
+    const float r = actor.desc.radius;
+    return {actor.desc.lateralOffset+r*(forward.x*0.8272f+right.x*barrelSide*0.2538f+up.x*0.1598f),
+        actor.desc.verticalOffset+r*(forward.y*0.8272f+right.y*barrelSide*0.2538f+up.y*0.1598f),
+        actor.desc.spawnDistance+actor.desc.distanceOffset+r*(forward.z*0.8272f+right.z*barrelSide*0.2538f+up.z*0.1598f)};
+}
+
 void EnemyTargetingSystem::Reset() {
     frame_ = {};
     previousPlayerDistance_ = 0.0f;
@@ -39,6 +64,21 @@ void EnemyTargetingSystem::Update(
 
     frame_ = {};
     for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+        const bool turret = actor.desc.meshId == "combat_turret";
+        const Vector3 previousAim = actor.targetingState.turretAimDirection;
+        if (turret && actor.combatState.canBeTargeted) {
+            if (!actor.attackState.tokenReserved || !actor.targetingState.solutionLocked) {
+                actor.targetingState.targetDistance = input.playerDistance;
+                actor.targetingState.targetLateralOffset = input.playerLateralOffset;
+                actor.targetingState.targetVerticalOffset = input.playerVerticalOffset;
+            }
+            const Vector3 desired = ResolveTurretAimDirection(actor);
+            const float blend = 1.0f-std::exp(-8.0f*dt);
+            actor.targetingState.turretAimDirection = Unit({
+                previousAim.x+(desired.x-previousAim.x)*blend,
+                previousAim.y+(desired.y-previousAim.y)*blend,
+                previousAim.z+(desired.z-previousAim.z)*blend});
+        }
         if (!actor.behaviorDefinition.commercialBehavior ||
             !actor.attackState.tokenReserved ||
             actor.attackState.intentSequence == 0) {
@@ -77,7 +117,9 @@ void EnemyTargetingSystem::LockSolution(
     const EnemyProjectileDefinitionAsset& definition =
         actor.desc.projectileDefinition;
     EnemyTargetingRuntimeState& state = actor.targetingState;
+    const Vector3 previousAim = state.turretAimDirection;
     state = {};
+    state.turretAimDirection = previousAim;
     state.attackIntentSequence = actor.attackState.intentSequence;
     state.attackTokenId = actor.attackState.tokenId;
     state.originDistance = actor.desc.spawnDistance + actor.desc.distanceOffset -
@@ -106,6 +148,12 @@ void EnemyTargetingSystem::LockSolution(
         playerLateralVelocity * predictionSeconds;
     state.targetVerticalOffset = input.playerVerticalOffset +
         playerVerticalVelocity * predictionSeconds;
+    if (actor.desc.meshId == "combat_turret") {
+        const Vector3 muzzle = ResolveTurretMuzzleRailPosition(actor,0.0f);
+        state.originDistance = muzzle.z;
+        state.originLateralOffset = muzzle.x;
+        state.originVerticalOffset = muzzle.y;
+    }
     state.initialized = true;
     state.solutionLocked = true;
     state.revision = ++revision_;

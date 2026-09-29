@@ -56,6 +56,9 @@ struct EnemyBehaviorDefinition final {
     // Single-volley encounter choreography. Delays do not extend the warning.
     float attackPassStartDelaySeconds = 0.0f;
     float attackPassRecoilSeconds = 0.20f;
+    // Allow the next actor to prepare during this final portion of the warning.
+    // Zero preserves fully sequential setpiece choreography.
+    float attackPassHandoffLeadSeconds = 0.0f;
     bool commercialBehavior = false;
     bool movementEnabled = true;
     bool requireTelegraphPresentation = true;

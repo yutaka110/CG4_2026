@@ -124,6 +124,18 @@ void WriteBehaviorDefinition(
     writer.Bool(value.commercialBehavior);
     writer.Bool(value.movementEnabled);
     writer.Bool(value.requireTelegraphPresentation);
+    writer.Bool(value.maintainForwardEngagementBand);
+    writer.F32(value.engagementBandMinimumForwardDistance);
+    writer.F32(value.engagementBandPreferredForwardDistance);
+    writer.F32(value.engagementBandMaximumForwardDistance);
+    writer.F32(value.engagementBandDisengageForwardDistance);
+    writer.F32(value.engagementBandPositionGain);
+    writer.F32(value.engagementBandMaximumCorrectionSpeed);
+    writer.F32(value.engagementBandVelocityResponse);
+    writer.Bool(value.choreographedAttackPass);
+    writer.F32(value.attackPassStartDelaySeconds);
+    writer.F32(value.attackPassRecoilSeconds);
+    writer.F32(value.attackPassHandoffLeadSeconds);
 }
 
 bool ReadBehaviorDefinition(
@@ -146,7 +158,19 @@ bool ReadBehaviorDefinition(
         !reader.F32(value.maximumBankRadians) ||
         !reader.Bool(value.commercialBehavior) ||
         !reader.Bool(value.movementEnabled) ||
-        !reader.Bool(value.requireTelegraphPresentation)) {
+        !reader.Bool(value.requireTelegraphPresentation) ||
+        !reader.Bool(value.maintainForwardEngagementBand) ||
+        !reader.F32(value.engagementBandMinimumForwardDistance) ||
+        !reader.F32(value.engagementBandPreferredForwardDistance) ||
+        !reader.F32(value.engagementBandMaximumForwardDistance) ||
+        !reader.F32(value.engagementBandDisengageForwardDistance) ||
+        !reader.F32(value.engagementBandPositionGain) ||
+        !reader.F32(value.engagementBandMaximumCorrectionSpeed) ||
+        !reader.F32(value.engagementBandVelocityResponse) ||
+        !reader.Bool(value.choreographedAttackPass) ||
+        !reader.F32(value.attackPassStartDelaySeconds) ||
+        !reader.F32(value.attackPassRecoilSeconds) ||
+        !reader.F32(value.attackPassHandoffLeadSeconds)) {
         return false;
     }
     value.archetype = static_cast<EnemyBehaviorArchetype>(archetype);
@@ -451,6 +475,17 @@ bool CourseRuntimeProgramAsset::IsSourceCurrent(uint64_t expectedSourceHash) con
         formatVersion == kCourseRuntimeProgramFormatVersion &&
         compilerVersion == kCourseRuntimeCompilerVersion &&
         schemaVersion == kCourseRuntimeAuthoringSchemaVersion;
+}
+
+bool CourseRuntimeProgramAsset::AreDependenciesCurrent() const {
+    for (const auto& dependency : dependencies) {
+        std::ifstream file(dependency.sourcePath, std::ios::binary);
+        if (!file.is_open()) return false;
+        const std::string bytes{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+        if ((!file.good() && !file.eof()) || dependency.contentHash == 0 ||
+            ComputeCourseRuntimeFileHash(bytes) != dependency.contentHash) return false;
+    }
+    return true;
 }
 
 bool CourseRuntimeProgramAsset::SaveToString(

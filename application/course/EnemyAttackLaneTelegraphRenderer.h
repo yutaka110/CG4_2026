@@ -81,6 +81,7 @@ struct EnemyAttackLaneTelegraphRenderInput final {
 class EnemyAttackLaneTelegraphRenderer final {
 public:
     void Reset(EffectRuntime* effectRuntime = nullptr);
+    void CancelActor(uint32_t actorId, EffectRuntime* effectRuntime = nullptr);
     void Update(const EnemyAttackLaneTelegraphRenderInput& input);
     void AppendProductionWorldPrimitives(
         ge3::debug::DebugDrawSystem& productionDraw) const;

@@ -147,6 +147,12 @@ void RailShooterDefensePromptRenderer::Update(
         command.color = color;
         push(std::move(command));
     };
+    const auto plate = [&](float x,float y,float w,float h,Vector4 color) {
+        RailShooterHudDrawCommand command{};
+        command.kind=RailShooterHudDrawCommandKind::Plate;
+        command.x=x; command.y=y; command.width=w; command.height=h; command.color=color;
+        push(std::move(command));
+    };
     const auto text = [&](std::string value, float x, float y,
                           float fontScale, Vector4 color) {
         RailShooterHudDrawCommand command{};
@@ -172,8 +178,8 @@ void RailShooterDefensePromptRenderer::Update(
             const float margin = 28.0f * scale;
             const float panelX = promptOnLeft
                 ? width - margin - panelWidth : margin;
-            const float panelY = height * 0.18f;
-            rect(panelX, panelY, panelWidth, panelHeight,
+            const float panelY = height * 0.36f;
+            plate(panelX, panelY, panelWidth, panelHeight,
                  {0.008f, 0.018f, 0.028f, alpha * 0.86f});
             rect(panelX, panelY, 5.0f * scale, panelHeight, color);
             text(input.outcome->headline, panelX + panelWidth * 0.5f,
@@ -206,7 +212,7 @@ void RailShooterDefensePromptRenderer::Update(
             basePanelWidth * scale * punchScale, width - 24.0f * scale);
         const float panelHeight = 92.0f * scale * punchScale;
         const float panelX = width * 0.5f - panelWidth * 0.5f;
-        const float panelY = height * 0.62f -
+        const float panelY = height * 0.72f -
             (panelHeight - 92.0f * scale) * 0.5f;
         const float centerX = width * 0.5f;
         const float centerY = panelY + panelHeight * 0.5f;
@@ -269,7 +275,7 @@ void RailShooterDefensePromptRenderer::Update(
             break;
         }
 
-        rect(panelX, panelY, panelWidth, panelHeight,
+        plate(panelX, panelY, panelWidth, panelHeight,
              {0.008f, 0.018f, 0.028f, alpha * 0.90f});
         rect(panelX, panelY, panelWidth, 6.0f * scale, color);
         text(input.outcome->headline, centerX,
@@ -307,7 +313,7 @@ void RailShooterDefensePromptRenderer::Update(
             ? Vector4{0.30f, 1.0f, 0.55f, alpha}
             : Vector4{primary->color.x, primary->color.y,
                       primary->color.z, alpha};
-        rect(panelX, panelY, panelWidth, panelHeight,
+        plate(panelX, panelY, panelWidth, panelHeight,
              {0.008f, 0.018f, 0.028f, alpha * 0.88f});
         rect(panelX, panelY, 7.0f * scale, panelHeight, actionColor);
 

@@ -8,8 +8,8 @@
 #include "CourseAsset.h"
 #include "CourseSpawnRuntime.h"
 
-inline constexpr uint32_t kCourseRuntimeProgramFormatVersion = 5;
-inline constexpr uint32_t kCourseRuntimeCompilerVersion = 5;
+inline constexpr uint32_t kCourseRuntimeProgramFormatVersion = 6;
+inline constexpr uint32_t kCourseRuntimeCompilerVersion = 6;
 inline constexpr uint32_t kCourseRuntimeAuthoringSchemaVersion = 7;
 
 enum class CourseRuntimeBuildConfiguration : uint8_t {
@@ -94,6 +94,7 @@ struct CourseRuntimeProgramAsset final {
 
     bool Validate(std::string* errorMessage = nullptr) const;
     bool IsSourceCurrent(uint64_t expectedSourceHash) const noexcept;
+    bool AreDependenciesCurrent() const;
     bool SaveToString(std::string* bytes, std::string* errorMessage = nullptr) const;
     bool LoadFromString(std::string_view bytes, std::string* errorMessage = nullptr);
     bool SaveToFile(const std::string& path, std::string* errorMessage = nullptr) const;

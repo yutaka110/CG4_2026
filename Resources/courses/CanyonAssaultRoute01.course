@@ -102,10 +102,11 @@ terrain|115.000|hero_landmark|intro_organic_arch_gate|organic_arch_large|0.000|3
 terrain|155.000|vista_background|intro_mist_spire_stack|root_spire_column|78.000|62.000|1060.000|16.000|60.000|6.000|0.000|-8.000|-3.000|none|0|260.000|860.000|cc90d58f752a9d15e051d803661391c5|1|0
 terrain|430.000|hero_landmark|crossfire_left_curved_wall|curved_canyon_wall|-32.000|10.000|70.000|7.000|18.000|18.000|0.000|12.000|-8.000|none|10|140.000|180.000|33a013dc651040981b20a20928b24148|1|0
 terrain|520.000|hero_landmark|crossfire_right_curved_wall|curved_canyon_wall|34.000|12.000|80.000|7.000|20.000|20.000|0.000|-10.000|8.000|none|10|140.000|180.000|3a6ac3292e7b5ac2b7b0f65079310272|1|0
-terrain|735.000|hero_landmark|tunnel_mouth_rib_crown|rib_tunnel_wall|0.000|13.000|84.000|16.000|12.000|6.000|0.000|0.000|0.000|none|20|180.000|300.000|6d4cde1b48870c23c4abb338557dfa93|1|0
+# Tunnel openings include the chase camera and central aim area; tall ribs keep their feet near rail level.
+terrain|735.000|hero_landmark|tunnel_mouth_rib_crown|rib_tunnel_wall|0.000|40.000|84.000|40.000|64.000|6.000|0.000|0.000|0.000|none|20|180.000|300.000|6d4cde1b48870c23c4abb338557dfa93|1|0
 terrain|776.000|gameplay_collision|tunnel_left_collision_wall|rail_hazard_solid|-12.000|2.000|18.000|2.000|7.000|8.000|0.000|0.000|0.000|proxy|30|80.000|220.000|45d9c591e19c63670f47682858231397|1|0
 terrain|828.000|gameplay_collision|tunnel_right_collision_wall|rail_hazard_solid|12.000|2.000|18.000|2.000|7.000|8.000|0.000|0.000|0.000|proxy|30|80.000|220.000|c0348c6de6f14c994984eb9a37c8a0c9|1|0
-terrain|875.000|hero_landmark|rib_tunnel_interior_sweep|rib_tunnel_wall|0.000|4.000|130.000|22.000|7.000|12.000|0.000|0.000|0.000|none|20|180.000|300.000|efb07c65f83feb8e7f9fd8bebf7fc29e|1|0
+terrain|875.000|hero_landmark|rib_tunnel_interior_sweep|rib_tunnel_wall|0.000|40.000|130.000|44.000|64.000|12.000|0.000|0.000|0.000|none|20|180.000|300.000|efb07c65f83feb8e7f9fd8bebf7fc29e|1|0
 terrain|980.000|vista_background|spire_far_hole_wall|vista_hole_wall|64.000|42.000|760.000|32.000|34.000|5.000|0.000|-18.000|0.000|none|0|420.000|220.000|fb97314af78e7d0949f3fe90c6eda019|1|0
 terrain|1010.000|hero_landmark|falling_spire_root_column|root_spire_column|-36.000|30.000|160.000|9.000|42.000|8.000|0.000|4.000|0.000|none|20|220.000|220.000|dc754a6307251c41fca0302421687a71|1|0
 terrain|1085.000|gameplay_collision|spire_debris_collision_lane|rail_hazard_solid|11.000|4.000|30.000|5.000|3.000|8.000|0.000|0.000|0.000|proxy|30|90.000|240.000|8e236597c8e324c0fa59d399bcde7170|1|0
@@ -197,7 +198,8 @@ event|776.000|obstacle|tunnel_left_rib_01|left wall rib teaches narrow clearance
 event|805.000|enemy_wave|tunnel_probe_slalom|slow probes mark the safe weave path|dd43912acbcf7314301186fd0c149d64|1|0
 event|828.000|obstacle|tunnel_right_rib_01|right wall rib forces lateral correction|2634d9528b5958b2931d605374ec25e2|1|0
 event|860.000|obstacle|tunnel_ceiling_teeth_01|ceiling teeth press the player low|336804a8a3250a7552a017778edd2e85|1|0
-event|895.000|enemy_wave|tunnel_exit_pinwheel|exit drones rotate around the tunnel mouth|01eb85b876d43cc442dfc8c4e88c1a14|1|0
+# Complete the three drone attack passes before the following camera fire hold.
+event|865.000|enemy_wave|tunnel_exit_pinwheel|exit drones rotate around the tunnel mouth|01eb85b876d43cc442dfc8c4e88c1a14|1|0
 event|925.000|obstacle|tunnel_split_pillars_01|center pillars split the aiming lane|cdb1abab560c98cfec16002bf7c44d1f|1|0
 event|955.000|vfx|tunnel_exit_haze|controlled sunlight haze before the canyon opens|1e38fcc336fe31f14cfb31d0415de801|1|0
 event|990.000|setpiece|spire_collapse_start|large silhouette collapse begins|fb58e07cac37c1b2ab146cace5fe7542|1|0
@@ -221,9 +223,9 @@ event|2320.000|checkpoint|stage_clear|score tally and next route preload|0ae54da
 wave|wave-first-contact-editor-test|First Contact Editor Test|205.000000|80.000000|30.000000|all_enemies_defeated|parallel|-|-|1|1|0
 
 # Persistent Tutorial Scout formation anchored to the First Contact rail segment.
-enemy_placement|enemy-first-contact-left|drone_scout|single_tutorial|wave-first-contact-editor-test|fc31fb48fc6acd3521ce104ec4cb0ae5|0.420000|-7.000000|4.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|80.000000|1|1|0
-enemy_placement|enemy-first-contact-center|drone_scout|single_tutorial|wave-first-contact-editor-test|fc31fb48fc6acd3521ce104ec4cb0ae5|0.520000|0.000000|6.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|80.000000|1|1|0
-enemy_placement|enemy-first-contact-right|drone_scout|single_tutorial|wave-first-contact-editor-test|fc31fb48fc6acd3521ce104ec4cb0ae5|0.620000|7.000000|4.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|80.000000|1|1|0
+enemy_placement|enemy-first-contact-left|drone_scout|assault_magenta_single|wave-first-contact-editor-test|fc31fb48fc6acd3521ce104ec4cb0ae5|0.420000|-7.000000|4.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|80.000000|1|1|0
+enemy_placement|enemy-first-contact-center|drone_scout|assault_magenta_single|wave-first-contact-editor-test|fc31fb48fc6acd3521ce104ec4cb0ae5|0.520000|0.000000|6.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|80.000000|1|1|0
+enemy_placement|enemy-first-contact-right|drone_scout|assault_magenta_single|wave-first-contact-editor-test|fc31fb48fc6acd3521ce104ec4cb0ae5|0.620000|7.000000|4.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|80.000000|1|1|0
 
 # Four-role projectile readability encounter. Distance gates preserve the authored order while the cart continues moving.
 wave|wave-threat-sequence-01-assault|Threat Sequence 01 Assault|1940.000000|90.000000|12.000000|reach_rail_distance|sequential|wave-threat-sequence-02-sniper|-|1|1|0

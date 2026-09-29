@@ -92,6 +92,7 @@ def turret():
                 face([rings[j][i],rings[j+1][i],rings[j+1][k],rings[j][k]],colour+(i%2 if colour<2 else 0))
         if cap:face(rings[0],3);face(list(reversed(rings[-1])),colour)
     tube('y',(0,0,0),[(-.50,.73),(-.40,.86),(-.25,.86),(-.17,.66)],0,8)
+    base_faces = len(m.faces)
     tube('y',(0,0,0),[(-.17,.40),(.05,.40),(.24,.58),(.44,.48),(.56,.26)],0,8)
     for x in [-.27,.27]:
         tube('z',(x,.17,0),[(-.18,.18),(.12,.20),(.53,.15),(.70,.20),(.88,.20)],1,8,False)
@@ -100,6 +101,10 @@ def turret():
         tube('z',(x,.17,0),[(.80,.10),(.875,.10)],3,8)
         tube('z',(x,.17,0),[(.878,.057),(.879,.057)],5,8)
     m.save(ROOT/'Resources/enemies/CombatTurret')
+    for name,faces in [('CombatTurretBase',m.faces[:base_faces]),('CombatTurretHead',m.faces[base_faces:])]:
+        part=Mesh(name,m.palette)
+        part.faces=faces
+        part.save(ROOT/'Resources/enemies'/name)
 
 if __name__=='__main__':
     stone('RailHazardBlock', True)

@@ -276,6 +276,12 @@ void EnemyAttackTelegraphSystem::Reset() {
     revision_ = 0;
 }
 
+void EnemyAttackTelegraphSystem::CancelActor(uint32_t actorId) {
+    trackedActors_.erase(actorId);
+    std::erase_if(frame_.cues,[actorId](const auto& cue) { return cue.actorId == actorId; });
+    std::erase_if(frame_.events,[actorId](const auto& event) { return event.actorId == actorId; });
+}
+
 void EnemyAttackTelegraphSystem::Update(
     const EnemyAttackTelegraphFrameInput& input) {
     frame_ = {};

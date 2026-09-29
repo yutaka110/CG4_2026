@@ -78,6 +78,9 @@ void EnemyProjectileSystem::RebuildFromProjectiles(
 uint32_t EnemyProjectileSystem::SpawnVolley(
     const CourseEnemyActor& actor,
     std::vector<EnemyProjectileRuntimeState>& projectiles) {
+    if (actor.desc.hitPoints <= 0.0f || (actor.combatState.initialized &&
+        (actor.combatState.phase == EnemyCombatPhase::Dying ||
+         actor.combatState.phase == EnemyCombatPhase::Retired))) return 0;
     const EnemyProjectileDefinitionAsset& definition =
         actor.desc.projectileDefinition;
     const int projectileCount = (std::max)(1, actor.desc.bulletCount);
@@ -106,6 +109,12 @@ uint32_t EnemyProjectileSystem::SpawnVolley(
         projectile.lateralOffset = actor.desc.lateralOffset +
             lane * actor.desc.radius * 0.7f;
         projectile.verticalOffset = actor.desc.verticalOffset;
+        if (actor.desc.meshId == "combat_turret" && hasTarget) {
+            const Vector3 muzzle = ResolveTurretMuzzleRailPosition(actor,(index & 1) ? 1.0f : -1.0f);
+            projectile.distanceOffset = muzzle.z;
+            projectile.lateralOffset = muzzle.x;
+            projectile.verticalOffset = muzzle.y;
+        }
         projectile.previousDistanceOffset = projectile.distanceOffset;
         projectile.previousLateralOffset = projectile.lateralOffset;
         projectile.previousVerticalOffset = projectile.verticalOffset;
