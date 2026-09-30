@@ -3841,7 +3841,9 @@ TerrainCpuMesh BuildChunkMesh(
         12u,
         64u);
     const uint32_t radialSegments = (std::clamp)(
-        settings.surfaceRadialSegments / lodDivisor,
+        // All LODs share the same boundary polygon. Decimating this ring
+        // independently creates T-junctions and exposes the sky below the floor.
+        settings.surfaceRadialSegments,
         16u,
         96u);
     TerrainVolumeField volumeField(railPath, settings, editLayer, previewLayer);
@@ -3861,10 +3863,12 @@ TerrainCpuMesh BuildChunkMesh(
             return {};
         }
         const float st = static_cast<float>(s) / static_cast<float>(longitudinalSteps);
-        const float distance = chunk.startDistance + (chunk.endDistance - chunk.startDistance) * st;
+        const float distance = s == longitudinalSteps ? chunk.endDistance :
+            chunk.startDistance + (chunk.endDistance - chunk.startDistance) * st;
         for (uint32_t a = 0; a <= radialSegments; ++a) {
             const float at = static_cast<float>(a) / static_cast<float>(radialSegments);
-            const float angle = 6.28318530718f * at;
+            // Evaluate the closing vertex at exactly zero, including noise and edits.
+            const float angle = a == radialSegments ? 0.0f : 6.28318530718f * at;
             openingMasks.push_back(volumeField.OpeningMask(distance, angle));
             Vector3 normal{};
             const Vector3 position = volumeField.SurfacePoint(distance, angle, &normal);
@@ -4609,6 +4613,13 @@ void AppendVolumeDebugDraw(
     }
 }
 } // namespace
+
+TerrainChunkCpuBuild BuildTerrainChunkGeometry(
+    const TerrainChunkDebugInfo& chunk,
+    const RailPath& railPath,
+    const TerrainGenerationSettings& settings) {
+    return BuildTerrainChunkCpu(nullptr, chunk, railPath, settings, {}, {}, 0u, {});
+}
 
 TerrainChunkManager::~TerrainChunkManager() {
     for (TerrainChunkBuildJob& job : pendingBuildJobs_) {

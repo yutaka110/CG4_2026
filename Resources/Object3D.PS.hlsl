@@ -121,6 +121,28 @@ PixelShaderOutput main(VertexShaderOutput input)
     float3 baseRgb = texColor.rgb * gMaterial.color.rgb;
     float baseA = texColor.a * gMaterial.color.a;
 
+    if (gMaterial.specularMode == 7) {
+        // Same albedo as gameplay terrain; world projection keeps rock scale
+        // consistent over the broad facade and the irregular inner surfaces.
+        float3 N = SafeNormalize(input.normal);
+        float3 weights = pow(abs(N), 4.0f);
+        weights /= max(weights.x + weights.y + weights.z, 1e-5f);
+        float3 p = input.worldPosition * 0.16f;
+        float3 rock = gTexture.Sample(gSampler, p.yz).rgb * weights.x +
+                      gTexture.Sample(gSampler, p.xz).rgb * weights.y +
+                      gTexture.Sample(gSampler, p.xy).rgb * weights.z;
+        // Assimp flips the authored V coordinate: V=1-depth after import.
+        float depth = max(0.0f, 1.0f-input.texcoord.y);
+        float interior = saturate(input.texcoord.x);
+        float recess = interior * smoothstep(0.0f, 38.0f, depth);
+        float diffuse = saturate(dot(N, SafeNormalize(-gDirectionalLight.direction)));
+        float3 key = gDirectionalLight.color.rgb * (0.38f + 0.42f*diffuse);
+        float3 lit = rock * gMaterial.color.rgb * key;
+        lit *= lerp(1.0f, 0.16f, recess);
+        output.color = float4(lit, 1.0f);
+        return output;
+    }
+
     // Title landscape only. Keep silhouette/large forms while limiting the
     // lighting range; point/spot highlights must not turn stone into glitter.
     if (gMaterial.specularMode == 6) {
@@ -130,7 +152,15 @@ PixelShaderOutput main(VertexShaderOutput input)
         float shade = lerp(0.62f, 0.82f, facing);
         float haze = smoothstep(40.0f, 220.0f, length(cameraWorldPosition-input.worldPosition)) * 0.68f;
         float3 hazeColor = float3(0.30f, 0.36f, 0.40f);
-        output.color = float4(lerp(baseRgb * shade, hazeColor, haze), baseA);
+        // Borrow the title key's hue without importing gameplay darkness.
+        // The CPU clear color uses this same tint and luminance normalization.
+        float3 hue = max(gDirectionalLight.color.rgb, 0.001f) / float3(1.0f, 0.93f, 0.83f);
+        const float3 luma = float3(0.2126f, 0.7152f, 0.0722f);
+        float3 tintedBase = baseRgb * hue;
+        tintedBase *= dot(baseRgb, luma) / max(dot(tintedBase, luma), 1e-6f);
+        float3 tintedHaze = hazeColor * hue;
+        tintedHaze *= dot(hazeColor, luma) / max(dot(tintedHaze, luma), 1e-6f);
+        output.color = float4(lerp(tintedBase * shade, tintedHaze, haze), baseA);
         return output;
     }
 

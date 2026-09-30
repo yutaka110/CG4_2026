@@ -55,6 +55,19 @@ class Mesh:
         self.faces.append((a, b, c))
 
     def add_grid(self, fn, u_count: int, v_count: int, flip=False):
+        def add_grid_face(a, b, c):
+            # Sharp displacement can make a central-difference vertex normal
+            # oppose an individual triangle. The importer then flips just that
+            # triangle, leaving a backface-culling hole in an otherwise intact wall.
+            pa, pb, pc = (self.vertices[i - 1] for i in (a, b, c))
+            face_normal = normalize(cross(sub(pb, pa), sub(pc, pa)))
+            average = tuple(sum(self.normals[i - 1][axis] for i in (a, b, c))
+                            for axis in range(3))
+            if sum(face_normal[i] * average[i] for i in range(3)) < 0.0:
+                a, b, c = (self.add_vertex(self.vertices[i - 1], self.uvs[i - 1], face_normal)
+                           for i in (a, b, c))
+            self.add_face(a, b, c)
+
         ids = []
         positions = []
         for y in range(v_count + 1):
@@ -91,11 +104,11 @@ class Mesh:
                 c = ids[y + 1][x + 1]
                 d = ids[y + 1][x]
                 if flip:
-                    self.add_face(a, c, b)
-                    self.add_face(a, d, c)
+                    add_grid_face(a, c, b)
+                    add_grid_face(a, d, c)
                 else:
-                    self.add_face(a, b, c)
-                    self.add_face(a, c, d)
+                    add_grid_face(a, b, c)
+                    add_grid_face(a, c, d)
 
     def write(self, directory: Path, filename: str, mtl_name: str):
         directory.mkdir(parents=True, exist_ok=True)

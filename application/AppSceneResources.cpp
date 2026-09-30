@@ -2616,6 +2616,7 @@ bool AppSceneResources::Initialize(
         {"courseRootRock", "Resources/course_meshes/materials/root_rock_albedo.bmp"},
         {"courseVistaRock", "Resources/course_meshes/materials/vista_rock_albedo.bmp"},
         {"titleSandstone", "Resources/course_meshes/TitleLandscape/title_sandstone.bmp"},
+        {"titleCaveRock", "Resources/terrain/Rocks016_1K-JPG/Rocks016.png"},
     };
 
     for (uint32_t index = 0; index < _countof(vfxTextureLoadSpecs); ++index) {
@@ -2999,7 +3000,7 @@ bool AppSceneResources::Initialize(
             return;
         }
 
-        const bool titleSolid = std::string_view(name) == "title_ground" ||
+        const bool titleSolid = std::string_view(name) == "title_tunnel" || std::string_view(name) == "title_ground" ||
             std::string_view(name) == "title_cliff" || std::string_view(name) == "title_boulder";
         if (titleSolid && (!ValidateModelGeometryOrientation(courseMeshData) ||
             !AuditModelClosedSurface(courseMeshData).IsValid())) {
@@ -3035,6 +3036,7 @@ bool AppSceneResources::Initialize(
     registerCourseMesh("title_ground", "Resources/course_meshes/TitleLandscape", "TitleGround.obj", "titleSandstone");
     registerCourseMesh("title_cliff", "Resources/course_meshes/TitleLandscape", "TitleCliff.obj", "titleSandstone");
     registerCourseMesh("title_boulder", "Resources/course_meshes/TitleLandscape", "TitleBoulder.obj", "titleSandstone");
+    registerCourseMesh("title_tunnel", "Resources/course_meshes/TitleLandscape", "TitleTunnel.obj", "titleCaveRock");
     registerCourseMesh("curved_canyon_wall", "Resources/course_meshes/CurvedCanyonWall", "CurvedCanyonWall.obj", "courseOrganicRock");
     registerCourseMesh("vista_hole_wall", "Resources/course_meshes/VistaHoleWall", "VistaHoleWall.obj", "courseVistaRock");
     registerCourseMesh("spire_broken_bridge_arc", "Resources/course_meshes/SpireBrokenBridgeArc", "SpireBrokenBridgeArc.obj", "courseRootRock");

@@ -122,7 +122,8 @@ rock_cluster|1085.000|spire_falling_event_debris|spire_broken_bridge_arc|ceiling
 rock_cluster|1265.000|gatekeeper_far_silhouette_rocks|vista_hole_wall|vista_wall|vista_silhouette|4|1.100|2.400|72.000|20.000|64.000|54.000|300.000|360.000|0.000|0.000|0.000|-|9e4ceda2dc25a77bd735d07a144d3b4b|1|0
 
 # Distance-driven cinematic lighting and fog presets.
-lighting|0.000|intro_backlit_mist|0.000|1.000|0.680|0.500|2.150|-0.500|-0.420|0.760|0.080|0.070|0.070|0.400|0.360|0.340|0.320|260.000|1850.000|0.110|0.220|0.300|1.020|0.120|0.080
+# Intro readability: retain sun/highlights; reduce foreground darkening only.
+lighting|0.000|intro_backlit_mist|0.000|1.000|0.680|0.500|2.150|-0.500|-0.420|0.760|0.080|0.070|0.070|0.400|0.360|0.340|0.320|260.000|1850.000|0.110|0.220|0.300|0.650|0.120|0.080
 lighting|180.000|first_contact_readability|80.000|1.000|0.680|0.460|2.200|-0.420|-0.500|0.740|0.120|0.110|0.100|0.450|0.390|0.360|0.420|170.000|1320.000|0.200|0.240|0.320|0.680|0.200|0.160
 lighting|420.000|crossfire_side_rim|120.000|1.000|0.620|0.400|3.100|-0.680|-0.360|0.620|0.160|0.140|0.140|0.440|0.340|0.300|0.440|150.000|1080.000|0.230|0.500|0.820|0.820|0.200|0.160
 lighting|720.000|tunnel_compression|90.000|0.740|0.840|1.000|1.700|-0.220|-0.700|0.480|0.060|0.070|0.090|0.260|0.300|0.360|0.320|65.000|720.000|0.340|0.220|0.340|0.880|0.360|0.300
@@ -162,7 +163,8 @@ camera_shot|1690.000|1880.000|escape_speed_widen|-|0.000|0.000|0.000|0.000|0.000
 camera_shot|2110.000|2380.000|final_gate_silhouette_hold|-|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|final_gate_silhouette_hold_preset|finale_linear_36_48|1.000
 
 # Terrain material presets drive authored rock color and detail by distance.
-terrain_material|0.000|intro_wet_organic_rock|0.000|0.460|0.390|0.350|0.540|1.220|1.280|1.160|0.120|1.480|1.180|0.720|1.480|1.340|1.280|0.050
+# Keep normals/micro-detail/cavity intact; lift the base and soft environment fill.
+terrain_material|0.000|intro_wet_organic_rock|0.000|0.460|0.390|0.350|0.640|1.220|1.280|1.160|0.120|1.480|1.180|0.720|1.480|1.340|1.280|0.320
 terrain_material|180.000|first_contact_readable_strata|80.000|0.860|0.740|0.620|0.740|0.700|1.020|0.920|0.090|0.850|0.500|0.420|1.120|1.020|0.920|0.200
 terrain_material|420.000|crossfire_dark_wall_rim|120.000|0.680|0.560|0.500|0.780|1.180|1.260|1.120|0.090|1.420|1.020|0.600|1.280|1.160|1.060|0.140
 terrain_material|720.000|tunnel_cold_ribs|90.000|0.480|0.520|0.620|0.620|1.320|1.420|1.180|0.070|1.580|1.180|0.620|1.460|1.300|1.100|0.100
@@ -204,8 +206,9 @@ event|925.000|obstacle|tunnel_split_pillars_01|center pillars split the aiming l
 event|955.000|vfx|tunnel_exit_haze|controlled sunlight haze before the canyon opens|1e38fcc336fe31f14cfb31d0415de801|1|0
 event|990.000|setpiece|spire_collapse_start|large silhouette collapse begins|fb58e07cac37c1b2ab146cace5fe7542|1|0
 event|1015.000|vfx|spire_dust_wall|dust wall reveals falling debris silhouettes|eadaca569834887116f0b5c86e9ee7e1|1|0
+# Allow three sequential warnings and interruption recovery before crossfire.
+event|1030.000|enemy_wave|spire_guard_line|spire guards enter before the debris peak|7e505b3df218380e77d12bd0789de8be|1|0
 event|1045.000|obstacle|spire_falling_slab_left|foreground slab drops across left lane|cd9e5e02ae702925d0e5809a89c91155|1|0
-event|1075.000|enemy_wave|spire_guard_line|spire guards appear between debris beats|7e505b3df218380e77d12bd0789de8be|1|0
 event|1108.000|obstacle|spire_falling_slab_right|right slab falls after guard line|b35e6b448722cd4e69858c905e7db03e|1|0
 event|1130.000|vfx|spire_shockwave|shockwave dust and falling shards|6e9c2990c5b49711298720b6ac44b4c1|1|0
 event|1160.000|enemy_wave|spire_shard_crossfire|turrets and drones fire through the dust|530cdab48e6eeb3b2c2e9d5b910f098b|1|0

@@ -255,6 +255,14 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
                 item->materialData->specularMode = 6; // Bounded title diffuse + distance haze.
                 item->useMaterialOverride = true;
             }
+            if (placement.meshId == "title_tunnel" && item->materialData != nullptr) {
+                item->materialData->color = {0.70f,0.61f,0.53f,1.0f};
+                item->materialData->enableLighting = true;
+                item->materialData->shininess = 1.0f;
+                item->materialData->environmentCoefficient = 0.0f;
+                item->materialData->specularMode = 7; // Rock mass with shaded cave interior.
+                item->useMaterialOverride = true;
+            }
             const Vector3 center = ResolveRailLocal(
                 railPath,
                 placement.distance,

@@ -77,9 +77,9 @@ class Mesh:
 def ground_height(radius, angle):
     # The sleeper underside is -0.28 m. The broad rail corridor stays flat,
     # including the curve's chord and the full start-camera orbit footprint.
-    if 60 <= radius <= 92:
+    if 60 <= radius <= 260:
         return -0.30
-    influence = min(1.0, max(0.0, (60-radius)/20 if radius<60 else (radius-92)/30))
+    influence = min(1.0, max(0.0, (60-radius)/20 if radius<60 else (radius-260)/40))
     influence = influence*influence*(3-2*influence)
     broad = 0.65*math.sin(angle*2+0.4) + 0.40*math.cos(angle*3-radius/80)
     return -0.30 + influence*broad - 9*max(0,(radius-220)/80)**2
@@ -90,7 +90,7 @@ def ground():
     segments = 192
     center = mesh.vertex((0,ground_height(0,0),0))
     rings = []
-    for radius in (12,25,40,52,60,64,67,70,73,76,80,88,92,105,130,160,200,250,300):
+    for radius in (12,25,40,52,60,64,67,70,73,76,80,88,92,105,130,160,200,250,260,300):
         rings.append([mesh.vertex((radius*math.cos(i*math.tau/segments),
             ground_height(radius,i*math.tau/segments),radius*math.sin(i*math.tau/segments))) for i in range(segments)])
     for i in range(segments):

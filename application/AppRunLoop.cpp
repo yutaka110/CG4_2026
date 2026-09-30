@@ -1,4 +1,4 @@
-﻿#include "AppRunLoop.h"
+#include "AppRunLoop.h"
 #include "AppLogFile.h"
 
 #include <DirectXMath.h>
@@ -6441,23 +6441,27 @@ void AppRunLoop::UpdateRailShooterFrame() {
         const auto titleSample = railTitleScene_.Path().Evaluate(railTitleScene_.Distance());
         // Stable warm key light follows the title composition; restore the
         // authored gameplay light only under the fully opaque transition.
-        runtimeState_.directionalLightData.color = {1.0f,0.93f,0.83f,1.0f};
+        const auto titleColors = railTitleScene_.Colors(
+            railShooterCourse_.EvaluateLightingPreset(railShooterDistance_).sunColor);
+        runtimeState_.directionalLightData.color = titleColors.light;
         runtimeState_.directionalLightData.direction = Normalize(Add(
             Scale(titleSample.tangent,-0.45f),Add(Scale(titleSample.right,-0.65f),Vector3{0,-1,0})));
-        runtimeState_.directionalLightData.intensity = 1.25f;
+        runtimeState_.directionalLightData.intensity = 1.25f*(1.0f-0.35f*railTitleScene_.TunnelShade());
         runtimeState_.pointLightData.intensity = 0.0f;
         runtimeState_.spotLight.intensity = 0.0f;
         // Match the far landscape haze and remove the gameplay sky's bright sun.
         runtimeState_.showSkybox = false;
         runtimeState_.showProceduralBackdrop = false;
-        runtimeState_.clearColor[0]=0.30f; runtimeState_.clearColor[1]=0.36f;
-        runtimeState_.clearColor[2]=0.40f; runtimeState_.clearColor[3]=1.0f;
+        runtimeState_.clearColor[0]=titleColors.background.x;
+        runtimeState_.clearColor[1]=titleColors.background.y;
+        runtimeState_.clearColor[2]=titleColors.background.z;
+        runtimeState_.clearColor[3]=1.0f;
         const float targetGain = focused ? railTitleScene_.AmbienceGain()*0.34f : 0.0f;
         railTitleAudioGain_ += (targetGain-railTitleAudioGain_)*(1.0f-std::exp(-8.0f*(std::clamp)(dt,0.0f,0.05f)));
         if(focused && !railTitleAmbiencePlaying_ && railTitleAmbience_.IsValid())
             railTitleAmbiencePlaying_ = audio_.PlaySpatial(railTitleAmbience_,0.0f,0.15f,1.0f,true);
         audio_.SetPlayback(railTitleAmbience_,railTitleAudioGain_*(1.0f-railTitleScene_.Blackout()),
-            1.0f+0.08f*railTitleScene_.StartProgress());
+            1.0f);
         if(!focused && railTitleAudioGain_<0.001f && railTitleAmbiencePlaying_) {
             audio_.Stop(railTitleAmbience_); railTitleAmbiencePlaying_=false;
         }
@@ -6479,7 +6483,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         frameState_.viewMatrix = MakeLookAtMatrix(eye,railTitleScene_.CameraTarget(),{0,1,0});
         // The orbit never approaches geometry closer than several metres.
         // Tight title-only clipping improves depth precision for ground/rail separation.
-        frameState_.projMatrix = MakePerspectiveFovMatrix(0.70f,metrics.AspectRatio(),0.5f,800.0f);
+        frameState_.projMatrix = MakePerspectiveFovMatrix(railTitleScene_.CameraFov(),metrics.AspectRatio(),0.5f,800.0f);
         frameState_.viewProjectionMatrix = Multiply(frameState_.viewMatrix,frameState_.projMatrix);
         frameState_.cameraWorldPosition = eye;
         frameState_.deltaTime = titleDt;
@@ -12091,7 +12095,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             &railTitleScene_.Wheels(),frameState_.viewMatrix,frameState_.projMatrix);
         scene_.SyncRailVehicleOccupantActorFrame({},frameState_.viewMatrix,frameState_.projMatrix);
         scene_.SyncCourseMeshRenderQueue(railTitleEmptySpawns_,&railTitleScene_.Scenery(),
-            railTitleScene_.Distance(),railTitleScene_.Path(),frameState_.viewMatrix,frameState_.projMatrix,nullptr,nullptr);
+            railTitleScene_.SceneryDistance(),railTitleScene_.SceneryPath(),frameState_.viewMatrix,frameState_.projMatrix,nullptr,nullptr);
     } else {
     scene_.SyncRailVehicleRenderFrame(
         railShooterVehicleRenderer_.Frame(),

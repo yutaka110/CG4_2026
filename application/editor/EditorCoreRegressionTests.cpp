@@ -1,4 +1,5 @@
-﻿#include "../course/RailTitleScene.h"
+﻿#include <cstdlib>
+#include "../course/RailTitleScene.h"
 #include "EditorCoreRegressionTests.h"
 
 #include "EditorAssetMutationExecutor.h"
@@ -16675,6 +16676,79 @@ void TestEditorFramePacingAndViewportRealtime(RegressionRunner& runner) {
         "Realtime toggle should restore continuous Viewport updates");
 }
 
+void TestTerrainChunkSurfaceSeams(RegressionRunner& runner) {
+    CourseAsset course;
+    std::string error;
+    if (!course.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course", &error)) {
+        runner.Expect(false, "Terrain seam test must load the actual gameplay route");
+        return;
+    }
+    RailPath rail;
+    course.ApplyToRailPath(rail);
+    std::ofstream log("logs/terrain_surface_seams.log");
+    float maxGap = 0.0f;
+    size_t checked = 0;
+    bool valid = true;
+    // Submission budget, editor default, and a non-divisible authoring setting.
+    for (uint32_t radial : {36u, 56u, 59u}) {
+        TerrainGenerationSettings settings;
+        settings.surfaceRadialSegments = radial;
+        const uint32_t stride = radial + 1u;
+        for (float boundary : {80.0f, 160.0f, 320.0f, 480.0f, 800.0f}) {
+            std::array<TerrainChunkCpuBuild, 3> before, after;
+            for (uint32_t lod = 0; lod < 3; ++lod) {
+                TerrainChunkDebugInfo chunk;
+                chunk.seed = 1337;
+                chunk.lodTier = lod;
+                chunk.startDistance = boundary - settings.chunkLength;
+                chunk.endDistance = boundary;
+                before[lod] = BuildTerrainChunkGeometry(chunk, rail, settings);
+                chunk.startDistance = boundary;
+                chunk.endDistance = boundary + settings.chunkLength;
+                after[lod] = BuildTerrainChunkGeometry(chunk, rail, settings);
+            }
+            const auto compare = [&](const VertexData& a, const VertexData& b) {
+                const float dx = a.position.x - b.position.x;
+                const float dy = a.position.y - b.position.y;
+                const float dz = a.position.z - b.position.z;
+                maxGap = (std::max)(maxGap, std::sqrt(dx*dx + dy*dy + dz*dz));
+                valid &= std::isfinite(dx) && std::isfinite(dy) && std::isfinite(dz);
+                ++checked;
+            };
+            for (uint32_t lhs = 0; lhs < 3; ++lhs) {
+                const uint32_t rows = (std::clamp)(settings.surfaceLongitudinalSteps / (lhs+1u), 12u, 64u);
+                if (before[lhs].vertices.size() < size_t(rows+1u)*stride) {
+                    valid = false;
+                    continue;
+                }
+                for (uint32_t rhs = 0; rhs < 3; ++rhs) {
+                    if (after[rhs].vertices.size() < stride) { valid = false; continue; }
+                    for (uint32_t a = 0; a < stride; ++a)
+                        compare(before[lhs].vertices[rows*stride+a], after[rhs].vertices[a]);
+                }
+                for (uint32_t row = 0; row <= rows; ++row)
+                    compare(before[lhs].vertices[row*stride], before[lhs].vertices[row*stride+radial]);
+            }
+        }
+    }
+    log << "boundary_and_wrap_vertex_pairs=" << checked << " max_gap=" << maxGap << " valid=" << valid << '\n';
+    runner.Expect(valid && checked > 6000 && maxGap < 0.00001f,
+        "Every LOD pair on the gameplay route must share an identical boundary and closed angular seam");
+    for (const char* name : {"CurvedCanyonWall", "RibTunnelWall"}) {
+        const auto model = LoadObjFile_Assimp(std::string("Resources/course_meshes/") + name,
+            std::string(name) + ".obj");
+        const auto audit = AuditModelClosedSurface(model);
+        log << name << " triangles=" << audit.triangleCount
+            << " inconsistent=" << audit.inconsistentEdges
+            << " duplicate=" << audit.duplicateTriangles << '\n';
+        // These authored wall patches deliberately have open perimeter edges.
+        runner.Expect(audit.triangleCount > 10000 && audit.inconsistentEdges == 0 &&
+            audit.nonManifoldEdges == 0 && audit.duplicateTriangles == 0 &&
+            audit.invalidTriangles == 0 && ValidateModelGeometryOrientation(model),
+            "Displaced wall patches must not acquire isolated reversed faces during import");
+    }
+}
+
 void TestTerrainChunkPresentationContinuityPolicy(RegressionRunner& runner) {
     TerrainChunkDebugInfo requested{};
     requested.startDistance = 128.0f;
@@ -29952,14 +30026,89 @@ void TestRailTitleLandscape(RegressionRunner& runner) {
         }
     }
     runner.Expect(clear,"Sparse cliffs and rocks must keep the cart visible throughout the lap and start orbit");
+    const auto tunnelMesh=LoadObjFile_Assimp("Resources/course_meshes/TitleLandscape","TitleTunnel.obj");
+    bool tunnelClear=!tunnelMesh.indices.empty(), entranceVisible=true, caveEnclosesView=true;
+    bool departureStraight=true, departureSupported=true, rearCurvePreserved=true;
+    for(int phase=0;phase<12;++phase) {
+        RailTitleScene entry;entry.Initialize();
+        const int idleFrames=int((phase/12.0f)*entry.LapLength()/RailTitleScene::Speed/0.05f);
+        for(int frame=0;frame<idleFrames;++frame) entry.Update(0.05f);
+        const auto departure=entry.Path().Evaluate(entry.Distance());
+        const auto previousPath=entry.Path();
+        const float previousDistance=entry.Distance();
+        entry.BeginStart();
+        for(float behind:{2.0f,5.0f,15.0f,35.0f,80.0f,140.0f}) {
+            const auto before=previousPath.Evaluate(previousDistance-behind);
+            const auto after=entry.Path().Evaluate(entry.Distance()-behind);
+            const auto error=sub(before.position,after.position);
+            rearCurvePreserved &= dot(error,error)<0.0004f && dot(before.tangent,after.tangent)>0.99999f;
+        }
+        const auto initial=entry.Path().Evaluate(entry.Distance());
+        departureStraight &= dot(sub(initial.position,departure.position),sub(initial.position,departure.position))<0.0001f;
+        const auto& portal=entry.Scenery().terrainPlacements.back();
+        const auto anchor=entry.SceneryPath().Evaluate(portal.distance);
+        const auto world=Multiply(tunnelMesh.rootNode.localMatrix,MakeAffineMatrix({1,1,1},
+            Vector3{0,std::atan2(anchor.tangent.x,anchor.tangent.z),0},anchor.position));
+        std::vector<Triangle> tunnel;
+        for(size_t j=0;j<tunnelMesh.indices.size();j+=3) {
+            const auto v=[&](size_t k){const auto& q=tunnelMesh.vertices[tunnelMesh.indices[j+k]].position;return transform({q.x,q.y,q.z},world);};
+            tunnel.push_back({v(0),v(1),v(2)});
+        }
+        // Cover the opening, not only the centre ray. A closed rear rock wall
+        // must occlude sky even on the straight approach to the cave.
+        const auto inside=entry.SceneryPath().Evaluate(portal.distance+10.0f);
+        const Vector3 origin{inside.position.x,inside.position.y+4.6f,inside.position.z};
+        for(float side:{-0.12f,-0.06f,0.0f,0.06f,0.12f}) for(float vertical:{-0.04f,0.0f,0.06f,0.12f}) {
+            const Vector3 direction{inside.tangent.x+side*inside.right.x,vertical,
+                inside.tangent.z+side*inside.right.z};
+            const float wall=nearest(tunnel,origin,direction);
+            caveEnclosesView &= wall>15.0f && wall<85.0f;
+        }
+        Vector3 previous=entry.CameraPosition();
+        for(int frame=0;frame<int(RailTitleScene::StartDuration/0.05f)+3 && !entry.ReadyForGameplay();++frame) {
+            entry.Update(0.05f);
+            const Vector3 eye=entry.CameraPosition();
+            auto cart=entry.Path().Evaluate(entry.Distance()).position;cart.y+=1.5f;
+            const auto pose=entry.Path().Evaluate(entry.Distance());
+            const auto delta=sub(pose.position,departure.position);
+            departureStraight &= std::abs(dot(delta,departure.right))<0.01f && dot(pose.tangent,departure.tangent)>0.9999f;
+            for(float side:{-1.9f,1.9f}) {
+                const Vector3 support{pose.position.x+pose.right.x*side,3.0f,pose.position.z+pose.right.z*side};
+                departureSupported &= std::abs(nearest(ground,support,{0,-1,0})-3.30f)<0.015f;
+            }
+            tunnelClear &= nearest(tunnel,previous,sub(eye,previous))>1.0f;
+            if(entry.Blackout()<0.99f) tunnelClear &= nearest(tunnel,eye,sub(cart,eye))>1.0f;
+            if(frame==int(RailTitleScene::OrbitDuration/0.05f)+2) {
+                const Vector3 mouth{anchor.position.x,anchor.position.y+4,anchor.position.z};
+                const auto forward=sub(entry.CameraTarget(),eye),toMouth=sub(mouth,eye);
+                entranceVisible &= dot(forward,toMouth)/std::sqrt(dot(forward,forward)*dot(toMouth,toMouth))>0.94f &&
+                    std::sqrt(dot(toMouth,toMouth))>10.0f && nearest(rocks,eye,toMouth)>1.0f;
+            }
+            previous=eye;
+        }
+        tunnelClear &= entry.TunnelCameraDepth()>4.5f && entry.Blackout()>0.999f;
+    }
     std::ofstream log("logs/title_landscape_geometry.log");
     log<<"placements="<<title.Scenery().terrainPlacements.size()<<" triangles="<<ground.size()+rocks.size()
-       <<" ground_rays=384 camera_rays="<<checked<<" supported="<<supported<<" clear="<<clear<<"\n";
+       <<" ground_rays=384 camera_rays="<<checked<<" supported="<<supported<<" clear="<<clear
+       <<" cave_clear="<<tunnelClear<<" entrance_visible="<<entranceVisible<<" cave_enclosed="<<caveEnclosesView
+       <<" departure_straight="<<departureStraight<<" departure_supported="<<departureSupported
+       <<" rear_curve_preserved="<<rearCurvePreserved<<"\n";
+    log.flush();
+    runner.Expect(tunnelClear && entranceVisible,
+        "At twelve click phases, the imported tunnel must frame the settled camera, clear the cart and camera path, and contain the camera before blackout");
+    runner.Expect(caveEnclosesView,
+        "The sealed cave must hide the far exit across the opening while keeping the forward camera corridor open");
+    runner.Expect(departureStraight && departureSupported,
+        "All twelve departure phases must preserve the cart position and follow grounded straight rails toward the cave");
+    runner.Expect(rearCurvePreserved,
+        "Starting must preserve the travelled curve behind the cart, including a join inside a Bezier segment");
+
 }
 
 void TestTitleImportedSurfaceAudit(RegressionRunner& runner) {
     std::ofstream log("logs/title_surface_audit.log");
-    for(const char* file:{"TitleGround.obj","TitleCliff.obj","TitleBoulder.obj"}) {
+    for(const char* file:{"TitleGround.obj","TitleCliff.obj","TitleBoulder.obj","TitleTunnel.obj"}) {
         const auto mesh=LoadObjFile_Assimp("Resources/course_meshes/TitleLandscape",file);
         const auto audit=AuditModelClosedSurface(mesh);
         log<<file<<" triangles="<<audit.triangleCount<<" boundary="<<audit.boundaryEdges
@@ -29990,17 +30139,40 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
         runner.Expect(title.Starting() && title.StartProgress()==0 && title.Blackout()==0,
             "Starting must not teleport the camera or flash the screen");
         float previousFade=0,previousMenu=1;
+        const auto luminance=[](Vector3 c) {return c.x*0.2126f+c.y*0.7152f+c.z*0.0722f;};
+        const float lightLuma=luminance({1.0f,0.93f,0.83f});
+        const float skyLuma=luminance({0.30f,0.36f,0.40f});
+        const Vector4 courseSun{1.0f,0.68f,0.50f,1.0f};
+        auto previousColors=title.Colors(courseSun);
+        bool colorContinuous=true;
         Vector3 previous=initial;
         bool continuous=true;
+        bool steadyApproach=true;
         int frames=0;
-        while(!title.ReadyForGameplay() && frames<fps*3) {
+        while(!title.ReadyForGameplay() && frames<int(fps*(RailTitleScene::StartDuration+1.0f))) {
             title.Update(1.0f/fps);
             const Vector3 eye=title.CameraPosition();
             const Vector3 center=title.Path().Evaluate(title.Distance()).position;
             const float step=std::sqrt((eye.x-previous.x)*(eye.x-previous.x)+(eye.y-previous.y)*(eye.y-previous.y)+(eye.z-previous.z)*(eye.z-previous.z));
             const float clearance=std::sqrt((eye.x-center.x)*(eye.x-center.x)+(eye.z-center.z)*(eye.z-center.z));
-            continuous &= std::isfinite(step) && step<2.0f && clearance>=9.4f && eye.y-center.y>=5.1f;
+            // Bound the orbit movement separately from the constant-speed chase.
+            continuous &= std::isfinite(step) && step<60.0f/fps && clearance>=7.9f && eye.y-center.y>=4.5f;
+            steadyApproach &= std::abs(title.CurrentSpeed()-12.0f)<0.001f && std::abs(title.CameraFov()-0.70f)<0.001f;
+            const float elapsed=float(frames+1)/fps;
+            if(elapsed>RailTitleScene::OrbitDuration+1.0f/fps) {
+                const auto forward=title.Path().Evaluate(title.Distance()).tangent;
+                const float cameraAdvance=(eye.x-previous.x)*forward.x+(eye.z-previous.z)*forward.z;
+                const float gap=(center.x-eye.x)*forward.x+(center.z-eye.z)*forward.z;
+                steadyApproach &= cameraAdvance>=-0.001f && std::abs(gap-8.0f)<0.01f;
+            }
             continuous &= title.Blackout()>=previousFade && title.MenuOpacity()<=previousMenu;
+            continuous &= title.TunnelCameraDepth()>2.0f || title.Blackout()==0.0f;
+            const auto colors=title.Colors(courseSun);
+            colorContinuous &= colors.transition>=previousColors.transition &&
+                std::abs(luminance({colors.light.x,colors.light.y,colors.light.z})-lightLuma)<0.0001f &&
+                std::abs(luminance(colors.background)-skyLuma)<0.0001f &&
+                std::abs(colors.light.x-previousColors.light.x)<0.025f;
+            previousColors=colors;
             previous=eye; previousFade=title.Blackout(); previousMenu=title.MenuOpacity();
             ++frames;
             if(frames==fps/2) {const float progress=title.StartProgress();title.BeginStart();
@@ -30008,7 +30180,20 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
         }
         runner.Expect(continuous && title.ReadyForGameplay() && title.Blackout()>0.999f && title.MenuOpacity()==0 && title.AmbienceGain()<0.001f,
             "Cinematic must remain outside the cart and switch worlds only under full blackout with silent title audio");
-        runner.Expect(std::abs(float(frames)/fps-1.8f)<0.04f,"Cinematic timing should be independent of frame rate");
+        runner.Expect(std::abs(float(frames)/fps-RailTitleScene::StartDuration)<0.04f &&
+            title.Scenery().terrainPlacements.size()==10,
+            "Tunnel cinematic timing must be frame-rate independent and repeated confirm must not duplicate the portal");
+        runner.Expect(steadyApproach,
+            "The cave approach must keep constant speed and FOV, with a fixed close chase distance after the orbit");
+        runner.Expect(std::abs(title.CurrentSpeed()-12.0f)<0.001f &&
+            std::abs(title.CameraFov()-0.70f)<0.001f &&
+            std::abs(title.TunnelCameraDepth()-4.6f)<0.01f,
+            "The steady approach must reach the same inside-cave position at all frame rates");
+        runner.Expect(colorContinuous && previousColors.transition==1.0f,
+            "Title hue must reach its transition endpoint without dimming the light or background or stepping between frames");
+        title.Initialize();
+        runner.Expect(title.Colors(courseSun).transition==0.0f,
+            "Reinitializing the title must clear the color transition");
     }
     EffectAssetLoader loader;
     LoadedEffectAsset dust;
@@ -30041,6 +30226,9 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
 }
 
 void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
+    size_t auditEnvSize = 0;
+    getenv_s(&auditEnvSize, nullptr, 0, "CG5_ENEMY_ATTACK_AUDIT");
+    const bool audit = auditEnvSize > 0;
     CourseAsset course; std::string error;
     runner.Expect(course.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course",&error),"timing course loads");
     auto compiled=CourseWaveRuntimeCompiler{}.Compile(course,{});
@@ -30064,7 +30252,7 @@ void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
             a.engagementBandVelocityResponse==b.engagementBandVelocityResponse,
             "saved gameplay must preserve the complete engagement and attack-pass contract");
     }
-    std::ofstream log("logs/authored_drone_attack_timing.log",std::ios::trunc);
+    std::ofstream log(audit ? "logs/enemy_attack_audit.log" : "logs/authored_drone_attack_timing.log",std::ios::trunc);
     // Changing just an actor/projectile asset must invalidate a cooked cache.
     {
         const std::string path="logs/attack_timing_dependency.txt";
@@ -30077,13 +30265,24 @@ void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
         runner.Expect(!cache.AreDependenciesCurrent(),"projectile tuning must invalidate old cooked combat data");
     }
     RailPath rail;rail.SetControlPoints(course.railPoints);
-    for(int mode:{0,1,2}) for(int fps:{30,60,120}) {
+    for(int mode:{0,1,2,3}) for(int fps:{30,60,120}) {
+        if (audit && (mode < 2 || fps != 60)) continue;
+        TerrainGenerationSettings terrain;
+        terrain.surfaceLongitudinalSteps=24; terrain.surfaceRadialSegments=36;
+        terrain.rockPillarDensity=0.22f;
+        std::unordered_map<uint32_t, std::string> identities;
+        std::unordered_map<uint32_t, uint64_t> shotCounts;
+        std::unordered_map<uint32_t, float> lastSeen;
+        std::unordered_map<uint32_t, std::unordered_map<std::string,float>> blocked;
+        std::unordered_map<uint32_t, uint64_t> warningTokens;
+        std::unordered_map<uint32_t, float> warningTimes;
+        bool safeShots = true;
         CourseSpawnRuntime runtime;
         const auto& program=mode==0?compiled.program:loaded;
         CourseGameplayWaveRuntimeBridge waveBridge;
         CourseEventDispatcher dispatcher; EncounterDirector encounters;
-        if(mode==2) runner.Expect(waveBridge.Bind(&program,&runtime,0,&error),"continuous timing wave bridge binds");
-        for(const auto& record:program.actors) if(mode!=2 && record.waveGuid=="wave-first-contact-editor-test") {
+        if(mode>=2) runner.Expect(waveBridge.Bind(&program,&runtime,0,&error),"continuous timing wave bridge binds");
+        for(const auto& record:program.actors) if(mode<2 && record.waveGuid=="wave-first-contact-editor-test") {
             runtime.SpawnEnemyActor(record.actor);
             log<<"mode="<<mode<<" fps="<<fps<<" actor="<<record.placementGuid<<" spawn="<<record.actor.spawnDistance
                 <<" band="<<record.actor.behaviorDefinition.maintainForwardEngagementBand
@@ -30095,9 +30294,9 @@ void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
         std::unordered_map<uint32_t,float> firstVisible,firstShot,firstWarning,firstArrival;
         std::unordered_map<uint32_t,std::string> lastReason;
         const float dt=1.0f/fps;
-        for(int step=0;step<(mode==2?30:16)*fps;++step) {
-            const float time=step*dt,distance=(mode==2?0:205)+time*15;
-            if(mode==2) {
+        for(int step=0;step<((audit || mode==3)?100:(mode>=2?30:16))*fps;++step) {
+            const float time=step*dt,distance=(mode>=2?0:205)+time*15;
+            if(mode>=2) {
                 waveBridge.Update({dt,distance,{}});
                 EncounterDirectorFrameInput ei{};ei.deltaTime=dt;ei.currentDistance=distance;ei.spawnRuntime=&runtime;
                 for(const auto& e:course.events) if(e.distance>distance-15*dt && e.distance<=distance &&
@@ -30132,28 +30331,47 @@ void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
             safety.hasCameraPosition=true;safety.cameraPosition=cameraFrame.position;safety.viewProjection=&vp;
             safety.cameraAllowsEnemyFire=cameraFrame.allowEnemyFire;safety.cameraStableForAiming=cameraFrame.stableForAiming;
             safety.cameraHardTransition=cameraFrame.hardTransition;safety.cameraReason=cameraFrame.comfortReason;
+            if (mode==3) { safety.terrainSettings=&terrain; safety.terrainEdits=&course.terrainEditLayer; }
             runtime.Update(dt,safety);
+            for (const auto& actor : runtime.Enemies()) if (actor.bulletsEmittedThisFrame) {
+                safeShots &= actor.fireEnvironmentReady && actor.fireSafetyAllowed &&
+                    actor.desc.hitPoints > 0 &&
+                    actor.desc.spawnDistance + actor.desc.distanceOffset - distance >= runtime.FireSafetySettings().minForwardDistance &&
+                    warningTokens[actor.actorId] == actor.attackState.tokenId &&
+                    warningTimes.contains(actor.actorId) &&
+                    time-warningTimes[actor.actorId] >= actor.behaviorDefinition.attackLeadSeconds-dt*1.5f;
+            }
             for(const auto& b:runtime.Bullets()) if(b.distanceOffset+b.spawnDistance<=distance && firstShot.contains(b.ownerActorId))
                 firstArrival.try_emplace(b.ownerActorId,time);
             EnemyAttackTelegraphFrameInput ti{};
             ti.spawnRuntime=&runtime;ti.railPath=&rail;ti.course=&course;ti.viewProjection=&vp;
             ti.cameraPosition=cameraFrame.position;ti.playerDistance=distance;ti.deltaTime=dt;ti.viewportWidth=1600;ti.viewportHeight=900;
+            if (mode==3) { ti.terrainSettings=&terrain; ti.terrainEdits=&course.terrainEditLayer; }
             telegraph.Update(ti);
             EnemyAttackLaneTelegraphRenderInput li{};li.telegraph=&telegraph.Frame();li.railPath=&rail;li.elapsedTime=time;
             lanes.Update(li);
             for(const auto& lane:lanes.Frame().lanes) if(lanes.WasSubmitted(lane.actorId,lane.attackIntentSequence)) {
                 runtime.MarkEnemyAttackTelegraphPresented(lane.actorId,lane.attackIntentSequence);
                 firstWarning.try_emplace(lane.actorId,time);
+                if (warningTokens[lane.actorId] != lane.attackTokenId) {
+                    warningTokens[lane.actorId]=lane.attackTokenId;
+                    warningTimes[lane.actorId]=time;
+                }
             }
             EnemyEncounterReadabilityInput ri{};
             ri.runtime=&runtime;ri.railPath=&rail;ri.viewProjection=&vp;ri.telegraph=&telegraph.Frame();
             ri.viewportWidth=1600;ri.viewportHeight=900;ri.deltaTime=dt;readability.Update(ri);
             for(const auto& a:readability.Frame().actors) if(a.onScreen && a.screenReadable) firstVisible.try_emplace(a.actorId,time);
             for(const auto& a:runtime.Enemies()) {
+                identities[a.actorId]=a.desc.waveId+"/"+a.desc.role;
+                shotCounts[a.actorId]=a.fireSequence; lastSeen[a.actorId]=time;
+                blocked[a.actorId][a.fireSafetyReason]+=dt;
                 if(a.bulletsEmittedThisFrame) firstShot.try_emplace(a.actorId,time);
                 if(a.fireSafetyReason!=lastReason[a.actorId] || a.bulletsEmittedThisFrame || step%fps==0) {
                     log<<"mode="<<mode<<" fps="<<fps<<" t="<<time<<" id="<<a.actorId<<" state="<<ToString(a.behaviorState.state)
-                        <<" distance="<<a.desc.spawnDistance+a.desc.distanceOffset-distance<<" shots="<<a.fireSequence
+                        <<" wave="<<a.desc.waveId<<" actor="<<a.desc.role<<" age="<<a.age<<" life="<<a.desc.lifetime
+                        <<" phase="<<ToString(a.entranceExitState.phase)<<" token="<<a.attackState.tokenReserved
+                        <<" remain="<<a.behaviorState.attackTimeRemaining<<" distance="<<a.desc.spawnDistance+a.desc.distanceOffset-distance<<" shots="<<a.fireSequence
                         <<" reason="<<a.fireSafetyReason<<'\n';
                     lastReason[a.actorId]=a.fireSafetyReason;
                 }
@@ -30162,7 +30380,27 @@ void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
         for(const auto& [id,t]:firstShot) log<<"RESULT mode="<<mode<<" fps="<<fps<<" id="<<id<<" visible="<<firstVisible[id]
             <<" warning="<<firstWarning[id]<<" shot="<<t<<" delay="<<t-firstVisible[id]
             <<" flight="<<(firstArrival.contains(id)?firstArrival[id]-t:-1)<<'\n';
-        runner.Expect(mode==2 ? firstShot.size()>=16 : firstShot.size()==3,
+        if (audit || mode==3) {
+            size_t encounterActors = 0;
+            for (const auto& [id,identity]:identities) {
+                log<<"AUDIT mode="<<mode<<" fps="<<fps<<" id="<<id<<" name="<<identity<<" shots="<<shotCounts[id]
+                    <<" visible="<<(firstVisible.contains(id)?firstVisible[id]:-1)
+                    <<" last="<<lastSeen[id]<<" firstShot="<<(firstShot.contains(id)?firstShot[id]:-1)<<'\n';
+                for (const auto& [reason,seconds]:blocked[id]) log<<"BLOCK mode="<<mode<<" id="<<id<<" seconds="<<seconds<<" reason="<<reason<<'\n';
+                // Front encounters must complete at least one attack while alive.
+                // Rear pursuit is a different approach contract; the boss is still
+                // active at the end of this opening-to-spire test interval.
+                if (identity.starts_with("spire_escape_chasers/") || identity.starts_with("gatekeeper_intro/")) continue;
+                ++encounterActors;
+                runner.Expect(shotCounts[id]>0,
+                    "continuous course must not strand an untouched forward enemy: "+identity+" fps="+std::to_string(fps));
+            }
+            log.flush();
+            runner.Expect(encounterActors==44 && safeShots,
+                "all 44 opening-to-spire actors need complete warnings and safe in-front shots");
+            continue;
+        }
+        runner.Expect(mode>=2 ? firstShot.size()>=16 : firstShot.size()==3,
             "authored and continuous opening encounters must not strand visible drones without a shot");
         runner.Expect(firstShot.at(1)-firstVisible.at(1)<=1.85f &&
             firstShot.at(2)-firstVisible.at(2)<=2.6f,
@@ -30423,7 +30661,9 @@ void TestTurretInterceptFlow(RegressionRunner& runner) {
                 sawCharge=sawCharge || (pose && pose->turretMuzzleActive && pose->weaponCharge>0.6f);
                 if (actor.fireSequence>0 && fireAt<0) {
                     fireAt=time;
-                    runner.Expect(warningAt>=0 && fireAt-warningAt>=1.18f,"visible warning must precede turret fire by the authored lead");
+                    runner.Expect(actor.behaviorDefinition.attackLeadSeconds>=0.65f && warningAt>=0 &&
+                        fireAt-warningAt>=actor.behaviorDefinition.attackLeadSeconds-2.0f/60.0f,
+                        "visible warning must precede turret fire by the authored lead");
                     const Vector3 desired=ResolveTurretAimDirection(actor),actual=actor.targetingState.turretAimDirection;
                     runner.Expect(desired.x*actual.x+desired.y*actual.y+desired.z*actual.z>0.995f,
                         "head must finish turning toward its frozen shot before firing");
@@ -30694,6 +30934,7 @@ int RunEditorCoreRegressionTests() {
         {"editor mode interactive tool framework", [&]() { TestEditorModeInteractiveToolFramework(runner); }},
         {"production placement brush tool pack", [&]() { TestProductionPlacementBrushToolPack(runner); }},
         {"production terrain sculpt paint tool pack", [&]() { TestProductionTerrainSculptPaintToolPack(runner); }},
+        {"terrain chunk surface seams", [&]() { TestTerrainChunkSurfaceSeams(runner); }},
         {"terrain chunk presentation continuity", [&]() { TestTerrainChunkPresentationContinuityPolicy(runner); }},
         {"terrain chunk latest-wins build policy", [&]() { TestTerrainChunkLatestWinsBuildPolicy(runner); }},
         {"editor notification toast lifecycle", [&]() { TestEditorNotificationToastLifecycle(runner); }},

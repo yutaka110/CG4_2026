@@ -2,6 +2,6 @@
 actor|spire_guard_left|Spire Guard Left Wing|combat_interceptor_hull|1.10|32|12|1.0|0.56|0.18|1.0|twin_chase
 combat|1.10|0.30|52|twin_chase
 movement|18
-behavior|interceptor|0.30|0.45|0.45|1.25|1.10|0.20|0.35|0|0|0|true
+behavior|interceptor|0.30|0.24|0.24|1.25|1.10|0.20|0.35|0|0|0|true
 engagement_band|true|30|50|70|12|2.2|34|10
-attack_pass|true|3.20|0.20
+attack_pass|true|2.40|0.20
