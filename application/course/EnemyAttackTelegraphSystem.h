@@ -140,6 +140,7 @@ struct EnemyAttackTelegraphFrameInput {
 class EnemyAttackTelegraphSystem {
 public:
     void Reset();
+    void CancelActor(uint32_t actorId);
     void Update(const EnemyAttackTelegraphFrameInput& input);
 
     const EnemyAttackTelegraphFrame& Frame() const { return frame_; }

@@ -240,7 +240,11 @@ void EnemyEntranceExitDirector::Update(
             ExitOffset(definition, actor, progress,
                 state.appliedForwardOffset, state.appliedLateralOffset,
                 state.appliedVerticalOffset);
-            state.presentationAlpha = 1.0f - progress;
+            // Keep a splitting wing visible while it actually peels away.
+            // The final fade hides its removal after it reaches the edge.
+            state.presentationAlpha = definition.exitStyle == EnemyExitStyle::SplitSides
+                ? 1.0f - SmoothStep((progress - 0.60f) / 0.40f)
+                : 1.0f - progress;
             state.presentationScale = 1.0f - progress * 0.18f;
             state.attackSuppressed = true;
             state.targetable = false;

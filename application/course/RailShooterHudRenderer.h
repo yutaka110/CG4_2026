@@ -10,6 +10,8 @@
 enum class RailShooterHudDrawCommandKind : uint8_t {
     Rectangle,
     Text,
+    TitleLogo,
+    Plate,
 };
 
 enum class RailShooterHudTextAlignment : uint8_t {
@@ -37,6 +39,11 @@ struct RailShooterHudRenderInput final {
     uint32_t viewportWidth = 0;
     uint32_t viewportHeight = 0;
     bool showTitleScreen = false;
+    int titleMenuSelection = 0;
+    bool titleControlsVisible = false;
+    float titleOpacity = 1.0f;
+    float titleBlackout = 0.0f;
+    bool titleLogoAvailable = true;
 };
 
 struct RailShooterHudRenderFrame final {

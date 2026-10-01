@@ -2424,7 +2424,7 @@ bool AppSceneResources::Initialize(
         &gradationLineSrvDesc,
         gradationLineTextureSrvHandleCPU);
 
-    const std::string skyboxTexturePath = "Resources/rostock_laage_airport_4k.dds";
+    const std::string skyboxTexturePath = "Resources/environment/canyon_soft_256.dds";
     if (std::filesystem::exists(skyboxTexturePath)) {
         DirectX::ScratchImage skyboxImages = AppRenderResources::LoadTexture(skyboxTexturePath);
         const DirectX::TexMetadata& skyboxMetadata = skyboxImages.GetMetadata();
@@ -2615,6 +2615,8 @@ bool AppSceneResources::Initialize(
         {"courseRibRock", "Resources/course_meshes/materials/rib_rock_albedo.bmp"},
         {"courseRootRock", "Resources/course_meshes/materials/root_rock_albedo.bmp"},
         {"courseVistaRock", "Resources/course_meshes/materials/vista_rock_albedo.bmp"},
+        {"titleSandstone", "Resources/course_meshes/TitleLandscape/title_sandstone.bmp"},
+        {"titleCaveRock", "Resources/terrain/Rocks016_1K-JPG/Rocks016.png"},
     };
 
     for (uint32_t index = 0; index < _countof(vfxTextureLoadSpecs); ++index) {
@@ -2998,6 +3000,14 @@ bool AppSceneResources::Initialize(
             return;
         }
 
+        const bool titleSolid = std::string_view(name) == "title_tunnel" || std::string_view(name) == "title_ground" ||
+            std::string_view(name) == "title_cliff" || std::string_view(name) == "title_boulder";
+        if (titleSolid && (!ValidateModelGeometryOrientation(courseMeshData) ||
+            !AuditModelClosedSurface(courseMeshData).IsValid())) {
+            OutputDebugStringA(("[TitleLandscape] Rejected broken imported solid: " + std::string(name) + "\n").c_str());
+            return;
+        }
+
         GpuMeshResource courseMesh = CreateGpuMeshResource(
             device,
             uploadCommandList,
@@ -3020,7 +3030,13 @@ bool AppSceneResources::Initialize(
     };
     registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj", "courseOrganicRock");
     registerCourseMesh("rib_tunnel_wall", "Resources/course_meshes/RibTunnelWall", "RibTunnelWall.obj", "courseRibRock");
+    registerCourseMesh("combat_turret_base", "Resources/enemies/CombatTurretBase", "CombatTurretBase.obj", "default");
+    registerCourseMesh("combat_turret_head", "Resources/enemies/CombatTurretHead", "CombatTurretHead.obj", "default");
     registerCourseMesh("root_spire_column", "Resources/course_meshes/RootSpireColumn", "RootSpireColumn.obj", "courseRootRock");
+    registerCourseMesh("title_ground", "Resources/course_meshes/TitleLandscape", "TitleGround.obj", "titleSandstone");
+    registerCourseMesh("title_cliff", "Resources/course_meshes/TitleLandscape", "TitleCliff.obj", "titleSandstone");
+    registerCourseMesh("title_boulder", "Resources/course_meshes/TitleLandscape", "TitleBoulder.obj", "titleSandstone");
+    registerCourseMesh("title_tunnel", "Resources/course_meshes/TitleLandscape", "TitleTunnel.obj", "titleCaveRock");
     registerCourseMesh("curved_canyon_wall", "Resources/course_meshes/CurvedCanyonWall", "CurvedCanyonWall.obj", "courseOrganicRock");
     registerCourseMesh("vista_hole_wall", "Resources/course_meshes/VistaHoleWall", "VistaHoleWall.obj", "courseVistaRock");
     registerCourseMesh("spire_broken_bridge_arc", "Resources/course_meshes/SpireBrokenBridgeArc", "SpireBrokenBridgeArc.obj", "courseRootRock");

@@ -51,11 +51,11 @@ void PlayerDamagePresentationBridge::Update(
                 ? 1.0f
                 : 0.48f + normalizedDamage * 0.42f;
             const bool dedicatedVehicleImpact =
-                result.request.hasWorldImpact &&
+                input.vehicleOwnsImpactPresentation || (result.request.hasWorldImpact &&
                 (result.request.kind == PlayerHitKind::ObstacleContact ||
-                 result.request.kind == PlayerHitKind::TerrainContact);
+                 result.request.kind == PlayerHitKind::TerrainContact));
             flashIntensity_ = (std::max)(flashIntensity_, intensity);
-            if (!dedicatedVehicleImpact) {
+            if (!dedicatedVehicleImpact && !input.suppressCameraFeedback) {
                 frame_.cameraShake = (std::max)(
                     frame_.cameraShake,
                     result.lethal

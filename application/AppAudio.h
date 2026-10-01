@@ -23,6 +23,8 @@ public:
         float pan,
         float pitch = 1.0f,
         bool loop = false);
+    void Stop(audio::SoundHandle handle);
+    void SetPlayback(audio::SoundHandle handle, float volume, float pitch = 1.0f);
     void Unload(audio::SoundHandle handle);
 
 private:

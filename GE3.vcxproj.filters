@@ -1214,6 +1214,7 @@
     <ClCompile Include="application\course\RailShooterHudPresentationBridge.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\RailTitleScene.cpp" />
     <ClCompile Include="application\course\RailShooterHudRenderer.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
@@ -1987,6 +1988,7 @@
     <ClInclude Include="application\course\RailShooterHudPresentationBridge.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\RailTitleScene.h" />
     <ClInclude Include="application\course\RailShooterHudRenderer.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>

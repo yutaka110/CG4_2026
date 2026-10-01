@@ -2,6 +2,8 @@
 
 確認日：2026-09-27。対象：現在のソース、Resources、Development出力、同梱ライセンス、公式配布元の公開条件。
 
+2026-09-29追記：空港の環境マップは実行時参照・提出用一覧から除外し、外部画像を使わない生成コード由来の `Resources/environment/canyon_soft_256.dds` に置換。生成方法は同フォルダーのREADME、現在のハッシュは `Build/SubmissionAssetProvenance.json` に記録。下記の空港素材の項目は差し替え前の監査記録。
+
 追記：この監査後、ボール柄の参照差し替えと不要教材の提出用構成からの除外を実施した。変更と検証は[SubmissionAssetCleanup.md](SubmissionAssetCleanup.md)を参照。その後のRelease版の画面整理と58件の素材確認は[SubmissionPresentationAndProvenance.md](SubmissionPresentationAndProvenance.md)を参照。以下の一覧は監査時点の記録であり、全権利の確認完了を示すものではない。
 
 **結論：現状のフォルダーをそのまま提出してよいとは、まだ確認できない。** 外部ライブラリとフォントの権利表記は整っているが、学校配布素材の外部提出条件と、一部素材の由来が未確認。侵害の認定ではなく、提出判断に必要な証拠の不足を示す。最終ZIPは未作成・未検査であり、法的な無侵害を保証するものではない。

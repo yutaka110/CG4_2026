@@ -165,6 +165,18 @@ void EnemyEncounterReadabilityDirector::Update(
         presenceInput.readableOffscreenWarning = warning != nullptr &&
             !warning->occluded && warning->phase != EnemyAttackTelegraphPhase::None;
         presenceInput.settings = input.settings.presence;
+        if (actor.desc.actorAssetId == "drone_scout" &&
+            input.playerDistance >= 0.0f &&
+            input.playerDistance < input.settings.openingScoutEndDistance) {
+            // The first targets teach the combat silhouette. Enlarge only the
+            // presentation proxy; aiming and collision retain the authored size.
+            presenceInput.settings.minimumIdleDiameterPixels = (std::max)(
+                presenceInput.settings.minimumIdleDiameterPixels,
+                input.settings.openingScoutIdleDiameterPixels);
+            presenceInput.settings.minimumEngagedDiameterPixels = (std::max)(
+                presenceInput.settings.minimumEngagedDiameterPixels,
+                input.settings.openingScoutEngagedDiameterPixels);
+        }
         const EnemyScreenPresenceResult presence =
             presencePolicy_.Evaluate(presenceInput);
 

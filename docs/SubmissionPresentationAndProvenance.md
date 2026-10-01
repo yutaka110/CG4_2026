@@ -4,7 +4,7 @@
 
 ## 画面の整理
 
-- 通常起動にタイトル画面を追加。作品名「レールであばレール」、操作説明、Enterで開始／Escで終了を表示。既存フォントと図形だけを使用し、外部素材は追加していない。作品名に必要な5文字を既存のHUDフォントアトラスへ追加。
+- 通常起動にタイトル画面を追加。作品名「レールであばレール」、操作説明、開始・終了メニューを表示。2026-09-29に作品名を専用の透過PNGロゴへ更新。組み込みimage_genによる生成素材で、制作方法と生成プロンプトを `Resources/UI/rail_title_logo.README.md` に記録。画像が読み込めない場合は既存HUDフォントで作品名を表示する。
 - タイトル表示中はゲームの更新を行わず、コース・敵・制限時間を進めない。Enterの短い入力も取りこぼさないよう、タイトル操作にはWindowsのキーイベントを使用する。専用の戦闘検証モードは従来どおり直接開始する。
 - Release / x64 のゲームを使用。起動時に開発用パネルを隠す既存設定を適用。
 - Releaseでは、地形プレビュー経由のデバッグ描画を送信しない。コリジョン枠・選択表示・レールの補助線を除き、通常の攻撃予告とゲームHUDは残す。
@@ -20,7 +20,7 @@
 | CurvedCanyonWall、OrganicArchLarge、RibTunnelWall、RootSpireColumn、SpireBrokenBridgeArc、VistaHoleWallと4種のBMP材質 | `generate_course_mesh_assets.py` から再生成。上記と合わせて20ファイルのSHA-256一致、6個のMTLは改行を正規化したテキストが一致 | 生成経路を確認。バイト一致とテキスト一致を記録上で区別 |
 | terrain/materials/texturesのORM・height 6枚 | `generate_terrain_pbr_maps.py` に、上記BMPから各画像を生成する処理と出力名がある | 生成経路のコードを確認。今回のPython環境にはOpenCVがなく再生成一致は未確認 |
 | Rocks016画像6枚 | 同名の[ambientCG公式素材](https://ambientcg.com/view?id=Rocks016)と[CC0の利用条件](https://docs.ambientcg.com/license/)を確認 | ローカル素材の取得元確認が必要。公式アーカイブとの照合はHTTP 403で完了せず。Rocks016.pngの変換・加工履歴も未確認 |
-| rostock_laage_airport_4k.dds | 同名の[Poly Haven公式HDRI](https://polyhaven.com/a/rostock_laage_airport)と[CC0の利用条件](https://polyhaven.com/license)を確認 | 入手元とDDSへの変換経路が未確認。同名だけで公式配布物とは確定しない |
+| environment/canyon_soft_256.dds | 2026-09-29にAI支援の生成コード `tools/generate_canyon_environment.cpp` から生成。外部写真は使用せず、空・砂岩・地面の色を方向で補間 | 256×256×6面、BC6H、9段のミップ。制作経路は同フォルダーのREADMEに記録。従来の空港DDSは実行時参照・提出用一覧から除外 |
 | M PLUS Rounded 1c Medium / Regular | `Resources/Editor/Fonts/README.md` と `OFL-MPLUS.txt` に出典・著作権表示・SIL OFL 1.1を記録 | 両フォントとライセンスを実行用・ソース用の両方に保持 |
 | circle、circle2、gradationLine、streakNoise、beamRamp_lightning、iceShard、warpTunnelFlipbook、terrain_detail_normal | Git初出と画像メタデータを確認したが、作者・配布元・条件を確定できる情報は得られず | 8枚の入手元・利用条件の確認が必要。簡単な図柄という理由では自作と判定しない |
 | ball.obj、CombatLaneRib、CombatShardGate、CombatAssaultの3モデル、CombatInterceptor、CombatSniper | 現在の提出用一覧に含まれる。今回確認した生成スクリプト群では生成元を特定できず | 8個のOBJとball.mtlについて制作履歴・作者を確認する |

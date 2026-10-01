@@ -2,6 +2,7 @@
 
 #include "GameSessionPresentationBridge.h"
 #include "PlayerDamagePresentationBridge.h"
+#include "RailVehicleCollisionFeedbackBridge.h"
 
 #include <algorithm>
 #include <cmath>
@@ -31,13 +32,17 @@ void RailShooterHudPresentationBridge::Reset() {
     frame_ = {};
     initialized_ = false;
     elapsedSeconds_ = 0.0f;
+    scoreGainRemaining_ = 0.0f;
+    displayedScoreGain_ = 0;
     revision_ = 0;
+    damageTrailHold_ = {}; damageDirectionRemaining_ = {}; lastVehicleDamageSequence_ = 0;
 }
 
 void RailShooterHudPresentationBridge::Update(
     const RailShooterHudPresentationInput& input) {
     if (input.definition == nullptr || input.runtime == nullptr ||
         !input.definition->enabled || !input.runtime->visible) {
+        damageTrailHold_ = {}; damageDirectionRemaining_ = {}; lastVehicleDamageSequence_ = 0;
         frame_ = {};
         frame_.revision = ++revision_;
         initialized_ = false;
@@ -51,6 +56,19 @@ void RailShooterHudPresentationBridge::Update(
     next.revision = ++revision_;
     elapsedSeconds_ += (std::max)(0.0f, input.deltaTime);
 
+    const float feedbackDt = runtime.gameplayActive ? (std::max)(0.0f, input.deltaTime) : 0.0f;
+    scoreGainRemaining_ = (std::max)(0.0f, scoreGainRemaining_ - feedbackDt);
+    if (!initialized_ || runtime.score < frame_.score) {
+        scoreGainRemaining_ = 0.0f;
+        displayedScoreGain_ = 0;
+    } else if (runtime.score > frame_.score) {
+        const uint64_t delta = runtime.score - frame_.score;
+        displayedScoreGain_ = scoreGainRemaining_ > 0.0f ? displayedScoreGain_ + delta : delta;
+        scoreGainRemaining_ = 0.9f;
+    }
+    next.scoreGainText = scoreGainRemaining_ > 0.0f ? "+" + std::to_string(displayedScoreGain_) : "";
+    next.scoreGainAlpha = (std::min)(1.0f, scoreGainRemaining_ / 0.25f);
+
     if (!initialized_) {
         next.playerHealthNormalized = runtime.playerHealthNormalized;
         next.vehicleIntegrityNormalized = runtime.vehicleIntegrityNormalized;
@@ -60,16 +78,6 @@ void RailShooterHudPresentationBridge::Update(
         next.adrenalineNormalized = runtime.adrenalineNormalized;
         initialized_ = true;
     } else {
-        next.playerHealthNormalized = Smooth(
-            frame_.playerHealthNormalized,
-            runtime.playerHealthNormalized,
-            definition.smoothingResponse,
-            input.deltaTime);
-        next.vehicleIntegrityNormalized = Smooth(
-            frame_.vehicleIntegrityNormalized,
-            runtime.vehicleIntegrityNormalized,
-            definition.smoothingResponse,
-            input.deltaTime);
         next.courseProgressNormalized = Smooth(
             frame_.courseProgressNormalized,
             runtime.courseProgressNormalized,
@@ -90,6 +98,39 @@ void RailShooterHudPresentationBridge::Update(
             runtime.adrenalineNormalized,
             definition.smoothingResponse,
             input.deltaTime);
+    }
+
+    const float health=(std::clamp)(runtime.playerHealthNormalized,0.0f,1.0f);
+    const float integrity=(std::clamp)(runtime.vehicleIntegrityNormalized,0.0f,1.0f);
+    const bool fresh=!frame_.visible;
+    const auto updateTrail=[&](float actual,float previous,float trail,size_t index) {
+        if(fresh || actual>previous+0.0001f) { damageTrailHold_[index]=0; return actual; }
+        if(actual<previous-0.0001f) {
+            damageTrailHold_[index]=0.22f;
+            return (std::max)(trail,previous);
+        }
+        const float decayDt=(std::max)(0.0f,feedbackDt-damageTrailHold_[index]);
+        damageTrailHold_[index]=(std::max)(0.0f,damageTrailHold_[index]-feedbackDt);
+        return (std::max)(actual,trail-decayDt*0.85f);
+    };
+    next.playerHealthTrail=updateTrail(health,frame_.playerHealthNormalized,frame_.playerHealthTrail,0);
+    next.vehicleIntegrityTrail=updateTrail(integrity,frame_.vehicleIntegrityNormalized,frame_.vehicleIntegrityTrail,1);
+    next.playerHealthNormalized=health;
+    next.vehicleIntegrityNormalized=integrity;
+    for(float& remaining:damageDirectionRemaining_) remaining=(std::max)(0.0f,remaining-feedbackDt);
+    if(input.vehicleDamage && input.vehicleDamage->hasImpactDirection &&
+        input.vehicleDamage->lastConsumedResultSequence>lastVehicleDamageSequence_) {
+        lastVehicleDamageSequence_=input.vehicleDamage->lastConsumedResultSequence;
+        const Vector2 direction=input.vehicleDamage->impactDirectionScreen;
+        const float magnitude=(std::max)(std::abs(direction.x),std::abs(direction.y));
+        if(magnitude>0.1f) {
+            if(std::abs(direction.x)>magnitude*0.45f) damageDirectionRemaining_[direction.x<0?0:1]=0.65f;
+            if(std::abs(direction.y)>magnitude*0.45f) damageDirectionRemaining_[direction.y>0?2:3]=0.65f;
+        }
+    }
+    for(size_t index=0;index<4;++index) {
+        const float fade=(std::clamp)(damageDirectionRemaining_[index]/0.45f,0.0f,1.0f);
+        next.damageDirectionAlpha[index]=fade*fade;
     }
 
     next.playerHealthCritical =
@@ -114,7 +155,7 @@ void RailShooterHudPresentationBridge::Update(
     next.maximumLocks = runtime.maximumLocks;
     next.primaryWeapon = runtime.primaryWeapon;
 
-    next.healthText = Utf8(u8"\u8010\u4e45 ") + Whole(runtime.playerHealth) + "/" +
+    next.healthText = Utf8(u8"\u4f53\u529b ") + Whole(runtime.playerHealth) + "/" +
         Whole(runtime.maximumPlayerHealth);
     next.vehicleText = Utf8(u8"\u8eca\u4f53 ") + Whole(runtime.vehicleIntegrity) + "/" +
         Whole(runtime.maximumVehicleIntegrity);

@@ -53,6 +53,7 @@ struct EnemyAttackLaneTelegraphProxy final {
     uint32_t readabilityTier = 0;
     uint32_t directionMarkerCount = 3;
     int projectileCount = 1;
+    bool openingCue = false;
     uint32_t sourceEffectInstanceId = 0;
     uint32_t targetEffectInstanceId = 0;
 };
@@ -71,6 +72,7 @@ struct EnemyAttackLaneTelegraphRenderInput final {
     const RailPath* railPath = nullptr;
     EffectRuntime* effectRuntime = nullptr;
     bool gameplayActive = true;
+    bool openingPresentation = false;
     float elapsedTime = 0.0f;
     EnemyAttackLaneTelegraphRendererSettings settings{};
 };
@@ -81,6 +83,7 @@ struct EnemyAttackLaneTelegraphRenderInput final {
 class EnemyAttackLaneTelegraphRenderer final {
 public:
     void Reset(EffectRuntime* effectRuntime = nullptr);
+    void CancelActor(uint32_t actorId, EffectRuntime* effectRuntime = nullptr);
     void Update(const EnemyAttackLaneTelegraphRenderInput& input);
     void AppendProductionWorldPrimitives(
         ge3::debug::DebugDrawSystem& productionDraw) const;

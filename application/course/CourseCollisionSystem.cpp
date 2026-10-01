@@ -270,6 +270,36 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         request.railDistance = hitbox.distance;
         request.lateralOffset = hitbox.lateralOffset;
         request.verticalOffset = hitbox.verticalOffset;
+        if (input.railPath != nullptr) {
+            // Entry into the swept hurt sphere, not the closest point (which
+            // can be the center or already on the far side of a fast shot).
+            const Vector3 start{bullet.previousLateralOffset - hitbox.previousLateralOffset,
+                bullet.previousVerticalOffset - hitbox.previousVerticalOffset,
+                bullet.spawnDistance + bullet.previousDistanceOffset - hitbox.previousDistance};
+            const Vector3 end{bullet.lateralOffset - hitbox.lateralOffset,
+                bullet.verticalOffset - hitbox.verticalOffset,
+                bullet.spawnDistance + bullet.distanceOffset - hitbox.distance};
+            const Vector3 delta{end.x-start.x,end.y-start.y,end.z-start.z};
+            const float a = LengthSquared(delta);
+            const float b = start.x*delta.x + start.y*delta.y + start.z*delta.z;
+            const float radius = hitbox.hurtRadius + bullet.radius;
+            const float c = LengthSquared(start) - radius*radius;
+            float t = 0.0f;
+            if (c > 0.0f && a > 0.000001f)
+                t = (std::clamp)((-b-std::sqrt((std::max)(0.0f,b*b-a*c)))/a,0.0f,1.0f);
+            const auto lerp = [t](float from,float to){return from+(to-from)*t;};
+            request.railDistance = bullet.spawnDistance + lerp(bullet.previousDistanceOffset,bullet.distanceOffset);
+            request.lateralOffset = lerp(bullet.previousLateralOffset,bullet.lateralOffset);
+            request.verticalOffset = lerp(bullet.previousVerticalOffset,bullet.verticalOffset);
+            const auto sample = input.railPath->Evaluate(request.railDistance);
+            request.impactWorldPosition = Add(sample.position,Add(Scale(sample.right,request.lateralOffset),
+                Scale(sample.up,request.verticalOffset)));
+            const Vector3 outward = NormalizeOr(Add(start,Scale(delta,t)),
+                NormalizeOr(Scale(delta,-1.0f),{0,0,0}));
+            request.impactNormalWorld = Add(Add(Scale(sample.right,outward.x),Scale(sample.up,outward.y)),
+                Scale(sample.tangent,outward.z));
+            request.hasWorldImpact = Finite(request.impactWorldPosition);
+        }
         const PlayerDamageResult result = SubmitPlayerHit(request);
         if (result.projectileConsumed) {
             bullet.age = bullet.lifetime;

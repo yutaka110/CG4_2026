@@ -1,3 +1,5 @@
+﻿#include <cstdlib>
+#include "../course/RailTitleScene.h"
 #include "EditorCoreRegressionTests.h"
 
 #include "EditorAssetMutationExecutor.h"
@@ -259,6 +261,7 @@
 #include "../course/CourseSpawnRuntime.h"
 #include "../course/CourseRuntimeProgramAsset.h"
 #include "../course/CourseGameplayWaveRuntimeBridge.h"
+#include "../course/EncounterDirector.h"
 #include "../course/GameSessionSystem.h"
 #include "../course/GameSessionPresentationBridge.h"
 #include "../course/GameSessionRetryCoordinator.h"
@@ -16673,6 +16676,79 @@ void TestEditorFramePacingAndViewportRealtime(RegressionRunner& runner) {
         "Realtime toggle should restore continuous Viewport updates");
 }
 
+void TestTerrainChunkSurfaceSeams(RegressionRunner& runner) {
+    CourseAsset course;
+    std::string error;
+    if (!course.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course", &error)) {
+        runner.Expect(false, "Terrain seam test must load the actual gameplay route");
+        return;
+    }
+    RailPath rail;
+    course.ApplyToRailPath(rail);
+    std::ofstream log("logs/terrain_surface_seams.log");
+    float maxGap = 0.0f;
+    size_t checked = 0;
+    bool valid = true;
+    // Submission budget, editor default, and a non-divisible authoring setting.
+    for (uint32_t radial : {36u, 56u, 59u}) {
+        TerrainGenerationSettings settings;
+        settings.surfaceRadialSegments = radial;
+        const uint32_t stride = radial + 1u;
+        for (float boundary : {80.0f, 160.0f, 320.0f, 480.0f, 800.0f}) {
+            std::array<TerrainChunkCpuBuild, 3> before, after;
+            for (uint32_t lod = 0; lod < 3; ++lod) {
+                TerrainChunkDebugInfo chunk;
+                chunk.seed = 1337;
+                chunk.lodTier = lod;
+                chunk.startDistance = boundary - settings.chunkLength;
+                chunk.endDistance = boundary;
+                before[lod] = BuildTerrainChunkGeometry(chunk, rail, settings);
+                chunk.startDistance = boundary;
+                chunk.endDistance = boundary + settings.chunkLength;
+                after[lod] = BuildTerrainChunkGeometry(chunk, rail, settings);
+            }
+            const auto compare = [&](const VertexData& a, const VertexData& b) {
+                const float dx = a.position.x - b.position.x;
+                const float dy = a.position.y - b.position.y;
+                const float dz = a.position.z - b.position.z;
+                maxGap = (std::max)(maxGap, std::sqrt(dx*dx + dy*dy + dz*dz));
+                valid &= std::isfinite(dx) && std::isfinite(dy) && std::isfinite(dz);
+                ++checked;
+            };
+            for (uint32_t lhs = 0; lhs < 3; ++lhs) {
+                const uint32_t rows = (std::clamp)(settings.surfaceLongitudinalSteps / (lhs+1u), 12u, 64u);
+                if (before[lhs].vertices.size() < size_t(rows+1u)*stride) {
+                    valid = false;
+                    continue;
+                }
+                for (uint32_t rhs = 0; rhs < 3; ++rhs) {
+                    if (after[rhs].vertices.size() < stride) { valid = false; continue; }
+                    for (uint32_t a = 0; a < stride; ++a)
+                        compare(before[lhs].vertices[rows*stride+a], after[rhs].vertices[a]);
+                }
+                for (uint32_t row = 0; row <= rows; ++row)
+                    compare(before[lhs].vertices[row*stride], before[lhs].vertices[row*stride+radial]);
+            }
+        }
+    }
+    log << "boundary_and_wrap_vertex_pairs=" << checked << " max_gap=" << maxGap << " valid=" << valid << '\n';
+    runner.Expect(valid && checked > 6000 && maxGap < 0.00001f,
+        "Every LOD pair on the gameplay route must share an identical boundary and closed angular seam");
+    for (const char* name : {"CurvedCanyonWall", "RibTunnelWall"}) {
+        const auto model = LoadObjFile_Assimp(std::string("Resources/course_meshes/") + name,
+            std::string(name) + ".obj");
+        const auto audit = AuditModelClosedSurface(model);
+        log << name << " triangles=" << audit.triangleCount
+            << " inconsistent=" << audit.inconsistentEdges
+            << " duplicate=" << audit.duplicateTriangles << '\n';
+        // These authored wall patches deliberately have open perimeter edges.
+        runner.Expect(audit.triangleCount > 10000 && audit.inconsistentEdges == 0 &&
+            audit.nonManifoldEdges == 0 && audit.duplicateTriangles == 0 &&
+            audit.invalidTriangles == 0 && ValidateModelGeometryOrientation(model),
+            "Displaced wall patches must not acquire isolated reversed faces during import");
+    }
+}
+
 void TestTerrainChunkPresentationContinuityPolicy(RegressionRunner& runner) {
     TerrainChunkDebugInfo requested{};
     requested.startDistance = 128.0f;
@@ -20432,22 +20508,85 @@ void TestRailShooterHudPipeline(RegressionRunner& runner) {
         });
     runner.Expect(
         renderFrame.visible && hasRectangle &&
-            containsText(Utf8ForTest(u8"\u8010\u4e45")) &&
+            containsText(Utf8ForTest(u8"\u4f53\u529b")) &&
             containsText(Utf8ForTest(u8"\u6ce2")) &&
             containsText(Utf8ForTest(u8"\u5371\u967a")) &&
             containsText("CHECKPOINT") &&
             renderFrame.commands.size() <= definition.maximumDrawCommands,
         "HUD renderer should emit a resolution-aware bounded command frame containing all priority combat information");
 
+    auto busyHud = presentation;
+    busyHud.showDamageNotice = true;
+    busyHud.damageNoticeAlpha = 1.0f;
+    busyHud.damageNoticeText = "DAMAGE CHECK";
+    busyHud.damageHealthText = "-20";
+    busyHud.showObstacleWarning = true;
+    busyHud.obstacleWarningText = "OBSTACLE CHECK";
+    busyHud.obstacleActionText = "EVADE CHECK";
+    busyHud.damageDirectionAlpha.fill(1.0f);
+    busyHud.scoreGainText = "+375";
+    busyHud.scoreGainAlpha = 1.0f;
+    busyHud.combo = 12;
+    busyHud.comboText = "12 COMBO";
+    busyHud.grazeChain = 3;
+    busyHud.grazeText = "GRAZE 3";
+    busyHud.maximumLocks = 8;
+    busyHud.lockCount = 3;
+    const std::array<std::pair<uint32_t, uint32_t>, 5> hudViewports{{
+        {640, 360}, {1280, 720}, {1920, 1080}, {1024, 768}, {2560, 1080}}};
+    for(const auto& [viewportWidth, viewportHeight] : hudViewports) {
+        renderer.Update({&definition, &busyHud, viewportWidth, viewportHeight});
+        const bool geometryFits = std::all_of(renderFrame.commands.begin(), renderFrame.commands.end(),
+            [=](const RailShooterHudDrawCommand& command) {
+                if(command.kind == RailShooterHudDrawCommandKind::Text) return true;
+                return command.x >= 0 && command.y >= 0 &&
+                    command.x + command.width <= viewportWidth &&
+                    command.y + command.height <= viewportHeight &&
+                    !(command.x < viewportWidth * 0.5f &&
+                      command.x + command.width > viewportWidth * 0.5f &&
+                      command.y < viewportHeight * 0.5f &&
+                      command.y + command.height > viewportHeight * 0.5f);
+            });
+        runner.Expect(geometryFits && renderFrame.commands.size() < definition.maximumDrawCommands &&
+            containsText("DAMAGE CHECK") && containsText("OBSTACLE CHECK") &&
+            containsText("EVADE CHECK") && containsText("+375"),
+            "simultaneous HUD events must fit the viewport, leave the aim center clear and retain damage, obstacle and score feedback");
+    }
+
     const RailShooterHudPresentationFrame uninitializedHud{};
     renderer.Update({&definition, &uninitializedHud, 1280, 720, true});
-    runner.Expect(renderer.Frame().visible && containsText("START GAME") &&
+    runner.Expect(renderer.Frame().visible && containsText(Utf8ForTest(u8"ゲーム開始")) &&
                       !containsText("CHECKPOINT"),
         "Title must render before the gameplay HUD initializes and replace combat information");
     renderer.Update({&definition, &uninitializedHud, 1280, 720, false});
     runner.Expect(!renderer.Frame().visible && renderer.Frame().commands.empty(),
         "Leaving the title must not retain menu commands in an inactive HUD");
 
+    RailShooterHudPresentationInput presentationInput{&definition, &runtime, &sessionPresentation, 1.0f / 60.0f};
+    runner.Expect(presentation.scoreGainText.empty(),
+        "opening an existing score must not fabricate a gain");
+    session.score += 250;
+    runtimeModel.Update(runtimeInput);
+    presentationBridge.Update(presentationInput);
+    runner.Expect(presentationBridge.Frame().scoreGainText == "+250",
+        "score popup must equal the committed session score delta");
+    session.score += 125;
+    runtimeModel.Update(runtimeInput);
+    presentationBridge.Update(presentationInput);
+    runner.Expect(presentationBridge.Frame().scoreGainText == "+375",
+        "rapid committed awards must aggregate without inventing hit rewards");
+    presentationInput.deltaTime = 1.0f;
+    presentationBridge.Update(presentationInput);
+    runner.Expect(presentationBridge.Frame().scoreGainText.empty(),
+        "unchanged score must not retrigger the reward popup");
+    session.score += 100;
+    runtimeModel.Update(runtimeInput);
+    presentationBridge.Update(presentationInput);
+    session.score = 0;
+    runtimeModel.Update(runtimeInput);
+    presentationBridge.Update(presentationInput);
+    runner.Expect(presentationBridge.Frame().scoreGainText.empty(),
+        "checkpoint rollback must clear reward popup without unsigned underflow");
     runtimeModel.Reset();
     presentationBridge.Reset();
     renderer.Reset();
@@ -21080,8 +21219,8 @@ void TestRailVehicleBodyCollisionAndDamage(RegressionRunner& runner) {
         collisionFeedback.Frame();
     runner.Expect(
         impactFeedback.audioCueCount == 1 &&
-            impactFeedback.vfxCommandCount ==
-                feedbackInput.settings.sparkBurstCount &&
+            impactFeedback.vfxCommandCount == 0 &&
+            impactFeedback.particles.size() == 24 &&
             impactFeedback.slowdown.valid &&
             impactFeedback.slowdown.resultSequence ==
                 damageFrame.damageResult.sequence &&
@@ -21985,6 +22124,14 @@ void TestEnemyBehaviorSystem(RegressionRunner& runner) {
 }
 
 void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
+    CourseActorAsset openingScout{};
+    std::string openingScoutError;
+    runner.Expect(
+        openingScout.LoadFromFile(
+            "Resources/courses/actors/drone_scout.actor", &openingScoutError) &&
+            openingScout.meshId == "combat_assault_hull" &&
+            openingScout.radius == 1.05f,
+        "opening scout uses a distinct production hull without enlarging its hitbox");
     const char* waveIds[]{"intro_scout_pair", "intro_lockon_line",
         "drone_intro_v", "first_contact_split", "first_contact_combo_ladder"};
     RailPath rail;
@@ -22005,7 +22152,7 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
         bool assetsEnabled = count > 0;
         for (const auto& actor : runtime.Enemies()) {
             assetsEnabled = assetsEnabled && actor.behaviorDefinition.maintainForwardEngagementBand &&
-                !actor.behaviorDefinition.choreographedAttackPass &&
+                actor.behaviorDefinition.choreographedAttackPass &&
                 actor.desc.formationDefinition.exitStyle == EnemyExitStyle::SplitSides;
         }
         bool forwardSafe = true, exitsSafe = true, warningsCleared = true;
@@ -22017,7 +22164,7 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
         safety.playerDistance = event.distance;
         safety.railPath = &rail;
         safety.hasCameraPosition = true;
-        for (uint32_t frame = 0; frame < 660; ++frame) {
+        for (uint32_t frame = 0; frame < 1080; ++frame) {
             safety.playerDistance += (frame < 120 ? 12.0f : frame < 300 ? 17.0f : 24.0f) * dt;
             safety.cameraPosition = rail.Evaluate(safety.playerDistance - 24.0f).position;
             runtime.Update(dt, safety);
@@ -22074,7 +22221,7 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
             }
         }
         runner.Expect(assetsEnabled && forwardSafe && exitsSafe && warningsCleared &&
-            exits == count && shots > 0 && runtime.Enemies().empty(),
+            exits == count && shots == count && runtime.Enemies().empty(),
             std::string(waveId) + " must hold its early threats ahead through acceleration, still fire, "
                 "and retire every survivor sideways without attack tokens or warning cues"
                 " (count=" + std::to_string(count) + ", exits=" + std::to_string(exits) +
@@ -22498,6 +22645,30 @@ void TestEnemyEncounterReadabilityAuthority(RegressionRunner& runner) {
         runtime.Enemies().front().screenPresenceAttackAllowed &&
             director.Frame().readableHostiles == 1,
         "stable on-screen exposure should release the actor fire gate without changing its authoritative radius");
+
+    CourseSpawnRuntime openingRuntime;
+    CourseEnemyActorDesc openingScout{};
+    openingScout.actorAssetId = "drone_scout";
+    openingScout.sourcePlacementGuid = "opening-scout";
+    openingScout.spawnDistance = 75.0f;
+    openingScout.radius = 1.05f;
+    openingScout.lifetime = 20.0f;
+    openingScout.hitPoints = 18.0f;
+    openingScout.suppressFire = true;
+    openingRuntime.SpawnEnemyActor(openingScout);
+    EnemyEncounterReadabilityDirector openingDirector;
+    input.runtime = &openingRuntime;
+    input.playerDistance = 80.0f;
+    openingDirector.Update(input);
+    const float openingScale = openingDirector.Frame().actors.front().presentationScale;
+    input.playerDistance = 181.0f;
+    openingDirector.Update(input);
+    runner.Expect(
+        openingScale > openingDirector.Frame().actors.front().presentationScale &&
+            openingRuntime.Enemies().front().desc.radius == 1.05f,
+        "the opening scout must read larger on screen while later encounters and collision keep their authored size");
+    input.runtime = &runtime;
+    input.playerDistance = -1.0f;
 
     runtime.MutableEnemies().clear();
     EnemyProjectileRuntimeState projectile{};
@@ -23573,6 +23744,13 @@ void TestEnemyProjectileCommercialVisualPipeline(RegressionRunner& runner) {
             renderer.Frame().lifecycleBursts.size() == 1,
         "projectile VFX renderer should enforce angular readability, direction markers, interception brackets, danger growth and a launch flash without changing collision data");
 
+    const auto& readableBullet = renderer.Frame().proxies.front();
+    const Vector3 trailDelta{readableBullet.trailStart.x - readableBullet.worldPosition.x,
+        readableBullet.trailStart.y - readableBullet.worldPosition.y,
+        readableBullet.trailStart.z - readableBullet.worldPosition.z};
+    runner.Expect(std::sqrt(trailDelta.x * trailDelta.x + trailDelta.y * trailDelta.y +
+        trailDelta.z * trailDelta.z) <= readableBullet.coreRadius * 4.01f,
+        "hostile trails must stay short after distant screen-size boosting");
     presentation.projectiles.clear();
     presentation.events.clear();
     EnemyProjectilePresentationEvent interceptEvent{};
@@ -23684,6 +23862,14 @@ void TestEnemyProjectileCommercialVisualPipeline(RegressionRunner& runner) {
             laneRenderer.Frame().lanes.front().directionMarkerCount == 1 &&
             laneRenderer.Frame().lanes.front().sourceEffectInstanceId == 0,
         "lane telegraph must use one compact impact marker, one direction cue and no source ring");
+    laneInput.openingPresentation = true;
+    laneRenderer.Update(laneInput);
+    runner.Expect(
+        laneRenderer.Frame().lanes.size() == 1 &&
+            laneRenderer.Frame().lanes.front().openingCue &&
+            laneRenderer.Frame().lanes.front().sourceRadius > 0.0f &&
+            laneRenderer.Frame().lanes.front().targetRadius > 0.0f,
+        "the first attack must retain both a source and impact cue before firing");
     telegraph.cues.front().phase = EnemyAttackTelegraphPhase::Fired;
     laneRenderer.Update(laneInput);
     runner.Expect(laneRenderer.Frame().lanes.empty() &&
@@ -24077,15 +24263,15 @@ void TestMountedDefenseResponseContract(RegressionRunner& runner) {
                 return command.kind == RailShooterHudDrawCommandKind::Text &&
                     command.text.find(expectedHeadline) != std::string::npos;
             });
-        const size_t rectangles = static_cast<size_t>(std::count_if(
+        const size_t geometryLayers = static_cast<size_t>(std::count_if(
             promptRenderer.Frame().commands.begin(),
             promptRenderer.Frame().commands.end(),
             [](const RailShooterHudDrawCommand& command) {
-                return command.kind ==
-                    RailShooterHudDrawCommandKind::Rectangle;
+                return command.kind == RailShooterHudDrawCommandKind::Rectangle ||
+                    command.kind == RailShooterHudDrawCommandKind::Plate;
             }));
         return headlineVisible && promptRenderer.Frame().droppedCommands == 0
-            ? rectangles : size_t{0};
+            ? geometryLayers : size_t{0};
     };
     const size_t interruptLayers = renderCelebration(
         interruptCelebration, jp(u8"\u653b\u6483\u963b\u6b62!"));
@@ -24355,6 +24541,18 @@ void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
             bridge.Frame().cameraFovImpulseRadians == 0.0f &&
             bridge.Frame().cameraRollImpulseRadians == 0.0f,
         "paused presentation should retain model state but suppress one-shot audio and VFX dispatch");
+    runner.Expect(bridge.Frame().destructionBursts.size() == 1 &&
+        bridge.Frame().destructionBursts.front().age == 0.0f,
+        "lethal hits emit one debris burst and pause must freeze its age");
+    input.events = {};
+    input.gameplayActive = true;
+    input.deltaTime = 0.7f;
+    bridge.Update(input);
+    runner.Expect(bridge.Frame().destructionBursts.empty(),
+        "destruction debris must expire even if no new combat event arrives");
+    bridge.Reset();
+    runner.Expect(bridge.Frame().destructionBursts.empty(),
+        "retry must clear all destruction debris");
 }
 
 void TestWeaponDamageFeedback(RegressionRunner& runner) {
@@ -27659,7 +27857,7 @@ void TestCourseMapSceneVisualizationPipeline(RegressionRunner& runner) {
             [&enemies](const CourseEnemyPlacement* placement) {
                 return placement != nullptr && placement->enabled &&
                     placement->actorAssetId == "drone_scout" &&
-                    placement->bulletPatternOverrideId == "single_tutorial" &&
+                    placement->bulletPatternOverrideId == "assault_magenta_single" &&
                     enemies.Resolve(*placement).valid;
             });
     runner.Expect(
@@ -27686,7 +27884,7 @@ void TestCourseMapSceneVisualizationPipeline(RegressionRunner& runner) {
                         productionCook.program.actors[actorIndex];
                     return actor.waveGuid == "wave-first-contact-editor-test" &&
                         actor.actor.actorAssetId == "drone_scout" &&
-                        actor.actor.bulletPatternId == "single_tutorial";
+                        actor.actor.bulletPatternId == "assault_magenta_single";
                 }),
         "production Course should cook the authored First Contact vertical slice without fallback assets");
 
@@ -29390,6 +29588,1189 @@ void TestVehicleCameraFraming(RegressionRunner& runner) {
     }
 }
 
+// Use the rendered triangles, not a solid box around the arch opening. Sweep
+// the production camera through the tunnel and keep its central aiming area
+// clear of overhead scenery; body clearance alone missed these obstructions.
+void TestTunnelCameraSceneryClearance(RegressionRunner& runner) {
+    CourseAsset course;
+    std::string error;
+    if (!course.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course", &error)) {
+        runner.Expect(false, "camera clearance course must load");
+        return;
+    }
+    RailPath rail;
+    rail.SetControlPoints(course.railPoints);
+    const auto add = [](Vector3 a, Vector3 b) { return Vector3{a.x+b.x, a.y+b.y, a.z+b.z}; };
+    const auto sub = [](Vector3 a, Vector3 b) { return Vector3{a.x-b.x, a.y-b.y, a.z-b.z}; };
+    const auto mul = [](Vector3 a, float s) { return Vector3{a.x*s, a.y*s, a.z*s}; };
+    const auto dot = [](Vector3 a, Vector3 b) { return a.x*b.x+a.y*b.y+a.z*b.z; };
+    const auto cross = [](Vector3 a, Vector3 b) {
+        return Vector3{a.y*b.z-a.z*b.y, a.z*b.x-a.x*b.z, a.x*b.y-a.y*b.x};
+    };
+    const auto unit = [&](Vector3 a) { return mul(a, 1.0f/std::sqrt(dot(a,a))); };
+    struct Scenery {
+        std::string id;
+        float distance;
+        Matrix4x4 inverseWorld;
+        ModelData mesh;
+    };
+    std::vector<Scenery> scenery;
+    const auto append = [&](const std::string& id, float distance, float lateral, float vertical,
+                            Vector3 scale, const char* directory, const char* file) {
+        const auto sample = rail.Evaluate(distance);
+        const Vector3 center = add(sample.position, add(mul(sample.right,lateral), mul(sample.up,vertical)));
+        const Vector3 rotation{std::asin((std::clamp)(-sample.tangent.y,-1.0f,1.0f)),
+            std::atan2(sample.tangent.x,sample.tangent.z),0};
+        auto mesh = LoadObjFile_Assimp(directory, file);
+        runner.Expect(!mesh.indices.empty(), "camera clearance mesh must load: " + id);
+        Matrix4x4 world = Multiply(mesh.rootNode.localMatrix, MakeAffineMatrix(scale,rotation,center));
+        scenery.push_back({id,distance,Inverse(world),std::move(mesh)});
+    };
+    for (const auto& p : course.terrainPlacements) {
+        if (p.meshId == "rib_tunnel_wall") append(p.id,p.distance+p.forwardOffset,
+            p.lateralOffset,p.verticalOffset,p.scale,
+            "Resources/course_meshes/RibTunnelWall","RibTunnelWall.obj");
+    }
+    CourseSpawnRuntime obstacles;
+    CourseEventDispatcher dispatcher;
+    for (const auto& event : course.events) {
+        if (event.type == "obstacle" && event.id == "tunnel_ceiling_teeth_01")
+            dispatcher.Dispatch({event},obstacles,event.distance);
+    }
+    for (const auto& actor : obstacles.Obstacles()) {
+        const auto& p = actor.desc;
+        append(p.id,p.spawnDistance+p.distanceOffset,p.lateralOffset,p.verticalOffset,p.halfExtents,
+            "Resources/course_meshes/RailHazardSolid","RailHazardSolid.obj");
+    }
+    runner.Expect(scenery.size() == 3, "check both tunnel arches and the overhead obstacle");
+    const auto transform = [](Vector3 v, const Matrix4x4& m, float w) {
+        return Vector3{v.x*m.m[0][0]+v.y*m.m[1][0]+v.z*m.m[2][0]+w*m.m[3][0],
+            v.x*m.m[0][1]+v.y*m.m[1][1]+v.z*m.m[2][1]+w*m.m[3][1],
+            v.x*m.m[0][2]+v.y*m.m[1][2]+v.z*m.m[2][2]+w*m.m[3][2]};
+    };
+    const auto blocked = [&](const Scenery& s, Vector3 origin, Vector3 direction, float maxDistance) {
+        origin = transform(origin,s.inverseWorld,1);
+        // Do not normalize: triangle t remains a distance in world units.
+        direction = transform(direction,s.inverseWorld,0);
+        for (size_t i=0; i+2<s.mesh.indices.size(); i+=3) {
+            const auto vertex = [&](size_t j) {
+                const auto& v=s.mesh.vertices[s.mesh.indices[j]].position;
+                return Vector3{v.x,v.y,v.z};
+            };
+            const Vector3 a=vertex(i), e1=sub(vertex(i+1),a), e2=sub(vertex(i+2),a);
+            const Vector3 h=cross(direction,e2);
+            const float det=dot(e1,h);
+            if (std::abs(det)<1.0e-8f) continue;
+            const Vector3 offset=sub(origin,a);
+            const float u=dot(offset,h)/det;
+            if (u<0 || u>1) continue;
+            const Vector3 q=cross(offset,e1);
+            const float v=dot(direction,q)/det;
+            if (v<0 || u+v>1) continue;
+            const float t=dot(e2,q)/det;
+            if (t>=0 && t<=maxDistance) return true;
+        }
+        return false;
+    };
+    std::ofstream metrics("logs/tunnel_camera_clearance.log",std::ios::trunc);
+    std::ofstream poses("logs/tunnel_camera_poses.csv",std::ios::trunc);
+    poses << "aiming,distance,px,py,pz,fx,fy,fz,ux,uy,uz,fov\n";
+    bool clear = true;
+    for (bool aiming : {false,true}) {
+        RailCameraDirector director;
+        RailCameraDirectorFrameInput input;
+        input.course=&course; input.railPath=&rail;
+        input.viewportWidth=1600; input.viewportHeight=900;
+        input.deltaTime=1.0f/30.0f; input.railSpeed=18;
+        input.vehicleFramingActive=true;
+        input.lockHeld=aiming; input.lockAimFeelActive=aiming;
+        std::vector<int> blockedSamples(scenery.size());
+        for (float distance=700; distance<=1080; distance+=0.6f) {
+            input.distance=distance; input.section=course.FindSection(distance);
+            const auto sample=rail.Evaluate(distance);
+            for (size_t c=0;c<input.vehicleBoundsCorners.size();++c) {
+                input.vehicleBoundsCorners[c]=add(sample.position,add(mul(sample.right,(c&1)?2.4f:-2.4f),
+                    add(mul(sample.up,1.4f+((c&2)?2.0f:-2.0f)),mul(sample.tangent,(c&4)?4.0f:-4.0f))));
+            }
+            const auto frame=director.Evaluate(input);
+            poses << aiming << ',' << distance << ',' << frame.position.x << ',' << frame.position.y << ',' << frame.position.z
+                << ',' << frame.forward.x << ',' << frame.forward.y << ',' << frame.forward.z
+                << ',' << frame.up.x << ',' << frame.up.y << ',' << frame.up.z << ',' << frame.fovY << '\n';
+            const Vector3 forward=unit(sub(frame.target,frame.position));
+            const Vector3 right=unit(cross(frame.up,forward)), up=unit(cross(forward,right));
+            const float height=std::tan(frame.fovY*0.5f);
+            for (size_t i=0;i<scenery.size();++i) {
+                if (std::abs(distance-scenery[i].distance)>85) continue;
+                bool hit=false;
+                // Keep the aim point clear for 55 units, and the central 40%
+                // width / 30% height clear within 25 units of the camera.
+                // Distant arch sides may frame the scene; they must not turn
+                // into a near-camera wall across the combat view on approach.
+                for (float x : {-0.4f,0.0f,0.4f}) for (float y : {-0.3f,0.0f,0.3f}) {
+                    const Vector3 ray=unit(add(forward,add(mul(right,x*height*16.0f/9.0f),mul(up,y*height))));
+                    const float range = x == 0.0f && y == 0.0f ? 55.0f : 25.0f;
+                    hit=hit || blocked(scenery[i],frame.position,ray,range);
+                }
+                if (hit) ++blockedSamples[i];
+            }
+        }
+        for (size_t i=0;i<scenery.size();++i) {
+            metrics << scenery[i].id << " aiming=" << aiming << " blockedSamples=" << blockedSamples[i] << '\n';
+            clear = clear && blockedSamples[i] == 0;
+        }
+    }
+    metrics.close();
+    runner.Expect(clear,"tunnel scenery must leave camera aiming area clear; see logs/tunnel_camera_clearance.log");
+}
+
+void TestVehicleDirectionalDamageResponse(RegressionRunner& runner) {
+    std::ofstream metrics("logs/vehicle_damage_response.csv",std::ios::trunc);
+    metrics << "fps,wheel,time,bank,pitch,bodyY,wheelLift\n";
+    const RailVehicleDefinition definition=RailVehicleDefinition::MineCartDefaults();
+    RailVehicleRuntimeState vehicle{};
+    vehicle.initialized=true; vehicle.vehicleId=definition.vehicleId;
+    vehicle.position={10,2,20}; vehicle.hitPoints=100;
+    // A 90-degree rail turn must not swap left/right with world X.
+    vehicle.right={0,0,-1}; vehicle.forward={1,0,0}; vehicle.up={0,1,0};
+    vehicle.weaponMountPosition={12,5,20}; vehicle.cameraMountPosition={8,6,20};
+    RailVehiclePresentationFrame base{};
+    base.visible=true; base.visualPosition=vehicle.position;
+    base.right=vehicle.right;base.up=vehicle.up;base.forward=vehicle.forward;
+    base.visualBankDegrees=7; base.visualPitchDegrees=2;
+    RailVehicleTrackContactPoseFrame contacts{};
+    contacts.valid=true;contacts.allWheelsSupported=true;contacts.contactCount=4;
+    contacts.right=vehicle.right;contacts.up=vehicle.up;contacts.forward=vehicle.forward;
+    contacts.rearLeftContact={8,0,22};contacts.rearRightContact={8,0,18};
+    contacts.frontLeftContact={12,0,22};contacts.frontRightContact={12,0,18};
+    for(int fps:{30,60,120}) for(size_t wheel=0;wheel<4;++wheel) {
+        RailVehicleCollisionFeedbackBridge feedback;
+        RailVehicleCollisionFeedbackInput input{};
+        input.vehicleState=&vehicle;input.deltaTime=1.0f/fps;
+        PlayerDamageResult hit{};hit.accepted=true;hit.appliedDamage=12;hit.sequence=1;
+        hit.request.kind=PlayerHitKind::EnemyProjectile;hit.request.hasWorldImpact=true;
+        const float side=(wheel&1)?1.0f:-1.0f,fore=wheel>=2?1.0f:-1.0f;
+        hit.request.impactWorldPosition={10+fore*2,3,20-side*2};
+        input.damageResults=std::span<const PlayerDamageResult>(&hit,1);
+        feedback.Update(input);
+        runner.Expect(feedback.Frame().hasImpactDirection && feedback.Frame().impactDirectionLocal.x*side>0 &&
+            feedback.Frame().impactDirectionLocal.z*fore>0 && feedback.Frame().bodyBankDegrees==0,
+            "damage direction must use the cart basis and start without a pose snap");
+        float maximum=0;bool rebound=false;
+        for(int step=1;step<=fps;++step) {
+            // Replaying the same accepted result must not restart the impulse.
+            feedback.Update(input);
+            const auto& f=feedback.Frame();
+            runner.Expect(f.audioCueCount==0 && f.vfxCommandCount==0 && !f.slowdown.valid &&
+                f.cameraShake==0 && f.cameraPitchImpulse==0 && f.cameraYawImpulse==0,
+                "projectile suspension reaction must not duplicate audio/VFX, slow movement or kick the camera");
+            maximum=(std::max)(maximum,f.bodyBankDegrees*side);
+            rebound=rebound || f.bodyBankDegrees*side< -0.001f;
+            const auto selected=std::max_element(f.wheelLiftOffsets.begin(),f.wheelLiftOffsets.end());
+            if(*selected>0.001f) runner.Expect(size_t(selected-f.wheelLiftOffsets.begin())==wheel,
+                "the struck corner must own the wheel hop");
+            RailVehicleWheelContactPresentationBridge wheels;
+            RailVehicleWheelContactPresentationInput wi{};
+            wi.contacts=&contacts;wi.vehiclePresentation=&base;wi.collisionFeedback=&f;wheels.Update(wi);
+            runner.Expect(wheels.Frame().valid && wheels.Frame().visibleWheelCount==4 &&
+                std::abs(wheels.Frame().wheels[wheel].axleCenter.y-0.62f-f.wheelLiftOffsets[wheel])<0.0001f,
+                "wheel render transforms must apply the hop without moving the rail contacts");
+            RailVehicleActor actor;RailVehicleActorInput ai{};
+            ai.vehicleDefinition=&definition;ai.vehicleState=&vehicle;ai.presentation=&base;ai.collisionFeedback=&f;
+            actor.Update(ai);
+            runner.Expect(std::abs(actor.Frame().visualBankDegrees-(base.visualBankDegrees+f.bodyBankDegrees))<0.0001f &&
+                actor.Frame().weaponMountPosition.x==12 && actor.Frame().cameraMountPosition.y==6 && vehicle.hitPoints==100,
+                "damage animation must add to the ride pose without changing gameplay mounts or health");
+            if(step% (fps/30)==0) metrics<<fps<<','<<wheel<<','<<float(step)/fps<<','<<f.bodyBankDegrees<<','
+                <<f.bodyPitchDegrees<<','<<f.bodyTranslationWorld.y<<','<<f.wheelLiftOffsets[wheel]<<'\n';
+        }
+        runner.Expect(maximum>0.5f && rebound && feedback.Frame().activeResponseRemainingSeconds==0 &&
+            feedback.Frame().bodyBankDegrees==0 && feedback.Frame().wheelLiftOffsets[wheel]==0,
+            "a struck cart must compress, rebound once, and fully settle despite duplicate notifications");
+        // Reset allows the new session's sequence 1 and clears the old pose.
+        feedback.Reset();feedback.Update(input);input.damageResults={};input.deltaTime=0.1f;feedback.Update(input);
+        const float paused=feedback.Frame().bodyBankDegrees;
+        input.gameplayActive=false;feedback.Update(input);
+        runner.Expect(feedback.Frame().bodyBankDegrees==paused,"pause must freeze the damage response clock");
+        feedback.Reset();feedback.Update(input);
+        runner.Expect(feedback.Frame().activeResponseRemainingSeconds==0,"retry must clear all response impulses");
+    }
+    // Unknown impact direction is a neutral compression; rejected hits do nothing.
+    RailVehicleCollisionFeedbackBridge feedback;RailVehicleCollisionFeedbackInput input{};
+    input.vehicleState=&vehicle;input.deltaTime=0.1f;
+    PlayerDamageResult hit{};hit.sequence=1;hit.appliedDamage=12;
+    input.damageResults=std::span<const PlayerDamageResult>(&hit,1);feedback.Update(input);
+    runner.Expect(feedback.Frame().activeResponseRemainingSeconds==0,"rejected damage cannot animate the cart");
+    hit.accepted=true;feedback.Update(input);input.damageResults={};feedback.Update(input);
+    runner.Expect(!feedback.Frame().hasImpactDirection && feedback.Frame().bodyBankDegrees==0 &&
+        feedback.Frame().bodyPitchDegrees==0 && feedback.Frame().bodyTranslationWorld.y<0,
+        "missing impact geometry must not invent a left/right hit");
+    feedback.Reset();hit.request.hasWorldImpact=true;hit.request.impactWorldPosition={12,3,18};
+    input.damageResults=std::span<const PlayerDamageResult>(&hit,1);input.deltaTime=1.0f/120;
+    for(int i=0;i<120;++i) {
+        hit.sequence=i+1;feedback.Update(input);const auto& f=feedback.Frame();
+        runner.Expect(std::abs(f.bodyBankDegrees)<=input.settings.maximumBankDegrees &&
+            std::abs(f.bodyPitchDegrees)<=input.settings.maximumPitchDegrees &&
+            f.wheelLiftOffsets[3]<=0.12f && std::abs(f.bodyTranslationWorld.y)<=input.settings.bodyKickDistance,
+            "rapid damage must stay bounded instead of accumulating tilt");
+    }
+    // Real swept collision must retain the entry side even when the endpoint
+    // has already passed all the way through the target in one frame.
+    for(float side:{-1.0f,1.0f}) {
+        RailPath rail;rail.SetControlPoints({{{0,0,0}},{{0,0,200}}});
+        CourseSpawnRuntime runtime;CourseCollisionSystem collision;
+        CourseBulletActor bullet{};bullet.projectileId=1;bullet.active=true;bullet.initialized=true;
+        bullet.distanceOffset=bullet.previousDistanceOffset=50;bullet.verticalOffset=bullet.previousVerticalOffset=3;
+        bullet.previousLateralOffset=side*10;bullet.lateralOffset=-side*10;
+        bullet.radius=0.3f;bullet.damage=6;bullet.lifetime=5;runtime.MutableBullets().push_back(bullet);
+        CourseCollisionFrameInput ci{};ci.railPath=&rail;ci.player.distance=50;ci.player.verticalOffset=3;
+        ci.weapon.enabled=false;ci.externalBodyCollisionAuthority=true;collision.Update(runtime,ci);
+        const auto& result=collision.LastPlayerDamageResult();
+        runner.Expect(result.accepted && result.request.hasWorldImpact && result.request.lateralOffset*side>0 &&
+            result.request.impactNormalWorld.x*side>0 && !runtime.Bullets().front().active,
+            "swept projectile damage must record its entry side, not the center or the far exit");
+        PlayerDamagePresentationBridge presentation;PlayerDamagePresentationInput pi{};
+        pi.results=collision.PlayerDamageResults();pi.suppressCameraFeedback=true;presentation.Update(pi);
+        runner.Expect(presentation.Frame().cameraShake==0 && presentation.Frame().cameraYawImpulse==0 &&
+            presentation.Frame().acceptedHits==1,"mounted projectile damage must preserve feedback without a camera kick");
+    }
+}
+
+void TestVehicleImpactAudiovisualAndHud(RegressionRunner& runner) {
+    for (int fps : {30,60,120}) {
+        RailVehicleRuntimeState vehicle{};
+        vehicle.initialized=true; vehicle.position={10,2,20}; vehicle.speed=15;
+        vehicle.right={0,0,-1}; vehicle.forward={1,0,0}; vehicle.up={0,1,0};
+        RailVehicleCollisionFeedbackBridge feedback;
+        RailVehicleCollisionFeedbackInput input{};
+        input.vehicleState=&vehicle; input.deltaTime=1.0f/fps;
+        input.listenerRight=vehicle.right; input.listenerForward=vehicle.forward;
+        PlayerDamageResult hit{}; hit.sequence=1; hit.accepted=true; hit.appliedDamage=20;
+        hit.request.kind=PlayerHitKind::EnemyProjectile; hit.request.hasWorldImpact=true;
+        hit.request.impactWorldPosition={12,3,22}; // front left on a turned rail
+        input.damageResults=std::span<const PlayerDamageResult>(&hit,1);
+        feedback.Update(input);
+        const auto impact=feedback.Frame();
+        runner.Expect(impact.audioCueCount==1 && impact.audioCues[0].pan<0 &&
+            impact.particles.size()==14 && impact.impactDirectionScreen.y>0,
+            "projectile impact must emit one left-panned cue and a bounded front-left burst");
+        runner.Expect(std::count_if(impact.particles.begin(),impact.particles.end(),[](const auto& p){return p.metal;})==4 &&
+            std::all_of(impact.particles.begin(),impact.particles.end(),[](const auto& p){
+                return p.position.x==12 && p.position.y==3 && p.position.z==22 && p.age==0;
+            }),"metal chips and sparks must start at the confirmed impact in the same frame");
+        PlayerDamagePresentationBridge generic;
+        PlayerDamagePresentationInput pi{};
+        pi.results=input.damageResults; pi.vehicleOwnsImpactPresentation=true; pi.suppressCameraFeedback=true;
+        generic.Update(pi);
+        runner.Expect(generic.Frame().acceptedHits==1 && generic.Frame().screenFlashIntensity>0 &&
+            generic.Frame().audioCues.empty() && generic.Frame().vfxCommands.empty() && generic.Frame().cameraShake==0,
+            "dedicated projectile effects must retain damage feedback without duplicate sound, VFX or camera motion");
+
+        RailShooterHudDefinitionAsset definition;
+        RailShooterHudRuntimeFrame runtime{};
+        runtime.visible=true; runtime.gameplayActive=true;
+        runtime.playerHealthNormalized=runtime.vehicleIntegrityNormalized=1;
+        RailShooterHudPresentationBridge hud;
+        RailShooterHudPresentationInput hi{};
+        hi.definition=&definition; hi.runtime=&runtime; hi.deltaTime=input.deltaTime;
+        hud.Update(hi);
+        hi.vehicleDamage=&feedback.Frame();
+        runtime.playerHealthNormalized=runtime.vehicleIntegrityNormalized=.8f;
+        hud.Update(hi);
+        runner.Expect(hud.Frame().playerHealthNormalized==.8f && hud.Frame().vehicleIntegrityNormalized==.8f &&
+            hud.Frame().playerHealthTrail==1 && hud.Frame().vehicleIntegrityTrail==1 &&
+            hud.Frame().damageDirectionAlpha[0]==1 && hud.Frame().damageDirectionAlpha[2]==1 &&
+            hud.Frame().damageDirectionAlpha[1]==0 && hud.Frame().damageDirectionAlpha[3]==0,
+            "HUD must immediately show real damage, retain the lost segment and identify only the struck sides");
+        for (const auto size : {std::pair{1600u,900u},std::pair{1280u,720u}}) {
+            RailShooterHudRenderer renderer;
+            RailShooterHudRenderInput ri{};
+            ri.definition=&definition; ri.presentation=&hud.Frame(); ri.viewportWidth=size.first; ri.viewportHeight=size.second;
+            renderer.Update(ri);
+            size_t markers=0,trails=0;
+            for(const auto& c:renderer.Frame().commands) if(c.kind==RailShooterHudDrawCommandKind::Rectangle) {
+                runner.Expect(c.x>=0 && c.y>=0 && c.x+c.width<=size.first+.01f && c.y+c.height<=size.second+.01f,
+                    "damage HUD rectangles must fit the viewport");
+                if(c.color.x==1 && c.color.z==.12f) {
+                    ++markers;
+                    runner.Expect(c.x+c.width<size.first*.25f || c.y+c.height<size.second*.25f,
+                        "front-left markers must stay outside the central aiming area");
+                }
+                if(c.color.x==1 && c.color.y==.72f && c.color.z==.32f) ++trails;
+            }
+            runner.Expect(markers==6 && trails==2 && renderer.Frame().commands.size()<definition.maximumDrawCommands,
+                "damage direction and both lost segments must render within the HUD command budget");
+        }
+        // A paused frame neither ages the particles nor consumes the damage hold.
+        input.gameplayActive=false; runtime.gameplayActive=false; input.deltaTime=hi.deltaTime=.25f;
+        feedback.Update(input); hud.Update(hi);
+        runner.Expect(feedback.Frame().particles.front().age==0 && hud.Frame().vehicleIntegrityTrail==1 &&
+            hud.Frame().damageDirectionAlpha[0]==1,"pause must freeze world and HUD feedback together");
+        input.gameplayActive=runtime.gameplayActive=true; input.deltaTime=hi.deltaTime=1.0f/fps;
+        for(int step=1;step<=fps;++step) {
+            feedback.Update(input); hud.Update(hi); // repeat sequence 1 deliberately
+            runner.Expect(feedback.Frame().audioCueCount==0,"duplicate damage must not replay the impact sound");
+            if(step==1) {
+                const auto& p=feedback.Frame().particles.front();
+                runner.Expect(p.age>0 && std::abs(p.position.y-(p.origin.y+p.velocity.y*p.age-4.9f*p.age*p.age))<.0001f,
+                    "impact fragments must move ballistically from their contact origin");
+            }
+            if(float(step)/fps<.2f) runner.Expect(hud.Frame().vehicleIntegrityTrail==1,
+                "damage trail must hold the previous integrity briefly before shrinking");
+        }
+        runner.Expect(feedback.Frame().particles.empty() && hud.Frame().vehicleIntegrityTrail==.8f &&
+            hud.Frame().damageDirectionAlpha[0]==0 && hud.Frame().damageDirectionAlpha[2]==0,
+            "all impact particles, direction markers and lost segments must settle despite duplicate results");
+        runtime.playerHealthNormalized=runtime.vehicleIntegrityNormalized=1; hud.Update(hi);
+        runner.Expect(hud.Frame().playerHealthTrail==1 && hud.Frame().vehicleIntegrityTrail==1,
+            "healing must not leave a false damage segment");
+
+        feedback.Reset(); hit.request.kind=PlayerHitKind::ObstacleContact;
+        hit.request.impactWorldPosition={10,3,18}; feedback.Update(input);
+        runner.Expect(feedback.Frame().particles.size()==24 && feedback.Frame().audioCueCount==1 &&
+            feedback.Frame().audioCues[0].pan>0 && feedback.Frame().audioCues[0].pitch<impact.audioCues[0].pitch &&
+            feedback.Frame().audioCues[0].volume>impact.audioCues[0].volume,
+            "right-side obstacle contact must sound lower and heavier than a projectile hit");
+        for(int step=0;step<120;++step) { ++hit.sequence; input.deltaTime=0; feedback.Update(input); }
+        runner.Expect(feedback.Frame().particles.size()==128,"rapid impacts must respect the particle cap");
+        feedback.Reset(); hud.Reset(); hi.vehicleDamage=&feedback.Frame(); hud.Update(hi);
+        runner.Expect(feedback.Frame().particles.empty() && hud.Frame().damageDirectionAlpha[0]==0 &&
+            hud.Frame().vehicleIntegrityTrail==1,"retry must clear old impact and HUD state");
+        hit.sequence=1; hit.accepted=false; feedback.Update(input);
+        runner.Expect(feedback.Frame().particles.empty() && feedback.Frame().audioCueCount==0,
+            "rejected damage cannot create audiovisual feedback");
+        hit.accepted=true; hit.request.hasWorldImpact=false; feedback.Update(input); hud.Update(hi);
+        runner.Expect(feedback.Frame().audioCues[0].pan==0 &&
+            std::all_of(hud.Frame().damageDirectionAlpha.begin(),hud.Frame().damageDirectionAlpha.end(),[](float a){return a==0;}),
+            "unknown impact direction must remain centered without a fabricated HUD arrow");
+    }
+}
+
+// Keep this diagnostic simulation out of LTCG's large regression-unit inlining.
+#pragma optimize("", off)
+void TestRailTitleLoop(RegressionRunner& runner) {
+    for (const int fps : {30,60,120}) {
+        RailTitleScene title;
+        runner.Expect(title.Initialize(),"Title track bake should succeed");
+        const float dt=1.0f/fps;
+        Vector3 previous=title.CameraPosition();
+        float previousDistance=title.Distance();
+        float previousWheel=title.Vehicle().wheelRotationRadians;
+        int wraps=0;
+        bool continuous=true,visible=true;
+        const int frames=int(title.LapLength()/RailTitleScene::Speed*fps*2.1f);
+        for(int i=0;i<frames;++i) {
+            title.Update(dt);
+            const Vector3 p=title.CameraPosition();
+            const float step=std::sqrt((p.x-previous.x)*(p.x-previous.x)+(p.y-previous.y)*(p.y-previous.y)+(p.z-previous.z)*(p.z-previous.z));
+            const float phase=std::remainder(title.Vehicle().wheelRotationRadians-previousWheel,6.283185307f);
+            continuous &= std::isfinite(step) && step<0.7f && std::abs(phase-dt*RailTitleScene::Speed/0.62f)<0.002f;
+            visible &= title.Vehicle().visible && title.Wheels().valid && title.Wheels().visibleWheelCount==4;
+            if(title.Distance()<previousDistance) ++wraps;
+            previous=p; previousDistance=title.Distance(); previousWheel=title.Vehicle().wheelRotationRadians;
+        }
+        runner.Expect(continuous && wraps>=2,"Title camera and wheel phase should remain continuous across two laps at each frame rate");
+        runner.Expect(visible,"Title cart and all four rail-contact wheels should remain visible");
+    }
+    for(const auto size : {Vector2{1280,720},Vector2{1920,1080},Vector2{1024,768},Vector2{2560,1080}}) {
+        const float s=(std::min)(size.x/1600.0f,size.y/900.0f);
+        const float left=(size.x-1600*s)*0.5f,top=(size.y-900*s)*0.5f;
+        for(int i=0;i<3;++i) runner.Expect(RailTitleScene::HitTest(left+300*s,top+(510+i*82)*s,size.x,size.y)==i,
+            "Title mouse hit targets must follow the letterboxed layout");
+        runner.Expect(RailTitleScene::HitTest(left+900*s,top+510*s,size.x,size.y)==-1,
+            "Clicks on the 3D scene must not activate a menu item");
+    }
+    RailShooterHudDefinitionAsset definition;
+    RailShooterHudPresentationFrame presentation;
+    RailShooterHudRenderer renderer;
+    for(bool help : {false,true}) {
+        renderer.Update({&definition,&presentation,1600,900,true,1,help});
+        bool coversScene=false;
+        for(const auto& c:renderer.Frame().commands)
+            coversScene |= c.kind==RailShooterHudDrawCommandKind::Rectangle && c.width>=1600 && c.height>=900 && c.color.w>=1;
+        runner.Expect(renderer.Frame().visible && !coversScene && renderer.Frame().commands.size()<=definition.maximumDrawCommands,
+            "Title/menu/help should remain bounded and preserve the running 3D scene");
+    }
+}
+
+void TestRailTitleLandscape(RegressionRunner& runner) {
+    RailTitleScene title;
+    runner.Expect(title.Initialize(),"Title landscape must initialize");
+    struct Triangle { Vector3 a,b,c; };
+    std::vector<Triangle> ground,rocks;
+    const auto sub=[](Vector3 a,Vector3 b){return Vector3{a.x-b.x,a.y-b.y,a.z-b.z};};
+    const auto cross=[](Vector3 a,Vector3 b){return Vector3{a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};};
+    const auto dot=[](Vector3 a,Vector3 b){return a.x*b.x+a.y*b.y+a.z*b.z;};
+    const auto transform=[](Vector3 p,const Matrix4x4& m){return Vector3{
+        p.x*m.m[0][0]+p.y*m.m[1][0]+p.z*m.m[2][0]+m.m[3][0],
+        p.x*m.m[0][1]+p.y*m.m[1][1]+p.z*m.m[2][1]+m.m[3][1],
+        p.x*m.m[0][2]+p.y*m.m[1][2]+p.z*m.m[2][2]+m.m[3][2]};};
+    int groundCount=0,cliffCount=0,rockCount=0;
+    for(const auto& p:title.Scenery().terrainPlacements) {
+        const char* file=nullptr;
+        if(p.meshId=="title_ground") {file="TitleGround.obj";++groundCount;}
+        else if(p.meshId=="title_cliff") {file="TitleCliff.obj";++cliffCount;}
+        else if(p.meshId=="title_boulder") {file="TitleBoulder.obj";++rockCount;}
+        runner.Expect(file!=nullptr,"Title must not reuse fragmented wall tiles");
+        const auto mesh=LoadObjFile_Assimp("Resources/course_meshes/TitleLandscape",file);
+        runner.Expect(!mesh.indices.empty() && !mesh.materials.empty() &&
+            std::filesystem::exists(mesh.materials.back().textureFilePath),"Title production meshes and their albedo must import");
+        const auto sample=title.Path().Evaluate(p.distance);
+        Vector3 center{sample.position.x+sample.right.x*p.lateralOffset,
+            sample.position.y+p.verticalOffset,sample.position.z+sample.right.z*p.lateralOffset};
+        Vector3 rotation=p.rotation;rotation.y+=std::atan2(sample.tangent.x,sample.tangent.z);
+        const auto world=Multiply(mesh.rootNode.localMatrix,MakeAffineMatrix(p.scale,rotation,center));
+        auto& target=p.meshId=="title_ground"?ground:rocks;
+        for(size_t j=0;j<mesh.indices.size();j+=3) {
+            const auto v=[&](size_t k){const auto& q=mesh.vertices[mesh.indices[j+k]].position;return transform({q.x,q.y,q.z},world);};
+            target.push_back({v(0),v(1),v(2)});
+        }
+    }
+    runner.Expect(groundCount==1 && cliffCount==3 && rockCount==5 && ground.size()+rocks.size()<12000,
+        "Title scenery should use one continuous ground, sparse large forms and a bounded geometry budget");
+    const auto nearest=[&](const std::vector<Triangle>& mesh,Vector3 origin,Vector3 direction){
+        float nearest=10000;
+        for(const auto& t:mesh) {
+            const Vector3 e1=sub(t.b,t.a),e2=sub(t.c,t.a),h=cross(direction,e2);
+            const float det=dot(e1,h);if(std::abs(det)<1e-8f)continue;
+            const Vector3 offset=sub(origin,t.a);const float u=dot(offset,h)/det;
+            if(u<-0.00001f || u>1.00001f)continue;
+            const Vector3 q=cross(offset,e1);const float v=dot(direction,q)/det;
+            if(v<-0.00001f || u+v>1.00001f)continue;
+            const float distance=dot(e2,q)/det;
+            if(distance>=0)nearest=(std::min)(nearest,distance);
+        }
+        return nearest;
+    };
+    bool supported=true;
+    for(int i=0;i<192;++i) {
+        const auto sample=title.Path().Evaluate(title.Distance()+title.LapLength()*i/192.0f);
+        for(float side:{-1.9f,1.9f}) {
+            Vector3 origin{sample.position.x+sample.right.x*side,3.0f,sample.position.z+sample.right.z*side};
+            supported &= std::abs(nearest(ground,origin,{0,-1,0})-3.30f)<0.015f;
+        }
+    }
+    runner.Expect(supported,"Both rails must have continuous ground at the sleeper height around the complete loop");
+    bool clear=true;int checked=0;
+    const auto checkCamera=[&](const RailTitleScene& scene){
+        const Vector3 eye=scene.CameraPosition();
+        Vector3 target=scene.Path().Evaluate(scene.Distance()).position;target.y+=1.5f;
+        return nearest(rocks,eye,sub(target,eye))>1.0f;
+    };
+    const int frames=int(title.LapLength()/RailTitleScene::Speed*20)+1;
+    for(int i=0;i<frames;++i) {
+        title.Update(0.05f);
+        if(i%6==0){clear &= checkCamera(title);++checked;}
+        if(i%60==0) {
+            auto start=title;start.BeginStart();
+            for(int frame=0;frame<36;++frame){start.Update(0.05f);clear &= checkCamera(start);++checked;}
+        }
+    }
+    runner.Expect(clear,"Sparse cliffs and rocks must keep the cart visible throughout the lap and start orbit");
+    const auto tunnelMesh=LoadObjFile_Assimp("Resources/course_meshes/TitleLandscape","TitleTunnel.obj");
+    bool tunnelClear=!tunnelMesh.indices.empty(), entranceVisible=true, caveEnclosesView=true;
+    bool departureStraight=true, departureSupported=true, rearCurvePreserved=true;
+    for(int phase=0;phase<12;++phase) {
+        RailTitleScene entry;entry.Initialize();
+        const int idleFrames=int((phase/12.0f)*entry.LapLength()/RailTitleScene::Speed/0.05f);
+        for(int frame=0;frame<idleFrames;++frame) entry.Update(0.05f);
+        const auto departure=entry.Path().Evaluate(entry.Distance());
+        const auto previousPath=entry.Path();
+        const float previousDistance=entry.Distance();
+        entry.BeginStart();
+        for(float behind:{2.0f,5.0f,15.0f,35.0f,80.0f,140.0f}) {
+            const auto before=previousPath.Evaluate(previousDistance-behind);
+            const auto after=entry.Path().Evaluate(entry.Distance()-behind);
+            const auto error=sub(before.position,after.position);
+            rearCurvePreserved &= dot(error,error)<0.0004f && dot(before.tangent,after.tangent)>0.99999f;
+        }
+        const auto initial=entry.Path().Evaluate(entry.Distance());
+        departureStraight &= dot(sub(initial.position,departure.position),sub(initial.position,departure.position))<0.0001f;
+        const auto& portal=entry.Scenery().terrainPlacements.back();
+        const auto anchor=entry.SceneryPath().Evaluate(portal.distance);
+        const auto world=Multiply(tunnelMesh.rootNode.localMatrix,MakeAffineMatrix({1,1,1},
+            Vector3{0,std::atan2(anchor.tangent.x,anchor.tangent.z),0},anchor.position));
+        std::vector<Triangle> tunnel;
+        for(size_t j=0;j<tunnelMesh.indices.size();j+=3) {
+            const auto v=[&](size_t k){const auto& q=tunnelMesh.vertices[tunnelMesh.indices[j+k]].position;return transform({q.x,q.y,q.z},world);};
+            tunnel.push_back({v(0),v(1),v(2)});
+        }
+        // Cover the opening, not only the centre ray. A closed rear rock wall
+        // must occlude sky even on the straight approach to the cave.
+        const auto inside=entry.SceneryPath().Evaluate(portal.distance+10.0f);
+        const Vector3 origin{inside.position.x,inside.position.y+4.6f,inside.position.z};
+        for(float side:{-0.12f,-0.06f,0.0f,0.06f,0.12f}) for(float vertical:{-0.04f,0.0f,0.06f,0.12f}) {
+            const Vector3 direction{inside.tangent.x+side*inside.right.x,vertical,
+                inside.tangent.z+side*inside.right.z};
+            const float wall=nearest(tunnel,origin,direction);
+            caveEnclosesView &= wall>15.0f && wall<85.0f;
+        }
+        Vector3 previous=entry.CameraPosition();
+        for(int frame=0;frame<int(RailTitleScene::StartDuration/0.05f)+3 && !entry.ReadyForGameplay();++frame) {
+            entry.Update(0.05f);
+            const Vector3 eye=entry.CameraPosition();
+            auto cart=entry.Path().Evaluate(entry.Distance()).position;cart.y+=1.5f;
+            const auto pose=entry.Path().Evaluate(entry.Distance());
+            const auto delta=sub(pose.position,departure.position);
+            departureStraight &= std::abs(dot(delta,departure.right))<0.01f && dot(pose.tangent,departure.tangent)>0.9999f;
+            for(float side:{-1.9f,1.9f}) {
+                const Vector3 support{pose.position.x+pose.right.x*side,3.0f,pose.position.z+pose.right.z*side};
+                departureSupported &= std::abs(nearest(ground,support,{0,-1,0})-3.30f)<0.015f;
+            }
+            tunnelClear &= nearest(tunnel,previous,sub(eye,previous))>1.0f;
+            if(entry.Blackout()<0.99f) tunnelClear &= nearest(tunnel,eye,sub(cart,eye))>1.0f;
+            if(frame==int(RailTitleScene::OrbitDuration/0.05f)+2) {
+                const Vector3 mouth{anchor.position.x,anchor.position.y+4,anchor.position.z};
+                const auto forward=sub(entry.CameraTarget(),eye),toMouth=sub(mouth,eye);
+                entranceVisible &= dot(forward,toMouth)/std::sqrt(dot(forward,forward)*dot(toMouth,toMouth))>0.94f &&
+                    std::sqrt(dot(toMouth,toMouth))>10.0f && nearest(rocks,eye,toMouth)>1.0f;
+            }
+            previous=eye;
+        }
+        tunnelClear &= entry.TunnelCameraDepth()>4.5f && entry.Blackout()>0.999f;
+    }
+    std::ofstream log("logs/title_landscape_geometry.log");
+    log<<"placements="<<title.Scenery().terrainPlacements.size()<<" triangles="<<ground.size()+rocks.size()
+       <<" ground_rays=384 camera_rays="<<checked<<" supported="<<supported<<" clear="<<clear
+       <<" cave_clear="<<tunnelClear<<" entrance_visible="<<entranceVisible<<" cave_enclosed="<<caveEnclosesView
+       <<" departure_straight="<<departureStraight<<" departure_supported="<<departureSupported
+       <<" rear_curve_preserved="<<rearCurvePreserved<<"\n";
+    log.flush();
+    runner.Expect(tunnelClear && entranceVisible,
+        "At twelve click phases, the imported tunnel must frame the settled camera, clear the cart and camera path, and contain the camera before blackout");
+    runner.Expect(caveEnclosesView,
+        "The sealed cave must hide the far exit across the opening while keeping the forward camera corridor open");
+    runner.Expect(departureStraight && departureSupported,
+        "All twelve departure phases must preserve the cart position and follow grounded straight rails toward the cave");
+    runner.Expect(rearCurvePreserved,
+        "Starting must preserve the travelled curve behind the cart, including a join inside a Bezier segment");
+
+}
+
+void TestTitleImportedSurfaceAudit(RegressionRunner& runner) {
+    std::ofstream log("logs/title_surface_audit.log");
+    for(const char* file:{"TitleGround.obj","TitleCliff.obj","TitleBoulder.obj","TitleTunnel.obj"}) {
+        const auto mesh=LoadObjFile_Assimp("Resources/course_meshes/TitleLandscape",file);
+        const auto audit=AuditModelClosedSurface(mesh);
+        log<<file<<" triangles="<<audit.triangleCount<<" boundary="<<audit.boundaryEdges
+           <<" nonmanifold="<<audit.nonManifoldEdges<<" inconsistent="<<audit.inconsistentEdges
+           <<" duplicate="<<audit.duplicateTriangles<<" invalid="<<audit.invalidTriangles<<" volume="<<audit.signedVolume<<"\n";
+        runner.Expect(audit.IsValid() && ValidateModelGeometryOrientation(mesh),
+            "Imported title solids must keep closed, non-overlapping faces and coherent normals after handedness conversion");
+        auto damaged=mesh;
+        std::swap(damaged.indices[0],damaged.indices[1]);
+        runner.Expect(!AuditModelClosedSurface(damaged).IsValid(),"Solid audit must catch a single reversed triangle before backface culling produces a hole");
+        damaged=mesh;damaged.indices.erase(damaged.indices.begin(),damaged.indices.begin()+3);
+        runner.Expect(!AuditModelClosedSurface(damaged).IsValid(),"Solid audit must catch a missing triangle");
+        damaged=mesh;damaged.indices.insert(damaged.indices.end(),mesh.indices.begin(),mesh.indices.begin()+3);
+        runner.Expect(!AuditModelClosedSurface(damaged).IsValid(),"Solid audit must catch duplicate coplanar triangles that can flicker");
+    }
+    const auto old=LoadObjFile_Assimp("Resources/course_meshes/CurvedCanyonWall","CurvedCanyonWall.obj");
+    const auto audit=AuditModelClosedSurface(old);
+    log<<"previous_wall boundary="<<audit.boundaryEdges<<" inconsistent_after_import="<<audit.inconsistentEdges<<"\n";
+}
+
+void TestRailTitleCinematic(RegressionRunner& runner) {
+    for(int fps : {30,60,120}) {
+        RailTitleScene title;
+        runner.Expect(title.Initialize(),"Cinematic title should initialize");
+        title.Update(0.02f);
+        const Vector3 initial=title.CameraPosition();
+        title.BeginStart();
+        runner.Expect(title.Starting() && title.StartProgress()==0 && title.Blackout()==0,
+            "Starting must not teleport the camera or flash the screen");
+        float previousFade=0,previousMenu=1;
+        const auto luminance=[](Vector3 c) {return c.x*0.2126f+c.y*0.7152f+c.z*0.0722f;};
+        const float lightLuma=luminance({1.0f,0.93f,0.83f});
+        const float skyLuma=luminance({0.30f,0.36f,0.40f});
+        const Vector4 courseSun{1.0f,0.68f,0.50f,1.0f};
+        auto previousColors=title.Colors(courseSun);
+        bool colorContinuous=true;
+        Vector3 previous=initial;
+        bool continuous=true;
+        bool steadyApproach=true;
+        int frames=0;
+        while(!title.ReadyForGameplay() && frames<int(fps*(RailTitleScene::StartDuration+1.0f))) {
+            title.Update(1.0f/fps);
+            const Vector3 eye=title.CameraPosition();
+            const Vector3 center=title.Path().Evaluate(title.Distance()).position;
+            const float step=std::sqrt((eye.x-previous.x)*(eye.x-previous.x)+(eye.y-previous.y)*(eye.y-previous.y)+(eye.z-previous.z)*(eye.z-previous.z));
+            const float clearance=std::sqrt((eye.x-center.x)*(eye.x-center.x)+(eye.z-center.z)*(eye.z-center.z));
+            // Bound the orbit movement separately from the constant-speed chase.
+            continuous &= std::isfinite(step) && step<60.0f/fps && clearance>=7.9f && eye.y-center.y>=4.5f;
+            steadyApproach &= std::abs(title.CurrentSpeed()-12.0f)<0.001f && std::abs(title.CameraFov()-0.70f)<0.001f;
+            const float elapsed=float(frames+1)/fps;
+            if(elapsed>RailTitleScene::OrbitDuration+1.0f/fps) {
+                const auto forward=title.Path().Evaluate(title.Distance()).tangent;
+                const float cameraAdvance=(eye.x-previous.x)*forward.x+(eye.z-previous.z)*forward.z;
+                const float gap=(center.x-eye.x)*forward.x+(center.z-eye.z)*forward.z;
+                steadyApproach &= cameraAdvance>=-0.001f && std::abs(gap-8.0f)<0.01f;
+            }
+            continuous &= title.Blackout()>=previousFade && title.MenuOpacity()<=previousMenu;
+            continuous &= title.TunnelCameraDepth()>2.0f || title.Blackout()==0.0f;
+            const auto colors=title.Colors(courseSun);
+            colorContinuous &= colors.transition>=previousColors.transition &&
+                std::abs(luminance({colors.light.x,colors.light.y,colors.light.z})-lightLuma)<0.0001f &&
+                std::abs(luminance(colors.background)-skyLuma)<0.0001f &&
+                std::abs(colors.light.x-previousColors.light.x)<0.025f;
+            previousColors=colors;
+            previous=eye; previousFade=title.Blackout(); previousMenu=title.MenuOpacity();
+            ++frames;
+            if(frames==fps/2) {const float progress=title.StartProgress();title.BeginStart();
+                runner.Expect(title.StartProgress()==progress,"Repeated confirm must not restart the camera animation");}
+        }
+        runner.Expect(continuous && title.ReadyForGameplay() && title.Blackout()>0.999f && title.MenuOpacity()==0 && title.AmbienceGain()<0.001f,
+            "Cinematic must remain outside the cart and switch worlds only under full blackout with silent title audio");
+        runner.Expect(std::abs(float(frames)/fps-RailTitleScene::StartDuration)<0.04f &&
+            title.Scenery().terrainPlacements.size()==10,
+            "Tunnel cinematic timing must be frame-rate independent and repeated confirm must not duplicate the portal");
+        runner.Expect(steadyApproach,
+            "The cave approach must keep constant speed and FOV, with a fixed close chase distance after the orbit");
+        runner.Expect(std::abs(title.CurrentSpeed()-12.0f)<0.001f &&
+            std::abs(title.CameraFov()-0.70f)<0.001f &&
+            std::abs(title.TunnelCameraDepth()-4.6f)<0.01f,
+            "The steady approach must reach the same inside-cave position at all frame rates");
+        runner.Expect(colorContinuous && previousColors.transition==1.0f,
+            "Title hue must reach its transition endpoint without dimming the light or background or stepping between frames");
+        title.Initialize();
+        runner.Expect(title.Colors(courseSun).transition==0.0f,
+            "Reinitializing the title must clear the color transition");
+    }
+    EffectAssetLoader loader;
+    LoadedEffectAsset dust;
+    runner.Expect(loader.LoadFile("Resources/effects/TitleWheelDust.effect",dust) &&
+        dust.asset.name=="title_wheel_dust" && dust.asset.lifetime<1.0f &&
+        std::none_of(dust.diagnostics.begin(),dust.diagnostics.end(),[](const auto& d){return d.severity==EffectAssetDiagnosticSeverity::Error;}),
+        "Title dust must load as a bounded production effect without asset errors");
+    EffectSystem system;
+    system.RegisterAsset(dust.asset);
+    float spawnTimer=0;
+    size_t peak=0;
+    for(int i=0;i<60*30;++i) {
+        spawnTimer+=1.0f/60;
+        if(spawnTimer>=0.12f) {spawnTimer=std::fmod(spawnTimer,0.12f);system.PlayEffect("title_wheel_dust",{0,0,0});system.PlayEffect("title_wheel_dust",{3,0,0});}
+        system.Update(1.0f/60);
+        peak=(std::max)(peak,system.Instances().size());
+    }
+    runner.Expect(peak>0 && peak<=14,"Wheel dust must not accumulate unbounded effect instances during idle title loops");
+    system.Update(1.0f);
+    runner.Expect(system.Instances().empty(),"Dust must expire completely when emission stops");
+    RailShooterHudDefinitionAsset def;
+    RailShooterHudPresentationFrame hud;
+    RailShooterHudRenderer renderer;
+    RailShooterHudRenderInput input{&def,&hud,1280,720,true};
+    input.titleOpacity=0; input.titleBlackout=1;
+    renderer.Update(input);
+    const auto& commands=renderer.Frame().commands;
+    runner.Expect(!commands.empty() && commands.back().width==1280 && commands.back().height==720 && commands.back().color.w==1,
+        "World handoff blackout must be the final fully opaque title command");
+}
+
+void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
+    size_t auditEnvSize = 0;
+    getenv_s(&auditEnvSize, nullptr, 0, "CG5_ENEMY_ATTACK_AUDIT");
+    const bool audit = auditEnvSize > 0;
+    CourseAsset course; std::string error;
+    runner.Expect(course.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course",&error),"timing course loads");
+    auto compiled=CourseWaveRuntimeCompiler{}.Compile(course,{});
+    runner.Expect(compiled.succeeded,"timing authored program compiles");
+    std::string bytes;
+    CourseRuntimeProgramAsset loaded;
+    runner.Expect(compiled.program.SaveToString(&bytes,&error) && loaded.LoadFromString(bytes,&error),"timing program round-trips");
+    for(size_t i=0;i<compiled.program.actors.size();++i) {
+        const auto& a=compiled.program.actors[i].actor.behaviorDefinition;
+        const auto& b=loaded.actors[i].actor.behaviorDefinition;
+        runner.Expect(a.maintainForwardEngagementBand==b.maintainForwardEngagementBand &&
+            a.choreographedAttackPass==b.choreographedAttackPass &&
+            a.attackPassHandoffLeadSeconds==b.attackPassHandoffLeadSeconds &&
+            a.attackPassStartDelaySeconds==b.attackPassStartDelaySeconds && a.attackPassRecoilSeconds==b.attackPassRecoilSeconds &&
+            a.engagementBandMinimumForwardDistance==b.engagementBandMinimumForwardDistance &&
+            a.engagementBandPreferredForwardDistance==b.engagementBandPreferredForwardDistance &&
+            a.engagementBandMaximumForwardDistance==b.engagementBandMaximumForwardDistance &&
+            a.engagementBandDisengageForwardDistance==b.engagementBandDisengageForwardDistance &&
+            a.engagementBandPositionGain==b.engagementBandPositionGain &&
+            a.engagementBandMaximumCorrectionSpeed==b.engagementBandMaximumCorrectionSpeed &&
+            a.engagementBandVelocityResponse==b.engagementBandVelocityResponse,
+            "saved gameplay must preserve the complete engagement and attack-pass contract");
+    }
+    std::ofstream log(audit ? "logs/enemy_attack_audit.log" : "logs/authored_drone_attack_timing.log",std::ios::trunc);
+    // Changing just an actor/projectile asset must invalidate a cooked cache.
+    {
+        const std::string path="logs/attack_timing_dependency.txt";
+        { std::ofstream file(path,std::ios::binary); file<<"speed=32"; }
+        CourseRuntimeProgramAsset cache;
+        cache.dependencies.push_back({CourseRuntimeDependencyKind::EnemyProjectile,"test",path,
+            ComputeCourseRuntimeFileHash("speed=32")});
+        runner.Expect(cache.AreDependenciesCurrent(),"unchanged projectile dependency remains current");
+        { std::ofstream file(path,std::ios::binary); file<<"speed=25"; }
+        runner.Expect(!cache.AreDependenciesCurrent(),"projectile tuning must invalidate old cooked combat data");
+    }
+    RailPath rail;rail.SetControlPoints(course.railPoints);
+    for(int mode:{0,1,2,3}) for(int fps:{30,60,120}) {
+        if (audit && (mode < 2 || fps != 60)) continue;
+        TerrainGenerationSettings terrain;
+        terrain.surfaceLongitudinalSteps=24; terrain.surfaceRadialSegments=36;
+        terrain.rockPillarDensity=0.22f;
+        std::unordered_map<uint32_t, std::string> identities;
+        std::unordered_map<uint32_t, uint64_t> shotCounts;
+        std::unordered_map<uint32_t, float> lastSeen;
+        std::unordered_map<uint32_t, std::unordered_map<std::string,float>> blocked;
+        std::unordered_map<uint32_t, uint64_t> warningTokens;
+        std::unordered_map<uint32_t, float> warningTimes;
+        bool safeShots = true;
+        CourseSpawnRuntime runtime;
+        const auto& program=mode==0?compiled.program:loaded;
+        CourseGameplayWaveRuntimeBridge waveBridge;
+        CourseEventDispatcher dispatcher; EncounterDirector encounters;
+        if(mode>=2) runner.Expect(waveBridge.Bind(&program,&runtime,0,&error),"continuous timing wave bridge binds");
+        for(const auto& record:program.actors) if(mode<2 && record.waveGuid=="wave-first-contact-editor-test") {
+            runtime.SpawnEnemyActor(record.actor);
+            log<<"mode="<<mode<<" fps="<<fps<<" actor="<<record.placementGuid<<" spawn="<<record.actor.spawnDistance
+                <<" band="<<record.actor.behaviorDefinition.maintainForwardEngagementBand
+                <<" pass="<<record.actor.behaviorDefinition.choreographedAttackPass<<'\n';
+        }
+        RailCameraDirector camera;
+        EnemyAttackTelegraphSystem telegraph;EnemyAttackLaneTelegraphRenderer lanes;
+        EnemyEncounterReadabilityDirector readability;
+        std::unordered_map<uint32_t,float> firstVisible,firstShot,firstWarning,firstArrival;
+        std::unordered_map<uint32_t,std::string> lastReason;
+        const float dt=1.0f/fps;
+        for(int step=0;step<((audit || mode==3)?100:(mode>=2?30:16))*fps;++step) {
+            const float time=step*dt,distance=(mode>=2?0:205)+time*15;
+            if(mode>=2) {
+                waveBridge.Update({dt,distance,{}});
+                EncounterDirectorFrameInput ei{};ei.deltaTime=dt;ei.currentDistance=distance;ei.spawnRuntime=&runtime;
+                for(const auto& e:course.events) if(e.distance>distance-15*dt && e.distance<=distance &&
+                    !(e.type=="enemy_wave" && std::any_of(program.waves.begin(),program.waves.end(),[&](const auto& w){
+                        return w.enabled && std::abs(w.triggerRailDistance-e.distance)<.5f;
+                    }))) ei.triggeredEvents.push_back(e);
+                const auto dispatched=encounters.Update(ei);
+                dispatcher.Dispatch(dispatched.dispatchEvents,runtime,distance);
+                camera.NotifyCourseEvents(dispatched.dispatchEvents);
+            }
+            RailCameraDirectorFrameInput ci{};
+            ci.course=&course;ci.railPath=&rail;ci.distance=distance;ci.section=course.FindSection(distance);
+            ci.deltaTime=dt;ci.railSpeed=15;ci.spawnRuntime=&runtime;ci.viewportWidth=1600;ci.viewportHeight=900;
+            const auto cameraFrame=camera.Evaluate(ci);
+            const auto unit=[](Vector3 v) {
+                const float l=std::sqrt(v.x*v.x+v.y*v.y+v.z*v.z);
+                return Vector3{v.x/l,v.y/l,v.z/l};
+            };
+            const auto cross=[](Vector3 a,Vector3 b) {
+                return Vector3{a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};
+            };
+            const Vector3 f=unit({cameraFrame.target.x-cameraFrame.position.x,
+                cameraFrame.target.y-cameraFrame.position.y,cameraFrame.target.z-cameraFrame.position.z});
+            const Vector3 r=unit(cross(cameraFrame.up,f)),u=cross(f,r);
+            Matrix4x4 world=MakeIdentity4x4();
+            const Vector3 rows[]{r,u,f,cameraFrame.position};
+            for (int row=0;row<4;++row) { world.m[row][0]=rows[row].x;world.m[row][1]=rows[row].y;world.m[row][2]=rows[row].z; }
+            const Matrix4x4 vp=Multiply(Inverse(world),MakePerspectiveFovMatrix(cameraFrame.fovY,16.0f/9,0.1f,1500));
+
+            CourseEnemyFireSafetyFrameInput safety{};
+            safety.playerDistance=distance;safety.playerVerticalOffset=3;safety.railPath=&rail;safety.course=&course;
+            safety.hasCameraPosition=true;safety.cameraPosition=cameraFrame.position;safety.viewProjection=&vp;
+            safety.cameraAllowsEnemyFire=cameraFrame.allowEnemyFire;safety.cameraStableForAiming=cameraFrame.stableForAiming;
+            safety.cameraHardTransition=cameraFrame.hardTransition;safety.cameraReason=cameraFrame.comfortReason;
+            if (mode==3) { safety.terrainSettings=&terrain; safety.terrainEdits=&course.terrainEditLayer; }
+            runtime.Update(dt,safety);
+            for (const auto& actor : runtime.Enemies()) if (actor.bulletsEmittedThisFrame) {
+                safeShots &= actor.fireEnvironmentReady && actor.fireSafetyAllowed &&
+                    actor.desc.hitPoints > 0 &&
+                    actor.desc.spawnDistance + actor.desc.distanceOffset - distance >= runtime.FireSafetySettings().minForwardDistance &&
+                    warningTokens[actor.actorId] == actor.attackState.tokenId &&
+                    warningTimes.contains(actor.actorId) &&
+                    time-warningTimes[actor.actorId] >= actor.behaviorDefinition.attackLeadSeconds-dt*1.5f;
+            }
+            for(const auto& b:runtime.Bullets()) if(b.distanceOffset+b.spawnDistance<=distance && firstShot.contains(b.ownerActorId))
+                firstArrival.try_emplace(b.ownerActorId,time);
+            EnemyAttackTelegraphFrameInput ti{};
+            ti.spawnRuntime=&runtime;ti.railPath=&rail;ti.course=&course;ti.viewProjection=&vp;
+            ti.cameraPosition=cameraFrame.position;ti.playerDistance=distance;ti.deltaTime=dt;ti.viewportWidth=1600;ti.viewportHeight=900;
+            if (mode==3) { ti.terrainSettings=&terrain; ti.terrainEdits=&course.terrainEditLayer; }
+            telegraph.Update(ti);
+            EnemyAttackLaneTelegraphRenderInput li{};li.telegraph=&telegraph.Frame();li.railPath=&rail;li.elapsedTime=time;
+            lanes.Update(li);
+            for(const auto& lane:lanes.Frame().lanes) if(lanes.WasSubmitted(lane.actorId,lane.attackIntentSequence)) {
+                runtime.MarkEnemyAttackTelegraphPresented(lane.actorId,lane.attackIntentSequence);
+                firstWarning.try_emplace(lane.actorId,time);
+                if (warningTokens[lane.actorId] != lane.attackTokenId) {
+                    warningTokens[lane.actorId]=lane.attackTokenId;
+                    warningTimes[lane.actorId]=time;
+                }
+            }
+            EnemyEncounterReadabilityInput ri{};
+            ri.runtime=&runtime;ri.railPath=&rail;ri.viewProjection=&vp;ri.telegraph=&telegraph.Frame();
+            ri.viewportWidth=1600;ri.viewportHeight=900;ri.deltaTime=dt;readability.Update(ri);
+            for(const auto& a:readability.Frame().actors) if(a.onScreen && a.screenReadable) firstVisible.try_emplace(a.actorId,time);
+            for(const auto& a:runtime.Enemies()) {
+                identities[a.actorId]=a.desc.waveId+"/"+a.desc.role;
+                shotCounts[a.actorId]=a.fireSequence; lastSeen[a.actorId]=time;
+                blocked[a.actorId][a.fireSafetyReason]+=dt;
+                if(a.bulletsEmittedThisFrame) firstShot.try_emplace(a.actorId,time);
+                if(a.fireSafetyReason!=lastReason[a.actorId] || a.bulletsEmittedThisFrame || step%fps==0) {
+                    log<<"mode="<<mode<<" fps="<<fps<<" t="<<time<<" id="<<a.actorId<<" state="<<ToString(a.behaviorState.state)
+                        <<" wave="<<a.desc.waveId<<" actor="<<a.desc.role<<" age="<<a.age<<" life="<<a.desc.lifetime
+                        <<" phase="<<ToString(a.entranceExitState.phase)<<" token="<<a.attackState.tokenReserved
+                        <<" remain="<<a.behaviorState.attackTimeRemaining<<" distance="<<a.desc.spawnDistance+a.desc.distanceOffset-distance<<" shots="<<a.fireSequence
+                        <<" reason="<<a.fireSafetyReason<<'\n';
+                    lastReason[a.actorId]=a.fireSafetyReason;
+                }
+            }
+        }
+        for(const auto& [id,t]:firstShot) log<<"RESULT mode="<<mode<<" fps="<<fps<<" id="<<id<<" visible="<<firstVisible[id]
+            <<" warning="<<firstWarning[id]<<" shot="<<t<<" delay="<<t-firstVisible[id]
+            <<" flight="<<(firstArrival.contains(id)?firstArrival[id]-t:-1)<<'\n';
+        if (audit || mode==3) {
+            size_t encounterActors = 0;
+            for (const auto& [id,identity]:identities) {
+                log<<"AUDIT mode="<<mode<<" fps="<<fps<<" id="<<id<<" name="<<identity<<" shots="<<shotCounts[id]
+                    <<" visible="<<(firstVisible.contains(id)?firstVisible[id]:-1)
+                    <<" last="<<lastSeen[id]<<" firstShot="<<(firstShot.contains(id)?firstShot[id]:-1)<<'\n';
+                for (const auto& [reason,seconds]:blocked[id]) log<<"BLOCK mode="<<mode<<" id="<<id<<" seconds="<<seconds<<" reason="<<reason<<'\n';
+                // Front encounters must complete at least one attack while alive.
+                // Rear pursuit is a different approach contract; the boss is still
+                // active at the end of this opening-to-spire test interval.
+                if (identity.starts_with("spire_escape_chasers/") || identity.starts_with("gatekeeper_intro/")) continue;
+                ++encounterActors;
+                runner.Expect(shotCounts[id]>0,
+                    "continuous course must not strand an untouched forward enemy: "+identity+" fps="+std::to_string(fps));
+            }
+            log.flush();
+            runner.Expect(encounterActors==44 && safeShots,
+                "all 44 opening-to-spire actors need complete warnings and safe in-front shots");
+            continue;
+        }
+        runner.Expect(mode>=2 ? firstShot.size()>=16 : firstShot.size()==3,
+            "authored and continuous opening encounters must not strand visible drones without a shot");
+        runner.Expect(firstShot.at(1)-firstVisible.at(1)<=1.85f &&
+            firstShot.at(2)-firstVisible.at(2)<=2.6f,
+            "the opening attacker and its successor must act promptly after becoming visible");
+        for(const auto& [id,t]:firstShot) {
+            const float flight=firstArrival.at(id)-t;
+            runner.Expect(flight>=.85f && flight<=1.4f,
+                "slower aimed shots must preserve a readable approach time at cart speed 15");
+            runner.Expect(t-firstVisible.at(id)<=5.5f,
+                "camera holds and wave queuing must not recreate the long idle opening");
+        }
+    }
+}
+
+#pragma optimize("", on)
+void TestNormalDroneAttackPass(RegressionRunner& runner) {
+    CourseAsset course;
+    std::string error;
+    if (!course.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course",&error)) {
+        runner.Expect(false,"drone course loads"); return;
+    }
+    RailPath rail; rail.SetControlPoints(course.railPoints);
+    std::ofstream metrics("logs/normal_drone_attack_pass.log",std::ios::trunc);
+    for (int fps : {30,60,120}) for (int mode : {0,1,2}) for (const char* wave : {"intro_scout_pair","intro_lockon_line","drone_intro_v",
+            "first_contact_split","first_contact_combo_ladder","crossfire_low_high_mix",
+            "cliff_crossfire_right","crossfire_pincer","tunnel_exit_pinwheel"}) {
+        if (mode!=0 && std::string(wave)!="intro_scout_pair") continue;
+        const auto event=std::find_if(course.events.begin(),course.events.end(),[&](const auto& e){return e.id==wave;});
+        if (event==course.events.end()) {runner.Expect(false,"drone encounter exists");continue;}
+        CourseSpawnRuntime runtime;
+        CourseEventDispatcher dispatcher; dispatcher.Dispatch({*event},runtime,event->distance);
+        const auto normal=[](const auto& actor){return actor.desc.actorAssetId=="drone_scout" ||
+            actor.desc.actorAssetId=="drone_basic" || actor.desc.actorAssetId=="drone_leader";};
+        const size_t count=std::count_if(runtime.Enemies().begin(),runtime.Enemies().end(),normal);
+        EnemyEncounterReadabilityDirector readability;
+        std::unordered_map<uint32_t,uint64_t> shots, warnedTokens;
+        std::unordered_map<uint32_t,float> warningTimes, poseDistances, shotTimes;
+        std::unordered_set<uint32_t> charged, posed, departed, visualBullets, visiblePeel;
+        uint32_t defeated=0;
+        float blockedAt=-1;
+        EnemyProjectilePresentationBridge projectilePresentation;
+        EnemyProjectileVfxRenderer projectileVfx;
+        runner.Expect(projectileVfx.LoadDirectory("Resources/courses/projectile_visuals",&error),"drone bullet visual assets load");
+        EnemyAttackTelegraphSystem telegraph; EnemyAttackLaneTelegraphRenderer lanes;
+        EnemyCombatPresentationBridge presentation;
+        RailCameraDirector camera;
+        const float dt=1.0f/fps;
+        for (int step=0;step<18*fps;++step) {
+            const float time=step*dt,distance=event->distance+time*15;
+            RailCameraDirectorFrameInput cameraInput;
+            cameraInput.course=&course; cameraInput.railPath=&rail;
+            cameraInput.distance=distance; cameraInput.section=course.FindSection(distance);
+            cameraInput.deltaTime=dt; cameraInput.railSpeed=15;
+            cameraInput.spawnRuntime=&runtime; cameraInput.viewportWidth=1600; cameraInput.viewportHeight=900;
+            const auto cameraFrame=camera.Evaluate(cameraInput);
+            const auto unit=[](Vector3 v) {
+                const float l=std::sqrt(v.x*v.x+v.y*v.y+v.z*v.z);
+                return Vector3{v.x/l,v.y/l,v.z/l};
+            };
+            const auto cross=[](Vector3 a,Vector3 b) {
+                return Vector3{a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};
+            };
+            const Vector3 f=unit({cameraFrame.target.x-cameraFrame.position.x,
+                cameraFrame.target.y-cameraFrame.position.y,cameraFrame.target.z-cameraFrame.position.z});
+            const Vector3 r=unit(cross(cameraFrame.up,f)),u=cross(f,r);
+            Matrix4x4 world=MakeIdentity4x4();
+            const Vector3 rows[]{r,u,f,cameraFrame.position};
+            for (int row=0;row<4;++row) { world.m[row][0]=rows[row].x;world.m[row][1]=rows[row].y;world.m[row][2]=rows[row].z; }
+            const Matrix4x4 vp=Multiply(Inverse(world),MakePerspectiveFovMatrix(cameraFrame.fovY,16.0f/9,0.1f,1500));
+            CourseEnemyFireSafetyFrameInput safety;
+            safety.playerDistance=distance; safety.playerVerticalOffset=3;
+            safety.railPath=&rail; safety.course=&course; safety.viewProjection=&vp;
+            safety.hasCameraPosition=true; safety.cameraPosition=cameraFrame.position;
+            safety.cameraAllowsEnemyFire=cameraFrame.allowEnemyFire;
+            safety.cameraStableForAiming=cameraFrame.stableForAiming;
+            safety.cameraHardTransition=cameraFrame.hardTransition;
+            safety.cameraReason=cameraFrame.comfortReason;
+
+            if (blockedAt>=0 && time<blockedAt+0.30f) safety.cameraAllowsEnemyFire=false;
+            runtime.Update(dt,safety);
+            EnemyAttackTelegraphFrameInput ti;
+            ti.spawnRuntime=&runtime;ti.railPath=&rail;ti.course=&course;ti.viewProjection=&vp;
+            ti.cameraPosition=cameraFrame.position;ti.playerDistance=distance;ti.deltaTime=dt;
+            ti.viewportWidth=1600;ti.viewportHeight=900;
+            telegraph.Update(ti);
+            EnemyAttackLaneTelegraphRenderInput li;
+            li.telegraph=&telegraph.Frame();li.railPath=&rail;li.elapsedTime=time;
+            lanes.Update(li);
+            for (const auto& lane:lanes.Frame().lanes) {
+                if (lanes.WasSubmitted(lane.actorId,lane.attackIntentSequence)) {
+                    runtime.MarkEnemyAttackTelegraphPresented(lane.actorId,lane.attackIntentSequence);
+                    if(warnedTokens[lane.actorId]!=lane.attackTokenId) {
+                        warnedTokens[lane.actorId]=lane.attackTokenId;warningTimes[lane.actorId]=time;
+                    }
+                }
+            }
+            EnemyCombatPresentationInput pi;
+            pi.runtime=&runtime;pi.railPath=&rail;pi.deltaTime=dt;presentation.Update(pi);
+            EnemyEncounterReadabilityInput ri;
+            ri.runtime=&runtime;ri.railPath=&rail;ri.viewProjection=&vp;ri.telegraph=&telegraph.Frame();
+            ri.viewportWidth=1600;ri.viewportHeight=900;ri.deltaTime=dt;readability.Update(ri);
+            EnemyProjectilePresentationInput bi;
+            bi.runtime=&runtime;bi.railPath=&rail;bi.playerDistance=distance;bi.deltaTime=dt;
+            projectilePresentation.Update(bi);
+            EnemyProjectileVfxRenderInput vi;
+            vi.presentation=&projectilePresentation.Frame();vi.cameraWorldPosition=cameraFrame.position;
+            vi.cameraRight=r;vi.cameraUp=u;vi.viewportHeightPixels=900;vi.verticalFovRadians=cameraFrame.fovY;
+            projectileVfx.Update(vi);
+            for(const auto& bullet:runtime.Bullets()) {
+                if(std::any_of(projectileVfx.Frame().proxies.begin(),projectileVfx.Frame().proxies.end(),
+                    [&](const auto& proxy){return proxy.projectileId==bullet.projectileId &&
+                        proxy.visualState!=EnemyProjectileVisualState::Unavailable;})) visualBullets.insert(bullet.ownerActorId);
+            }
+            for (const auto& actor:runtime.Enemies()) {
+                if(!normal(actor)) continue;
+                shots[actor.actorId]=actor.fireSequence;
+                const auto& behavior=actor.behaviorState;
+                const auto* pose=presentation.FindActor(actor.actorId);
+                if(behavior.state==EnemyBehaviorState::Aiming || behavior.state==EnemyBehaviorState::RequestingAttack) {
+                    if(posed.insert(actor.actorId).second) poseDistances[actor.actorId]=behavior.engagementBandForwardDistance;
+                    runner.Expect(std::abs(behavior.engagementBandForwardDistance-poseDistances[actor.actorId])<0.9f &&
+                        std::abs(behavior.behaviorLateralOffset)<0.001f && std::abs(behavior.behaviorVerticalOffset)<0.001f,
+                        "drone must hold its aim pose while the cart moves");
+                }
+                if(pose && pose->weaponCharge>0.65f && behavior.attackIntentActive) {
+                    charged.insert(actor.actorId);
+                    if(mode==2 && blockedAt<0) blockedAt=time;
+                    if(mode==1 && defeated==0) {
+                        defeated=actor.actorId;
+                        runner.Expect(runtime.EnemyCombat().ForceDefeat(runtime,defeated),"drone defeat accepted");
+                        telegraph.CancelActor(defeated);lanes.CancelActor(defeated);
+                        presentation.Update(pi);pose=presentation.FindActor(defeated);
+                        runner.Expect(pose && pose->weaponCharge==0 && !actor.attackState.tokenReserved &&
+                            !actor.targetingState.solutionLocked && !behavior.attackIntentActive &&
+                            std::none_of(lanes.Frame().lanes.begin(),lanes.Frame().lanes.end(),
+                                [&](const auto& lane){return lane.actorId==defeated;}),
+                            "same-frame drone destruction cancels charge, warning and future attack");
+                    }
+                }
+                if(actor.bulletsEmittedThisFrame) {
+                    shotTimes[actor.actorId]=time;
+                    runner.Expect(actor.bulletsEmittedThisFrame==1 && actor.fireSequence==1 && charged.contains(actor.actorId) &&
+                        warningTimes.contains(actor.actorId) && time-warningTimes[actor.actorId]>=actor.behaviorDefinition.attackLeadSeconds-dt*1.5f,
+                        "exactly one visible shot must follow a complete, uninterrupted warning");
+                    if(mode==2 && blockedAt>=0) runner.Expect(time>=blockedAt+0.30f+actor.behaviorDefinition.attackLeadSeconds-dt*1.5f,
+                        "camera safety interruption must restart the full warning before firing");
+                }
+                if(actor.entranceExitState.phase==EnemyEntranceExitPhase::Exiting) {
+                    const bool firstExitFrame=departed.insert(actor.actorId).second;
+                    const float side=behavior.authoredLateralOffset< -0.1f ? -1.0f : 1.0f;
+                    runner.Expect(actor.fireSequence==1 && actor.entranceExitState.appliedLateralOffset*side>0 &&
+                        !behavior.attackIntentActive && !actor.attackState.tokenReserved && pose && pose->weaponCharge==0,
+                        "a fired drone must depart outward without another warning or shot");
+                    if (std::string(wave)=="intro_scout_pair" || std::string(wave)=="intro_lockon_line") {
+                        if (firstExitFrame) runner.Expect(shotTimes.contains(actor.actorId) &&
+                            time-shotTimes[actor.actorId]>=0.80f,
+                            "opening scouts remain shootable briefly after their first shot");
+                        if (actor.entranceExitState.phaseElapsedSeconds>=0.75f &&
+                            actor.entranceExitState.phaseElapsedSeconds<=0.85f &&
+                            actor.entranceExitState.presentationAlpha>=0.98f) {
+                            visiblePeel.insert(actor.actorId);
+                        }
+                    }
+                }
+                if (step%fps==0 || actor.bulletsEmittedThisFrame) {
+                    metrics<<"fps="<<fps<<" mode="<<mode<<" "<<wave<<" t="<<time<<" id="<<actor.actorId<<" state="<<ToString(actor.behaviorState.state)
+                        <<" remaining="<<actor.behaviorState.attackTimeRemaining<<" shots="<<actor.fireSequence
+                        <<" distance="<<actor.behaviorState.engagementBandForwardDistance
+                        <<" safety="<<actor.fireSafetyReason<<'\n';
+                }
+            }
+        }
+        size_t fired=0;for(const auto& [id,n]:shots) if(n>0)++fired;
+        for(const auto& [id,n]:shots) runner.Expect(n<=1 && (n==0 || visualBullets.contains(id)),
+            "normal shots must reach the visible projectile renderer, with no second volley");
+        if (std::string(wave)=="intro_scout_pair" || std::string(wave)=="intro_lockon_line") {
+            runner.Expect(visiblePeel.size()==fired,
+                "opening scouts stay visibly opaque through the first half of their slower exit");
+        }
+        metrics<<"RESULT fps="<<fps<<" mode="<<mode<<" "<<wave<<" fired="<<fired<<"/"<<count<<'\n';metrics.flush();
+        runner.Expect((mode!=1 || (defeated!=0 && shots[defeated]==0 && !visualBullets.contains(defeated))) &&
+            fired==count-(mode==1 ? 1:0) && departed.size()==fired &&
+            (mode!=2 || blockedAt>=0) &&
+            std::none_of(runtime.Enemies().begin(),runtime.Enemies().end(),normal),"each untouched normal drone must fire: "+std::string(wave)+" "+std::to_string(fired)+"/"+std::to_string(count));
+    }
+}
+
+void TestTurretInterceptFlow(RegressionRunner& runner) {
+    CourseAsset course;
+    std::string error;
+    runner.Expect(course.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course",&error),"turret course loads");
+    RailPath rail;
+    rail.SetControlPoints(course.railPoints);
+    const auto event = std::find_if(course.events.begin(),course.events.end(),[](const auto& e) {
+        return e.id == "cliff_crossfire_left";
+    });
+    runner.Expect(event != course.events.end(),"first turret encounter exists");
+    for (const char* part : {"CombatTurretBase","CombatTurretHead"}) {
+        const auto mesh = LoadObjFile_Assimp(std::string("Resources/enemies/")+part,std::string(part)+".obj");
+        runner.Expect(!mesh.indices.empty(),"separate turret geometry loads");
+    }
+    std::ofstream metrics("logs/turret_intercept_flow.log",std::ios::trunc);
+    for (bool interrupt : {false,true}) {
+        CourseSpawnRuntime runtime;
+        CourseEventDispatcher dispatcher;
+        dispatcher.Dispatch({*event},runtime,event->distance);
+        runner.Expect(runtime.Enemies().size()==1,"first encounter isolates one priority turret");
+        const uint32_t actorId=runtime.Enemies().front().actorId;
+        runner.Expect(runtime.Enemies().front().desc.meshId=="combat_turret" &&
+            runtime.Enemies().front().desc.distanceOffset>=80 &&
+            std::abs(runtime.Enemies().front().desc.lateralOffset)<=10,
+            "turret is discovered ahead instead of arriving at the screen edge");
+        EnemyCombatPresentationBridge presentation;
+        EnemyAttackTelegraphSystem telegraph;
+        EnemyAttackLaneTelegraphRenderer lanes;
+        EnemyProjectilePresentationBridge projectilePresentation;
+        EnemyProjectileVfxRenderer projectileVfx;
+        runner.Expect(projectileVfx.LoadDirectory("Resources/courses/projectile_visuals",&error),"turret bullet visuals load");
+        RailCameraDirector camera;
+        float warningAt=-1,fireAt=-1,defeatAt=-1;
+        bool sawCharge=false,sawBullet=false,sawAim=false;
+        uint64_t lastFireSequence=0;
+        for (int step=0;step<360;++step) {
+            const float time=step/60.0f, distance=event->distance+time*15;
+            RailCameraDirectorFrameInput cameraInput;
+            cameraInput.course=&course; cameraInput.railPath=&rail;
+            cameraInput.distance=distance; cameraInput.section=course.FindSection(distance);
+            cameraInput.deltaTime=1.0f/60; cameraInput.railSpeed=15;
+            cameraInput.viewportWidth=1600; cameraInput.viewportHeight=900;
+            const auto cameraFrame=camera.Evaluate(cameraInput);
+            const auto unit=[](Vector3 v) {
+                const float l=std::sqrt(v.x*v.x+v.y*v.y+v.z*v.z);
+                return Vector3{v.x/l,v.y/l,v.z/l};
+            };
+            const auto cross=[](Vector3 a,Vector3 b) {
+                return Vector3{a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};
+            };
+            const Vector3 f=unit({cameraFrame.target.x-cameraFrame.position.x,
+                cameraFrame.target.y-cameraFrame.position.y,cameraFrame.target.z-cameraFrame.position.z});
+            const Vector3 r=unit(cross(cameraFrame.up,f)),u=cross(f,r);
+            Matrix4x4 world=MakeIdentity4x4();
+            const Vector3 rows[]{r,u,f,cameraFrame.position};
+            for (int row=0;row<4;++row) { world.m[row][0]=rows[row].x;world.m[row][1]=rows[row].y;world.m[row][2]=rows[row].z; }
+            const Matrix4x4 vp=Multiply(Inverse(world),MakePerspectiveFovMatrix(cameraFrame.fovY,16.0f/9,0.1f,1500));
+            CourseEnemyFireSafetyFrameInput safety;
+            safety.playerDistance=distance; safety.playerVerticalOffset=3;
+            safety.railPath=&rail; safety.course=&course; safety.viewProjection=&vp;
+            safety.hasCameraPosition=true; safety.cameraPosition=cameraFrame.position;
+            runtime.Update(1.0f/60,safety);
+            EnemyAttackTelegraphFrameInput ti;
+            ti.spawnRuntime=&runtime;ti.railPath=&rail;ti.course=&course;ti.viewProjection=&vp;
+            ti.cameraPosition=cameraFrame.position;ti.playerDistance=distance;
+            ti.viewportWidth=1600;ti.viewportHeight=900;
+            telegraph.Update(ti);
+            EnemyAttackLaneTelegraphRenderInput li;
+            li.telegraph=&telegraph.Frame();li.railPath=&rail;li.elapsedTime=time;
+            lanes.Update(li);
+            for (const auto& lane : lanes.Frame().lanes) {
+                if (lane.attackIntentSequence && lanes.WasSubmitted(lane.actorId,lane.attackIntentSequence)) {
+                    runtime.MarkEnemyAttackTelegraphPresented(lane.actorId,lane.attackIntentSequence);
+                    if (warningAt<0) warningAt=time;
+                }
+            }
+            EnemyCombatPresentationInput pi;
+            pi.runtime=&runtime;pi.railPath=&rail;pi.deltaTime=1.0f/60;
+            presentation.Update(pi);
+            const auto* pose=presentation.FindActor(actorId);
+            if (!runtime.Enemies().empty()) {
+                const auto& actor=runtime.Enemies().front();
+                sawAim=sawAim || std::abs(actor.targetingState.turretAimDirection.x)>0.04f;
+                if (step%30==0) metrics << "interrupt=" << interrupt << " time=" << time << " phase=" << ToString(actor.behaviorState.state)
+                    << " safety=" << actor.fireSafetyReason << " charge=" << (pose?pose->weaponCharge:0) << '\n';
+                sawCharge=sawCharge || (pose && pose->turretMuzzleActive && pose->weaponCharge>0.6f);
+                if (actor.fireSequence>0 && fireAt<0) {
+                    fireAt=time;
+                    runner.Expect(actor.behaviorDefinition.attackLeadSeconds>=0.65f && warningAt>=0 &&
+                        fireAt-warningAt>=actor.behaviorDefinition.attackLeadSeconds-2.0f/60.0f,
+                        "visible warning must precede turret fire by the authored lead");
+                    const Vector3 desired=ResolveTurretAimDirection(actor),actual=actor.targetingState.turretAimDirection;
+                    runner.Expect(desired.x*actual.x+desired.y*actual.y+desired.z*actual.z>0.995f,
+                        "head must finish turning toward its frozen shot before firing");
+                    size_t barrel=0;
+                    for (const auto& bullet : runtime.Bullets()) {
+                        if (bullet.ownerActorId != actorId) continue;
+                        const auto muzzle=ResolveTurretMuzzleRailPosition(actor,(barrel++ & 1) ? 1.0f : -1.0f);
+                        runner.Expect(std::abs(bullet.previousDistanceOffset-muzzle.z)<0.001f &&
+                            std::abs(bullet.previousLateralOffset-muzzle.x)<0.001f &&
+                            std::abs(bullet.previousVerticalOffset-muzzle.y)<0.001f,
+                            "visible turret bolts must originate at the aimed barrel positions");
+                    }
+                    runner.Expect(barrel==3,"turret emits its authored three-way volley");
+                }
+                lastFireSequence=actor.fireSequence;
+                if (defeatAt<0 && ((interrupt && pose && pose->weaponCharge>0.75f) || (!interrupt && fireAt>=0))) {
+                    // Exercise same-frame destruction before the next runtime update.
+                    runner.Expect(runtime.EnemyCombat().ForceDefeat(runtime,actorId),"turret defeat is accepted");
+                    defeatAt=time;
+                    presentation.Update(pi);pose=presentation.FindActor(actorId);
+                    // Match production: clear retained warnings after damage,
+                    // without waiting for the next telegraph update.
+                    telegraph.CancelActor(actorId);lanes.CancelActor(actorId);
+                    runner.Expect(pose && !pose->turretMuzzleActive && pose->weaponCharge==0 &&
+                        !actor.attackState.tokenReserved && !actor.targetingState.solutionLocked && lanes.Frame().lanes.empty(),
+                        "defeat immediately cancels muzzle charge, lane warning, reservation and locked aim");
+                    std::vector<EnemyProjectileRuntimeState> illegalShots;
+                    EnemyProjectileSystem emitter;
+                    runner.Expect(emitter.SpawnVolley(actor,illegalShots)==0 && illegalShots.empty(),
+                        "even a stale execution request cannot emit from a defeated turret");
+                }
+            }
+            EnemyProjectilePresentationInput bi;
+            bi.runtime=&runtime;bi.railPath=&rail;bi.playerDistance=distance;bi.deltaTime=1.0f/60;
+            projectilePresentation.Update(bi);
+            EnemyProjectileVfxRenderInput vi;
+            vi.presentation=&projectilePresentation.Frame();vi.cameraWorldPosition=cameraFrame.position;
+            vi.cameraRight=r;vi.cameraUp=u;vi.viewportHeightPixels=900;vi.verticalFovRadians=cameraFrame.fovY;
+            projectileVfx.Update(vi);
+            sawBullet=sawBullet || !projectileVfx.Frame().proxies.empty();
+            if (defeatAt>=0 && time-defeatAt>1) break;
+        }
+        metrics << "interrupt=" << interrupt << " warning=" << warningAt << " fire=" << fireAt << " defeat=" << defeatAt
+            << " charge=" << sawCharge << " bullet=" << sawBullet << " aim=" << sawAim << '\n';
+        metrics.flush();
+        runner.Expect(warningAt>=0 && sawCharge && sawAim && defeatAt>=0,
+            "production turret must be discoverable, aim and visibly charge; see logs/turret_intercept_flow.log");
+        runner.Expect(interrupt ? (fireAt<0 && !sawBullet && lastFireSequence==0) : (fireAt>=0 && sawBullet && lastFireSequence==1),
+            "destroying during warning prevents all shots; an untouched turret fires visible bolts then stops after defeat");
+    }
+}
+
 void TestCameraMotionContinuity(RegressionRunner& runner) {
     std::ofstream metrics("logs/camera_motion_continuity.log", std::ios::trunc);
     bool continuousSections = true;
@@ -29518,6 +30899,16 @@ int RunEditorCoreRegressionTests() {
         {"submission obstacle readability and clearance", [&]() { TestSubmissionObstacleReadability(runner); }},
         {"player damage cause notice", [&]() { TestPlayerDamageNotice(runner); }},
         {"vehicle camera framing", [&]() { TestVehicleCameraFraming(runner); }},
+        {"tunnel camera scenery clearance", [&]() { TestTunnelCameraSceneryClearance(runner); }},
+        {"vehicle directional damage and suspension response", [&]() { TestVehicleDirectionalDamageResponse(runner); }},
+        {"title imported surface integrity", [&]() { TestTitleImportedSurfaceAudit(runner); }},
+        {"title landscape ground and camera clearance", [&]() { TestRailTitleLandscape(runner); }},
+        {"title cinematic and ambience lifecycle", [&]() { TestRailTitleCinematic(runner); }},
+        {"title running loop and menu layout", [&]() { TestRailTitleLoop(runner); }},
+        {"authored drone attack timing", [&]() { TestAuthoredDroneAttackTiming(runner); }},
+        {"vehicle impact audiovisual and damage HUD", [&]() { TestVehicleImpactAudiovisualAndHud(runner); }},
+        {"normal drone approach pose warn fire and depart", [&]() { TestNormalDroneAttackPass(runner); }},
+        {"turret discover aim warn fire and interrupt", [&]() { TestTurretInterceptFlow(runner); }},
         {"camera motion continuity", [&]() { TestCameraMotionContinuity(runner); }},
         {"transaction stack undo/redo", [&]() { TestTransactionStack(runner); }},
         {"domain independent transaction commands", [&]() { TestDomainIndependentTransactionCommands(runner); }},
@@ -29598,6 +30989,7 @@ int RunEditorCoreRegressionTests() {
         {"editor mode interactive tool framework", [&]() { TestEditorModeInteractiveToolFramework(runner); }},
         {"production placement brush tool pack", [&]() { TestProductionPlacementBrushToolPack(runner); }},
         {"production terrain sculpt paint tool pack", [&]() { TestProductionTerrainSculptPaintToolPack(runner); }},
+        {"terrain chunk surface seams", [&]() { TestTerrainChunkSurfaceSeams(runner); }},
         {"terrain chunk presentation continuity", [&]() { TestTerrainChunkPresentationContinuityPolicy(runner); }},
         {"terrain chunk latest-wins build policy", [&]() { TestTerrainChunkLatestWinsBuildPolicy(runner); }},
         {"editor notification toast lifecycle", [&]() { TestEditorNotificationToastLifecycle(runner); }},

@@ -39,7 +39,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     const float width = static_cast<float>(input.viewportWidth);
     const float height = static_cast<float>(input.viewportHeight);
     const float responsive = (std::clamp)(
-        (std::min)(width / 1600.0f, height / 900.0f), 0.72f, 1.35f);
+        (std::min)(width / 1600.0f, height / 900.0f), 0.20f, 1.35f);
     const float scale = responsive * definition.scale;
     const float safe = definition.safeAreaPixels * responsive;
     const float opacity = definition.opacity;
@@ -75,55 +75,85 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     };
     const auto bar = [&rect](
         float x, float y, float w, float h, float value, Vector4 color,
-        Vector4 background) {
+        Vector4 background, float trail = -1.0f) {
         rect(x, y, w, h, background);
+        if(trail>value) rect(x+w*value,y,w*((std::min)(trail,1.0f)-value),h,{1.0f,0.72f,0.32f,color.w*0.85f});
         rect(x, y, w * (std::clamp)(value, 0.0f, 1.0f), h, color);
     };
 
     if (input.showTitleScreen) {
-        // A self-contained title uses the existing font atlas and geometric
-        // shapes, so it adds no external artwork or texture dependencies.
         const float s = (std::min)(width / 1600.0f, height / 900.0f);
-        const float cx = width * 0.5f;
-        const float top = (height - 900.0f * s) * 0.5f;
-        const Vector4 ink{0.018f, 0.034f, 0.048f, 1.0f};
-        const Vector4 cyan{0.24f, 0.83f, 0.90f, 1.0f};
-        const Vector4 white{0.91f, 0.96f, 0.97f, 1.0f};
-        const Vector4 secondary{0.57f, 0.70f, 0.76f, 1.0f};
-        rect(0.0f, 0.0f, width, height, ink);
-        // Stepped rail silhouettes frame the title without obscuring the text.
-        for (int i = 0; i < 12; ++i) {
-            const float depth = static_cast<float>(i) / 11.0f;
-            const float spread = (460.0f + depth * depth * 300.0f) * s;
-            const float y = top + (140.0f + i * 62.0f) * s;
-            const Vector4 rail{0.055f, 0.12f + depth * 0.05f, 0.16f, 1.0f};
-            rect(cx - spread, y, 4.0f * s, 48.0f * s, rail);
-            rect(cx + spread, y, 4.0f * s, 48.0f * s, rail);
-            rect(cx - spread - 18.0f * s, y, 40.0f * s, 3.0f * s, rail);
-            rect(cx + spread - 18.0f * s, y, 40.0f * s, 3.0f * s, rail);
+        const float left = (width-1600.0f*s)*0.5f;
+        const float top = (height-900.0f*s)*0.5f;
+        const Vector4 accent{0.94f,0.76f,0.43f,1};
+        const Vector4 white{1.0f,0.98f,0.91f,1};
+        const Vector4 muted{0.83f,0.81f,0.75f,1};
+        // Adjacent bands form a broad, quiet scrim. Overlapping all bands at
+        // the left edge made an opaque strip beside the old card-style menu.
+        for (int i=0;i<20;++i) {
+            const float t = float(i)/19.0f;
+            const float bandWidth = (left+640*s)/20.0f;
+            rect(i*bandWidth,0,bandWidth,height,{0.055f,0.045f,0.03f,0.38f*(1-t)*(1-t)});
         }
-        rect(cx - 34.0f * s, top + 130.0f * s, 68.0f * s, 4.0f * s, cyan);
-        text("RAIL SHOOTING", cx, top + 185.0f * s, 0.85f * s,
-             secondary, RailShooterHudTextAlignment::Center);
-        text(Utf8(u8"\u30ec\u30fc\u30eb\u3067"), cx, top + 300.0f * s, 4.4f * s,
-             white, RailShooterHudTextAlignment::Center);
-        text(Utf8(u8"\u3042\u3070\u30ec\u30fc\u30eb"), cx, top + 405.0f * s, 4.4f * s,
-             cyan, RailShooterHudTextAlignment::Center);
-        text("RIDE THE RAILS. BREAK THROUGH.", cx, top + 457.0f * s,
-             0.85f * s, secondary, RailShooterHudTextAlignment::Center);
-        rect(cx - 220.0f * s, top + 516.0f * s, 440.0f * s, 70.0f * s,
-             Vector4{0.06f, 0.22f, 0.27f, 1.0f});
-        rect(cx - 220.0f * s, top + 516.0f * s, 4.0f * s, 70.0f * s, cyan);
-        text("ENTER  /  START GAME", cx, top + 561.0f * s, 1.18f * s,
-             white, RailShooterHudTextAlignment::Center);
-        text("ESC  /  EXIT", cx, top + 640.0f * s, 0.94f * s,
-             secondary, RailShooterHudTextAlignment::Center);
-        text("MOUSE: AIM   |   LMB: FIRE   |   RMB: HOLD LOCK / RELEASE", cx,
-             top + 761.0f * s, 0.78f * s, secondary,
-             RailShooterHudTextAlignment::Center);
-        text("WASD: MOVE   |   SHIFT / SPACE: DODGE   |   P: PAUSE", cx,
-             top + 799.0f * s, 0.78f * s, secondary,
-             RailShooterHudTextAlignment::Center);
+        const float x = left+96*s;
+        if (input.titleLogoAvailable) {
+            RailShooterHudDrawCommand logo{};
+            logo.kind = RailShooterHudDrawCommandKind::TitleLogo;
+            logo.x = left+60*s;
+            logo.y = top+80*s;
+            logo.width = 560*s;
+            logo.height = (560.0f*2.0f/3.0f)*s;
+            logo.color = {1,1,1,1};
+            // A restrained screen-space shadow keeps the flat white lettering
+            // readable without baking thick extrusion into every character.
+            auto shadow = logo;
+            shadow.x += 1.5f*s;
+            shadow.y += 2.5f*s;
+            shadow.color = {0.08f,0.06f,0.04f,0.22f};
+            push(std::move(shadow));
+            push(std::move(logo));
+        } else {
+            // Retain a readable title if a packaged image is missing/corrupt.
+            text(Utf8(u8"レールで"),x,top+279*s,3.3f*s,white);
+            text(Utf8(u8"あばレール"),x,top+370*s,3.3f*s,white);
+        }
+        if (!input.titleControlsVisible) {
+            const std::u8string_view labels[]{u8"ゲーム開始",u8"操作説明",u8"終了"};
+            const float underlineWidths[]{180,144,72};
+            const float center = x+232*s;
+            for (int i=0;i<3;++i) {
+                const float y=top+(480+i*82)*s;
+                const bool selected=i==input.titleMenuSelection;
+                // Keep the original generous mouse targets and row baselines;
+                // the visual menu is lettering, not a stack of panels.
+                text(Utf8(labels[i]),center+1.5f*s,y+46.5f*s,1.70f*s,
+                    {0.025f,0.02f,0.015f,0.65f},RailShooterHudTextAlignment::Center);
+                text(Utf8(labels[i]),center,y+45*s,1.70f*s,
+                    selected?white:muted,RailShooterHudTextAlignment::Center);
+                if(selected) {
+                    text(">",center-(underlineWidths[i]*0.5f+28)*s,y+42*s,1.20f*s,accent);
+                    rect(center-underlineWidths[i]*0.5f*s,y+59*s,
+                        underlineWidths[i]*s,2*s,{accent.x,accent.y,accent.z,0.80f});
+                }
+            }
+            text(Utf8(u8"W / S : 選択    ENTER : 決定"),center,top+778*s,0.76f*s,
+                muted,RailShooterHudTextAlignment::Center);
+            text(Utf8(u8"マウス : 選択 / 決定"),center,top+810*s,0.76f*s,
+                muted,RailShooterHudTextAlignment::Center);
+        } else {
+            rect(x-16*s,top+456*s,654*s,377*s,{0.075f,0.06f,0.045f,0.95f});
+            text(Utf8(u8"操作説明"),x,top+496*s,1.12f*s,accent);
+            const std::u8string_view lines[]{
+                u8"マウス : 照準    左クリック : 射撃",
+                u8"右クリック長押し : ロックオン",
+                u8"右クリックを離す : 一斉発射",
+                u8"WASD : 移動    SHIFT / SPACE : 回避",
+                u8"P : 一時停止"};
+            for(int i=0;i<5;++i) text(Utf8(lines[i]),x,top+(546+i*46)*s,0.80f*s,white);
+            text(Utf8(u8"ENTER / ESC / CLICK : 戻る"),x,top+809*s,0.77f*s,accent);
+        }
+        for(auto& command:next.commands) command.color.w *= (std::clamp)(input.titleOpacity,0.0f,1.0f);
+        rect(0,0,width,height,{0.015f,0.025f,0.035f,(std::clamp)(input.titleBlackout,0.0f,1.0f)});
         next.visible = !next.commands.empty();
         frame_ = std::move(next);
         return;
@@ -138,171 +168,150 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     const float criticalOpacity = opacity * (0.65f + 0.35f * hud.warningPulse);
     const Vector4 critical = WithOpacity(definition.criticalColor, criticalOpacity);
     const Vector4 barBackground{0.04f, 0.075f, 0.09f, opacity * 0.92f};
-    const float barHeight = definition.barHeight * scale;
 
-    if (definition.showPlayerHealth || definition.showVehicleIntegrity) {
-        const float x = safe;
-        const float y = safe;
-        const float panelWidth = definition.leftPanelWidth * scale;
-        const float panelHeight = (definition.showPlayerHealth &&
-            definition.showVehicleIntegrity ? 112.0f : 65.0f) * scale;
-        rect(x, y, panelWidth, panelHeight, panel);
-        rect(x, y, panelWidth, 3.0f * scale, primary);
-        float rowY = y + 24.0f * scale;
-        if (definition.showPlayerHealth) {
-            text(hud.healthText, x + 11.0f * scale, rowY,
-                 0.66f * scale, textColor);
-            bar(x + 11.0f * scale, rowY + 9.0f * scale,
-                panelWidth - 22.0f * scale, barHeight,
-                hud.playerHealthNormalized,
-                hud.playerHealthCritical ? critical : healthy,
-                barBackground);
-            rowY += 45.0f * scale;
+    // Thin stepped markers leave the aiming area clear.
+    for(size_t direction=0;direction<4;++direction) {
+        const float alpha=hud.damageDirectionAlpha[direction]*opacity;
+        if(alpha<=0) continue;
+        for(int band=0;band<3;++band) {
+            const float inset=(8+band*5)*responsive;
+            const float length=(88-band*18)*responsive;
+            const Vector4 color{1.0f,0.28f+band*0.07f,0.12f,alpha*(1-band*0.24f)};
+            if(direction<2) rect(direction==0?inset:width-inset-3*responsive,
+                height*0.5f-length*0.5f,3*responsive,length,color);
+            else rect(width*0.5f-length*0.5f,direction==2?inset:height-inset-3*responsive,
+                length,3*responsive,color);
         }
-        if (definition.showVehicleIntegrity) {
-            text(hud.vehicleText, x + 11.0f * scale, rowY,
-                 0.62f * scale, textColor);
-            bar(x + 11.0f * scale, rowY + 9.0f * scale,
-                panelWidth - 22.0f * scale, barHeight,
-                hud.vehicleIntegrityNormalized,
-                hud.vehicleIntegrityCritical ? critical : warning,
-                barBackground);
+    }
+
+
+    const auto plate = [&](float x,float y,float w,float h,Vector4 color) {
+        RailShooterHudDrawCommand command{};
+        command.kind=RailShooterHudDrawCommandKind::Plate;
+        command.x=x; command.y=y; command.width=w; command.height=h; command.color=color;
+        push(std::move(command));
+    };
+    const auto ink = [&](const std::string& value,float x,float y,float size,Vector4 color,
+                         RailShooterHudTextAlignment align=RailShooterHudTextAlignment::Left) {
+        text(value,x+1.5f*scale,y+2*scale,size,{0.015f,0.02f,0.025f,color.w*0.8f},align);
+        text(value,x,y,size,color,align);
+    };
+    const auto center=RailShooterHudTextAlignment::Center;
+    const float gaugeWidth=definition.leftPanelWidth*scale;
+    float healthBottom=safe;
+    // Vehicle survival leads. Player HP is a distinct, secondary gauge.
+    if(definition.showVehicleIntegrity) {
+        const float y=safe;
+        const Vector4 color=hud.vehicleIntegrityCritical?critical:primary;
+        // Small original cart silhouette; no external UI artwork.
+        plate(safe,y+7*scale,32*scale,19*scale,color);
+        rect(safe+6*scale,y+29*scale,6*scale,6*scale,textColor);
+        rect(safe+23*scale,y+29*scale,6*scale,6*scale,textColor);
+        ink(hud.vehicleText,safe+45*scale,y+28*scale,0.95f*scale,textColor);
+        bar(safe,y+42*scale,gaugeWidth,18*scale,hud.vehicleIntegrityNormalized,
+            color,barBackground,hud.vehicleIntegrityTrail);
+        // Tick marks aid estimating remaining durability without reading digits.
+        for(int i=1;i<5;++i) rect(safe+gaugeWidth*i/5.0f,y+42*scale,2*scale,18*scale,panel);
+        healthBottom=y+60*scale;
+    }
+    if(definition.showPlayerHealth) {
+        const float y=healthBottom+(definition.showVehicleIntegrity?24:0)*scale;
+        ink(hud.healthText,safe,y+19*scale,0.68f*scale,textColor);
+        bar(safe,y+29*scale,gaugeWidth*0.72f,8*scale,hud.playerHealthNormalized,
+            hud.playerHealthCritical?critical:healthy,barBackground,hud.playerHealthTrail);
+        healthBottom=y+37*scale;
+    }
+    if(definition.showPlayerHealth || definition.showVehicleIntegrity) {
+        text(Utf8(u8"残機 ")+std::to_string(hud.retriesRemaining),safe,
+            healthBottom+23*scale,0.54f*scale,muted);
+    }
+    if(hud.showDamageNotice && hud.damageNoticeAlpha>0) {
+        const float y=healthBottom+39*scale;
+        const float a=opacity*hud.damageNoticeAlpha;
+        // Event card sits alongside the health display, never over the reticle.
+        plate(safe,y,365*scale,66*scale,{0.10f,0.025f,0.018f,a*0.85f});
+        text(hud.damageNoticeText,safe+14*scale,y+26*scale,0.73f*scale,{1,0.64f,0.39f,a});
+        text(hud.damageHealthText,safe+14*scale,y+51*scale,0.65f*scale,{1,0.97f,0.9f,a});
+    }
+    if(definition.showWaveObjective) {
+        const float w=definition.topCenterWidth*0.64f*scale;
+        ink(hud.waveText,width*0.5f,safe+19*scale,0.66f*scale,muted,center);
+        bar(width*0.5f-w*0.5f,safe+31*scale,w,4*scale,
+            hud.courseProgressNormalized,primary,barBackground);
+    }
+    if(definition.showScore) {
+        const float x=width-safe-definition.rightPanelWidth*scale*0.5f;
+        text(Utf8(u8"得点"),x,safe+16*scale,0.57f*scale,muted,center);
+        const std::string digits=std::to_string(hud.score);
+        const float numberSize=digits.size()>8?1.14f:1.75f;
+        ink(digits,x,safe+60*scale,numberSize*scale,textColor,center);
+        if(hud.combo>1) {
+            plate(x-83*scale,safe+76*scale,166*scale,33*scale,warning);
+            text(hud.comboText,x,safe+100*scale,0.90f*scale,
+                {0.075f,0.055f,0.025f,opacity},center);
         }
-        text(Utf8(u8"\u6b8b\u6a5f ") + std::to_string(hud.retriesRemaining),
-             x + panelWidth - 82.0f * scale,
-             y + 18.0f * scale, 0.48f * scale, muted);
+        if(!hud.scoreGainText.empty() && hud.scoreGainAlpha>0) {
+            const float a=(std::clamp)(hud.scoreGainAlpha,0.0f,1.0f);
+            ink(hud.scoreGainText,x,safe+(146-8*(1-a))*scale,
+                (1.04f+0.16f*a)*scale,{warning.x,warning.y,warning.z,opacity*a},center);
+        }
+        if(hud.grazeChain>0) text(hud.grazeText,x,safe+174*scale,
+            0.58f*scale,primary,center);
     }
-
-    if (hud.showDamageNotice && hud.damageNoticeAlpha > 0.0f) {
-        // Keep the combat centre clear and place the explanation by health.
-        const float panelWidth = (std::min)(400.0f * scale, width - safe * 2.0f);
-        const float panelHeight = 76.0f * scale;
-        const float healthHeight = definition.showPlayerHealth && definition.showVehicleIntegrity
-            ? 112.0f : (definition.showPlayerHealth || definition.showVehicleIntegrity ? 65.0f : 0.0f);
-        const float y = safe + (healthHeight + 12.0f) * scale;
-        const float alpha = opacity * hud.damageNoticeAlpha;
-        rect(safe, y, panelWidth, panelHeight, {0.035f, 0.012f, 0.012f, alpha * 0.94f});
-        rect(safe, y, 4.0f * scale, panelHeight, {1.0f, 0.30f, 0.16f, alpha});
-        text(hud.damageNoticeText, safe + 14.0f * scale, y + 29.0f * scale,
-            0.78f * scale, {1.0f, 0.68f, 0.44f, alpha});
-        text(hud.damageHealthText, safe + 14.0f * scale, y + 57.0f * scale,
-            0.70f * scale, {0.96f, 0.96f, 0.96f, alpha});
+    if(definition.showWeapon) {
+        // Lock readiness is anchored below combat, separate from enemy markers.
+        const float y=height-safe-67*scale;
+        const uint32_t slots=(std::min)(hud.maximumLocks,8u);
+        if(slots>0) {
+            ink(Utf8(u8"ロック ")+std::to_string(hud.lockCount)+" / "+std::to_string(hud.maximumLocks),
+                width*0.5f,y+21*scale,0.80f*scale,textColor,center);
+            const float total=slots*22.0f*scale;
+            if(hud.maximumLocks>slots) {
+                bar(width*0.5f-total*0.5f,y+33*scale,total,10*scale,
+                    static_cast<float>(hud.lockCount)/hud.maximumLocks,primary,barBackground);
+            } else for(uint32_t i=0;i<slots;++i) {
+                plate(width*0.5f-total*0.5f+i*22*scale,y+33*scale,17*scale,10*scale,
+                    i<hud.lockCount?primary:Vector4{0.12f,0.15f,0.15f,opacity});
+            }
+        }
+        const float x=width-safe-220*scale;
+        ink(hud.weaponText,x,height-safe-48*scale,0.78f*scale,textColor);
+        if(hud.primaryWeapon.overheated || hud.primaryWeapon.reloading ||
+           !hud.primaryWeapon.unlimitedAmmo) {
+            text(hud.weaponStatusText,x,height-safe-24*scale,0.64f*scale,
+                hud.primaryWeapon.overheated?critical:warning);
+        }
+        if(hud.primaryWeapon.available && hud.primaryWeapon.heatNormalized>0.01f) {
+            bar(x,height-safe-12*scale,210*scale,6*scale,hud.primaryWeapon.heatNormalized,
+                hud.primaryWeapon.overheated?critical:warning,barBackground);
+        }
     }
-
-    if (definition.showWaveObjective) {
-        const float panelWidth = definition.topCenterWidth * scale;
-        const float x = width * 0.5f - panelWidth * 0.5f;
-        const float y = safe;
-        rect(x, y, panelWidth, 62.0f * scale, panel);
-        text(hud.waveText, width * 0.5f, y + 22.0f * scale,
-             0.66f * scale, primary, RailShooterHudTextAlignment::Center);
-        bar(x + 12.0f * scale, y + 30.0f * scale,
-            panelWidth - 24.0f * scale, 7.0f * scale,
-            hud.courseProgressNormalized, primary, barBackground);
-        text(hud.enemyText, width * 0.5f, y + 52.0f * scale,
-             0.52f * scale, hud.activeEnemies > 0 ? warning : healthy,
-             RailShooterHudTextAlignment::Center);
+    if(definition.showSpeed) {
+        text(hud.speedText,safe,height-safe-15*scale,0.60f*scale,muted);
     }
-
-    if (definition.showScore) {
-        const float panelWidth = definition.rightPanelWidth * scale;
-        const float x = width - safe - panelWidth;
-        const float y = safe;
-        rect(x, y, panelWidth, 86.0f * scale, panel);
-        rect(x, y, panelWidth, 3.0f * scale, primary);
-        text(hud.scoreText, x + 12.0f * scale, y + 28.0f * scale,
-             0.72f * scale, textColor);
-        text(hud.comboText, x + 12.0f * scale, y + 53.0f * scale,
-             0.60f * scale, warning);
-        text(hud.grazeText, x + 12.0f * scale, y + 76.0f * scale,
-             0.48f * scale, hud.grazeChain > 0 ? primary : muted);
+    if(hud.showObstacleWarning) {
+        const float w=(std::min)(450*scale,width-2*safe);
+        const float y=safe+63*scale;
+        plate(width*0.5f-w*0.5f,y,w,67*scale,{0.10f,0.065f,0.025f,opacity*0.88f});
+        text(hud.obstacleWarningText,width*0.5f,y+27*scale,0.78f*scale,warning,center);
+        text(hud.obstacleActionText,width*0.5f,y+53*scale,0.72f*scale,textColor,center);
+    } else if(definition.showThreat && hud.threatWarning) {
+        ink(hud.threatText,width*0.5f,safe+76*scale,0.80f*scale,critical,center);
     }
-
-    if (definition.showSpeed) {
-        const float panelWidth = 190.0f * scale;
-        const float x = safe;
-        const float y = height - safe - 61.0f * scale;
-        rect(x, y, panelWidth, 61.0f * scale, panel);
-        text(Utf8(u8"\u901f\u5ea6"), x + 11.0f * scale, y + 20.0f * scale,
-             0.48f * scale, muted);
-        text(hud.speedText, x + 11.0f * scale, y + 47.0f * scale,
-             0.82f * scale, primary);
-        bar(x + 11.0f * scale, y + 52.0f * scale,
-            panelWidth - 22.0f * scale, 4.0f * scale,
-            hud.speedNormalized, primary, barBackground);
+    if(definition.showSessionBanner && hud.showBanner && hud.bannerAlpha>0) {
+        const float a=opacity*hud.bannerAlpha;
+        const float y=height*0.27f;
+        const float w=(std::min)(560*scale,width-2*safe);
+        plate(width*0.5f-w*0.5f,y-39*scale,w,60*scale,{0.035f,0.045f,0.05f,a*0.86f});
+        ink(hud.bannerHeadline,width*0.5f,y+6*scale,1.34f*scale,
+            {hud.bannerColor.x,hud.bannerColor.y,hud.bannerColor.z,a},center);
+        if(!hud.bannerDetail.empty()) ink(hud.bannerDetail,width*0.5f,y+50*scale,
+            0.69f*scale,{1,0.98f,0.91f,a},center);
     }
-
-    if (definition.showWeapon) {
-        const float panelWidth = 235.0f * scale;
-        const float x = width - safe - panelWidth;
-        const float y = height - safe - 70.0f * scale;
-        rect(x, y, panelWidth, 70.0f * scale, panel);
-        text(hud.weaponText, x + 12.0f * scale, y + 27.0f * scale,
-             0.65f * scale, textColor);
-        const Vector4 weaponStatusColor = hud.primaryWeapon.overheated
-            ? critical
-            : (hud.primaryWeapon.reloading ? warning : healthy);
-        text(hud.weaponStatusText, x + 12.0f * scale, y + 52.0f * scale,
-             0.52f * scale, weaponStatusColor);
-        bar(x + 12.0f * scale, y + 59.0f * scale,
-            panelWidth - 24.0f * scale, 5.0f * scale,
-            hud.primaryWeapon.heatNormalized,
-            hud.primaryWeapon.overheated ? critical : warning,
-            barBackground);
-    }
-
-    if (hud.showObstacleWarning) {
-        const float panelWidth = (std::min)(440.0f * scale, width - safe * 2.0f);
-        const float x = width * 0.5f - panelWidth * 0.5f;
-        const float y = safe + 74.0f * scale;
-        rect(x, y, panelWidth, 68.0f * scale, {0.045f, 0.025f, 0.008f, opacity * 0.96f});
-        rect(x, y, panelWidth, 3.0f * scale, warning);
-        text(hud.obstacleWarningText, width * 0.5f, y + 27.0f * scale,
-            0.76f * scale, warning, RailShooterHudTextAlignment::Center);
-        text(hud.obstacleActionText, width * 0.5f, y + 53.0f * scale,
-            0.72f * scale, textColor, RailShooterHudTextAlignment::Center);
-    }
-
-    if (definition.showThreat && hud.threatWarning && !hud.showObstacleWarning) {
-        const float threatWidth = 320.0f * scale;
-        const float x = width * 0.5f - threatWidth * 0.5f;
-        const float y = safe + 77.0f * scale;
-        rect(x, y, threatWidth, 38.0f * scale,
-             Vector4{definition.panelColor.x, definition.panelColor.y,
-                     definition.panelColor.z, opacity * 0.74f});
-        text(hud.threatText, width * 0.5f, y + 25.0f * scale,
-             0.72f * scale, critical, RailShooterHudTextAlignment::Center);
-    }
-
-    if (definition.showSessionBanner && hud.showBanner &&
-        hud.bannerAlpha > 0.0f) {
-        const float bannerWidth = (std::min)(620.0f * scale, width - safe * 2.0f);
-        const float bannerHeight = hud.bannerDetail.empty()
-            ? 82.0f * scale : 112.0f * scale;
-        const float x = width * 0.5f - bannerWidth * 0.5f;
-        const float y = height * 0.28f - bannerHeight * 0.5f;
-        const float alpha = opacity * hud.bannerAlpha;
-        rect(x, y, bannerWidth, bannerHeight,
-             Vector4{0.008f, 0.015f, 0.022f, alpha * 0.88f});
-        rect(x, y, bannerWidth, 4.0f * scale,
-             Vector4{hud.bannerColor.x, hud.bannerColor.y,
-                     hud.bannerColor.z, alpha});
-        text(hud.bannerHeadline, width * 0.5f, y + 49.0f * scale,
-             1.24f * scale,
-             Vector4{hud.bannerColor.x, hud.bannerColor.y,
-                     hud.bannerColor.z, alpha},
-             RailShooterHudTextAlignment::Center);
-        text(hud.bannerDetail, width * 0.5f, y + 84.0f * scale,
-             0.72f * scale, Vector4{0.82f, 0.92f, 0.96f, alpha},
-             RailShooterHudTextAlignment::Center);
-    }
-
-    // Keep the first-play controls available after removing the editor panels.
-    // ASCII is covered by the HUD atlas; the strip sits below the main panels.
-    if (width >= 960.0f) {
-        text("LMB: FIRE   RMB: HOLD LOCK / RELEASE   P: PAUSE   R: RETRY",
-            width * 0.5f, height - 10.0f * responsive, 0.52f * responsive,
-            textColor, RailShooterHudTextAlignment::Center);
+    // Keep compact reminders at the edge, not a permanent panel across combat.
+    if(width>=960) {
+        text(Utf8(u8"左クリック : 射撃   右クリック : ロック / 離して発射   P : 一時停止"),
+            width*0.5f,height-10*responsive,0.50f*responsive,muted,center);
     }
     next.visible = !next.commands.empty();
     frame_ = std::move(next);

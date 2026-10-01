@@ -1,6 +1,7 @@
 #include "EnemyCombatPresentationBridge.h"
 
 #include "CourseSpawnRuntime.h"
+#include "../diagnostics/DebugDrawSystem.h"
 
 #include <algorithm>
 #include <cmath>
@@ -243,7 +244,8 @@ void ApplyProceduralAnimation(
         output.verticalOffset = -state.deathProgress * settings.deathDropDistance;
         output.rotationOffset.z = state.deathProgress * 2.2f;
         output.rotationOffset.x = state.deathProgress * 0.55f;
-        output.scaleMultiplier = 1.0f + pulse * 0.20f;
+        output.scaleMultiplier = (1.0f + pulse * 0.12f) *
+            (1.0f - SmoothStep(state.deathProgress) * 0.88f);
         output.bodyScale = {
             1.0f + pulse * 0.32f,
             1.0f - state.deathProgress * 0.42f,
@@ -284,7 +286,7 @@ void ApplyProceduralAnimation(
         output.bodyScale = {1.0f, 1.0f, 1.0f};
         output.scaleMultiplier = 1.0f;
         output.materialColor = {0.60f, 0.78f, 0.94f, state.presentationAlpha};
-        output.coreColor = {0.12f, 0.40f, 0.62f, state.presentationAlpha};
+        output.coreColor = {1.0f, 0.48f, 0.12f, state.presentationAlpha};
         output.weaponCharge = 0.0f;
         output.emissiveStrength = 0.50f;
         output.silhouetteSpread = settings.dronePodSpread;
@@ -458,15 +460,50 @@ void EnemyCombatPresentationBridge::Update(
 
     if (!input.settings.enabled || input.runtime == nullptr ||
         input.railPath == nullptr || input.railPath->Length() <= 0.0f) {
+        frame_.destructionBursts.clear();
         frame_.revision = ++revision_;
         return;
     }
 
+    if (input.gameplayActive) {
+        for (auto& burst : frame_.destructionBursts)
+            burst.age += (std::max)(0.0f, input.deltaTime);
+        std::erase_if(frame_.destructionBursts,
+            [](const EnemyDestructionBurst& burst) { return burst.age >= 0.65f; });
+    }
     frame_.actors.reserve(input.runtime->Enemies().size());
     for (const CourseEnemyActor& actor : input.runtime->Enemies()) {
         if (!actor.combatState.initialized) continue;
         EnemyCombatActorPresentation output{};
         ApplyProceduralAnimation(output, actor, input.settings);
+        if (actor.desc.meshId == "combat_turret") {
+            output.turret = true;
+            const auto sample = input.railPath->Evaluate(actor.desc.spawnDistance+actor.desc.distanceOffset);
+            const Vector3 local = actor.targetingState.turretAimDirection;
+            const Vector3 forward = Add(Add(Scale(sample.right,local.x),Scale(sample.up,local.y)),Scale(sample.tangent,local.z));
+            output.turretWorldRotation = {std::asin((std::clamp)(forward.y,-1.0f,1.0f)),
+                std::atan2(-forward.x,-forward.z),0};
+            const bool alive = actor.desc.hitPoints > 0 && actor.combatState.phase != EnemyCombatPhase::Dying &&
+                actor.combatState.phase != EnemyCombatPhase::Retired;
+            const bool warning = alive && actor.fireEnvironmentReady && actor.behaviorState.attackIntentActive &&
+                actor.attackState.tokenReserved && actor.behaviorState.telegraphPresented;
+            const bool firing = alive && (actor.attackState.committedThisFrame ||
+                (actor.attackState.phase == EnemyAttackRuntimePhase::Recovery &&
+                 actor.behaviorState.stateElapsedSeconds < 0.14f));
+            output.turretMuzzleActive = warning || firing;
+            output.weaponCharge = warning ? 0.18f + 0.82f*Saturate(1.0f-actor.behaviorState.attackTimeRemaining /
+                (std::max)(0.05f,actor.behaviorDefinition.attackLeadSeconds)) : (firing ? 1.0f : 0.0f);
+            output.coreColor = firing ? Vector4{1.0f,1.0f,0.90f,output.materialColor.w} :
+                Vector4{1.0f,0.32f+0.60f*output.weaponCharge,0.06f,output.materialColor.w};
+            if (alive) {
+                // A planted pedestal and rotating head, not a hovering drone.
+                output.forwardOffset = output.lateralOffset = output.verticalOffset = 0;
+                output.rotationOffset = {};
+                output.bodyScale = {1,1,1};
+                output.scaleMultiplier = 1;
+                output.materialColor = {0.85f,0.91f,1.0f,output.materialColor.w};
+            }
+        }
         frame_.actors.push_back(output);
     }
 
@@ -486,6 +523,9 @@ void EnemyCombatPresentationBridge::Update(
         for (const EnemyCombatEvent* event : prioritized) {
             const CourseEnemyActor* actor = FindEnemy(*input.runtime, event->actorId);
             if (actor == nullptr) continue;
+            if (actor->desc.hitPoints <= 0 &&
+                (event->kind == EnemyCombatEventKind::AttackCommitted ||
+                 event->kind == EnemyCombatEventKind::TelegraphStarted)) continue;
             if (event->kind == EnemyCombatEventKind::TelegraphStarted &&
                 actor->behaviorDefinition.commercialBehavior &&
                 !(actor->fireEnvironmentReady && actor->behaviorState.attackIntentActive &&
@@ -592,6 +632,15 @@ void EnemyCombatPresentationBridge::Update(
                 vfx.actorId = actor->actorId;
                 vfx.worldPosition = mix.position;
                 if (deathVfx) {
+                    // Bounded moving debris survives actor retirement and does
+                    // not depend on optional particle textures/effect assets.
+                    const bool alreadyVisible = std::any_of(
+                        frame_.destructionBursts.begin(), frame_.destructionBursts.end(),
+                        [&](const EnemyDestructionBurst& burst) { return burst.actorId == actor->actorId; });
+                    if (!alreadyVisible && frame_.destructionBursts.size() < 16) {
+                        frame_.destructionBursts.push_back({actor->actorId, mix.position,
+                            (std::clamp)(actor->desc.radius, 0.6f, 4.0f), 0.0f});
+                    }
                     // WeaponFeedback owns the contact impact. This is a larger,
                     // actor-centered destruction burst and is emitted once.
                     vfx.cueId = "enemy_combat_death";
@@ -605,12 +654,22 @@ void EnemyCombatPresentationBridge::Update(
                     vfx.worldPosition = Add(
                         mix.position,
                         Scale(sample.tangent, -actor->desc.radius * 0.88f));
+                    if (actor->desc.meshId == "combat_turret") {
+                        const Vector3 muzzle = ResolveTurretMuzzleRailPosition(*actor,0);
+                        const auto muzzleSample = input.railPath->Evaluate(muzzle.z);
+                        vfx.worldPosition = Add(muzzleSample.position,
+                            Add(Scale(muzzleSample.right,muzzle.x),Scale(muzzleSample.up,muzzle.y)));
+                    }
                     vfx.cueId = "enemy_combat_muzzle";
                     vfx.effectName = "enemy_muzzle_burst";
                     vfx.color = {1.0f, 0.72f, 0.20f, 0.96f};
                     vfx.radius = (std::max)(0.72f, actor->desc.radius * 0.78f);
                     vfx.lifetime = 0.30f;
                 } else if (chargeVfx) {
+                    // Turrets use a continuous, cancellable muzzle glow. A
+                    // detached one-shot charging particle could outlive defeat.
+                    if (actor->desc.meshId == "combat_turret" ||
+                        actor->behaviorDefinition.choreographedAttackPass) continue;
                     vfx.cueId = "enemy_combat_charge";
                     vfx.effectName = "enemy_charge_pulse";
                     vfx.color = {1.0f, 0.48f, 0.12f, 0.82f};
@@ -633,6 +692,27 @@ void EnemyCombatPresentationBridge::Update(
         }
     }
     frame_.revision = ++revision_;
+}
+
+void EnemyCombatPresentationBridge::AppendDestructionPrimitives(
+    ge3::debug::DebugDrawSystem& draw) const {
+    for (const auto& burst : frame_.destructionBursts) {
+        const float t = burst.age / 0.65f;
+        const float alpha = (1.0f - t) * (1.0f - t);
+        for (int i = 0; i < 10; ++i) {
+            const float angle = i * 2.399963f + static_cast<float>(burst.actorId % 13u);
+            const float y = -0.75f + 1.5f * static_cast<float>(i) / 9.0f;
+            const float radial = std::sqrt(1.0f - y * y);
+            const Vector3 direction{std::cos(angle) * radial, y, std::sin(angle) * radial};
+            Vector3 position = Add(burst.worldPosition,
+                Scale(direction, burst.radius * (0.25f + 3.5f * t)));
+            position.y -= burst.radius * t * t;
+            const Vector3 tail = Subtract(position, Scale(direction, burst.radius * 0.35f));
+            const Vector4 color{1.0f, 0.64f - t * 0.36f, 0.12f, alpha};
+            draw.AddLine(tail, position, {0.65f, 0.14f, 0.02f, alpha * 0.35f}, color);
+            draw.AddPoint(position, burst.radius * 0.055f * (1.0f - t), color);
+        }
+    }
 }
 
 const EnemyCombatActorPresentation*

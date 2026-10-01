@@ -462,6 +462,7 @@
     <ClCompile Include="application\course\RailShooterHudDefinitionAsset.cpp" />
     <ClCompile Include="application\course\RailShooterHudRuntimeModel.cpp" />
     <ClCompile Include="application\course\RailShooterHudPresentationBridge.cpp" />
+    <ClCompile Include="application\course\RailTitleScene.cpp" />
     <ClCompile Include="application\course\RailShooterHudRenderer.cpp" />
     <ClCompile Include="application\course\RailShooterDefensePromptRenderer.cpp" />
     <ClCompile Include="application\course\CourseRailRideEventDefinition.cpp" />
@@ -1448,6 +1449,7 @@
     <ClInclude Include="application\course\RailShooterHudDefinitionAsset.h" />
     <ClInclude Include="application\course\RailShooterHudRuntimeModel.h" />
     <ClInclude Include="application\course\RailShooterHudPresentationBridge.h" />
+    <ClInclude Include="application\course\RailTitleScene.h" />
     <ClInclude Include="application\course\RailShooterHudRenderer.h" />
     <ClInclude Include="application\course\RailShooterDefensePromptRenderer.h" />
     <ClInclude Include="application\course\CourseRailRideEventDefinition.h" />

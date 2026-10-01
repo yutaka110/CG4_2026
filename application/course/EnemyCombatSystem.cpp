@@ -425,6 +425,20 @@ void EnemyCombatSystem::ApplyPhaseGates(CourseEnemyActor& actor) {
         state.presentationScale = 0.0f;
         break;
     }
+    if (state.phase == EnemyCombatPhase::Dying || state.phase == EnemyCombatPhase::Retired) {
+        // Damage can arrive after the attack update. Cancel immediately in the
+        // same frame, so no retained warning or muzzle light survives defeat.
+        actor.behaviorState.attackIntentActive = false;
+        actor.behaviorState.telegraphPresented = false;
+        actor.behaviorState.attackTimeRemaining = 0;
+        actor.attackState.tokenReserved = false;
+        actor.attackState.tokenId = 0;
+        actor.attackState.telegraphPresented = false;
+        actor.attackState.committedThisFrame = false;
+        actor.attackState.phase = EnemyAttackRuntimePhase::Cancelled;
+        actor.targetingState.solutionLocked = false;
+        actor.fireEnvironmentReady = actor.fireSafetyAllowed = false;
+    }
 }
 
 void EnemyCombatSystem::QueueEvent(

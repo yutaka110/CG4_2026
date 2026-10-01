@@ -88,15 +88,25 @@ bool HasAttackPassTurn(
             peer.combatState.phase == EnemyCombatPhase::Dying ||
             peer.combatState.phase == EnemyCombatPhase::Retired) continue;
         const EnemyBehaviorState peerState = peer.behaviorState.state;
-        if (peerState == EnemyBehaviorState::Aiming ||
-            peerState == EnemyBehaviorState::RequestingAttack ||
-            peerState == EnemyBehaviorState::Evading) return false;
+        if (peerState == EnemyBehaviorState::Aiming) return false;
+        // Prepare the next shooter during the tail of a visible warning.
+        // Its own full warning still runs, under the shared attack budget.
+        if (peerState == EnemyBehaviorState::RequestingAttack &&
+            (!peer.attackState.tokenReserved || !peer.behaviorState.telegraphPresented ||
+             peer.behaviorState.attackTimeRemaining > peer.behaviorDefinition.attackPassHandoffLeadSeconds)) return false;
+        if (peerState == EnemyBehaviorState::Evading &&
+            peer.behaviorDefinition.attackPassHandoffLeadSeconds <= 0.0f) return false;
         // Preserve leader/left/right order even if a preceding actor is still
         // establishing its band. A defeated or departing actor yields its turn.
         if (peerState != EnemyBehaviorState::Retreating &&
             peerState != EnemyBehaviorState::Disabled &&
-            peer.behaviorDefinition.attackPassStartDelaySeconds <
-                actor.behaviorDefinition.attackPassStartDelaySeconds) return false;
+            peerState != EnemyBehaviorState::RequestingAttack &&
+            peerState != EnemyBehaviorState::Evading &&
+            (peer.behaviorDefinition.attackPassStartDelaySeconds <
+                actor.behaviorDefinition.attackPassStartDelaySeconds ||
+             (peer.behaviorDefinition.attackPassStartDelaySeconds ==
+                actor.behaviorDefinition.attackPassStartDelaySeconds &&
+              peer.actorId < actor.actorId))) return false;
     }
     return true;
 }
@@ -217,7 +227,9 @@ bool EnemyBehaviorDefinition::Validate(std::string* errorMessage) const {
         !FiniteNonNegative(engagementBandMaximumCorrectionSpeed) ||
         !FiniteNonNegative(engagementBandVelocityResponse) ||
         !FiniteNonNegative(attackPassStartDelaySeconds) ||
-        !FiniteNonNegative(attackPassRecoilSeconds)) {
+        !FiniteNonNegative(attackPassRecoilSeconds) ||
+        !FiniteNonNegative(attackPassHandoffLeadSeconds) ||
+        attackPassHandoffLeadSeconds > attackLeadSeconds) {
         SetError(errorMessage, "EnemyBehaviorDefinition contains an invalid value.");
         return false;
     }
@@ -611,8 +623,14 @@ void EnemyBehaviorSystem::ApplyMovement(
         state.engagementBandVelocity +=
             (targetVelocity - state.engagementBandVelocity) *
             (std::clamp)(velocityBlend, 0.0f, 1.0f);
-        state.integratedForwardOffset +=
-            state.engagementBandVelocity * deltaTime;
+        if (holdingPose) {
+            // Once aiming, match cart travel exactly; residual approach velocity
+            // must not pull the muzzle through its newly acquired firing pose.
+            state.integratedForwardOffset += error;
+            state.engagementBandVelocity = playerForwardSpeed;
+        } else {
+            state.integratedForwardOffset += state.engagementBandVelocity * deltaTime;
+        }
         if (std::abs(correction) > 0.10f) {
             ++frame_.engagementBandCorrections;
         }

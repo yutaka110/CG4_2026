@@ -298,14 +298,11 @@
       "sourceUrls": []
     },
     {
-      "file": "Resources/rostock_laage_airport_4k.dds",
-      "sha256": "1ab268e59ddadaf64cbe10d905ad5125e6924e74f32582edb3154e25b8ba8814",
-      "status": "candidate_source_unconfirmed",
-      "evidence": "Official namesake has CC0 license; original download and DDS conversion not verified.",
-      "sourceUrls": [
-        "https://polyhaven.com/a/rostock_laage_airport",
-        "https://polyhaven.com/license"
-      ]
+      "file": "Resources/environment/canyon_soft_256.dds",
+      "sha256": "6ab066e00522e2020fa0c552d580f296d2612bf86693a0f951108d559d9a98c5",
+      "status": "generated_from_local_code",
+      "evidence": "2026-09-29: generated with AI coding assistance from tools/generate_canyon_environment.cpp using only an analytic directional color field, no external images. DDS round-trip and compression error verified. Replaces airport cubemap in runtime and submission allowlist.",
+      "sourceUrls": []
     },
     {
       "file": "Resources/streakNoise.png",

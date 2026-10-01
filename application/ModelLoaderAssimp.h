@@ -1,4 +1,4 @@
-// ModelLoaderAssimp.h
+﻿// ModelLoaderAssimp.h
 #pragma once
 #include <cstdint>
 #include <string>
@@ -29,3 +29,20 @@ ModelData LoadObjFile_Assimp(const std::string& directoryPath,
 
 // ModelLoaderAssimp.h
 //Node ReadNode(aiNode* node);
+
+// Solid scenery is audited after import/handedness conversion, rather than
+// accepting a mesh whose normal-based repair has opened isolated triangles.
+struct ModelClosedSurfaceAudit {
+    uint32_t triangleCount = 0;
+    uint32_t boundaryEdges = 0;
+    uint32_t nonManifoldEdges = 0;
+    uint32_t inconsistentEdges = 0;
+    uint32_t duplicateTriangles = 0;
+    uint32_t invalidTriangles = 0;
+    double signedVolume = 0.0;
+    bool IsValid() const {
+        return triangleCount > 0 && boundaryEdges == 0 && nonManifoldEdges == 0 &&
+            inconsistentEdges == 0 && duplicateTriangles == 0 && invalidTriangles == 0 && signedVolume > 0.0;
+    }
+};
+ModelClosedSurfaceAudit AuditModelClosedSurface(const ModelData& modelData);

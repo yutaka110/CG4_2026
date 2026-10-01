@@ -22,6 +22,10 @@ public:
         HANDLE fenceEvent);
 
     void Initialize();
+    ~AppFrameCoordinator();
+    // Shared upload buffers are not frame-buffered yet. Call before ANY scene
+    // update/upload, not just before resetting the current command allocator.
+    bool WaitBeforeSharedResourceWrites();
     bool WaitForFrameSlot(uint32_t frameIndex);
     bool SignalFrame(uint32_t frameIndex);
     bool FlushGpu();
@@ -36,6 +40,7 @@ public:
 private:
     void ConfigurePresentPolicy();
     void LogPresentPolicy() const;
+    void LogSharedResourceWaitStats(const char* reason) const;
     HRESULT DeviceRemovedReason(HRESULT fallback) const;
 
     graphics::SwapChain& swapChain_;
@@ -50,4 +55,11 @@ private:
     uint32_t presentMaxFrameLatency_ = 0;
     bool lowLatencyPresentEnabled_ = false;
     bool presentTearingAllowed_ = false;
+    bool serializeSharedWrites_ = true;
+    uint64_t sharedWriteFrames_ = 0;
+    uint64_t sharedWritePendingFrames_ = 0;
+    uint64_t sharedWriteWaits_ = 0;
+    uint64_t sharedWriteFailures_ = 0;
+    double sharedWriteWaitTotalMs_ = 0.0;
+    double sharedWriteWaitMaxMs_ = 0.0;
 };

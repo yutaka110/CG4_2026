@@ -1,9 +1,13 @@
-#include "ModelLoaderAssimp.h"
+﻿#include "ModelLoaderAssimp.h"
 
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 
+#include <algorithm>
+#include <array>
+#include <map>
+#include <set>
 #include <cstdint>
 #include <cmath>
 #include <filesystem>
@@ -424,5 +428,46 @@ Node ReadNode(aiNode* node) {
         result.children[i] = ReadNode(node->mChildren[i]);
     }
 
+    return result;
+}
+
+ModelClosedSurfaceAudit AuditModelClosedSurface(const ModelData& model) {
+    ModelClosedSurfaceAudit result;
+    std::map<std::array<float,3>,uint32_t> positions;
+    std::vector<uint32_t> welded;
+    for(const auto& vertex:model.vertices) {
+        if(!IsFinite(Position3(vertex))) {++result.invalidTriangles; return result;}
+        const std::array<float,3> key{vertex.position.x,vertex.position.y,vertex.position.z};
+        auto [it,inserted]=positions.emplace(key,static_cast<uint32_t>(positions.size()));
+        welded.push_back(it->second);
+    }
+    struct Edge { uint32_t count=0; int balance=0; };
+    std::map<std::pair<uint32_t,uint32_t>,Edge> edges;
+    std::set<std::array<uint32_t,3>> faces;
+    if(model.indices.size()%3) ++result.invalidTriangles;
+    for(size_t i=0;i+2<model.indices.size();i+=3) {
+        std::array<uint32_t,3> face{model.indices[i],model.indices[i+1],model.indices[i+2]};
+        if(std::any_of(face.begin(),face.end(),[&](uint32_t j){return j>=model.vertices.size();})) {
+            ++result.invalidTriangles;continue;
+        }
+        const Vector3 a=Position3(model.vertices[face[0]]),b=Position3(model.vertices[face[1]]),c=Position3(model.vertices[face[2]]);
+        if(LengthSquared(Cross(Subtract(b,a),Subtract(c,a)))<=kGeometryEpsilonSquared) ++result.invalidTriangles;
+        result.signedVolume += (double(a.x)*(double(b.y)*c.z-double(b.z)*c.y)+
+            double(a.y)*(double(b.z)*c.x-double(b.x)*c.z)+double(a.z)*(double(b.x)*c.y-double(b.y)*c.x))/6.0;
+        for(auto& j:face)j=welded[j];
+        auto key=face;std::sort(key.begin(),key.end());
+        if(!faces.insert(key).second)++result.duplicateTriangles;
+        for(int k=0;k<3;++k) {
+            const uint32_t u=face[k],v=face[(k+1)%3];
+            auto& edge=edges[{(std::min)(u,v),(std::max)(u,v)}];
+            ++edge.count;edge.balance+=u<v?1:-1;
+        }
+        ++result.triangleCount;
+    }
+    for(const auto& [key,edge]:edges) {
+        if(edge.count==1)++result.boundaryEdges;
+        if(edge.count>2)++result.nonManifoldEdges;
+        if(edge.count==2 && edge.balance!=0)++result.inconsistentEdges;
+    }
     return result;
 }

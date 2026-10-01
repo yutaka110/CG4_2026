@@ -103,6 +103,15 @@ void AppendProjectilePrimitive(
         Subtract(proxy.worldPosition, side),
         tailFade,
         WithAlphaScale(proxy.haloColor, 0.72f));
+    // Navy edge plus magenta diamond remains legible against pale terrain.
+    draw.AddCircle(proxy.worldPosition, proxy.cameraRight, proxy.cameraUp,
+        coreRadius * 1.18f, {0.018f, 0.008f, 0.035f, 0.95f}, 24);
+    const Vector3 diamondRight = Scale(proxy.cameraRight, coreRadius * 1.35f);
+    const Vector3 diamondUp = Scale(proxy.cameraUp, coreRadius * 1.35f);
+    draw.AddLine(Add(proxy.worldPosition, diamondRight), Add(proxy.worldPosition, diamondUp), proxy.haloColor);
+    draw.AddLine(Add(proxy.worldPosition, diamondUp), Subtract(proxy.worldPosition, diamondRight), proxy.haloColor);
+    draw.AddLine(Subtract(proxy.worldPosition, diamondRight), Subtract(proxy.worldPosition, diamondUp), proxy.haloColor);
+    draw.AddLine(Subtract(proxy.worldPosition, diamondUp), Add(proxy.worldPosition, diamondRight), proxy.haloColor);
     draw.AddPoint(
         proxy.worldPosition,
         coreRadius,
@@ -128,8 +137,8 @@ void AppendProjectilePrimitive(
 
     // Repeated chevrons make travel direction readable even in a still frame.
     const Vector3 tailVector = Subtract(proxy.trailStart, proxy.worldPosition);
-    for (int marker = 1; marker <= 3; ++marker) {
-        const float t = static_cast<float>(marker) * 0.22f;
+    for (int marker = 1; marker <= 2; ++marker) {
+        const float t = static_cast<float>(marker) * 0.32f;
         const Vector3 center = Add(proxy.worldPosition, Scale(tailVector, t));
         const float spread = coreRadius * (0.62f + 0.14f * marker);
         const Vector3 tip = Add(
@@ -495,7 +504,7 @@ void EnemyProjectileVfxRenderer::Update(
         proxy.motionDirection = motionDirection;
         proxy.trailStart = Add(
             projectile.worldPosition,
-            Scale(motionDirection, -coreRadius * visual.trailLengthInRadii));
+            Scale(motionDirection, -coreRadius * (std::clamp)(visual.trailLengthInRadii, 2.0f, 4.0f)));
 
         ManagedEffect& managed = managedEffects_[projectile.projectileId];
         if (managed.visualDefinitionId != visual.id) {

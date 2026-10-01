@@ -129,7 +129,7 @@ bool CourseActorAsset::LoadFromFile(const std::string& path, std::string* errorM
             loaded.behaviorDefinition.engagementBandVelocityResponse =
                 ParseFloatOr(parts, 8, 8.0f);
         } else if (parts[0] == "attack_pass") {
-            if (parts.size() != 4 || loaded.behaviorDefinition.definitionId.empty()) {
+            if ((parts.size() != 4 && parts.size() != 5) || loaded.behaviorDefinition.definitionId.empty()) {
                 if (errorMessage != nullptr) {
                     *errorMessage = "attack_pass requires a preceding behavior row and enabled/start-delay/recoil values at line " +
                         std::to_string(lineNumber);
@@ -142,6 +142,8 @@ bool CourseActorAsset::LoadFromFile(const std::string& path, std::string* errorM
                 ParseFloatOr(parts, 2, 0.0f);
             loaded.behaviorDefinition.attackPassRecoilSeconds =
                 ParseFloatOr(parts, 3, 0.20f);
+            loaded.behaviorDefinition.attackPassHandoffLeadSeconds =
+                ParseFloatOr(parts, 4, 0.0f);
         } else if (errorMessage != nullptr) {
             *errorMessage = "Unknown actor asset row at line " + std::to_string(lineNumber) + ": " + parts[0];
             return false;

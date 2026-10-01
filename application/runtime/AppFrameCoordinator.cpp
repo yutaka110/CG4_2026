@@ -2,6 +2,7 @@
 #include "../AppLogFile.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -95,6 +96,74 @@ void AppFrameCoordinator::Initialize() {
     nextFrameFenceValue_ = completedFenceValue + 1;
     ConfigurePresentPolicy();
     LogPresentPolicy();
+    // Diagnostic A/B override only: normal launches protect shared uploads.
+    serializeSharedWrites_ = ReadEnvironmentFlag("GE3_SERIALIZE_SHARED_GPU_WRITES", true);
+    LogSharedResourceWaitStats("initialize");
+}
+
+AppFrameCoordinator::~AppFrameCoordinator() {
+    if (sharedWriteFrames_ != 0) LogSharedResourceWaitStats("shutdown");
+}
+
+bool AppFrameCoordinator::WaitBeforeSharedResourceWrites() {
+    ++sharedWriteFrames_;
+    if (fence_ == nullptr || fenceEvent_ == nullptr || frameFenceValues_.empty()) {
+        ++sharedWriteFailures_;
+        LogSharedResourceWaitStats("missing_fence");
+        return false;
+    }
+    // The slot about to be reused may be three frames old. Its fence alone
+    // cannot protect buffers shared with the other two submitted frames.
+    const auto latest = std::max_element(frameFenceValues_.begin(), frameFenceValues_.end());
+    const uint32_t slot = static_cast<uint32_t>(latest - frameFenceValues_.begin());
+    const uint64_t target = *latest;
+    const uint64_t before = fence_->GetCompletedValue();
+    bool ok = before != UINT64_MAX; // Device removal is not completion.
+    const bool pending = ok && before < target;
+    if (pending) ++sharedWritePendingFrames_;
+    if (ok && serializeSharedWrites_ && pending) {
+        ++sharedWriteWaits_;
+        const auto start = std::chrono::steady_clock::now();
+        ok = WaitForFrameSlot(slot);
+        const double waitMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count();
+        sharedWriteWaitTotalMs_ += waitMs;
+        sharedWriteWaitMaxMs_ = (std::max)(sharedWriteWaitMaxMs_, waitMs);
+    }
+    const uint64_t after = fence_->GetCompletedValue();
+    ok = ok && after != UINT64_MAX && (!serializeSharedWrites_ || after >= target);
+    if (!ok) {
+        ++sharedWriteFailures_;
+        LogFenceFailure("BeforeSharedResourceWrites", slot, target, after,
+            DeviceRemovedReason(E_FAIL), WAIT_FAILED);
+        LogSharedResourceWaitStats("failed");
+        return false;
+    }
+    // Bounded aggregate logging avoids a disk write on every rendered frame.
+    if (sharedWriteFrames_ == 1 || sharedWriteFrames_ % 300 == 0 ||
+        (pending && sharedWritePendingFrames_ <= 3)) {
+        LogSharedResourceWaitStats("sample");
+    }
+    return true;
+}
+
+void AppFrameCoordinator::LogSharedResourceWaitStats(const char* reason) const {
+    SYSTEMTIME now{};
+    GetSystemTime(&now);
+    char line[640]{};
+    std::snprintf(line, sizeof(line),
+        "[SharedGpuWrites] utc=%04u-%02u-%02uT%02u:%02u:%02u.%03uZ pid=%lu reason=%s "
+        "serialize=%u frames=%llu pendingBefore=%llu waits=%llu failures=%llu "
+        "waitTotalMs=%.4f waitMaxMs=%.4f syncInterval=%u\n",
+        now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond, now.wMilliseconds,
+        GetCurrentProcessId(), reason, serializeSharedWrites_ ? 1u : 0u,
+        static_cast<unsigned long long>(sharedWriteFrames_),
+        static_cast<unsigned long long>(sharedWritePendingFrames_),
+        static_cast<unsigned long long>(sharedWriteWaits_),
+        static_cast<unsigned long long>(sharedWriteFailures_),
+        sharedWriteWaitTotalMs_, sharedWriteWaitMaxMs_, presentSyncInterval_);
+    auto log = app::OpenRotatingLog("logs/shared_gpu_writes.log");
+    if (log) log << line;
 }
 
 uint64_t AppFrameCoordinator::CompletedFenceValue() const {

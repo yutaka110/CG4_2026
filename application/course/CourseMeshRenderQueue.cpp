@@ -243,6 +243,26 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
                 item->materialData->specularMode = 2; // Diffuse-only stone.
                 item->useMaterialOverride = true;
             }
+            if ((placement.meshId == "title_ground" || placement.meshId == "title_cliff" ||
+                 placement.meshId == "title_boulder") && item->materialData != nullptr) {
+                // Quiet matte sandstone: geometry defines the large forms,
+                // without environment highlights or high-frequency rock noise.
+                item->materialData->color = placement.meshId == "title_ground"
+                    ? Vector4{0.90f,0.85f,0.75f,1.0f} : Vector4{0.84f,0.82f,0.78f,1.0f};
+                item->materialData->enableLighting = true;
+                item->materialData->shininess = 1.0f;
+                item->materialData->environmentCoefficient = 0.0f;
+                item->materialData->specularMode = 6; // Bounded title diffuse + distance haze.
+                item->useMaterialOverride = true;
+            }
+            if (placement.meshId == "title_tunnel" && item->materialData != nullptr) {
+                item->materialData->color = {0.70f,0.61f,0.53f,1.0f};
+                item->materialData->enableLighting = true;
+                item->materialData->shininess = 1.0f;
+                item->materialData->environmentCoefficient = 0.0f;
+                item->materialData->specularMode = 7; // Rock mass with shaded cave interior.
+                item->useMaterialOverride = true;
+            }
             const Vector3 center = ResolveRailLocal(
                 railPath,
                 placement.distance,
@@ -358,7 +378,8 @@ void CourseMeshRenderQueue::AddEnemyInstances(
         const RailPathSample sample =
             railPath.Evaluate(enemy.desc.spawnDistance + enemy.desc.distanceOffset);
         const uint32_t modelIndex =
-            ResolveModelIndex(models, enemy.desc.meshId, "ball");
+            ResolveModelIndex(models, enemy.desc.meshId == "combat_turret"
+                ? "combat_turret_head" : enemy.desc.meshId, enemy.desc.meshId == "combat_turret" ? "combat_turret" : "ball");
         const CourseMeshModelBinding& model = models[modelIndex];
         if (!IsCourseMeshRenderEligible(
                 CourseMeshRenderKind::Enemy,
@@ -412,7 +433,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
         float bridgeScale = presentation != nullptr
             ? (std::max)(0.0f, presentation->scaleMultiplier)
             : 1.0f;
-        if (readability != nullptr) {
+        if (readability != nullptr && enemy.desc.meshId != "combat_turret") {
             bridgeScale *= (std::max)(
                 1.0f, readability->presentationScale);
         }
@@ -423,6 +444,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             enemy.desc.localRotation);
         if (presentation != nullptr) {
             rotation = Add(rotation, presentation->rotationOffset);
+            if (presentation->turret) rotation = Add(presentation->turretWorldRotation,presentation->rotationOffset);
         }
         if (item->materialData != nullptr) {
             const float alpha = enemy.combatState.initialized
@@ -431,6 +453,8 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             // A pooled item may have been an unlit charging muzzle/outline in
             // the previous frame, especially as a guard departs.
             item->materialData->enableLighting = true;
+            item->materialData->specularMode = presentation != nullptr &&
+                presentation->flashStrength > 0.25f ? 4 : 3;
             Vector4 materialColor = presentation != nullptr
                 ? presentation->materialColor
                 : Vector4{1.0f, 1.0f, 1.0f, alpha};
@@ -462,7 +486,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 : 0.16f;
             if (enemy.desc.meshId == "combat_turret") {
                 item->materialData->environmentCoefficient = 0.025f;
-                item->materialData->specularMode = 2; // Matte painted armour.
+                // Enemy rim/fill mode also keeps painted armour matte.
             }
             item->useMaterialOverride = true;
         }
@@ -534,7 +558,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                             0.042f,
                             (std::clamp)(0.70f + strength * 0.22f,
                                          0.70f,
-                                         0.92f)};
+                                         0.92f) * presentation->materialColor.w};
                         backdrop->materialData->enableLighting = false;
                         backdrop->materialData->shininess = 1.0f;
                         backdrop->materialData->environmentCoefficient = 0.02f;
@@ -563,9 +587,55 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             }
         }
 
-        // The turret mesh already owns its base, twin barrels and muzzle cores.
-        // Generic drone parts would replicate whole turrets at either side.
-        if (enemy.desc.meshId == "combat_turret") continue;
+        if (enemy.desc.meshId == "combat_turret") {
+            // Keep the pedestal planted while the separate head aims in yaw/pitch.
+            const uint32_t baseIndex = ResolveModelIndex(models,"combat_turret_base",nullptr);
+            if (model.name == "combat_turret_head" && models[baseIndex].name == "combat_turret_base") {
+                if (CourseMeshRenderItem* base = AllocateItem()) {
+                    base->kind = CourseMeshRenderKind::Enemy;
+                    base->sourceActorId = enemy.actorId;
+                    base->meshId = "combat_turret_base";
+                    base->modelIndex = baseIndex;
+                    base->visible = models[baseIndex].loaded && base->transformData != nullptr;
+                    if (base->materialData && item->materialData) {
+                        *base->materialData = *item->materialData;
+                        base->useMaterialOverride = true;
+                    }
+                    WriteItemTransform(*base,models[baseIndex].rootLocal,
+                        {baseScale,baseScale,baseScale},RotationFromRailTangent(sample.tangent),center,viewProjection);
+                }
+            }
+            if (presentation->turretMuzzleActive) {
+                const uint32_t glowIndex = ResolveModelIndex(models,"ball",nullptr);
+                if (models[glowIndex].name == "ball") {
+                    const Matrix4x4 head = MakeAffineMatrix({baseScale,baseScale,baseScale},rotation,center);
+                    for (float side : {-1.0f,1.0f}) {
+                        CourseMeshRenderItem* glow = AllocateItem();
+                        if (!glow) break;
+                        glow->kind = CourseMeshRenderKind::Enemy;
+                        glow->sourceActorId = enemy.actorId;
+                        glow->meshId = "turret_muzzle_glow";
+                        glow->modelIndex = glowIndex;
+                        glow->visible = models[glowIndex].loaded && glow->transformData != nullptr;
+                        const Vector3 p{side*0.2538f,0.1598f,-0.8272f};
+                        const Vector3 muzzle{p.x*head.m[0][0]+p.y*head.m[1][0]+p.z*head.m[2][0]+head.m[3][0],
+                            p.x*head.m[0][1]+p.y*head.m[1][1]+p.z*head.m[2][1]+head.m[3][1],
+                            p.x*head.m[0][2]+p.y*head.m[1][2]+p.z*head.m[2][2]+head.m[3][2]};
+                        if (glow->materialData) {
+                            *glow->materialData = {};
+                            glow->materialData->color = presentation->coreColor;
+                            glow->materialData->enableLighting = false;
+                            glow->materialData->specularMode = 5;
+                            glow->materialData->uvTransform = MakeIdentity4x4();
+                            glow->useMaterialOverride = true;
+                        }
+                        const float radius = baseScale*(0.09f+0.14f*presentation->weaponCharge);
+                        WriteItemTransform(*glow,models[glowIndex].rootLocal,{radius,radius,radius},{},muzzle,viewProjection);
+                    }
+                }
+            }
+            continue;
+        }
 
         const float spread = baseScale * (std::max)(
             0.45f, presentation->silhouetteSpread);
@@ -605,6 +675,11 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 part->materialData->environmentCoefficient =
                     environmentCoefficient;
                 part->materialData->specularMode = 1;
+                if (enemy.behaviorDefinition.choreographedAttackPass &&
+                    std::string_view{suffix} == "/weapon-core") {
+                    // The charge must stay readable even with the legacy ball texture.
+                    part->materialData->specularMode = 5;
+                }
                 part->useMaterialOverride = true;
             }
             WriteItemTransform(

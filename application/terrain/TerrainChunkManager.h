@@ -120,6 +120,12 @@ bool TerrainChunkBuildRequestMatches(
     const TerrainChunkDebugInfo& requested,
     uint32_t requestedSettingsHash) noexcept;
 
+// CPU-only generation for offline geometry inspection; uses the runtime builder.
+TerrainChunkCpuBuild BuildTerrainChunkGeometry(
+    const TerrainChunkDebugInfo& chunk,
+    const RailPath& railPath,
+    const TerrainGenerationSettings& settings);
+
 uint32_t RequestStopForSupersededTerrainChunkBuildJobs(
     std::deque<TerrainChunkBuildJob>& jobs,
     const std::vector<TerrainChunkDebugInfo>& requested,

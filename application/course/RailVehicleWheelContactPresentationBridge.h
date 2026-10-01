@@ -6,6 +6,7 @@
 
 #include "RailVehiclePresentationBridge.h"
 #include "RailVehicleTrackContactPoseSolver.h"
+#include "RailVehicleCollisionFeedbackBridge.h"
 #include "utils/math/MathUtils.h"
 
 enum class RailVehicleWheelSlot : uint8_t {
@@ -49,6 +50,7 @@ struct RailVehicleWheelContactPresentationFrame final {
 struct RailVehicleWheelContactPresentationInput final {
     const RailVehicleTrackContactPoseFrame* contacts = nullptr;
     const RailVehiclePresentationFrame* vehiclePresentation = nullptr;
+    const RailVehicleCollisionFeedbackFrame* collisionFeedback = nullptr;
     RailVehicleWheelContactPresentationSettings settings{};
 };
 

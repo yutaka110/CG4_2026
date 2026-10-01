@@ -20,6 +20,9 @@ struct EnemyAttackDefensePresentationFrame;
 struct EnemyEncounterReadabilitySettings final {
     CombatTruthGateSettings truth{};
     EnemyScreenPresenceSettings presence{};
+    float openingScoutEndDistance = 180.0f;
+    float openingScoutIdleDiameterPixels = 68.0f;
+    float openingScoutEngagedDiameterPixels = 84.0f;
     float safeAreaPixels = 48.0f;
     float minimumAttackExposureSeconds = 0.34f;
     float exposureDecayPerSecond = 2.5f;
@@ -58,6 +61,7 @@ struct EnemyEncounterReadabilityInput final {
     uint32_t activeWaves = 0;
     uint32_t viewportWidth = 0;
     uint32_t viewportHeight = 0;
+    float playerDistance = -1.0f;
     float deltaTime = 0.016f;
     bool gameplayActive = true;
     EnemyEncounterReadabilitySettings settings{};

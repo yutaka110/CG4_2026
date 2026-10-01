@@ -1998,7 +1998,11 @@ void RailCameraDirector::UpdateComfortMetrics(
         frame.comfortReason = comfortSettings_.enabled ? "initial frame" : "comfort metrics disabled";
     } else {
         const float forwardDot = (std::clamp)(Dot(previousForward_, frame.forward), -1.0f, 1.0f);
-        frame.angularVelocityDeg = RadiansToDegrees(std::acos(forwardDot)) / dt;
+        // acos(dot) loses precision near parallel vectors. At high frame rates
+        // this quantizes slow camera motion into spurious acceleration spikes,
+        // repeatedly restarting otherwise readable attack warnings.
+        const float forwardSin = Length(Cross(previousForward_, frame.forward));
+        frame.angularVelocityDeg = RadiansToDegrees(std::atan2(forwardSin, forwardDot)) / dt;
         frame.angularAccelerationDeg =
             std::abs(frame.angularVelocityDeg - previousAngularVelocityDeg_) / dt;
         frame.fovChangeRateDeg = std::abs(RadiansToDegrees(frame.fovY - previousFovY_)) / dt;
@@ -2043,10 +2047,11 @@ void RailCameraDirector::UpdateComfortMetrics(
                 std::abs(frame.rollDeg) <= comfortSettings_.stableRollDeg &&
                 frame.shakeAmount <= comfortSettings_.stableShakeAmount);
 
+        // Setpieces and event accents still contain interactive encounters.
+        // Their measured motion, framing and transition gates below determine
+        // readiness; a mode label must not suppress an entire enemy lifetime.
         const bool modeBlocksFire =
-            frame.modeKind == RailCameraDirectorMode::Cinematic ||
-            frame.modeKind == RailCameraDirectorMode::EventAccent ||
-            frame.modeKind == RailCameraDirectorMode::Setpiece;
+            frame.modeKind == RailCameraDirectorMode::Cinematic;
         frame.allowEnemyFire = frame.stableForAiming && !frame.hardTransition && !modeBlocksFire;
 
         if (!comfortSettings_.enabled) {
