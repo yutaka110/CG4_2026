@@ -7327,6 +7327,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
     laneTelegraphInput.gameplayActive = gameplayDeltaTime > 0.0f &&
         (!railShooterGameSession_.IsInitialized() ||
          railShooterGameSession_.State().gameplaySimulationEnabled);
+    laneTelegraphInput.openingPresentation =
+        railShooterCoursePath_ == "Resources/courses/CanyonAssaultRoute01.course" &&
+        railShooterDistance_ < 180.0f;
     laneTelegraphInput.elapsedTime = railShooterGameSession_.IsInitialized()
         ? railShooterGameSession_.State().gameplayElapsedSeconds
         : railEnemyProjectilePresentationTime_;
@@ -7807,6 +7810,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         : 0;
     encounterReadabilityInput.viewportWidth = metrics.width;
     encounterReadabilityInput.viewportHeight = metrics.height;
+    encounterReadabilityInput.playerDistance = railShooterDistance_;
     encounterReadabilityInput.deltaTime = gameplayDeltaTime;
     encounterReadabilityInput.gameplayActive = grazeInput.gameplayActive;
     encounterReadabilityInput.settings =

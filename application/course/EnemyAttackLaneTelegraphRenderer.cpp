@@ -159,6 +159,8 @@ void EnemyAttackLaneTelegraphRenderer::Update(
         proxy.readabilityTier = style.tier;
         proxy.directionMarkerCount = 1;
         proxy.projectileCount = (std::max)(1, cue.projectileCount);
+        proxy.openingCue = input.openingPresentation &&
+            proxy.shape == EnemyAttackLaneShape::Line;
 
         const LaneKey key{cue.actorId, cue.attackIntentSequence};
         ManagedMarkers& markers = managedMarkers_[key];
@@ -327,9 +329,16 @@ void EnemyAttackLaneTelegraphRenderer::AppendWorldPrimitives(
 void EnemyAttackLaneTelegraphRenderer::AppendProductionWorldPrimitives(
     ge3::debug::DebugDrawSystem& draw) const {
     for (const auto& lane : frame_.lanes) {
-        // The muzzle and first 78% of the flight corridor remain unpainted.
-        // Only a short arrival cue and a single footprint describe danger.
+        // The opening shot teaches where a threat originates. Later encounters
+        // retain the compact arrival cue so multiple lanes do not fill the view.
         const Vector3 tail = Lerp(lane.startWorld, lane.targetWorld, 0.78f);
+        if (lane.openingCue) {
+            Vector4 sourceColor = lane.color;
+            sourceColor.w *= 0.48f;
+            draw.AddLine(lane.startWorld, tail, sourceColor, lane.color);
+            draw.AddCircle(lane.startWorld, lane.railRight, lane.railUp,
+                lane.sourceRadius * 1.5f, lane.color, 20);
+        }
         draw.AddLine(tail, lane.targetWorld, lane.color);
         if (lane.targetEffectInstanceId == 0) {
             draw.AddCircle(lane.targetWorld, lane.railRight, lane.railUp,

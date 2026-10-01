@@ -1,5 +1,5 @@
 wave|intro_lockon_line|Intro Lock-On Line
-formation|authored|from_ahead|split_sides|true|7|1.4|8|0|0|0.60|0.08|22|8|1.0|12|28
+formation|authored|from_ahead|split_sides|true|7|1.4|8|0|0|0.60|0.08|22|8|1.6|12|18
 unitAsset|line_front|drone_scout|assault_magenta_single|52|0|4|1.0|1.05|16|0.60|0.82|1.0|1.0
 unitAsset|line_mid_left|drone_scout|assault_magenta_single|52|-4|5|1.0|1.05|16|0.60|0.82|1.0|1.0
 unitAsset|line_mid_right|drone_scout|assault_magenta_single|62|4|5|1.0|1.05|16|0.60|0.82|1.0|1.0

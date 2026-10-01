@@ -184,7 +184,7 @@ cinematic_shot_set|1680.000|2100.000|escape_speed_set|Escape Speed Widen|-|-|esc
 cinematic_shot_set|2100.000|2380.000|final_gate_silhouette_set|Final Gate Silhouette|-|-|final_gate_silhouette|final_gate_silhouette_hold|final_gate_obsidian_rim|dark gate haze|hold a dark gate silhouette against a controlled pale opening instead of washing the frame out
 
 event|35.000|vfx|sun_glint_intro|wide canyon reveal and first dust glints|82146211c3b564d0dcd17dfdcdd0cb40|1|0
-event|75.000|enemy_wave|intro_scout_pair|two slow scouts teach lock-on magnetism|4810fcaa0aba29eb0115f484ab28fe1b|1|0
+event|35.000|enemy_wave|intro_scout_pair|two slow scouts teach lock-on magnetism|4810fcaa0aba29eb0115f484ab28fe1b|1|0
 event|125.000|enemy_wave|intro_lockon_line|three drones line up for first combo|456ad6cf4e606154e8e89424567e2944|1|0
 event|205.000|enemy_wave|drone_intro_v|five drones fan from center|730f3d9ff7394f8466c2f7c1af9c8734|1|0
 event|270.000|enemy_wave|first_contact_split|front split wave asks for left-right tracking|8ce5485410b510c1ee1c5841673cdd31|1|0

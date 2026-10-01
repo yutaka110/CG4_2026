@@ -22124,6 +22124,14 @@ void TestEnemyBehaviorSystem(RegressionRunner& runner) {
 }
 
 void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
+    CourseActorAsset openingScout{};
+    std::string openingScoutError;
+    runner.Expect(
+        openingScout.LoadFromFile(
+            "Resources/courses/actors/drone_scout.actor", &openingScoutError) &&
+            openingScout.meshId == "combat_assault_hull" &&
+            openingScout.radius == 1.05f,
+        "opening scout uses a distinct production hull without enlarging its hitbox");
     const char* waveIds[]{"intro_scout_pair", "intro_lockon_line",
         "drone_intro_v", "first_contact_split", "first_contact_combo_ladder"};
     RailPath rail;
@@ -22637,6 +22645,30 @@ void TestEnemyEncounterReadabilityAuthority(RegressionRunner& runner) {
         runtime.Enemies().front().screenPresenceAttackAllowed &&
             director.Frame().readableHostiles == 1,
         "stable on-screen exposure should release the actor fire gate without changing its authoritative radius");
+
+    CourseSpawnRuntime openingRuntime;
+    CourseEnemyActorDesc openingScout{};
+    openingScout.actorAssetId = "drone_scout";
+    openingScout.sourcePlacementGuid = "opening-scout";
+    openingScout.spawnDistance = 75.0f;
+    openingScout.radius = 1.05f;
+    openingScout.lifetime = 20.0f;
+    openingScout.hitPoints = 18.0f;
+    openingScout.suppressFire = true;
+    openingRuntime.SpawnEnemyActor(openingScout);
+    EnemyEncounterReadabilityDirector openingDirector;
+    input.runtime = &openingRuntime;
+    input.playerDistance = 80.0f;
+    openingDirector.Update(input);
+    const float openingScale = openingDirector.Frame().actors.front().presentationScale;
+    input.playerDistance = 181.0f;
+    openingDirector.Update(input);
+    runner.Expect(
+        openingScale > openingDirector.Frame().actors.front().presentationScale &&
+            openingRuntime.Enemies().front().desc.radius == 1.05f,
+        "the opening scout must read larger on screen while later encounters and collision keep their authored size");
+    input.runtime = &runtime;
+    input.playerDistance = -1.0f;
 
     runtime.MutableEnemies().clear();
     EnemyProjectileRuntimeState projectile{};
@@ -23830,6 +23862,14 @@ void TestEnemyProjectileCommercialVisualPipeline(RegressionRunner& runner) {
             laneRenderer.Frame().lanes.front().directionMarkerCount == 1 &&
             laneRenderer.Frame().lanes.front().sourceEffectInstanceId == 0,
         "lane telegraph must use one compact impact marker, one direction cue and no source ring");
+    laneInput.openingPresentation = true;
+    laneRenderer.Update(laneInput);
+    runner.Expect(
+        laneRenderer.Frame().lanes.size() == 1 &&
+            laneRenderer.Frame().lanes.front().openingCue &&
+            laneRenderer.Frame().lanes.front().sourceRadius > 0.0f &&
+            laneRenderer.Frame().lanes.front().targetRadius > 0.0f,
+        "the first attack must retain both a source and impact cue before firing");
     telegraph.cues.front().phase = EnemyAttackTelegraphPhase::Fired;
     laneRenderer.Update(laneInput);
     runner.Expect(laneRenderer.Frame().lanes.empty() &&
@@ -30437,8 +30477,8 @@ void TestNormalDroneAttackPass(RegressionRunner& runner) {
         const size_t count=std::count_if(runtime.Enemies().begin(),runtime.Enemies().end(),normal);
         EnemyEncounterReadabilityDirector readability;
         std::unordered_map<uint32_t,uint64_t> shots, warnedTokens;
-        std::unordered_map<uint32_t,float> warningTimes, poseDistances;
-        std::unordered_set<uint32_t> charged, posed, departed, visualBullets;
+        std::unordered_map<uint32_t,float> warningTimes, poseDistances, shotTimes;
+        std::unordered_set<uint32_t> charged, posed, departed, visualBullets, visiblePeel;
         uint32_t defeated=0;
         float blockedAt=-1;
         EnemyProjectilePresentationBridge projectilePresentation;
@@ -30541,6 +30581,7 @@ void TestNormalDroneAttackPass(RegressionRunner& runner) {
                     }
                 }
                 if(actor.bulletsEmittedThisFrame) {
+                    shotTimes[actor.actorId]=time;
                     runner.Expect(actor.bulletsEmittedThisFrame==1 && actor.fireSequence==1 && charged.contains(actor.actorId) &&
                         warningTimes.contains(actor.actorId) && time-warningTimes[actor.actorId]>=actor.behaviorDefinition.attackLeadSeconds-dt*1.5f,
                         "exactly one visible shot must follow a complete, uninterrupted warning");
@@ -30548,11 +30589,21 @@ void TestNormalDroneAttackPass(RegressionRunner& runner) {
                         "camera safety interruption must restart the full warning before firing");
                 }
                 if(actor.entranceExitState.phase==EnemyEntranceExitPhase::Exiting) {
-                    departed.insert(actor.actorId);
+                    const bool firstExitFrame=departed.insert(actor.actorId).second;
                     const float side=behavior.authoredLateralOffset< -0.1f ? -1.0f : 1.0f;
                     runner.Expect(actor.fireSequence==1 && actor.entranceExitState.appliedLateralOffset*side>0 &&
                         !behavior.attackIntentActive && !actor.attackState.tokenReserved && pose && pose->weaponCharge==0,
                         "a fired drone must depart outward without another warning or shot");
+                    if (std::string(wave)=="intro_scout_pair" || std::string(wave)=="intro_lockon_line") {
+                        if (firstExitFrame) runner.Expect(shotTimes.contains(actor.actorId) &&
+                            time-shotTimes[actor.actorId]>=0.80f,
+                            "opening scouts remain shootable briefly after their first shot");
+                        if (actor.entranceExitState.phaseElapsedSeconds>=0.75f &&
+                            actor.entranceExitState.phaseElapsedSeconds<=0.85f &&
+                            actor.entranceExitState.presentationAlpha>=0.98f) {
+                            visiblePeel.insert(actor.actorId);
+                        }
+                    }
                 }
                 if (step%fps==0 || actor.bulletsEmittedThisFrame) {
                     metrics<<"fps="<<fps<<" mode="<<mode<<" "<<wave<<" t="<<time<<" id="<<actor.actorId<<" state="<<ToString(actor.behaviorState.state)
@@ -30565,6 +30616,10 @@ void TestNormalDroneAttackPass(RegressionRunner& runner) {
         size_t fired=0;for(const auto& [id,n]:shots) if(n>0)++fired;
         for(const auto& [id,n]:shots) runner.Expect(n<=1 && (n==0 || visualBullets.contains(id)),
             "normal shots must reach the visible projectile renderer, with no second volley");
+        if (std::string(wave)=="intro_scout_pair" || std::string(wave)=="intro_lockon_line") {
+            runner.Expect(visiblePeel.size()==fired,
+                "opening scouts stay visibly opaque through the first half of their slower exit");
+        }
         metrics<<"RESULT fps="<<fps<<" mode="<<mode<<" "<<wave<<" fired="<<fired<<"/"<<count<<'\n';metrics.flush();
         runner.Expect((mode!=1 || (defeated!=0 && shots[defeated]==0 && !visualBullets.contains(defeated))) &&
             fired==count-(mode==1 ? 1:0) && departed.size()==fired &&
